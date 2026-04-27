@@ -16,16 +16,19 @@ import { collectExpandableNodes } from '../utils/outlineAiExpand'
 
 function FullGenConfigModal({
   projectId,
+  hasExistingOutline,
   onClose,
   onDispatch,
 }: {
   projectId: string
+  hasExistingOutline: boolean
   onClose: () => void
   onDispatch: (params: { scale_hint: string; model_profile: string; clear_existing: boolean }) => void
 }) {
   const [scaleHint, setScaleHint] = useState<'auto' | 'short' | 'medium' | 'long'>('auto')
   const [modelProfile, setModelProfile] = useState<'default' | 'gemini'>('default')
-  const [clearExisting, setClearExisting] = useState(false)
+  // 已有大纲时默认勾选「清除重建」，避免重复叠加旧内容
+  const [clearExisting, setClearExisting] = useState(hasExistingOutline)
 
   const handleStart = () => {
     if (clearExisting && !window.confirm('将清除现有全部大纲节点，确定继续？')) return
@@ -95,18 +98,40 @@ function FullGenConfigModal({
             </select>
           </div>
 
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={clearExisting}
-              onChange={e => setClearExisting(e.target.checked)}
-              className="rounded"
-            />
-            <span className="text-xs text-gray-600">
-              清除现有大纲后重新生成
-              {clearExisting && <span className="text-red-500 ml-1">（不可恢复）</span>}
-            </span>
-          </label>
+          {/* 模式说明 */}
+          <div className="rounded-xl border border-gray-100 bg-gray-50 divide-y divide-gray-100 text-xs overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setClearExisting(false)}
+              className={`w-full flex items-start gap-2.5 px-3 py-2.5 text-left transition-colors ${!clearExisting ? 'bg-green-50 border-l-2 border-green-400' : 'hover:bg-gray-100'}`}
+            >
+              <span className="mt-0.5 text-base leading-none">✏️</span>
+              <div>
+                <div className={`font-medium ${!clearExisting ? 'text-green-800' : 'text-gray-700'}`}>
+                  续写空卷（推荐）
+                </div>
+                <div className="text-gray-400 mt-0.5">
+                  识别现有大纲中尚无章节计划的卷/篇，直接填充内容。已写章节和已有大纲节点全部保留。
+                </div>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setClearExisting(true)}
+              className={`w-full flex items-start gap-2.5 px-3 py-2.5 text-left transition-colors ${clearExisting ? 'bg-red-50 border-l-2 border-red-400' : 'hover:bg-gray-100'}`}
+            >
+              <span className="mt-0.5 text-base leading-none">🗑️</span>
+              <div>
+                <div className={`font-medium ${clearExisting ? 'text-red-700' : 'text-gray-700'}`}>
+                  清除后重建
+                  {clearExisting && <span className="ml-1 font-normal text-red-400">（大纲将被全部删除）</span>}
+                </div>
+                <div className="text-gray-400 mt-0.5">
+                  删除现有全部大纲节点，AI 从零规划新卷结构。章节正文不受影响，但大纲链接会断开。
+                </div>
+              </div>
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100 bg-gray-50">
@@ -504,6 +529,7 @@ export default function OutlinePage() {
       {showFullGenModal && projectId && (
         <FullGenConfigModal
           projectId={projectId}
+          hasExistingOutline={outlineTree.length > 0}
           onClose={() => setShowFullGenModal(false)}
           onDispatch={handleDispatchFullGen}
         />

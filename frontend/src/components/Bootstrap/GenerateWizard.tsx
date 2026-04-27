@@ -39,10 +39,12 @@ export default function GenerateWizard({ onClose }: Props) {
   const [errorMsg, setErrorMsg] = useState('')
   const [projectId, setProjectId] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const isSubmittingRef = useRef(false)   // 防止重复提交
 
   // ── 开始生成 ──────────────────────────────────────────────
   const startGenerate = async () => {
-    if (!logline.trim()) return
+    if (!logline.trim() || isSubmittingRef.current) return
+    isSubmittingRef.current = true
     setPhase('generating')
     setErrorMsg('')
 
@@ -93,6 +95,8 @@ export default function GenerateWizard({ onClose }: Props) {
       if (err.name !== 'AbortError') {
         setErrorMsg(err.message || '网络错误')
       }
+    } finally {
+      isSubmittingRef.current = false
     }
   }
 

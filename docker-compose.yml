@@ -1,0 +1,59 @@
+version: "3.9"
+
+# 宿主机端口（浏览器 / 宿主机进程访问）与容器内端口：
+#   前端    NOVEL_DOCKER_FRONTEND_HOST_PORT（默认 19173） -> 容器 5173
+#   后端    NOVEL_DOCKER_BACKEND_HOST_PORT（默认 18080） -> 容器 8000
+#   Postgres NOVEL_DOCKER_POSTGRES_HOST_PORT（默认 5432） -> 容器 5432
+#   Redis   NOVEL_DOCKER_REDIS_HOST_PORT（默认 6379）    -> 容器 6379
+# 本地裸跑（./restart.sh）默认 8000/5173，见 env.local.ports.example；改 Postgres/Redis 映射时须同步 backend/.env 的 DATABASE_URL / REDIS_URL 端口。
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: novel
+      POSTGRES_PASSWORD: novel
+      POSTGRES_DB: novel_db
+    ports:
+      - "${NOVEL_DOCKER_POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${NOVEL_DOCKER_REDIS_HOST_PORT:-6379}:6379"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "${NOVEL_DOCKER_BACKEND_HOST_PORT:-18080}:8000"
+    environment:
+      DATABASE_URL: postgresql://novel:novel@postgres:5432/novel_db
+      REDIS_URL: redis://redis:6379/0
+    env_file:
+      - ./backend/.env
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${NOVEL_DOCKER_FRONTEND_HOST_PORT:-19173}:5173"
+    environment:
+      VITE_API_PROXY_TARGET: http://backend:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev -- --host
+
+volumes:
+  postgres_data:

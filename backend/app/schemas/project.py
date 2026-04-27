@@ -1,0 +1,41 @@
+from pydantic import BaseModel
+from typing import Optional, Any
+from datetime import datetime
+import uuid
+
+
+class ProjectCreate(BaseModel):
+    title: str
+    genre: Optional[str] = None
+    logline: Optional[str] = None
+    world_overview: Optional[str] = None
+    story_core: Optional[dict] = {}
+    target_words: Optional[str] = None
+
+
+class ProjectUpdate(BaseModel):
+    title: Optional[str] = None
+    genre: Optional[str] = None
+    logline: Optional[str] = None
+    world_overview: Optional[str] = None
+    story_core: Optional[dict] = None
+    status: Optional[str] = None
+    target_words: Optional[str] = None
+    cover_url: Optional[str] = None
+
+
+class ProjectOut(BaseModel):
+    id: uuid.UUID
+    title: str
+    genre: Optional[str]
+    logline: Optional[str]
+    world_overview: Optional[str]
+    story_core: Optional[dict]
+    status: str
+    target_words: Optional[str]
+    cover_url: Optional[str]
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True

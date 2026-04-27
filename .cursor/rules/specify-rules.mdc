@@ -1,0 +1,34 @@
+# multi-agent-demo 研发指引
+
+由全部功能计划自动生成。最近更新：2026-04-08
+
+## 当前技术栈
+
+[从全部 plan.md 抽取]
+
+## 项目结构
+
+```text
+[来自计划的实际结构]
+```
+
+## 常用命令
+
+[仅包含当前技术栈相关命令]
+
+## 代码风格
+
+[按实际使用语言填写]
+
+## 近期变更
+
+[最近 3 个功能及其新增内容]
+
+<!-- 手工补充开始 -->
+<!-- 手工补充结束 -->
+
+## Active Technologies
+- Python 3.11+（backend）、TypeScript/React（client / frontend） (010-unified-program)
+
+## Recent Changes
+- 010-unified-program: 合并原 001/002/003 规格为单一目录；Speckit 使用 `export SPECIFY_FEATURE=010-unified-program`

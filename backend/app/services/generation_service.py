@@ -49,6 +49,48 @@ def _sse(event: str, **kwargs) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+def _normalize_outline(data: list) -> list:
+    """
+    容错归并：
+    1. 同一卷下若 AI 返回多个篇节点（重复/分割），合并为单篇
+    2. 修正每级子节点的 sort_order，保证从 0 连续递增
+    """
+    for vol in data:
+        if vol.get("node_type") != "volume":
+            continue
+        children = vol.get("children", [])
+        arcs = [c for c in children if c.get("node_type") == "arc"]
+        non_arcs = [c for c in children if c.get("node_type") != "arc"]
+
+        if len(arcs) > 1:
+            # 多篇 → 合并所有章节到第一篇下
+            merged_chapters: list = []
+            for arc in arcs:
+                merged_chapters.extend(arc.get("children", []))
+            for i, ch in enumerate(merged_chapters):
+                ch["sort_order"] = i
+            first_arc = dict(arcs[0])
+            first_arc["children"] = merged_chapters
+            vol["children"] = [first_arc] + non_arcs
+        else:
+            # 单篇 or 无篇，只修正 chapter_plan 的 sort_order
+            for arc in arcs:
+                for i, ch in enumerate(arc.get("children", [])):
+                    ch["sort_order"] = i
+            # chapter_plan 直接在卷下的也修正
+            chap_idx = 0
+            for child in non_arcs:
+                if child.get("node_type") == "chapter_plan":
+                    child["sort_order"] = chap_idx
+                    chap_idx += 1
+
+        # 修正当前层子节点 sort_order
+        for i, child in enumerate(vol.get("children", [])):
+            child["sort_order"] = i
+
+    return data
+
+
 # ─────────────────────────────────────────────────────────────
 #  主服务类
 # ─────────────────────────────────────────────────────────────
@@ -350,30 +392,45 @@ role 只能是: protagonist / supporting / antagonist"""
 创意：{ctx['logline']}
 设定：{ctx['settings_summary']}
 
-生成大纲树，返回JSON数组（3卷，第一卷展开前10个章节计划，其余只写卷标题和概述）：
+生成大纲树，返回JSON数组。结构严格为：卷→篇→章（三层）。
+第一卷下有且仅有一篇，篇下展开前10个章节计划；其余两卷只写卷标题和概述（children为空）。
+
 [
   {{
     "node_type": "volume", "title": "第一卷：起点（示例）", "sort_order": 0,
     "summary": "本卷核心事件概述",
     "children": [
       {{
-        "node_type": "chapter_plan", "title": "第1章：章节标题", "sort_order": 0,
-        "summary": "本章发生什么",
-        "hook": "开头的悬念/钩子",
-        "highlight": "本章最高燃点",
-        "conflict": "核心冲突"
+        "node_type": "arc", "title": "第一篇：篇名（示例）", "sort_order": 0,
+        "summary": "本篇概述",
+        "children": [
+          {{
+            "node_type": "chapter_plan", "title": "第1章：章节标题", "sort_order": 0,
+            "summary": "本章发生什么",
+            "hook": "开头的悬念/钩子",
+            "highlight": "本章最高燃点",
+            "conflict": "核心冲突"
+          }},
+          {{
+            "node_type": "chapter_plan", "title": "第2章：章节标题", "sort_order": 1,
+            "summary": "...", "hook": "...", "highlight": "...", "conflict": "..."
+          }}
+        ]
       }}
-      ... 共10个 chapter_plan
     ]
   }},
   {{"node_type": "volume", "title": "第二卷：标题", "sort_order": 1, "summary": "...", "children": []}},
   {{"node_type": "volume", "title": "第三卷：标题", "sort_order": 2, "summary": "...", "children": []}}
-]"""
+]
+注意：只返回JSON数组，不要任何说明文字。"""
 
         raw = await self._call_with_retry(system, prompt)
         data = _parse_json(raw)
         if not isinstance(data, list):
             data = data.get("outline", [])
+
+        # 归并 AI 可能生成的重复篇节点，并修正 sort_order
+        data = _normalize_outline(data)
 
         results = []
 
@@ -557,7 +614,8 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
             for child in item.get("children", []):
                 save_node(child, parent_id=node.id)
 
-        for vol in data.get("outline", []):
+        outline_data = _normalize_outline(data.get("outline", []))
+        for vol in outline_data:
             save_node(vol)
 
         for m in data.get("memory", []):

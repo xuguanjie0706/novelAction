@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Crown, User, Swords, Zap, BookOpen, Eye, Trash2 } from 'lucide-react'
+import { Plus, Crown, User, Swords, Zap, BookOpen, Eye, Trash2, Heart, TrendingUp, FileText, Target, NotebookPen } from 'lucide-react'
 import { charactersApi } from '../api/client'
 import { useAppStore } from '../store'
 import type { Character } from '../types'
@@ -57,9 +57,45 @@ const DETAIL_TABS: { key: DetailTab; label: string; icon: React.ElementType }[] 
   { key: 'basic',      label: '基础',     icon: User },
   { key: 'appearance', label: '外貌风格', icon: Eye },
   { key: 'power',      label: '实力体系', icon: Zap },
-  { key: 'depth',      label: '深度性格', icon: BookOpen },
-  { key: 'growth',     label: '成长轨迹', icon: Crown },
+  { key: 'depth',      label: '深度性格', icon: Heart },
+  { key: 'growth',     label: '成长轨迹', icon: TrendingUp },
 ]
+
+function CharacterTag({ children, tone = 'amber' }: { children: React.ReactNode; tone?: 'amber' | 'green' | 'red' }) {
+  const colors = {
+    amber: 'bg-amber-50 text-amber-700 border-amber-200',
+    green: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    red: 'bg-red-50 text-red-600 border-red-200',
+  }
+
+  return (
+    <span className={clsx('text-sm px-4 py-2 rounded-lg border font-medium shadow-sm', colors[tone])}>
+      {children}
+    </span>
+  )
+}
+
+function InfoPanel({
+  icon: Icon,
+  title,
+  accent,
+  children,
+}: {
+  icon: React.ElementType
+  title: string
+  accent: string
+  children: React.ReactNode
+}) {
+  return (
+    <section className={clsx('bg-white rounded-2xl border border-gray-100 shadow-sm p-6 border-l-4', accent)}>
+      <div className="flex items-center gap-3 mb-4">
+        <Icon size={22} className="text-current" />
+        <h3 className="text-lg font-bold text-gray-900">{title}</h3>
+      </div>
+      {children}
+    </section>
+  )
+}
 
 function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
   char: Character
@@ -94,85 +130,105 @@ function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
   )
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-[#FAF8F4] p-6 overflow-auto">
       {/* 人物头部卡片 */}
-      <div className="shrink-0 bg-white border-b border-gray-100 px-5 pt-5 pb-3">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-full bg-gradient-to-br from-amber-300 to-amber-500 flex items-center justify-center shrink-0">
-            <span className="text-white text-xl font-bold">{char.name[0]}</span>
+      <div className="shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm px-8 py-7">
+        <div className="flex items-start gap-8">
+          <div className="w-28 h-28 rounded-full bg-gradient-to-br from-amber-300 to-amber-500 flex items-center justify-center shrink-0 shadow-sm">
+            <span className="text-white text-5xl font-bold">{char.name[0]}</span>
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-lg font-bold text-gray-900">{char.name}</h2>
+          <div className="flex-1 min-w-0 pt-2">
+            <div className="flex items-center gap-3 flex-wrap">
+              <h2 className="text-4xl font-bold text-gray-900 leading-tight">{char.name}</h2>
               {(form.alias ?? []).map(a => (
-                <span key={a} className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded">"{a}"</span>
+                <span key={a} className="text-sm px-2 py-1 bg-gray-100 text-gray-500 rounded-lg">"{a}"</span>
               ))}
-              <span className={clsx('text-xs px-2 py-0.5 rounded-full border font-medium', meta.color)}>{meta.label}</span>
-              <span className="flex items-center gap-1 text-xs text-gray-400">
-                <span className={clsx('w-1.5 h-1.5 rounded-full', statusM.dot)} />{statusM.label}
+              <span className={clsx('text-base px-3 py-1 rounded-lg border font-semibold', meta.color)}>{meta.label}</span>
+              <span className="flex items-center gap-2 text-base text-gray-400">
+                <span className={clsx('w-2.5 h-2.5 rounded-full', statusM.dot)} />{statusM.label}
               </span>
             </div>
-            <div className="text-sm text-gray-500 flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
+            <div className="text-lg text-gray-500 flex flex-wrap gap-x-4 gap-y-1 mt-4">
               {form.gender && <span>{form.gender}</span>}
+              {form.gender && form.age && <span className="text-gray-300">|</span>}
               {form.age && <span>{form.age}岁</span>}
-              {form.current_realm && <span className="text-amber-600 font-medium">⚡ {form.current_realm}</span>}
-              {form.faction && <span className="text-blue-600">⚔ {form.faction}</span>}
-              {form.current_location && <span className="text-gray-400">📍 {form.current_location}</span>}
+              {(form.gender || form.age) && (form.current_realm || form.faction || form.current_location) && <span className="text-gray-300">|</span>}
+              {form.current_realm && <span className="text-amber-600 font-medium">{form.current_realm}</span>}
+              {form.faction && <span className="text-blue-600">{form.faction}</span>}
+              {form.current_location && <span className="text-gray-400">{form.current_location}</span>}
             </div>
           </div>
-          <button onClick={() => onDelete(char.id)} className="text-gray-300 hover:text-red-400 transition-colors shrink-0">
-            <Trash2 size={16} />
+          <button onClick={() => onDelete(char.id)} className="w-11 h-11 rounded-xl border border-gray-200 text-gray-400 hover:text-red-400 hover:border-red-200 transition-colors shrink-0 flex items-center justify-center">
+            <Trash2 size={20} />
           </button>
         </div>
 
-        {/* 标签条 */}
+        {/* 标签只保留在头部，避免和基础信息卡片重复展示 */}
         {((form.special_traits?.length ?? 0) > 0 || (form.strengths?.length ?? 0) > 0 || (form.weaknesses?.length ?? 0) > 0) && (
-          <div className="flex flex-wrap gap-1.5 mt-3">
+          <div className="flex flex-wrap gap-3 mt-6 pl-36">
             {form.special_traits?.map(t => (
-              <span key={t} className="text-xs px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full border border-amber-200">{t}</span>
+              <CharacterTag key={`trait-${t}`} tone="amber">{t}</CharacterTag>
             ))}
             {form.strengths?.map(t => (
-              <span key={t} className="text-xs px-2 py-0.5 bg-green-50 text-green-700 rounded-full border border-green-200">+{t}</span>
+              <CharacterTag key={`strength-${t}`} tone="green">+ {t}</CharacterTag>
             ))}
             {form.weaknesses?.map(t => (
-              <span key={t} className="text-xs px-2 py-0.5 bg-red-50 text-red-600 rounded-full border border-red-200">−{t}</span>
+              <CharacterTag key={`weakness-${t}`} tone="red">− {t}</CharacterTag>
             ))}
           </div>
         )}
+      </div>
 
-        {/* 子Tab */}
-        <div className="flex gap-1 mt-3">
+      {/* 子Tab */}
+      <div className="shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm mt-5 px-8">
+        <div className="grid grid-cols-5">
           {DETAIL_TABS.map(({ key, label, icon: Icon }) => (
             <button key={key} onClick={() => setDetailTab(key)}
-              className={clsx('flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors',
-                detailTab === key ? 'bg-amber-50 text-amber-700 ring-1 ring-amber-200' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50')}>
-              <Icon size={12} />{label}
+              className={clsx('relative flex items-center justify-center gap-3 py-5 text-lg font-semibold transition-colors',
+                detailTab === key ? 'text-gray-900' : 'text-gray-500 hover:text-gray-700')}>
+              <Icon size={24} className={detailTab === key ? 'text-amber-500' : 'text-gray-500'} />{label}
+              {detailTab === key && <span className="absolute left-5 right-5 bottom-0 h-0.5 bg-amber-400 rounded-full" />}
             </button>
           ))}
         </div>
       </div>
 
       {/* 详情内容 */}
-      <div className="flex-1 overflow-auto bg-[#FAF8F4] p-5">
-        <div className="max-w-2xl mx-auto space-y-4">
+      <div className="flex-1 pt-7">
+        <div className="space-y-6">
 
           {detailTab === 'basic' && (
-            <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm space-y-4">
-              <div className="text-sm font-semibold text-gray-700">基础信息</div>
-              <div className="grid grid-cols-3 gap-3">
-                <Field label="姓名"><TInput value={form.name} onChange={f('name')} /></Field>
-                <Field label="性别"><TInput value={form.gender ?? ''} onChange={f('gender')} /></Field>
-                <Field label="年龄"><TInput value={form.age ?? ''} onChange={f('age')} /></Field>
+            <div className="grid grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)] gap-6">
+              <section className="bg-white rounded-2xl p-8 border border-gray-100 shadow-sm space-y-5">
+                <div className="flex items-center gap-3 border-b border-gray-100 pb-5">
+                  <FileText size={22} className="text-amber-500" />
+                  <h3 className="text-lg font-bold text-gray-900">基础信息</h3>
+                </div>
+                <div className="grid grid-cols-3 gap-5">
+                  <Field label="姓名"><TInput value={form.name} onChange={f('name')} /></Field>
+                  <Field label="性别"><TInput value={form.gender ?? ''} onChange={f('gender')} /></Field>
+                  <Field label="年龄"><TInput value={form.age ?? ''} onChange={f('age')} /></Field>
+                </div>
+                <div className="grid grid-cols-2 gap-5">
+                  <Field label="所属势力"><TInput value={form.faction ?? ''} onChange={f('faction')} /></Field>
+                  <Field label="势力职位"><TInput value={form.faction_rank ?? ''} onChange={f('faction_rank')} placeholder="如：内门首席弟子" /></Field>
+                </div>
+                <Field label="出生地"><TInput value={form.birthplace ?? ''} onChange={f('birthplace')} placeholder="未填写" /></Field>
+                <SaveBtn />
+              </section>
+
+              <div className="space-y-6">
+                <InfoPanel icon={BookOpen} title="背景经历" accent="border-l-blue-400">
+                  <TArea value={form.background ?? ''} onChange={f('background')} rows={5} />
+                </InfoPanel>
+                <InfoPanel icon={Target} title="核心动机" accent="border-l-emerald-400">
+                  <TArea value={form.motivation ?? ''} onChange={f('motivation')} rows={4} placeholder="想要什么？为什么这样行动？" />
+                </InfoPanel>
+                <InfoPanel icon={NotebookPen} title="作者备注（仅自用）" accent="border-l-purple-400">
+                  <TArea value={form.author_notes ?? ''} onChange={f('author_notes')} rows={3} placeholder="提醒自己犯错的错误、待展开的细节" />
+                </InfoPanel>
+                <div className="flex justify-end"><SaveBtn /></div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="所属势力"><TInput value={form.faction ?? ''} onChange={f('faction')} /></Field>
-                <Field label="势力职位"><TInput value={form.faction_rank ?? ''} onChange={f('faction_rank')} placeholder="如：内门首席弟子" /></Field>
-              </div>
-              <Field label="出生地"><TInput value={form.birthplace ?? ''} onChange={f('birthplace')} /></Field>
-              <Field label="背景经历"><TArea value={form.background ?? ''} onChange={f('background')} rows={4} /></Field>
-              <Field label="核心动机"><TArea value={form.motivation ?? ''} onChange={f('motivation')} rows={2} placeholder="想要什么？为什么这样行动？" /></Field>
-              <Field label="作者备注（仅自用）"><TArea value={form.author_notes ?? ''} onChange={f('author_notes')} rows={2} placeholder="提醒自己别犯的错误、待展开的细节" /></Field>
-              <SaveBtn />
             </div>
           )}
 

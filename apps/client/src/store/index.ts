@@ -59,7 +59,7 @@ function readStoredGenQueueState(): StoredGenQueuePayload {
     const parsed = JSON.parse(raw) as Partial<StoredGenQueuePayload>
     if (!Array.isArray(parsed.queue)) return { queue: [], open: false }
     const isValidTaskStatus = (status: unknown): status is GenTaskStatus =>
-      status === 'pending' || status === 'running' || status === 'done' || status === 'error'
+      status === 'pending' || status === 'running' || status === 'done' || status === 'error' || status === 'cancelled'
     const queue = parsed.queue
       .filter((t): t is GenTask =>
         !!t

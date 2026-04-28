@@ -12,15 +12,34 @@
 import React, { useEffect, useRef, useCallback } from 'react'
 import {
   Loader2, CheckCircle2, AlertCircle, ChevronUp, ChevronDown,
-  ListTodo, Sparkles, X, BookOpen,
+  ListTodo, X, BookOpen,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useAppStore } from '../../store'
-import type { GenTask, GenProgressItem } from '../../types'
+import type { Chapter, GenTask, GenProgressItem } from '../../types'
+import { chaptersApi } from '../../api/client'
 import {
   fetchOutlineExpandResult,
   commitOutlineExpand,
 } from '../../utils/outlineAiExpand'
+
+function escapeHtml(s: string) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function plainTextDraftToHtml(s: string) {
+  const blocks = s.split(/\n{2,}/).map(b => b.trim()).filter(Boolean)
+  if (blocks.length === 0) return '<p></p>'
+  return blocks.map(b => `<p>${escapeHtml(b).replace(/\n/g, '<br>')}</p>`).join('')
+}
+
+function parseSseDataLine(line: string): { text?: string; error?: string; done?: boolean } | null {
+  const t = line.trim()
+  if (!t.startsWith('data:')) return null
+  const raw = t.slice(5).trimStart()
+  if (raw === '[DONE]') return { done: true }
+  try { return JSON.parse(raw) } catch { return null }
+}
 
 // ── 任务执行器 ─────────────────────────────────────────────
 
@@ -160,12 +179,112 @@ async function runBatchExpand(
   onComplete(`批量展开完成：${successCount}/${nodes.length} 个节点成功`)
 }
 
+/** 执行 continue_chapters 任务：从当前章开始逐章续写，并把结果保存回章节正文 */
+async function runContinueChapters(
+  task: GenTask,
+  pushProgress: (item: GenProgressItem) => void,
+  onComplete: (msg: string) => void,
+  onError: (msg: string) => void,
+  signal: AbortSignal,
+  upsertChapter: (chapter: Chapter) => void,
+) {
+  const { projectId, params } = task
+  const chapterIds: string[] = Array.isArray(params.chapterIds) ? params.chapterIds : []
+  const userPrompt: string = typeof params.userPrompt === 'string' ? params.userPrompt : ''
+  const modelProfile: 'local' | 'gemini' = params.modelProfile ?? 'local'
+  const llmProviderId: string | undefined = params.llm_provider_id
+
+  let successCount = 0
+  for (let i = 0; i < chapterIds.length; i++) {
+    if (signal.aborted) {
+      onComplete(`已取消（已完成 ${successCount}/${chapterIds.length} 章）`)
+      return
+    }
+
+    const chapterId = chapterIds[i]
+    let chapter: Chapter
+    try {
+      const chapterRes = await chaptersApi.get(projectId, chapterId)
+      chapter = chapterRes.data
+    } catch (e: any) {
+      pushProgress({ step: i + 1, label: `读取第 ${i + 1} 章失败：${e?.message || '未知错误'}`, done: true, error: true })
+      onError(`读取章节失败，已完成 ${successCount}/${chapterIds.length} 章`)
+      return
+    }
+
+    const stepLabel = `${chapter.title}（${i + 1}/${chapterIds.length}）`
+    pushProgress({ step: i + 1, label: `正在续写 ${stepLabel}…`, done: false, error: false })
+
+    let accumulated = ''
+    try {
+      const res = await fetch(`/api/v1/projects/${projectId}/ai/draft-assist/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chapter_id: chapterId,
+          model_profile: modelProfile,
+          ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
+          user_prompt: userPrompt.trim() || null,
+          replace_existing: false,
+        }),
+        signal,
+      })
+
+      if (!res.ok) throw new Error((await res.text().catch(() => '')).slice(0, 240) || `HTTP ${res.status}`)
+      if (!res.body) throw new Error('响应无流式内容')
+
+      const reader = res.body.getReader()
+      const dec = new TextDecoder()
+      let buf = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += dec.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+        for (const line of lines) {
+          const parsed = parseSseDataLine(line)
+          if (!parsed) continue
+          if (parsed.error) throw new Error(parsed.error)
+          if (parsed.text) accumulated += parsed.text
+        }
+      }
+      for (const line of buf.split('\n')) {
+        const parsed = parseSseDataLine(line)
+        if (parsed?.error) throw new Error(parsed.error)
+        if (parsed?.text) accumulated += parsed.text
+      }
+
+      if (!accumulated.trim()) throw new Error('未收到正文内容')
+
+      const appendedHtml = plainTextDraftToHtml(accumulated.trim())
+      const nextContent = `${chapter.content || ''}${chapter.content ? '\n' : ''}${appendedHtml}`
+      const updateRes = await chaptersApi.update(projectId, chapterId, { content: nextContent })
+      upsertChapter(updateRes.data)
+      pushProgress({ step: i + 1, label: `✓ ${stepLabel} 已续写并保存`, done: true, error: false })
+      successCount++
+    } catch (e: any) {
+      if (signal.aborted || e?.name === 'AbortError') {
+        onComplete(`已取消（已完成 ${successCount}/${chapterIds.length} 章）`)
+        return
+      }
+      pushProgress({ step: i + 1, label: `✗ ${stepLabel} 失败：${e?.message || '未知错误'}`, done: true, error: true })
+      onError(`续写中断：${stepLabel} 失败，已完成 ${successCount}/${chapterIds.length} 章`)
+      return
+    }
+  }
+
+  onComplete(`多章续写完成：${successCount}/${chapterIds.length} 章已保存`)
+}
+
 // ── 单任务卡片 ─────────────────────────────────────────────
 
-function TaskCard({ task, onRemove }: { task: GenTask; onRemove: () => void }) {
+function TaskCard({ task, onRemove, onCancel }: { task: GenTask; onRemove: () => void; onCancel: () => void }) {
   const isRunning = task.status === 'running'
+  const isPending = task.status === 'pending'
   const isDone = task.status === 'done'
   const isError = task.status === 'error'
+  const isCancelled = task.status === 'cancelled'
 
   const statusIcon = isRunning ? (
     <Loader2 size={13} className="text-amber-500 animate-spin shrink-0" />
@@ -173,6 +292,8 @@ function TaskCard({ task, onRemove }: { task: GenTask; onRemove: () => void }) {
     <CheckCircle2 size={13} className="text-green-500 shrink-0" />
   ) : isError ? (
     <AlertCircle size={13} className="text-red-500 shrink-0" />
+  ) : isCancelled ? (
+    <X size={13} className="text-gray-500 shrink-0" />
   ) : (
     <span className="w-3 h-3 rounded-full bg-gray-300 shrink-0" />
   )
@@ -182,6 +303,7 @@ function TaskCard({ task, onRemove }: { task: GenTask; onRemove: () => void }) {
       'rounded-xl border px-3 py-2.5 text-xs transition-colors',
       isDone ? 'bg-green-50 border-green-200' :
       isError ? 'bg-red-50 border-red-200' :
+      isCancelled ? 'bg-gray-50 border-gray-200' :
       isRunning ? 'bg-amber-50 border-amber-200' :
       'bg-gray-50 border-gray-200'
     )}>
@@ -192,12 +314,22 @@ function TaskCard({ task, onRemove }: { task: GenTask; onRemove: () => void }) {
           'flex-1 font-medium truncate',
           isDone ? 'text-green-800' :
           isError ? 'text-red-700' :
+          isCancelled ? 'text-gray-500' :
           isRunning ? 'text-amber-800' :
           'text-gray-600'
         )}>
           {task.label}
         </span>
-        {(isDone || isError) && (
+        {(isRunning || isPending) && (
+          <button
+            onClick={onCancel}
+            className="text-gray-400 hover:text-red-500 p-0.5 rounded"
+            title="取消任务"
+          >
+            <X size={11} />
+          </button>
+        )}
+        {(isDone || isError || isCancelled) && (
           <button
             onClick={onRemove}
             className="text-gray-400 hover:text-gray-600 p-0.5 rounded"
@@ -238,6 +370,9 @@ function TaskCard({ task, onRemove }: { task: GenTask; onRemove: () => void }) {
       {task.errorMsg && (
         <p className="text-[11px] text-red-700 mt-1.5">{task.errorMsg}</p>
       )}
+      {isCancelled && (
+        <p className="text-[11px] text-gray-500 mt-1.5">已取消</p>
+      )}
     </div>
   )
 }
@@ -252,6 +387,7 @@ export default function GenerationQueuePanel() {
   const pushGenProgress = useAppStore(s => s.pushGenProgress)
   const removeGenTask = useAppStore(s => s.removeGenTask)
   const setOutlineNeedsReload = useAppStore(s => s.setOutlineNeedsReload)
+  const upsertChapter = useAppStore(s => s.upsertChapter)
 
   // 避免并发执行：记录正在运行的任务 id
   const runningIdRef = useRef<string | null>(null)
@@ -267,8 +403,13 @@ export default function GenerationQueuePanel() {
     const pushProgress = (item: GenProgressItem) => pushGenProgress(task.id, item)
 
     const onComplete = (msg: string) => {
+      if (abort.signal.aborted) {
+        updateGenTask(task.id, { status: 'cancelled', completedMsg: undefined, errorMsg: undefined })
+        runningIdRef.current = null
+        return
+      }
       updateGenTask(task.id, { status: 'done', completedMsg: msg })
-      setOutlineNeedsReload(true)
+      if (task.type === 'full_generate' || task.type === 'batch_expand') setOutlineNeedsReload(true)
       runningIdRef.current = null
     }
 
@@ -279,8 +420,12 @@ export default function GenerationQueuePanel() {
 
     if (task.type === 'full_generate') {
       await runFullGenerate(task, pushProgress, onComplete, onError, abort.signal)
-    } else {
+    } else if (task.type === 'batch_expand') {
       await runBatchExpand(task, pushProgress, onComplete, onError, abort.signal)
+    } else if (task.type === 'continue_chapters') {
+      await runContinueChapters(task, pushProgress, onComplete, onError, abort.signal, upsertChapter)
+    } else {
+      onError('未知任务类型')
     }
 
     // 若仍是 running（回调未正确结束任务），标为错误而非假成功
@@ -288,7 +433,19 @@ export default function GenerationQueuePanel() {
       updateGenTask(task.id, { status: 'error', errorMsg: '任务异常结束（未收到明确完成或失败信号）' })
       runningIdRef.current = null
     }
-  }, [updateGenTask, pushGenProgress, setOutlineNeedsReload])
+  }, [updateGenTask, pushGenProgress, setOutlineNeedsReload, upsertChapter])
+
+  const cancelTask = useCallback((task: GenTask) => {
+    if (task.status === 'pending') {
+      updateGenTask(task.id, { status: 'cancelled', completedMsg: undefined, errorMsg: undefined })
+      return
+    }
+    if (task.status === 'running') {
+      abortRef.current?.abort()
+      updateGenTask(task.id, { status: 'cancelled', completedMsg: undefined, errorMsg: undefined })
+      runningIdRef.current = null
+    }
+  }, [updateGenTask])
 
   // 自动调度：有 pending 且无 running 时执行下一个
   useEffect(() => {
@@ -334,6 +491,7 @@ export default function GenerationQueuePanel() {
                 key={task.id}
                 task={task}
                 onRemove={() => removeGenTask(task.id)}
+                onCancel={() => cancelTask(task)}
               />
             ))}
           </div>

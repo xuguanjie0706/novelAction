@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback, useRef, useState } from 'react'
+import React, { useEffect, useCallback, useMemo, useRef, useState } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import CharacterCount from '@tiptap/extension-character-count'
@@ -10,7 +10,7 @@ import toast from 'react-hot-toast'
 import {
   BookOpen, Sparkles, X, Zap, Target, Users, Flag, GitBranch, RefreshCw,
   Maximize2, Minimize2, Clock, StickyNote, ChevronDown,
-  Feather, PenLine,
+  Feather, PenLine, ListPlus,
   CheckSquare, TrendingUp, MapPin, Swords, Bot,
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -96,7 +96,7 @@ const INLINE_ACTIONS = [
 export default function ChapterEditor({
   projectId, chapter, outlineNode, prevChapter, onFocusModeChange,
 }: Props) {
-  const { upsertChapter, characters, storyLines, setStoryLines, setMemories } = useAppStore()
+  const { upsertChapter, chapters, characters, storyLines, setStoryLines, setMemories, addGenTask } = useAppStore()
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
   const storylineAutoSyncingRef = useRef(false)
   const memoryAutoSyncingRef = useRef(false)
@@ -117,6 +117,7 @@ export default function ChapterEditor({
   // ── 原有 AI 草稿功能 ───────────────────────────────────────────────
   const [aiDrafting, setAiDrafting]                     = useState(false)
   const [aiExtraPrompt, setAiExtraPrompt]               = useState('')
+  const [continueChapterCount, setContinueChapterCount] = useState(1)
   const [selectionText, setSelectionText]               = useState('')
   const [showSelectionBar, setShowSelectionBar]         = useState(false)
 
@@ -442,6 +443,49 @@ export default function ChapterEditor({
     setShowSelectionBar(false)
   }
 
+  const enqueueContinueChapters = async () => {
+    const ordered = [...chapters].sort((a, b) => a.sort_order - b.sort_order)
+    const startIndex = ordered.findIndex(c => c.id === chapter.id)
+    if (startIndex < 0) {
+      toast.error('未找到当前章节顺序，请刷新后重试')
+      return
+    }
+    const remaining = Math.max(1, ordered.length - startIndex)
+    const count = Math.min(Math.max(1, continueChapterCount || 1), remaining)
+    const targetChapters = ordered.slice(startIndex, startIndex + count)
+    if (targetChapters.length <= 1) {
+      generateDraft()
+      return
+    }
+
+    if (editor) {
+      try {
+        const currentContent = editor.getHTML()
+        if (currentContent !== chapter.content) {
+          const res = await chaptersApi.update(projectId, chapter.id, { content: currentContent })
+          upsertChapter(res.data)
+        }
+      } catch {
+        toast.error('当前章节保存失败，请稍后重试')
+        return
+      }
+    }
+
+    const route = useAppStore.getState().aiBackendRoute
+    addGenTask({
+      type: 'continue_chapters',
+      projectId,
+      label: `从《${chapter.title}》起续写 ${targetChapters.length} 章`,
+      params: {
+        chapterIds: targetChapters.map(c => c.id),
+        userPrompt: aiExtraPrompt.trim(),
+        modelProfile: modelProfileFromRoute(route),
+        ...routeLlmProviderPayload(route),
+      },
+    })
+    toast.success(`已加入 AI 队列：连续续写 ${targetChapters.length} 章`)
+  }
+
   /** 调用 AI 自动分析章节，预填复盘面板 */
   const runAutoDebrief = async () => {
     setAutoDebriefing(true)
@@ -585,6 +629,18 @@ export default function ChapterEditor({
     outlineNode.hook || outlineNode.summary || outlineNode.conflict || outlineNode.highlight
   )
   const currentStatus   = STATUS_OPTIONS.find(o => o.value === chapter.status) ?? STATUS_OPTIONS[0]
+  const orderedChapters = useMemo(
+    () => [...chapters].sort((a, b) => a.sort_order - b.sort_order),
+    [chapters],
+  )
+  const currentChapterIndex = orderedChapters.findIndex(c => c.id === chapter.id)
+  const remainingChapterCount = currentChapterIndex >= 0
+    ? Math.max(1, orderedChapters.length - currentChapterIndex)
+    : 1
+  const normalizedContinueCount = Math.min(
+    Math.max(1, continueChapterCount || 1),
+    remainingChapterCount,
+  )
   const prevTail        = prevChapter?.content ? htmlTail(prevChapter.content) : null
   const elapsedMin      = Math.floor(sessionElapsed / 60)
   const elapsedLabel    = elapsedMin > 0 ? `${elapsedMin}m` : sessionElapsed > 0 ? `${sessionElapsed}s` : ''
@@ -780,27 +836,60 @@ export default function ChapterEditor({
 
           {/* AI 输入工具区（专注模式下隐藏）*/}
           {!focusMode && (
-            <div className="border-t border-novel-border bg-novel-panel/90 px-6 py-3 shrink-0 space-y-2">
-              <textarea
-                value={aiExtraPrompt}
-                onChange={e => setAiExtraPrompt(e.target.value)}
-                rows={2}
-                disabled={aiDrafting}
-                placeholder="输入要求后可直接改写、扩写或重新生成"
-                className="w-full text-xs border border-novel-border rounded-novel px-3 py-2 bg-novel-card text-novel-ink placeholder:text-novel-ink-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-novel-accent resize-y min-h-[2.5rem] disabled:opacity-60"
-              />
-              <div className="flex flex-wrap items-center gap-2">
-                <button type="button" onClick={() => generateDraft()} disabled={aiDrafting}
-                  className="flex items-center gap-1.5 text-xs px-3 py-2 font-medium bg-novel-accent text-white rounded-novel hover:bg-novel-accent-hover disabled:opacity-60 transition-novel">
-                  <Sparkles size={13} className={aiDrafting ? 'animate-pulse' : ''} />
-                  {aiDrafting ? '生成中…' : '生成'}
-                </button>
-                {wordCount > 0 && (
-                  <button type="button" onClick={() => generateDraft({ replaceExisting: true })} disabled={aiDrafting}
-                    className="flex items-center gap-1.5 text-xs px-3 py-2 font-medium border border-red-200 text-red-700 bg-red-50/80 rounded-novel hover:bg-red-100 disabled:opacity-60 transition-novel">
-                    <RefreshCw size={13} />重新生成本章
-                  </button>
-                )}
+            <div className="border-t border-gray-100 bg-[#fbfaf7] px-5 py-4 shrink-0">
+              <div className="rounded-lg border border-gray-200 bg-white px-3 py-3 shadow-sm">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+                  <label className="flex-1 min-w-0">
+                    <span className="mb-1.5 block text-[11px] font-semibold text-gray-500">AI 续写要求</span>
+                    <input
+                      type="text"
+                      value={aiExtraPrompt}
+                      onChange={e => setAiExtraPrompt(e.target.value)}
+                      disabled={aiDrafting}
+                      placeholder="输入风格、情节走向或禁忌；留空则按大纲和上下文续写"
+                      className="h-10 w-full rounded-lg border border-gray-200 px-3 text-sm font-medium text-gray-800 outline-none transition placeholder:text-gray-400 focus:border-amber-400 focus:ring-2 focus:ring-amber-100 disabled:opacity-60"
+                    />
+                  </label>
+
+                  <div className="flex flex-wrap items-end gap-2 lg:self-end">
+                    <label className="w-28">
+                      <span className="mb-1.5 block text-[11px] font-semibold text-gray-500">连续章节</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={remainingChapterCount}
+                        value={normalizedContinueCount}
+                        disabled={aiDrafting}
+                        onChange={e => {
+                          const next = Number(e.target.value)
+                          setContinueChapterCount(Number.isFinite(next) ? next : 1)
+                        }}
+                        className="h-10 w-full rounded-lg border border-gray-200 px-3 text-sm font-medium text-gray-800 outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100 disabled:opacity-60"
+                      />
+                    </label>
+
+                    <div className="flex flex-col gap-1.5">
+                      <span className="block text-[11px] font-semibold text-transparent select-none">操作</span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button type="button" onClick={enqueueContinueChapters} disabled={aiDrafting}
+                          className="flex h-10 items-center gap-2 rounded-lg bg-amber-500 px-4 text-sm font-semibold text-white transition-colors hover:bg-amber-600 disabled:opacity-60">
+                          {normalizedContinueCount > 1
+                            ? <ListPlus size={15} />
+                            : <Sparkles size={15} className={aiDrafting ? 'animate-pulse' : ''} />}
+                          {normalizedContinueCount > 1 ? '加入队列' : aiDrafting ? '生成中…' : '生成'}
+                        </button>
+
+                        {wordCount > 0 && (
+                          <button type="button" onClick={() => generateDraft({ replaceExisting: true })} disabled={aiDrafting}
+                            className="flex h-10 items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 text-sm font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:opacity-60">
+                            <RefreshCw size={14} />重写本章
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
               </div>
             </div>
           )}

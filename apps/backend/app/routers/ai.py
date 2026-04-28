@@ -65,6 +65,10 @@ async def quality_check(
     if not chapter:
         raise HTTPException(404, "Chapter not found")
 
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
     memories = db.query(MemoryChunk).filter(
         MemoryChunk.project_id == project_id
     ).order_by(MemoryChunk.chapter_number).limit(50).all()
@@ -374,6 +378,10 @@ async def draft_assist_stream(
     if not chapter:
         raise HTTPException(404, "Chapter not found")
 
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
     # ── 大纲节点（可选）──────────────────────────────
     outline_node = None
     if chapter.outline_node_id:
@@ -490,6 +498,7 @@ async def draft_assist_stream(
                 storyline_summary=storyline_summary,
                 memory_summary=memory_summary,
                 existing_content=existing_content,
+                premise=project.premise or "",
                 user_prompt=req.user_prompt or "",
                 replace_existing=req.replace_existing,
             ):

@@ -464,6 +464,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         character_summary: str,
         memory_summary: str,
         existing_content: str,
+        premise: str = "",
         user_prompt: str = "",
         replace_existing: bool = False,
         # 新增：故事线、实力里程碑、情感基调
@@ -489,19 +490,21 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 4. 注意上一章结尾的衔接，保持情感和节奏的连续性
 5. 如果本章有实力里程碑（如突破境界），要让这一刻有分量
 6. 故事线进展要顺势推进，切勿无视当前活跃的冲突线
-7. 直接给出正文，不要解释、不要旁白、不要说"好的"之类的废话"""
+7. 每一场戏都必须服务作品基本面：读者定位、核心命题、爽点承诺、禁忌边界
+8. 直接给出正文，不要解释、不要旁白、不要说"好的"之类的废话"""
 
         if replace_existing:
             task_line = (
-                "【整章重写】请根据本章大纲与故事背景，写出全新正文约 800 字，"
+                "【整章重写】请根据本章大纲与故事背景，写出全新正文约2200-2400字，"
                 "不要复述或抄袭旧稿套话；若旧稿与大纲冲突，以大纲为准。"
             )
         elif has_content:
-            task_line = f"当前已写内容（最后500字供衔接参考）：\n{existing_content[-500:]}\n\n请根据章节计划，续写接下来约600字的正文："
+            task_line = f"当前已写内容（最后500字供衔接参考）：\n{existing_content[-500:]}\n\n请根据章节计划，续写接下来约1200-1600字的正文，保持章节爽点与情绪推进："
         else:
-            task_line = "请根据章节计划，写出本章开篇约600字，第一句话必须立刻抓住读者："
+            task_line = "请根据章节计划，写出本章完整初稿约2200-2400字，第一句话必须立刻抓住读者，并在章末留下追读钩子："
 
         # 控制 prompt 总长度（8b 模型 context 约 8k，每段严格限字）
+        premise_part = premise[:1200] if premise else "（未填写；请从创意、人物和大纲中提炼作品基本面，但不得违背既有设定）"
         world_part = world_summary[:200] if world_summary else "（未设定）"
         char_part = character_summary[:300] if character_summary else "（未设定）"
         mem_part = f"\n近期关键事件：{memory_summary[:150]}" if memory_summary else ""
@@ -516,7 +519,10 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         if user_prompt and user_prompt.strip():
             extra = f"\n\n【作者补充要求】\n{user_prompt.strip()[:800]}"
 
-        prompt = f"""【故事背景】
+        prompt = f"""【立意与类型 / PREMISE】
+{premise_part}
+
+【故事背景】
 世界观：{world_part}
 主要人物（含境界/位置/技能）：{char_part}{mem_part}{storyline_part}
 
@@ -533,7 +539,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 
 {task_line}{extra}"""
 
-        async for chunk in self._stream_ai(system, prompt):
+        async for chunk in self._stream_ai(system, prompt, max_tokens=4096):
             yield chunk
 
     # ── 自动复盘提取 ──────────────────────────────────
@@ -665,7 +671,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         )
         return resp.choices[0].message.content or ""
 
-    async def _stream_ai(self, system: str, prompt: str) -> AsyncGenerator[str, None]:
+    async def _stream_ai(self, system: str, prompt: str, max_tokens: int = 2048) -> AsyncGenerator[str, None]:
         client = self._get_client()
         stream = await client.chat.completions.create(
             model=self.model,
@@ -673,6 +679,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
+            max_tokens=max_tokens,
             stream=True,
         )
         async for chunk in stream:

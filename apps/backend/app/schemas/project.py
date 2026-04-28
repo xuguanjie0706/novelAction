@@ -8,6 +8,7 @@ class ProjectCreate(BaseModel):
     title: str
     genre: Optional[str] = None
     logline: Optional[str] = None
+    premise: Optional[str] = None
     world_overview: Optional[str] = None
     story_core: Optional[dict] = {}
     target_words: Optional[str] = None
@@ -17,6 +18,7 @@ class ProjectUpdate(BaseModel):
     title: Optional[str] = None
     genre: Optional[str] = None
     logline: Optional[str] = None
+    premise: Optional[str] = None
     world_overview: Optional[str] = None
     story_core: Optional[dict] = None
     status: Optional[str] = None
@@ -29,6 +31,7 @@ class ProjectOut(BaseModel):
     title: str
     genre: Optional[str]
     logline: Optional[str]
+    premise: Optional[str]
     world_overview: Optional[str]
     story_core: Optional[dict]
     status: str

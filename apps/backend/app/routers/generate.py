@@ -13,6 +13,7 @@ router = APIRouter(prefix="/bootstrap", tags=["bootstrap"])
 
 class BootstrapRequest(BaseModel):
     logline: str
+    premise: Optional[str] = None
     mode: Literal["sequential", "single_shot"] = "sequential"
     model_profile: Literal["local", "gemini"] = "local"
     llm_provider_id: Optional[UUID] = None
@@ -36,7 +37,7 @@ async def bootstrap_stream(
     )
 
     async def event_stream():
-        async for chunk in svc.bootstrap(logline=req.logline, mode=req.mode):
+        async for chunk in svc.bootstrap(logline=req.logline, premise=req.premise or "", mode=req.mode):
             yield chunk
         # 心跳结束
         yield "data: {\"event\": \"end\"}\n\n"

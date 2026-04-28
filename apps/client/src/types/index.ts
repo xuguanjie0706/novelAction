@@ -4,6 +4,7 @@ export interface Project {
   title: string
   genre?: string
   logline?: string
+  premise?: string
   world_overview?: string
   story_core?: Record<string, any>
   status: 'drafting' | 'writing' | 'completed'

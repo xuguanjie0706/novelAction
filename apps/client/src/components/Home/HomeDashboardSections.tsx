@@ -296,9 +296,9 @@ export function CreateProjectDialog({
   onClose,
   onUseAi,
 }: {
-  form: { title: string; genre: string; logline: string }
+  form: { title: string; genre: string; logline: string; premise: string }
   creating: boolean
-  onChange: React.Dispatch<React.SetStateAction<{ title: string; genre: string; logline: string }>>
+  onChange: React.Dispatch<React.SetStateAction<{ title: string; genre: string; logline: string; premise: string }>>
   onCreate: () => void
   onClose: () => void
   onUseAi: () => void
@@ -335,6 +335,13 @@ export function CreateProjectDialog({
             value={form.logline}
             onChange={e => onChange(f => ({ ...f, logline: e.target.value }))}
             rows={3}
+            className="w-full resize-none rounded-lg border border-gray-200 px-3 py-3 text-sm outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+          />
+          <textarea
+            placeholder="立意与类型（选填）：目标读者、主题命题、核心矛盾、禁忌边界..."
+            value={form.premise}
+            onChange={e => onChange(f => ({ ...f, premise: e.target.value }))}
+            rows={5}
             className="w-full resize-none rounded-lg border border-gray-200 px-3 py-3 text-sm outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
           />
         </div>

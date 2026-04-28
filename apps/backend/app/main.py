@@ -87,8 +87,21 @@ def _ensure_character_relationship_columns() -> None:
         ))
 
 
+def _ensure_project_columns() -> None:
+    """
+    开发环境兼容迁移：为已有 projects 表补齐作品基本面字段。
+    """
+    ddl_statements = [
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS premise TEXT",
+    ]
+    with engine.begin() as conn:
+        for ddl in ddl_statements:
+            conn.execute(text(ddl))
+
+
 # 自动建表（开发用，生产建议改用 Alembic）
 Base.metadata.create_all(bind=engine)
+_ensure_project_columns()
 _ensure_outline_node_columns()
 _ensure_character_columns()
 _ensure_character_relationship_columns()

@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Map } from 'lucide-react'
-import { settingsApi } from '../api/client'
+import { Plus } from 'lucide-react'
+import { projectsApi, settingsApi } from '../api/client'
 import { useAppStore } from '../store'
-import type { WorldSetting } from '../types'
+import type { Project, WorldSetting } from '../types'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 
@@ -24,7 +24,7 @@ function getIcon(title: string) {
 
 export default function SettingsPage() {
   const { projectId } = useParams<{ projectId: string }>()
-  const { settings, setSettings, upsertSetting, removeSetting } = useAppStore()
+  const { currentProject, setCurrentProject, settings, setSettings, upsertSetting, removeSetting } = useAppStore()
   const [selected, setSelected] = useState<WorldSetting | null>(null)
   const [creating, setCreating] = useState(false)
   const [newTitle, setNewTitle] = useState('')
@@ -33,9 +33,25 @@ export default function SettingsPage() {
     if (!projectId) return
     settingsApi.list(projectId).then(res => {
       setSettings(res.data)
-      if (res.data.length > 0) setSelected(res.data[0])
+      if (res.data.length > 0) {
+        const premiseCard = res.data.find((s: WorldSetting) => isPremiseSetting(s.title, s.tags))
+        setSelected(premiseCard ?? res.data[0])
+      }
     })
+    projectsApi.get(projectId)
+      .then(res => setCurrentProject(res.data))
+      .catch(() => {})
   }, [projectId])
+
+  const syncProjectPremise = async (content: string) => {
+    if (!projectId || !currentProject) return
+    try {
+      const res = await projectsApi.update(projectId, { premise: content })
+      setCurrentProject(res.data)
+    } catch {
+      // ignore sync errors to avoid blocking card saving
+    }
+  }
 
   const create = async () => {
     if (!newTitle.trim() || !projectId) return
@@ -107,19 +123,29 @@ export default function SettingsPage() {
 
       {/* 右栏：设定卡详情 */}
       <div className="flex-1 overflow-auto bg-[#FAF8F4]">
-        {selected
-          ? <SettingDetail setting={selected} projectId={projectId!} onUpdate={upsertSetting} />
-          : <div className="flex items-center justify-center h-full text-gray-400 text-sm">选择左侧设定卡查看详情</div>
-        }
+        <div className="max-w-2xl mx-auto p-6 space-y-4">
+          {selected
+            ? (
+              <SettingDetail
+                setting={selected}
+                projectId={projectId!}
+                onUpdate={upsertSetting}
+                onPremiseSync={syncProjectPremise}
+              />
+            )
+            : <div className="flex items-center justify-center min-h-60 text-gray-400 text-sm">选择左侧设定卡查看详情</div>
+          }
+        </div>
       </div>
     </div>
   )
 }
 
-function SettingDetail({ setting, projectId, onUpdate }: {
+function SettingDetail({ setting, projectId, onUpdate, onPremiseSync }: {
   setting: WorldSetting
   projectId: string
   onUpdate: (s: WorldSetting) => void
+  onPremiseSync?: (content: string) => Promise<void>
 }) {
   const [form, setForm] = useState({ title: setting.title, content: setting.content ?? '', tags: setting.tags })
   const [saving, setSaving] = useState(false)
@@ -135,6 +161,9 @@ function SettingDetail({ setting, projectId, onUpdate }: {
     try {
       const res = await settingsApi.update(projectId, setting.id, form)
       onUpdate(res.data)
+      if (isPremiseSetting(form.title, form.tags)) {
+        await onPremiseSync?.(form.content)
+      }
       toast.success('已保存')
     } catch { toast.error('保存失败') }
     finally { setSaving(false) }
@@ -149,7 +178,7 @@ function SettingDetail({ setting, projectId, onUpdate }: {
   const removeTag = (t: string) => setForm(f => ({ ...f, tags: f.tags.filter(x => x !== t) }))
 
   return (
-    <div className="max-w-2xl mx-auto p-6 space-y-4">
+    <div className="space-y-4">
       {/* 标题栏 */}
       <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm flex items-center gap-3">
         <span className="text-3xl">{getIcon(setting.title)}</span>
@@ -203,4 +232,11 @@ function SettingDetail({ setting, projectId, onUpdate }: {
       </div>
     </div>
   )
+}
+
+function isPremiseSetting(title: string, tags: string[]) {
+  const t = title.trim()
+  if (t === '作品立意') return true
+  if (t.includes('立意') && t.includes('类型')) return true
+  return tags.some(tag => tag.includes('立意') || tag.includes('主题'))
 }

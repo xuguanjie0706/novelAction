@@ -28,6 +28,7 @@ apps/frontend/package-lock.json
 
 # Logs
 *.log
+*.pid
 npm-debug.log*
 pnpm-debug.log*
 yarn-debug.log*
@@ -39,4 +40,8 @@ yarn-error.log*
 
 
 .env
-.local/logs
+.local/logs/
+.local/logs/*.pid
+admin.pid
+backend.pid
+client.pid

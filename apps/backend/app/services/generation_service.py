@@ -95,21 +95,22 @@ class GenerationService:
     async def bootstrap(
         self,
         logline: str,
+        premise: str = "",
         mode: Literal["sequential", "single_shot"] = "sequential",
     ) -> AsyncGenerator[str, None]:
         if mode == "single_shot":
-            async for chunk in self._single_shot(logline):
+            async for chunk in self._single_shot(logline, premise):
                 yield chunk
         else:
-            async for chunk in self._sequential(logline):
+            async for chunk in self._sequential(logline, premise):
                 yield chunk
 
     # ══════════════════════════════════════════════════════════
     #  方案 A：串行步进
     # ══════════════════════════════════════════════════════════
 
-    async def _sequential(self, logline: str) -> AsyncGenerator[str, None]:
-        ctx = {"logline": logline}   # 上下文在步骤间传递
+    async def _sequential(self, logline: str, premise: str = "") -> AsyncGenerator[str, None]:
+        ctx = {"logline": logline, "premise": premise}   # 上下文在步骤间传递
 
         try:
             # Step 1 — 项目基础
@@ -130,7 +131,7 @@ class GenerationService:
                        preview="、".join(c.name for c in chars[:3]))
 
             # Step 4 — 大纲
-            yield _sse("step_start", step="outline", label="生成大纲树（3卷+前10章）...")
+            yield _sse("step_start", step="outline", label="生成大纲树（卷数与章节动态规划）...")
             nodes = await self._gen_outline(project, ctx)
             yield _sse("step_done", step="outline", count=len(nodes))
 
@@ -153,7 +154,7 @@ class GenerationService:
     #  方案 B：单次全量（适合 Gemini）
     # ══════════════════════════════════════════════════════════
 
-    async def _single_shot(self, logline: str) -> AsyncGenerator[str, None]:
+    async def _single_shot(self, logline: str, premise: str = "") -> AsyncGenerator[str, None]:
         yield _sse("step_start", step="all", label="AI 全量生成中（单次调用）...")
 
         system = """你是专业的网络小说策划，根据一句话创意生成完整的小说初始化数据。
@@ -162,6 +163,7 @@ class GenerationService:
         prompt = f"""根据以下创意，生成完整的小说初始化数据：
 
 创意：{logline}
+立意与类型（作品基本面）：{premise[:2000] or '（未填写，请根据创意自动提炼作品定位、主题命题、核心矛盾与禁忌边界）'}
 
 返回以下 JSON 结构（严格遵守字段名）：
 {{
@@ -169,6 +171,7 @@ class GenerationService:
     "title": "小说名称",
     "genre": "玄幻",
     "logline": "{logline}",
+    "premise": "立意与类型：作品定位、核心一句话、类型篇幅、主题命题、核心矛盾、结局倾向、禁忌边界等",
     "world_overview": "世界观简述（200字）",
     "story_core": {{
       "drive": "复仇",
@@ -178,6 +181,7 @@ class GenerationService:
     }}
   }},
   "settings": [
+    {{"title": "作品立意", "content": "作品定位、主题命题、核心矛盾、情感基调、禁忌边界", "tags": ["立意", "主题"]}},
     {{"title": "修炼体系", "content": "详细描述", "tags": ["境界", "突破"]}},
     {{"title": "主要势力", "content": "详细描述", "tags": ["宗门"]}},
     {{"title": "世界规则", "content": "详细描述", "tags": ["法则"]}},
@@ -199,12 +203,9 @@ class GenerationService:
       "summary": "本卷概述",
       "children": [
         {{"node_type": "chapter_plan", "title": "第1章：标题", "sort_order": 0,
-          "hook": "钩子", "highlight": "燃点", "conflict": "冲突", "summary": "章节摘要"}},
-        ...共10个chapter_plan
+          "hook": "钩子", "highlight": "燃点", "conflict": "冲突", "summary": "章节摘要"}}
       ]
-    }},
-    {{"node_type": "volume", "title": "第二卷：标题", "sort_order": 1, "summary": "...", "children": []}},
-    {{"node_type": "volume", "title": "第三卷：标题", "sort_order": 2, "summary": "...", "children": []}}
+    }}
   ],
   "memory": [
     {{"memory_type": "setting", "title": "修炼体系锚点", "content": "...", "tags": ["设定"]}},
@@ -221,7 +222,7 @@ class GenerationService:
             yield _sse("step_done", step="all", count=1)
 
             yield _sse("step_start", step="saving", label="写入数据库...")
-            project = await self._save_all(data, logline)
+            project = await self._save_all(data, logline, premise)
             yield _sse("step_done", step="saving", count=1)
             yield _sse("complete", project_id=str(project.id))
 
@@ -235,19 +236,26 @@ class GenerationService:
     async def _gen_project(self, ctx: dict):
         system = "你是网络小说策划专家。根据创意生成项目基础信息，只返回JSON。"
         prompt = f"""创意：{ctx['logline']}
+立意与类型：{ctx.get('premise')[:1500] if ctx.get('premise') else '（未填写，请自动提炼作品定位、主题命题、核心矛盾与禁忌边界）'}
 
 返回JSON：
 {{
   "title": "小说名（2~6个汉字，有冲击力）",
   "genre": "玄幻",
-  "world_overview": "世界观简述，200字以内",
+  "premise": "使用 markdown 二级标题输出完整《立意与类型（PREMISE）》，必须包含：作品定位、核心一句话、类型与篇幅、主题与命题、核心矛盾、主角概况、结局倾向、最坏会怎样（收束边界）、希望读者记住的一个画面、叙事视角与禁忌",
+  "world_overview": "世界观简述，300~500字，包含力量体系、势力格局、社会规则",
   "story_core": {{
     "drive": "故事驱动力（成长/复仇/守护等）",
     "conflict": "核心矛盾",
     "theme": "主题",
     "differentiation": "与同类小说的差异化"
   }}
-}}"""
+}}
+要求：
+1) premise 不要空话，必须可直接作为作者创作基线
+2) premise 中必须给出清晰的目标读者、篇幅规模、禁忌边界
+3) theme / conflict 要与 premise 一致
+4) 只返回 JSON，不要解释文字。"""
 
         raw = await self._call_with_retry(system, prompt)
         data = _parse_json(raw)
@@ -256,6 +264,7 @@ class GenerationService:
             title=data["title"],
             genre=data.get("genre", "玄幻"),
             logline=ctx["logline"],
+            premise=data.get("premise") or ctx.get("premise") or "",
             world_overview=data.get("world_overview", ""),
             story_core=data.get("story_core", {}),
         )
@@ -267,6 +276,7 @@ class GenerationService:
         ctx["genre"] = project.genre
         ctx["world_overview"] = project.world_overview
         ctx["story_core"] = data.get("story_core", {})
+        ctx["premise"] = project.premise or ctx.get("premise") or ""
 
         return project, ctx
 
@@ -278,15 +288,27 @@ class GenerationService:
         system = "你是网络小说世界观设计专家。只返回JSON数组。"
         prompt = f"""小说：《{ctx['project_title']}》({ctx['genre']})
 创意：{ctx['logline']}
+立意与类型：{ctx.get('premise', '')[:1000] or '（未填写）'}
 世界观：{ctx['world_overview'][:300]}
 
-生成4张世界观设定卡，返回JSON数组：
+生成8张设定卡，返回JSON数组（第一张必须是“作品立意”）：
 [
+  {{"title": "作品立意", "content": "提炼作品定位、主题命题、核心矛盾、情感基调与禁忌边界", "tags": ["立意", "主题"]}},
   {{"title": "修炼体系", "content": "详细说明境界、突破条件、上限", "tags": ["境界", "修炼"]}},
   {{"title": "主要势力", "content": "3个主要势力的名称、特色、立场", "tags": ["势力", "宗门"]}},
   {{"title": "世界规则", "content": "2~3条最重要的世界底层规则", "tags": ["规则", "法则"]}},
-  {{"title": "特殊资源", "content": "本世界独特的修炼资源或道具", "tags": ["资源", "道具"]}}
-]"""
+  {{"title": "特殊资源", "content": "本世界独特的修炼资源或道具", "tags": ["资源", "道具"]}},
+  {{"title": "丹药/功法体系", "content": "关键丹药线与功法成长路径", "tags": ["丹药", "功法"]}},
+  {{"title": "地图与区域风险", "content": "关键地点、资源点、禁地与风险层级", "tags": ["地图", "风险"]}},
+  {{"title": "历史谜团与禁忌", "content": "驱动长线追读的历史真相与禁忌边界", "tags": ["谜团", "禁忌"]}}
+]
+要求：
+1) 第一张卡标题固定为“作品立意”
+2) 若用户未提供立意，由你根据创意自动提炼
+3) “作品立意”聚焦作品基本面，不写世界规则细节
+4) 其余卡片聚焦可执行设定，避免空话
+5) 每张卡 content 至少120字，且要有可落地细节（名词、规则、代价、限制）
+只返回JSON，不要解释。"""
 
         raw = await self._call_with_retry(system, prompt)
         data = _parse_json(raw)
@@ -316,9 +338,10 @@ class GenerationService:
         system = "你是网络小说人物设计专家。只返回JSON数组。"
         prompt = f"""小说：《{ctx['project_title']}》({ctx['genre']})
 创意：{ctx['logline']}
+立意与类型：{ctx.get('premise', '')[:1000] or '（未填写）'}
 故事核：冲突={ctx['story_core'].get('conflict','')}，主题={ctx['story_core'].get('theme','')}
 
-生成5个人物（1主角+2配角+1反派+1导师/长辈），返回JSON数组：
+生成8个人物（至少：1主角+3核心配角+2反派+2师长/势力角色），返回JSON数组：
 [
   {{
     "name": "姓名", "role": "protagonist",
@@ -327,6 +350,11 @@ class GenerationService:
     "background": "背景经历（3句话）",
     "motivation": "核心动机",
     "arc": "人物弧线（从X到Y的成长）",
+    "current_realm": "当前境界（或能力层级）",
+    "speech_style": "说话风格",
+    "values": "价值观",
+    "fear": "最恐惧的东西",
+    "secrets": "不愿公开的秘密",
     "strengths": ["特质1", "特质2"],
     "weaknesses": ["弱点1"],
     "special_traits": ["特殊能力或标志性特征"]
@@ -352,6 +380,11 @@ role 只能是: protagonist / supporting / antagonist"""
                 background=item.get("background"),
                 motivation=item.get("motivation"),
                 arc=item.get("arc"),
+                current_realm=item.get("current_realm"),
+                speech_style=item.get("speech_style"),
+                values=item.get("values"),
+                fear=item.get("fear"),
+                secrets=item.get("secrets"),
                 strengths=item.get("strengths", []),
                 weaknesses=item.get("weaknesses", []),
                 special_traits=item.get("special_traits", []),
@@ -372,10 +405,15 @@ role 只能是: protagonist / supporting / antagonist"""
         system = "你是网络小说结构策划专家。只返回JSON数组。"
         prompt = f"""小说：《{ctx['project_title']}》主角：{ctx['protagonist']}
 创意：{ctx['logline']}
+立意与类型：{ctx.get('premise', '')[:1200] or '（未填写）'}
 设定：{ctx['settings_summary']}
 
 生成大纲树，返回JSON数组。结构严格为：卷→章（两层），不要使用“篇”或 arc 节点。
-第一卷下展开前10个章节计划；其余两卷只写卷标题和概述（children为空）。
+卷数和章节数必须按故事规模动态规划，禁止写死“3卷”或“前10章”。
+要求：
+1) 卷数量建议 4~8 卷（最少 3 卷）
+2) 首批至少产出 20~40 个章节计划，按剧情自然分布到前几卷
+3) 后续卷也应给出基础章节骨架，不要只有空壳 children
 
 [
   {{
@@ -388,15 +426,9 @@ role 只能是: protagonist / supporting / antagonist"""
         "hook": "开头的悬念/钩子",
         "highlight": "本章最高燃点",
         "conflict": "核心冲突"
-      }},
-      {{
-        "node_type": "chapter_plan", "title": "第2章：章节标题", "sort_order": 1,
-        "summary": "...", "hook": "...", "highlight": "...", "conflict": "..."
       }}
     ]
-  }},
-  {{"node_type": "volume", "title": "第二卷：标题", "sort_order": 1, "summary": "...", "children": []}},
-  {{"node_type": "volume", "title": "第三卷：标题", "sort_order": 2, "summary": "...", "children": []}}
+  }}
 ]
 注意：只返回JSON数组，不要任何说明文字。"""
 
@@ -531,13 +563,14 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
     #  单次全量保存（方案B）
     # ══════════════════════════════════════════════════════════
 
-    async def _save_all(self, data: dict, logline: str) -> Project:
+    async def _save_all(self, data: dict, logline: str, premise: str = "") -> Project:
         """把方案B生成的完整 JSON 一次性存库"""
         p = data["project"]
         project = Project(
             title=p["title"],
             genre=p.get("genre", "玄幻"),
             logline=logline,
+            premise=p.get("premise") or premise or "",
             world_overview=p.get("world_overview", ""),
             story_core=p.get("story_core", {}),
         )

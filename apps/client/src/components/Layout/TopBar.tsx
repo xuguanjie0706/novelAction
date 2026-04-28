@@ -1,5 +1,6 @@
 import React from 'react'
-import { Sparkles } from 'lucide-react'
+import { ArrowLeft, Sparkles } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { useAppStore } from '../../store'
 import clsx from 'clsx'
 import LlmAgentMenu from './LlmAgentMenu'
@@ -12,6 +13,14 @@ export default function TopBar({ projectId }: Props) {
   return (
     <header className="h-11 flex items-center justify-between px-4 bg-white border-b border-gray-100 shrink-0">
       <div className="flex items-center gap-2">
+        <Link
+          to="/"
+          className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-800"
+          title="返回首页"
+        >
+          <ArrowLeft size={12} />
+          首页
+        </Link>
         <span className="font-semibold text-sm text-gray-800">
           {currentProject?.title ?? '加载中...'}
         </span>

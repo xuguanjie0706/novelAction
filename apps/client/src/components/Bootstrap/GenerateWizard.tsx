@@ -24,7 +24,7 @@ const STEP_DEFS: { key: StepKey; label: string }[] = [
   { key: 'project',    label: '项目基础信息' },
   { key: 'settings',   label: '世界观设定卡' },
   { key: 'characters', label: '人物库' },
-  { key: 'outline',    label: '大纲树（3卷+前10章）' },
+  { key: 'outline',    label: '大纲树（卷章动态规划）' },
   { key: 'memory',     label: '记忆库种子' },
   { key: 'relations',  label: '人物关系' },
 ]
@@ -211,6 +211,9 @@ export default function GenerateWizard({ onClose }: Props) {
               />
               <p className="text-xs text-gray-400 mt-1">越具体越好，包含主角特点、世界背景、核心矛盾</p>
             </div>
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+              立意、主题和设定将由 AI 根据一句话创意自动生成，你无需额外填写设定项。
+            </p>
 
             {/* 模式选择 */}
             <div>

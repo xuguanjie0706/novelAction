@@ -13,6 +13,7 @@ class Project(Base):
     title = Column(String(200), nullable=False)
     genre = Column(String(100))                    # 玄幻/都市/科幻...
     logline = Column(Text)                         # 一句话创意
+    premise = Column(Text)                         # 立意与类型：作品定位、主题命题、禁忌边界等
     world_overview = Column(Text)                  # 世界观简述
     story_core = Column(JSON, default=dict)        # 故事核: {drive, conflict, theme, ...}
     status = Column(String(20), default="drafting") # drafting/writing/completed

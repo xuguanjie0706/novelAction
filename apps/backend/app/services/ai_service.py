@@ -297,17 +297,18 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
     async def expand_outline(
         self,
         node_title: str,
-        node_type: str,              # volume / arc
+        node_type: str,              # volume / legacy arc
         node_summary: str,
         project_title: str,
         genre: str,
         world_summary: str,
         character_summary: str,
+        theme_statement: str = "",
         existing_chapters: int = 0,  # 已有章节数，用于章节编号连续
         chapter_count: int = 10,     # 生成几章
     ) -> dict:
         """
-        为选定的大纲节点（卷/篇）生成详细的子章节计划。
+        为选定的大纲节点（卷或旧篇）生成详细的子章节计划。
         返回「五要素」格式：开篇钩子/核心事件/人物变化/伏笔管理/章末钩子。
         """
         system = """你是拥有30年经验的网络小说策划，深刻理解网文追读机制。
@@ -317,13 +318,14 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 
         start_num = existing_chapters + 1
         prompt = f"""小说：《{project_title}》（{genre}）
-当前节点：{node_type == 'volume' and '卷' or '篇'}《{node_title}》
+当前节点：{node_type == 'volume' and '卷' or '旧篇'}《{node_title}》
 节点概述：{node_summary or '（未填写）'}
 
 世界观摘要：{world_summary[:400]}
 主要人物：{character_summary[:300]}
+全书立意：{theme_statement[:300] or '（未填写；请从创意和人物中提炼一条贯穿全书的价值命题）'}
 
-请为本{node_type == 'volume' and '卷' or '篇'}生成 {chapter_count} 个章节计划，章节编号从第{start_num}章开始。
+请为本{node_type == 'volume' and '卷' or '旧篇'}生成 {chapter_count} 个章节计划，章节编号从第{start_num}章开始。
 
 每章使用「作家五要素」格式，返回 JSON：
 {{
@@ -342,15 +344,17 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
       "foreshadow": "伏笔管理：本章新埋的伏笔 / 回收的旧伏笔（格式：埋[xxx] 收[xxx]）",
       "end_hook": "章末钩子：读者读完最后一句停不下来的原因，要具体到手法",
       "pacing": "fast/medium/slow",
-      "word_estimate": 3000
+      "word_estimate": 2300
     }}
   ]
 }}
 
 重点要求：
 1. 每章「章末钩子」必须具体，不能只写"留下悬念"，要说清楚「悬念的具体内容」
-2. 前3章追读钩子要特别强
-3. 伏笔要有连续性，本卷内至少有2条贯穿始终的伏笔线"""
+2. 每章字数预估控制在 2200-2400 字，默认 2300 字
+3. 每章核心事件必须同时服务于情节推进、人物变化和全书立意，不要只堆事件
+4. 前3章追读钩子要特别强
+5. 伏笔要有连续性，本卷内至少有2条贯穿始终的伏笔线"""
 
         # gemini 有大 context，可以给更多 token；小模型控制在 4096 防止 OOM
         max_tok = 8192 if self.profile == "gemini" else 4096
@@ -379,30 +383,32 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         logline: str,
         world_summary: str,
         character_summary: str,
+        theme_statement: str = "",
         scale_hint: str = "auto",   # auto / short / medium / long
     ) -> dict:
         """
-        全量大纲规划：AI 自主决定卷数和每卷章节数，无需用户指定。
-        scale_hint 只是量级参考，AI 根据故事内容自行判断最合适的结构。
+        全量大纲规划：AI 规划卷结构，后端会按每卷约 60 章校准章节数。
         返回: { "volumes": [{ title, summary, hook, conflict, planned_chapters: int }] }
         """
         scale_desc = {
-            "auto":   "根据故事复杂度自由决定（通常 2-8 卷）",
-            "short":  "轻量短篇风格，约 30-50 章（2-3 卷）",
-            "medium": "标准中篇，约 60-120 章（3-5 卷）",
-            "long":   "长篇连载，约 150 章以上（5-10 卷）",
+            "auto":   "默认约 540 章、约 124 万字，拆成 9 个 60 章左右的卷",
+            "short":  "短篇长篇化，约 360 章、约 80 万字，拆成 6 个 60 章左右的卷",
+            "medium": "标准长篇，约 540 章、约 124 万字，拆成 9 个 60 章左右的卷",
+            "long":   "超长篇，约 660 章、约 152 万字，拆成 11 个 60 章左右的卷",
         }.get(scale_hint, "根据故事自由决定")
 
         system = "你是资深网络小说策划，擅长根据故事特质规划最合适的卷章结构。严格返回JSON，不要任何额外文字。"
         prompt = f"""小说：《{project_title}》（{genre}）
 一句话创意：{logline or '（未填写）'}
+全书立意：{theme_statement[:500] or '（未填写；请从创意和人物中提炼一条贯穿全书的价值命题）'}
 世界观：{world_summary[:300] or '（未填写）'}
 主要人物：{character_summary[:200] or '（未填写）'}
 
 篇幅倾向：{scale_desc}
 
-请根据这个故事的特质，自主规划最适合的卷级结构。
-每卷给出你认为最合适的章节数（planned_chapters），而不是固定值。
+请根据这个故事的特质规划卷级结构。
+章节数必须服务于「每卷约 60 章、每章 2200-2400 字」的长篇目录结构：planned_chapters 优先使用 60，必要时允许 30，不要使用篇/arc结构。
+每卷必须围绕全书立意形成一个阶段性证明：人物选择如何变化，价值冲突如何升级，不能只做事件堆叠。
 
 返回JSON：
 {{
@@ -410,18 +416,23 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
     {{
       "title": "卷标题（简洁有力，带悬念感，不要用"第X卷"）",
       "summary": "本卷核心情节摘要，60字内",
+      "theme_stage": "本卷如何推进/反证/深化全书立意",
+      "character_arc": "本卷关键人物的欲望、选择和代价",
       "hook": "本卷核心悬念：读者最想知道答案的问题",
       "conflict": "本卷主要矛盾冲突",
-      "planned_chapters": 15
+      "planned_chapters": 60
     }}
   ]
 }}
 
 规划原则：
-1. 章节数要符合本卷的情节密度——信息量大、转折多的卷章节数可以多一些
-2. 整体弧线完整，起承转合清晰，收尾不要仓促
-3. 悬念递进，每卷末尾都要有足够的钩子让读者追下一卷
-4. 标题要有画面感，能让读者一眼感受到本卷的核心氛围"""
+1. 不再使用“篇”的概念；直接规划“卷 → 章”
+2. 每卷优先 60 章，少数过渡卷可以 30 章；不要随意给 10、15、20、40 这类杂乱数量
+3. 每章按 2200-2400 字设计，优先按 2300 字估算
+4. 整体弧线完整，起承转合清晰，收尾不要仓促
+5. 人物弧线、剧情主线、世界观秘密都要受全书立意统领
+6. 悬念递进，每卷末尾都要有足够的钩子让读者追下一卷
+7. 标题要有画面感，能让读者一眼感受到本卷的核心氛围"""
 
         response = await self._call_ai(system, prompt)
         import re

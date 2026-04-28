@@ -140,6 +140,7 @@ export const aiApi = {
   autoDebrief: (pid: string, data: {
     chapter_id: string
     model_profile?: 'local' | 'gemini'
+    llm_provider_id?: string
   }) => api.post(`/projects/${pid}/ai/auto-debrief`, data),
 
   /** 章节写完后批量提交状态更新 */

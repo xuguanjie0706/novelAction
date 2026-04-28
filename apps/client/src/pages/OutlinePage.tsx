@@ -25,12 +25,14 @@ function FullGenConfigModal({
   onClose: () => void
   onDispatch: (params: {
     scale_hint: string
+    theme_statement?: string
     model_profile: string
     clear_existing: boolean
     llm_provider_id?: string
   }) => void
 }) {
   const [scaleHint, setScaleHint] = useState<'auto' | 'short' | 'medium' | 'long'>('auto')
+  const [themeStatement, setThemeStatement] = useState('')
   // 已有大纲时默认勾选「清除重建」，避免重复叠加旧内容
   const [clearExisting, setClearExisting] = useState(hasExistingOutline)
 
@@ -39,6 +41,7 @@ function FullGenConfigModal({
     const route = useAppStore.getState().aiBackendRoute
     onDispatch({
       scale_hint: scaleHint,
+      theme_statement: themeStatement.trim() || undefined,
       model_profile: toOutlineApiModelProfile(route),
       clear_existing: clearExisting,
       ...routeLlmProviderPayload(route),
@@ -59,7 +62,7 @@ function FullGenConfigModal({
 
         <div className="px-5 py-4 space-y-4">
           <p className="text-xs text-gray-500 leading-relaxed">
-            AI 读取项目的 logline、类型、世界观、人物，自主决定几卷几章并写入大纲树。
+            AI 读取项目的 logline、类型、世界观、人物生成大纲；后端会按「每卷约 60 章」校准并写入大纲树。
             <span className="block mt-1 text-amber-600 font-medium">
               任务将在右下角队列中后台运行，不影响当前操作。
             </span>
@@ -70,10 +73,10 @@ function FullGenConfigModal({
             <label className="text-xs text-gray-500 block mb-2">篇幅倾向</label>
             <div className="grid grid-cols-2 gap-2">
               {([
-                { value: 'auto',   label: '让 AI 决定', sub: '根据故事自动判断' },
-                { value: 'short',  label: '短篇',       sub: '约 30–50 章' },
-                { value: 'medium', label: '中篇',       sub: '约 60–120 章' },
-                { value: 'long',   label: '长篇',       sub: '约 150 章以上' },
+                { value: 'auto',   label: '自动',       sub: '默认约 120 万字' },
+                { value: 'short',  label: '短篇',       sub: '约 80 万字' },
+                { value: 'medium', label: '中篇',       sub: '约 120 万字' },
+                { value: 'long',   label: '长篇',       sub: '约 150 万字' },
               ] as const).map(opt => (
                 <button
                   key={opt.value}
@@ -95,6 +98,19 @@ function FullGenConfigModal({
             </div>
           </div>
 
+          <div>
+            <label className="text-xs text-gray-500 block mb-2">全书立意</label>
+            <textarea
+              value={themeStatement}
+              onChange={e => setThemeStatement(e.target.value)}
+              placeholder="例如：人在被命运压低时，仍能靠选择重塑自身价值。"
+              className="w-full min-h-[76px] text-sm border border-gray-200 rounded-xl px-3 py-2 resize-y focus:outline-none focus:ring-2 focus:ring-amber-300 placeholder:text-gray-300"
+            />
+            <p className="mt-1 text-[11px] text-gray-400 leading-relaxed">
+              留空时后端会从项目故事核中读取主题，仍为空则让 AI 从创意和人物中提炼。
+            </p>
+          </div>
+
           <p className="text-[11px] text-gray-400 leading-relaxed">
             使用顶部栏当前选择的模型加入队列。
           </p>
@@ -112,7 +128,7 @@ function FullGenConfigModal({
                   续写空卷（推荐）
                 </div>
                 <div className="text-gray-400 mt-0.5">
-                  识别现有大纲中尚无章节计划的卷/篇，直接填充内容。已写章节和已有大纲节点全部保留。
+                  识别现有大纲中尚无章节计划的卷，直接填充内容。已写章节和已有大纲节点全部保留。
                 </div>
               </div>
             </button>
@@ -166,7 +182,7 @@ function BatchExpandConfigModal({
   onClose: () => void
   onDispatch: (chapterCount: number) => void
 }) {
-  const [chapterCount, setChapterCount] = useState(15)
+  const [chapterCount, setChapterCount] = useState(60)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -181,7 +197,7 @@ function BatchExpandConfigModal({
 
         <div className="px-5 py-4 space-y-4">
           <p className="text-xs text-gray-500 leading-relaxed">
-            将对 <span className="font-semibold text-gray-700">{targetCount} 个</span>尚未有章节计划的卷/篇依次展开。
+            将对 <span className="font-semibold text-gray-700">{targetCount} 个</span>尚未有章节计划的卷依次展开，默认每卷 60 章。
             <span className="block mt-1 text-amber-600 font-medium">任务将在右下角队列中后台运行。</span>
           </p>
 
@@ -265,7 +281,7 @@ export default function OutlinePage() {
   }
 
   const typeLabel = (t: OutlineNode['node_type']) =>
-    ({ volume: '卷', arc: '篇', chapter_plan: '章' }[t])
+    ({ volume: '卷', arc: '旧篇', chapter_plan: '章' }[t])
 
   const typeColor = (t: OutlineNode['node_type']) =>
     ({ volume: 'bg-amber-100 text-amber-700', arc: 'bg-blue-100 text-blue-700', chapter_plan: 'bg-gray-100 text-gray-600' }[t])
@@ -308,8 +324,8 @@ export default function OutlinePage() {
   const handleAddChild = async (parent: OutlineNode, e: React.MouseEvent) => {
     e.stopPropagation()
     if (!projectId) return
-    const childType = parent.node_type === 'volume' ? 'arc' : 'chapter_plan'
-    const titleMap: Record<string, string> = { arc: '新篇', chapter_plan: '新章节' }
+    const childType = 'chapter_plan'
+    const titleMap: Record<string, string> = { chapter_plan: '新章节' }
     try {
       const res = await outlineApi.create(projectId, {
         parent_id: parent.id,
@@ -329,6 +345,7 @@ export default function OutlinePage() {
   // ── 全量生成 → 派发到队列 ─────────────────────────────────
   const handleDispatchFullGen = (params: {
     scale_hint: string
+    theme_statement?: string
     model_profile: string
     clear_existing: boolean
     llm_provider_id?: string
@@ -348,7 +365,7 @@ export default function OutlinePage() {
     if (!projectId) return
     const targets = collectExpandableNodes(outlineTree)
     if (targets.length === 0) {
-      toast.error('没有可展开的卷/篇（可能已全部有章节计划，或大纲为空）')
+      toast.error('没有可展开的卷（可能已全部有章节计划，或大纲为空）')
       return
     }
     const route = useAppStore.getState().aiBackendRoute
@@ -435,15 +452,8 @@ export default function OutlinePage() {
           <div className="flex items-center gap-1 shrink-0">
             <button
               type="button"
-              onClick={() => {
-                if (expandableCount === 0) {
-                  toast.error('没有可展开的卷/篇')
-                  return
-                }
-                setShowFullGenModal(true)
-              }}
-              disabled={outlineTree.length === 0}
-              className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg border border-amber-200 text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed"
+              onClick={() => setShowFullGenModal(true)}
+              className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg border border-amber-200 text-amber-700 bg-amber-50 hover:bg-amber-100"
             >
               <Sparkles size={12} />
               全部生成
@@ -507,7 +517,7 @@ export default function OutlinePage() {
             <p className="text-xs text-gray-300 text-center max-w-sm">
               「<span className="text-indigo-400">全量生成</span>」：AI 从零生成完整大纲（卷+章节）。
               <br />
-              「<span className="text-amber-400">全部展开</span>」：对已有卷/篇补全章节计划。
+              「<span className="text-amber-400">全部展开</span>」：对已有卷补全章节计划。
               <br />
               两者均在右下角队列中后台运行。
             </p>
@@ -574,7 +584,7 @@ function NodeDetailPanel({
         highlight: form.highlight,
         conflict: form.conflict,
       }
-      // 章节节点才传新字段，避免干扰卷/篇节点
+      // 章节节点才传新字段，避免干扰卷节点
       if (node.node_type === 'chapter_plan') {
         payload.power_milestone = form.power_milestone || null
         payload.emotional_tone = form.emotional_tone || null
@@ -622,7 +632,7 @@ function NodeDetailPanel({
             node.node_type === 'arc'    ? 'bg-blue-100 text-blue-700' :
                                           'bg-gray-100 text-gray-600'
           )}>
-            {{ volume: '卷', arc: '篇', chapter_plan: '章' }[node.node_type]}
+            {{ volume: '卷', arc: '旧篇', chapter_plan: '章' }[node.node_type]}
           </span>
           <h3 className="font-semibold text-gray-800 text-base truncate max-w-xs">
             {editing ? '编辑节点' : node.title}

@@ -52,55 +52,23 @@ def _sse(event: str, **kwargs) -> str:
 
 def _normalize_outline(data: list) -> list:
     """
-    容错归并，统一强制 卷 → 篇 → 章 三层结构：
-    1. 卷下无篇但有章 → 自动补插一个篇节点，把章节包进去
-    2. 卷下多篇 → 合并所有章节到第一篇下
+    容错归并，统一强制 卷 → 章 两层结构：
+    1. AI 若返回旧篇节点，提取其章节并直接挂回卷下
+    2. 卷下散落章节保留，和旧篇内章节合并排序
     3. 修正每级子节点的 sort_order，保证从 0 连续递增
     """
     for vol in data:
         if vol.get("node_type") != "volume":
             continue
         children = vol.get("children", [])
-        arcs = [c for c in children if c.get("node_type") == "arc"]
-        loose_chapters = [c for c in children if c.get("node_type") == "chapter_plan"]
+        chapters = [c for c in children if c.get("node_type") == "chapter_plan"]
+        for arc in [c for c in children if c.get("node_type") == "arc"]:
+            chapters.extend(arc.get("children", []))
 
-        if not arcs and loose_chapters:
-            # 无篇但有章 → 补插一个篇，把散落章节包进去
-            vol_title = vol.get("title", "")
-            arc_title = vol_title.split("：", 1)[1] if "：" in vol_title else vol_title
-            for i, ch in enumerate(loose_chapters):
-                ch["sort_order"] = i
-            synthetic_arc = {
-                "node_type": "arc",
-                "title": f"第一篇：{arc_title}",
-                "sort_order": 0,
-                "children": loose_chapters,
-            }
-            # 保留非章节的其他子节点（如有），再加合成篇
-            other_children = [c for c in children if c.get("node_type") not in ("arc", "chapter_plan")]
-            vol["children"] = [synthetic_arc] + other_children
-
-        elif len(arcs) > 1:
-            # 多篇 → 合并所有章节到第一篇下
-            merged_chapters: list = []
-            for arc in arcs:
-                merged_chapters.extend(arc.get("children", []))
-            for i, ch in enumerate(merged_chapters):
-                ch["sort_order"] = i
-            first_arc = dict(arcs[0])
-            first_arc["children"] = merged_chapters
-            non_arcs = [c for c in children if c.get("node_type") != "arc"]
-            vol["children"] = [first_arc] + non_arcs
-
-        else:
-            # 单篇：只修正篇下章节的 sort_order
-            for arc in arcs:
-                for i, ch in enumerate(arc.get("children", [])):
-                    ch["sort_order"] = i
-
-        # 修正当前层子节点 sort_order
-        for i, child in enumerate(vol.get("children", [])):
-            child["sort_order"] = i
+        for i, chapter in enumerate(chapters):
+            chapter["node_type"] = "chapter_plan"
+            chapter["sort_order"] = i
+        vol["children"] = chapters
 
     return data
 
@@ -230,14 +198,9 @@ class GenerationService:
       "node_type": "volume", "title": "第一卷：标题", "sort_order": 0,
       "summary": "本卷概述",
       "children": [
-        {{
-          "node_type": "arc", "title": "第一篇：标题", "sort_order": 0,
-          "children": [
-            {{"node_type": "chapter_plan", "title": "第1章：标题", "sort_order": 0,
-              "hook": "钩子", "highlight": "燃点", "conflict": "冲突", "summary": "章节摘要"}},
-            ...共10个chapter_plan
-          ]
-        }}
+        {{"node_type": "chapter_plan", "title": "第1章：标题", "sort_order": 0,
+          "hook": "钩子", "highlight": "燃点", "conflict": "冲突", "summary": "章节摘要"}},
+        ...共10个chapter_plan
       ]
     }},
     {{"node_type": "volume", "title": "第二卷：标题", "sort_order": 1, "summary": "...", "children": []}},
@@ -411,8 +374,8 @@ role 只能是: protagonist / supporting / antagonist"""
 创意：{ctx['logline']}
 设定：{ctx['settings_summary']}
 
-生成大纲树，返回JSON数组。结构严格为：卷→篇→章（三层）。
-第一卷下有且仅有一篇，篇下展开前10个章节计划；其余两卷只写卷标题和概述（children为空）。
+生成大纲树，返回JSON数组。结构严格为：卷→章（两层），不要使用“篇”或 arc 节点。
+第一卷下展开前10个章节计划；其余两卷只写卷标题和概述（children为空）。
 
 [
   {{
@@ -420,21 +383,15 @@ role 只能是: protagonist / supporting / antagonist"""
     "summary": "本卷核心事件概述",
     "children": [
       {{
-        "node_type": "arc", "title": "第一篇：篇名（示例）", "sort_order": 0,
-        "summary": "本篇概述",
-        "children": [
-          {{
-            "node_type": "chapter_plan", "title": "第1章：章节标题", "sort_order": 0,
-            "summary": "本章发生什么",
-            "hook": "开头的悬念/钩子",
-            "highlight": "本章最高燃点",
-            "conflict": "核心冲突"
-          }},
-          {{
-            "node_type": "chapter_plan", "title": "第2章：章节标题", "sort_order": 1,
-            "summary": "...", "hook": "...", "highlight": "...", "conflict": "..."
-          }}
-        ]
+        "node_type": "chapter_plan", "title": "第1章：章节标题", "sort_order": 0,
+        "summary": "本章发生什么",
+        "hook": "开头的悬念/钩子",
+        "highlight": "本章最高燃点",
+        "conflict": "核心冲突"
+      }},
+      {{
+        "node_type": "chapter_plan", "title": "第2章：章节标题", "sort_order": 1,
+        "summary": "...", "hook": "...", "highlight": "...", "conflict": "..."
       }}
     ]
   }},
@@ -448,7 +405,7 @@ role 只能是: protagonist / supporting / antagonist"""
         if not isinstance(data, list):
             data = data.get("outline", [])
 
-        # 归并 AI 可能生成的重复篇节点，并修正 sort_order
+        # 归并 AI 可能生成的旧篇节点，并修正 sort_order
         data = _normalize_outline(data)
 
         results = []
@@ -457,7 +414,7 @@ role 只能是: protagonist / supporting / antagonist"""
             node = OutlineNode(
                 project_id=project.id,
                 parent_id=parent_id,
-                node_type=item.get("node_type", "arc"),
+                node_type=item.get("node_type", "volume" if parent_id is None else "chapter_plan"),
                 title=item.get("title", "未命名"),
                 summary=item.get("summary"),
                 hook=item.get("hook"),
@@ -620,7 +577,7 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
             node = OutlineNode(
                 project_id=project.id,
                 parent_id=parent_id,
-                node_type=item.get("node_type", "arc"),
+                node_type=item.get("node_type", "volume" if parent_id is None else "chapter_plan"),
                 title=item.get("title", ""),
                 summary=item.get("summary"),
                 hook=item.get("hook"),

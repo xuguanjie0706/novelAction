@@ -10,7 +10,7 @@ import toast from 'react-hot-toast'
 import {
   BookOpen, Sparkles, X, Zap, Target, Users, Flag, GitBranch, RefreshCw,
   Maximize2, Minimize2, Clock, StickyNote, ChevronDown,
-  Wand2, Feather, Flame, MessageSquare, PenLine,
+  Feather, PenLine,
   CheckSquare, TrendingUp, MapPin, Swords, Bot,
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -67,35 +67,6 @@ const STATUS_OPTIONS: { value: Chapter['status']; label: string; dotCls: string;
   { value: 'reviewed', label: '已审',  dotCls: 'bg-amber-400',  textCls: 'text-amber-600' },
 ]
 
-// ─── 选中文字快捷 AI 动作 ─────────────────────────────────────────────────────
-const INLINE_ACTIONS = [
-  {
-    key: 'rewrite',  label: '改写',     icon: <RefreshCw size={11} />,
-    buildPrompt: (t: string) =>
-      `请将以下选中段落改写，保持语义不变但改变表达方式，只返回改写后的文字，不要任何解释：\n\n「${t}」`,
-  },
-  {
-    key: 'expand',   label: '扩写',     icon: <Feather size={11} />,
-    buildPrompt: (t: string) =>
-      `请将以下段落扩写，增加细节和描写，只返回扩写后的文字，不要任何解释：\n\n「${t}」`,
-  },
-  {
-    key: 'tension',  label: '加强张力', icon: <Flame size={11} />,
-    buildPrompt: (t: string) =>
-      `请改写以下段落，增强紧张感、情绪张力和节奏感，只返回改写后的文字，不要任何解释：\n\n「${t}」`,
-  },
-  {
-    key: 'dialogue', label: '优化对话', icon: <MessageSquare size={11} />,
-    buildPrompt: (t: string) =>
-      `请优化以下对话内容，让其更自然流畅且更有角色特色，只返回修改后的文字，不要任何解释：\n\n「${t}」`,
-  },
-  {
-    key: 'continue', label: '续写',     icon: <Wand2 size={11} />,
-    buildPrompt: (t: string) =>
-      `请从以下内容结尾处续写，风格保持一致，只返回续写的新内容，不要任何解释：\n\n「${t}」`,
-  },
-]
-
 // ─── 人物角色标签 ─────────────────────────────────────────────────────────────
 const ROLE_BADGE: Record<Character['role'], { label: string; cls: string }> = {
   protagonist: { label: '主角', cls: 'bg-amber-100 text-amber-700' },
@@ -103,6 +74,23 @@ const ROLE_BADGE: Record<Character['role'], { label: string; cls: string }> = {
   antagonist:  { label: '反派', cls: 'bg-red-50 text-red-600' },
   neutral:     { label: '中立', cls: 'bg-gray-100 text-gray-600' },
 }
+
+const INLINE_ACTIONS = [
+  {
+    key: 'rewrite',
+    label: '改写',
+    icon: <RefreshCw size={11} />,
+    buildPrompt: (t: string) =>
+      `请将以下选中段落改写，保持语义不变但改变表达方式，只返回改写后的文字，不要任何解释：\n\n「${t}」`,
+  },
+  {
+    key: 'expand',
+    label: '扩写',
+    icon: <Feather size={11} />,
+    buildPrompt: (t: string) =>
+      `请将以下段落扩写，增加细节和描写，只返回扩写后的文字，不要任何解释：\n\n「${t}」`,
+  },
+] as const
 
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ChapterEditor({
@@ -128,14 +116,9 @@ export default function ChapterEditor({
 
   // ── 原有 AI 草稿功能 ───────────────────────────────────────────────
   const [aiDrafting, setAiDrafting]                     = useState(false)
-  const [draftText, setDraftText]                       = useState('')
-  const [showDraft, setShowDraft]                       = useState(false)
   const [aiExtraPrompt, setAiExtraPrompt]               = useState('')
-  const [autoInsertAfterDraft, setAutoInsertAfterDraft] = useState(true)
-
-  // ── 选中文字快捷 AI ────────────────────────────────────────────────
-  const [selectionText, setSelectionText]       = useState('')
-  const [showSelectionBar, setShowSelectionBar] = useState(false)
+  const [selectionText, setSelectionText]               = useState('')
+  const [showSelectionBar, setShowSelectionBar]         = useState(false)
 
   // ── 章节复盘（写完后提交状态更新）────────────────────────────────
   const [debriefSubmitting, setDebriefSubmitting] = useState(false)
@@ -208,11 +191,9 @@ export default function ChapterEditor({
     sessionStartTime.current  = Date.now()
     setSessionDelta(0)
     setSessionElapsed(0)
-    setShowDraft(false)
-    setDraftText('')
     setAiDrafting(false)
-    setShowSelectionBar(false)
     setSelectionText('')
+    setShowSelectionBar(false)
     setNotepad(() => { try { return localStorage.getItem(scratchKey(chapter.id)) ?? '' } catch { return '' } })
   }, [chapter.id])
 
@@ -272,6 +253,7 @@ export default function ChapterEditor({
       const auto = await aiApi.autoDebrief(projectId, {
         chapter_id: chapter.id,
         model_profile: modelProfileFromRoute(route),
+        ...routeLlmProviderPayload(route),
       })
       const data = auto.data as {
         storyline_updates?: Array<{ storyline_id?: string; storyline_name?: string; status?: string; beat?: string }>
@@ -370,18 +352,6 @@ export default function ChapterEditor({
     try { localStorage.setItem(scratchKey(chapter.id), val) } catch { /* ignore */ }
   }
 
-  /** 点击选中快捷动作：预填 prompt 并自动触发生成 */
-  const applyInlineAction = (actionKey: string) => {
-    const action = INLINE_ACTIONS.find(a => a.key === actionKey)
-    if (!action || !selectionText) return
-    const prompt = action.buildPrompt(selectionText.slice(0, 400))
-    setAiExtraPrompt(prompt)
-    setShowSelectionBar(false)
-    setShowDraft(true)
-    // 稍作延迟让 state 更新后触发生成
-    setTimeout(() => triggerGenerate(prompt), 80)
-  }
-
   // ─────────────────────────────────────────────────────────────────
   // AI 草稿生成（保留原逻辑，额外支持传入 prompt）
   // ─────────────────────────────────────────────────────────────────
@@ -397,13 +367,12 @@ export default function ChapterEditor({
       await autoExtractMemoryAfterChapter(false)
       lastMemoryAutoExtractAtRef.current = Date.now()
       toast.success(replace ? '已替换全文并保存' : '已插入文末并保存')
-      setShowDraft(false); setDraftText('')
     } catch { toast.error('保存失败，请点顶部「保存」重试') }
   }, [editor, projectId, chapter.id, upsertChapter])
 
   /** 核心生成逻辑，可接受临时 prompt（选中快捷动作用） */
   const triggerGenerate = async (overridePrompt?: string, opts?: { replaceExisting?: boolean }) => {
-    setAiDrafting(true); setDraftText(''); setShowDraft(true)
+    setAiDrafting(true)
     let accumulated = ''
     const promptToSend = overridePrompt ?? (aiExtraPrompt.trim() || null)
     try {
@@ -435,17 +404,16 @@ export default function ChapterEditor({
           if (!p) continue
           if (p.done) break
           if (p.error) throw new Error(p.error)
-          if (p.text) { accumulated += p.text; setDraftText(accumulated) }
+          if (p.text) { accumulated += p.text }
         }
       }
       for (const line of buf.split('\n')) {
         const p = parseSseDataLine(line)
         if (p?.error) throw new Error(p.error)
-        if (p?.text) { accumulated += p.text; setDraftText(accumulated) }
+        if (p?.text) { accumulated += p.text }
       }
       if (!accumulated.trim()) { toast.error('未收到内容，请检查模型或稍后重试'); return }
-      toast.success('生成完成')
-      if (autoInsertAfterDraft) await insertDraftToEditorAndSave(accumulated, !!opts?.replaceExisting)
+      await insertDraftToEditorAndSave(accumulated, !!opts?.replaceExisting)
       // 生成完成后自动触发 AI 复盘分析（后台静默运行，完成后弹提示）
       void runAutoDebrief()
     } catch (e: unknown) {
@@ -455,11 +423,23 @@ export default function ChapterEditor({
     }
   }
 
-  const generateDraft = (opts?: { replaceExisting?: boolean }) => {
+  const generateDraft = (opts?: { replaceExisting?: boolean; overridePrompt?: string }) => {
     if (opts?.replaceExisting) {
       if (!window.confirm('「重新生成本章」将按大纲重写当前正文。建议先手动保存快照。确定继续？')) return
     }
-    void triggerGenerate(undefined, opts)
+    void triggerGenerate(opts?.overridePrompt, opts)
+  }
+
+  const runPromptAction = (action: 'rewrite' | 'expand') => {
+    if (!selectionText.trim()) {
+      toast.error('请先选中需要处理的正文')
+      return
+    }
+    const actionConfig = INLINE_ACTIONS.find(item => item.key === action)
+    if (!actionConfig) return
+    const actionPrompt = actionConfig.buildPrompt(selectionText.slice(0, 400))
+    void triggerGenerate(actionPrompt, { replaceExisting: false })
+    setShowSelectionBar(false)
   }
 
   /** 调用 AI 自动分析章节，预填复盘面板 */
@@ -470,6 +450,7 @@ export default function ChapterEditor({
       const res = await aiApi.autoDebrief(projectId, {
         chapter_id: chapter.id,
         model_profile: modelProfileFromRoute(route),
+        ...routeLlmProviderPayload(route),
       })
       const data = res.data as {
         character_updates: Array<{
@@ -777,14 +758,18 @@ export default function ChapterEditor({
                   <Sparkles size={11} />
                   已选 {selectionText.length} 字
                 </span>
-                {INLINE_ACTIONS.map(action => (
-                  <button key={action.key} type="button"
-                    disabled={aiDrafting}
-                    onClick={() => applyInlineAction(action.key)}
-                    className="flex items-center gap-1 text-[11px] px-2.5 py-1 bg-white border border-violet-200 text-violet-700 rounded-novel hover:bg-violet-100 transition-novel disabled:opacity-50">
-                    {action.icon}{action.label}
-                  </button>
-                ))}
+                <button type="button"
+                  disabled={aiDrafting}
+                  onClick={() => runPromptAction('rewrite')}
+                  className="flex items-center gap-1 text-[11px] px-2.5 py-1 bg-white border border-violet-200 text-violet-700 rounded-novel hover:bg-violet-100 transition-novel disabled:opacity-50">
+                  <RefreshCw size={11} />改写
+                </button>
+                <button type="button"
+                  disabled={aiDrafting}
+                  onClick={() => runPromptAction('expand')}
+                  className="flex items-center gap-1 text-[11px] px-2.5 py-1 bg-white border border-violet-200 text-violet-700 rounded-novel hover:bg-violet-100 transition-novel disabled:opacity-50">
+                  <Feather size={11} />扩写
+                </button>
                 <button type="button" onClick={() => setShowSelectionBar(false)}
                   className="ml-auto text-violet-300 hover:text-violet-500 p-0.5 shrink-0">
                   <X size={12} />
@@ -793,84 +778,29 @@ export default function ChapterEditor({
             </div>
           )}
 
-          {/* AI 草稿预览 */}
-          {showDraft && (
-            <div className="border-t border-amber-100 bg-amber-50/60 px-6 py-4 shrink-0">
-              <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <Sparkles size={13} className="text-amber-500" />
-                  <span className="text-xs font-medium text-amber-800">
-                    {aiDrafting ? 'AI 正在生成…' : 'AI 草稿预览'}
-                  </span>
-                  {aiDrafting && (
-                    <span className="flex gap-0.5 ml-1">
-                      {[0, 1, 2].map(i => (
-                        <span key={i} className="w-1 h-1 rounded-full bg-amber-400 animate-bounce"
-                          style={{ animationDelay: `${i * 0.15}s` }} />
-                      ))}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  {!aiDrafting && draftText.trim() && (
-                    <>
-                      <button type="button"
-                        onClick={() => insertDraftToEditorAndSave(draftText, false)}
-                        className="text-xs px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-novel transition-novel">
-                        插入文末并保存
-                      </button>
-                      <button type="button"
-                        onClick={() => { if (window.confirm('用草稿替换全部正文？')) insertDraftToEditorAndSave(draftText, true) }}
-                        className="text-xs px-2.5 py-1 border border-amber-400 text-amber-800 rounded-novel hover:bg-amber-100 transition-novel">
-                        替换全文并保存
-                      </button>
-                      <button type="button" onClick={() => generateDraft()}
-                        className="text-xs px-2.5 py-1 border border-amber-300 text-amber-700 rounded-novel hover:bg-amber-100 transition-novel">
-                        重新生成
-                      </button>
-                    </>
-                  )}
-                  <button type="button" onClick={() => setShowDraft(false)}
-                    className="text-amber-400 hover:text-amber-600 p-1"><X size={14} /></button>
-                </div>
-              </div>
-              <div className="text-sm text-gray-800 whitespace-pre-wrap max-h-52 overflow-auto leading-relaxed bg-white rounded-novel px-4 py-3 border border-amber-100">
-                {draftText || <span className="text-gray-400 italic">{aiDrafting ? '等待首包…' : '（空）'}</span>}
-              </div>
-            </div>
-          )}
-
           {/* AI 输入工具区（专注模式下隐藏）*/}
           {!focusMode && (
             <div className="border-t border-novel-border bg-novel-panel/90 px-6 py-3 shrink-0 space-y-2">
-              <label className="block text-[11px] font-medium text-novel-ink-muted">
-                起笔 / 续写说明（可选；选中文字后点快捷动作可自动填入）
-              </label>
               <textarea
                 value={aiExtraPrompt}
                 onChange={e => setAiExtraPrompt(e.target.value)}
                 rows={2}
                 disabled={aiDrafting}
-                placeholder="例如：偏压抑、少对话、突出某某伏笔；或重写时希望的开场氛围…"
+                placeholder="输入要求后可直接改写、扩写或重新生成"
                 className="w-full text-xs border border-novel-border rounded-novel px-3 py-2 bg-novel-card text-novel-ink placeholder:text-novel-ink-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-novel-accent resize-y min-h-[2.5rem] disabled:opacity-60"
               />
-              <label className="flex items-center gap-2 text-[11px] text-novel-ink-muted cursor-pointer select-none">
-                <input type="checkbox" checked={autoInsertAfterDraft}
-                  onChange={e => setAutoInsertAfterDraft(e.target.checked)}
-                  disabled={aiDrafting} className="rounded border-novel-border" />
-                生成完成后自动写入正文并保存（续写插文末；「重新生成」为替换全文）
-              </label>
               <div className="flex flex-wrap items-center gap-2">
                 <button type="button" onClick={() => generateDraft()} disabled={aiDrafting}
                   className="flex items-center gap-1.5 text-xs px-3 py-2 font-medium bg-novel-accent text-white rounded-novel hover:bg-novel-accent-hover disabled:opacity-60 transition-novel">
                   <Sparkles size={13} className={aiDrafting ? 'animate-pulse' : ''} />
-                  {aiDrafting ? '生成中…' : chapter.word_count > 100 ? 'AI 续写' : 'AI 起笔'}
+                  {aiDrafting ? '生成中…' : '生成'}
                 </button>
-                <button type="button" onClick={() => generateDraft({ replaceExisting: true })} disabled={aiDrafting}
-                  className="flex items-center gap-1.5 text-xs px-3 py-2 font-medium border border-red-200 text-red-700 bg-red-50/80 rounded-novel hover:bg-red-100 disabled:opacity-60 transition-novel">
-                  <RefreshCw size={13} />重新生成本章
-                </button>
-                <span className="text-[10px] text-novel-ink-faint">模型在顶部栏选择</span>
+                {wordCount > 0 && (
+                  <button type="button" onClick={() => generateDraft({ replaceExisting: true })} disabled={aiDrafting}
+                    className="flex items-center gap-1.5 text-xs px-3 py-2 font-medium border border-red-200 text-red-700 bg-red-50/80 rounded-novel hover:bg-red-100 disabled:opacity-60 transition-novel">
+                    <RefreshCw size={13} />重新生成本章
+                  </button>
+                )}
               </div>
             </div>
           )}

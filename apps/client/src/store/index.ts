@@ -1,8 +1,9 @@
 import { create } from 'zustand'
-import type { Project, Chapter, OutlineNode, Character, WorldSetting, MemoryChunk, GenTask, GenProgressItem, StoryLine, PowerSystem, Skill, Item, Faction } from '../types'
+import type { Project, Chapter, OutlineNode, Character, WorldSetting, MemoryChunk, GenTask, GenProgressItem, GenTaskStatus, StoryLine, PowerSystem, Skill, Item, Faction } from '../types'
 
 const AI_ROUTE_STORAGE_KEY = 'novelAction:ai-backend-route'
 const LEGACY_AI_MODEL_KEY = 'novelAction:ai-model-profile'
+const GEN_QUEUE_STORAGE_KEY = 'novelAction:gen-queue:v1'
 
 /**
  * 全局模型路由：
@@ -44,6 +45,56 @@ export function toOutlineApiModelProfile(route: string): 'default' | 'gemini' {
 export function routeLlmProviderPayload(route: string): { llm_provider_id?: string } {
   const id = llmProviderIdFromRoute(route)
   return id ? { llm_provider_id: id } : {}
+}
+
+type StoredGenQueuePayload = {
+  queue: GenTask[]
+  open: boolean
+}
+
+function readStoredGenQueueState(): StoredGenQueuePayload {
+  try {
+    const raw = localStorage.getItem(GEN_QUEUE_STORAGE_KEY)
+    if (!raw) return { queue: [], open: false }
+    const parsed = JSON.parse(raw) as Partial<StoredGenQueuePayload>
+    if (!Array.isArray(parsed.queue)) return { queue: [], open: false }
+    const isValidTaskStatus = (status: unknown): status is GenTaskStatus =>
+      status === 'pending' || status === 'running' || status === 'done' || status === 'error'
+    const queue = parsed.queue
+      .filter((t): t is GenTask =>
+        !!t
+        && typeof t === 'object'
+        && typeof t.id === 'string'
+        && isValidTaskStatus((t as Partial<GenTask>).status)
+      )
+      .map((task) => {
+        // 页面重载后原 running 任务无法延续流连接，恢复为 pending 继续执行
+        if (task.status !== 'running') return task
+        const resumeProgress: GenProgressItem = {
+          step: 'resume',
+          label: '已从上次会话恢复，准备继续执行',
+          done: false,
+          error: false,
+        }
+        const hasResumeMark = task.progress?.some((p) => p.step === 'resume')
+        return {
+          ...task,
+          status: 'pending' as const,
+          progress: hasResumeMark ? (task.progress ?? []) : [resumeProgress, ...(task.progress ?? [])],
+        }
+      })
+    return { queue, open: !!parsed.open }
+  } catch {
+    return { queue: [], open: false }
+  }
+}
+
+function writeStoredGenQueueState(queue: GenTask[], open: boolean) {
+  try {
+    localStorage.setItem(GEN_QUEUE_STORAGE_KEY, JSON.stringify({ queue, open }))
+  } catch {
+    // ignore localStorage failure
+  }
 }
 
 interface AppState {
@@ -141,7 +192,13 @@ interface AppState {
   setOutlineNeedsReload: (v: boolean) => void
 }
 
-let _taskIdCounter = 0
+const _storedQueueState = readStoredGenQueueState()
+let _taskIdCounter = _storedQueueState.queue.reduce((max, task) => {
+  const matched = task.id.match(/^task-(\d+)-\d+$/)
+  if (!matched) return max
+  const current = Number(matched[1])
+  return Number.isFinite(current) ? Math.max(max, current) : max
+}, 0)
 
 export const useAppStore = create<AppState>((set) => ({
   currentProject: null,
@@ -242,30 +299,40 @@ export const useAppStore = create<AppState>((set) => ({
   },
 
   // ── 生成队列 ─────────────────────────────────────
-  genQueue: [],
-  genQueueOpen: false,
-  setGenQueueOpen: (v) => set({ genQueueOpen: v }),
+  genQueue: _storedQueueState.queue,
+  genQueueOpen: _storedQueueState.open,
+  setGenQueueOpen: (v) => set((state) => {
+    writeStoredGenQueueState(state.genQueue, v)
+    return { genQueueOpen: v }
+  }),
 
   addGenTask: (task) => {
     const id = `task-${++_taskIdCounter}-${Date.now()}`
-    set((state) => ({
-      genQueue: [
+    set((state) => {
+      const nextTask: GenTask = { ...task, id, status: 'pending', progress: [], createdAt: Date.now() }
+      const nextQueue = [
         ...state.genQueue,
-        { ...task, id, status: 'pending', progress: [], createdAt: Date.now() },
-      ],
-      genQueueOpen: true,   // 有新任务时自动展开面板
-    }))
+        nextTask,
+      ]
+      writeStoredGenQueueState(nextQueue, true)
+      return {
+        genQueue: nextQueue,
+        genQueueOpen: true,   // 有新任务时自动展开面板
+      }
+    })
     return id
   },
 
   updateGenTask: (id, updates) =>
-    set((state) => ({
-      genQueue: state.genQueue.map(t => t.id === id ? { ...t, ...updates } : t),
-    })),
+    set((state) => {
+      const nextQueue = state.genQueue.map(t => t.id === id ? { ...t, ...updates } : t)
+      writeStoredGenQueueState(nextQueue, state.genQueueOpen)
+      return { genQueue: nextQueue }
+    }),
 
   pushGenProgress: (id, item) =>
-    set((state) => ({
-      genQueue: state.genQueue.map(t => {
+    set((state) => {
+      const nextQueue = state.genQueue.map(t => {
         if (t.id !== id) return t
         const idx = t.progress.findIndex(p => p.step === item.step)
         if (idx >= 0) {
@@ -274,11 +341,17 @@ export const useAppStore = create<AppState>((set) => ({
           return { ...t, progress: next }
         }
         return { ...t, progress: [...t.progress, item] }
-      }),
-    })),
+      })
+      writeStoredGenQueueState(nextQueue, state.genQueueOpen)
+      return { genQueue: nextQueue }
+    }),
 
   removeGenTask: (id) =>
-    set((state) => ({ genQueue: state.genQueue.filter(t => t.id !== id) })),
+    set((state) => {
+      const nextQueue = state.genQueue.filter(t => t.id !== id)
+      writeStoredGenQueueState(nextQueue, state.genQueueOpen)
+      return { genQueue: nextQueue }
+    }),
 
   outlineNeedsReload: false,
   setOutlineNeedsReload: (v) => set({ outlineNeedsReload: v }),

@@ -1,5 +1,5 @@
 /**
- * GenerationQueuePanel — 右下角悬浮大纲生成队列
+ * GenerationQueuePanel — 右下角悬浮 AI 任务队列
  *
  * 特性：
  *  - 固定在右下角，始终可见（有任务时）
@@ -120,7 +120,7 @@ async function runBatchExpand(
 ) {
   const { projectId, params } = task
   const nodes: Array<{ id: string; title: string }> = params.nodes ?? []
-  const chapterCount: number = params.chapterCount ?? 10
+  const chapterCount: number = params.chapterCount ?? 60
   const modelProfile: 'default' | 'gemini' = params.modelProfile ?? 'default'
   const llmProviderId: string | undefined = params.llm_provider_id
 
@@ -313,7 +313,7 @@ export default function GenerationQueuePanel() {
           {/* 面板头 */}
           <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-100 bg-gray-50">
             <ListTodo size={14} className="text-gray-500" />
-            <span className="text-xs font-semibold text-gray-700 flex-1">大纲生成队列</span>
+            <span className="text-xs font-semibold text-gray-700 flex-1">AI 任务队列</span>
             {hasRunning && (
               <span className="text-[10px] text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded-full font-medium">
                 {runningCount} 进行中
@@ -353,12 +353,12 @@ export default function GenerationQueuePanel() {
         {hasRunning ? (
           <>
             <Loader2 size={13} className="animate-spin" />
-            <span>生成中 {runningCount} 任务</span>
+            <span>执行中 {runningCount} 任务</span>
           </>
         ) : (
           <>
             <BookOpen size={13} />
-            <span>生成队列</span>
+            <span>AI 队列</span>
           </>
         )}
         {genQueueOpen

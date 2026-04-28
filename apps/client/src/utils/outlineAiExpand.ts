@@ -22,7 +22,7 @@ export interface ExpandResult {
   chapters: ExpandChapterCard[]
 }
 
-/** 收集尚未挂「章节计划」子节点的卷/篇（有篇先扩篇，不重复扩卷） */
+/** 收集尚未挂「章节计划」子节点的卷；历史旧篇仍兼容展开 */
 export function collectExpandableNodes(tree: OutlineNode[]): OutlineNode[] {
   const out: OutlineNode[] = []
 

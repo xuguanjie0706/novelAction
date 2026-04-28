@@ -11,6 +11,11 @@ from app.models import OutlineNode, Project, WorldSetting, Character
 from app.models.chapter import Chapter
 from app.schemas import OutlineNodeCreate, OutlineNodeUpdate, OutlineNodeOut
 from app.services.ai_service import AIService
+from app.services.outline_planning import (
+    TARGET_CHAPTERS_PER_VOLUME,
+    TARGET_WORDS_PER_CHAPTER,
+    normalize_volume_plan,
+)
 
 router = APIRouter(prefix="/projects/{project_id}/outline", tags=["outline"])
 
@@ -167,7 +172,8 @@ async def ai_expand_outline(
 # ─────────────────────────────────────────────────────────────
 
 class FullGenerateRequest(BaseModel):
-    scale_hint: str = "auto"      # auto / short / medium / long — 篇幅倾向，AI 自主决定结构
+    scale_hint: str = "auto"      # auto / short / medium / long — 篇幅倾向，后端按 60 章/卷校准
+    theme_statement: Optional[str] = None
     model_profile: str = "default"
     llm_provider_id: Optional[UUID] = None
     clear_existing: bool = False
@@ -180,7 +186,7 @@ async def ai_full_generate_outline(
     db: Session = Depends(get_db),
 ):
     """
-    全量生成大纲：AI 自主决定卷数和每卷章节数，无需用户指定。
+    全量生成大纲：AI 规划卷结构，后端按「每卷约 60 章」校准章节数。
       Step 0（可选）：清除现有大纲
       Step 1：AI 分析故事，规划卷级骨架（含每卷 planned_chapters），写入数据库
       Step 2~N：逐卷按 planned_chapters 生成章节计划，写入数据库
@@ -200,6 +206,8 @@ async def ai_full_generate_outline(
         f"{c.name}（{c.role}，{c.faction or ''}）{(c.personality or '')[:40]}"
         for c in characters[:5]
     )
+    story_core = project.story_core if isinstance(project.story_core, dict) else {}
+    theme_statement = (req.theme_statement or story_core.get("theme") or "").strip()
 
     svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
 
@@ -213,7 +221,7 @@ async def ai_full_generate_outline(
     ):
         """
         为 target_node（卷或篇）生成章节计划并入库。
-        target_node 为卷时自动建篇包装；为篇时直接挂章节。
+        target_node 为卷/旧篇时直接挂章节，不再自动创建篇。
         返回 (写入章节数, 新的 chapter_offset)。
         以 async generator 推送进度 SSE。
         """
@@ -238,6 +246,7 @@ async def ai_full_generate_outline(
                     genre=project.genre or "玄幻",
                     world_summary=world_summary,
                     character_summary=char_summary,
+                    theme_statement=theme_statement,
                     existing_chapters=batch_offset,
                     chapter_count=batch_count,
                 )
@@ -257,31 +266,10 @@ async def ai_full_generate_outline(
             yield 0   # 用 yield 传回写入数量（async generator 不能 return value）
             return
 
-        # 确定章节挂载的父节点：卷→先建篇；篇→直接挂
-        if target_node.node_type == "volume":
-            subtitle = target_node.title.split("：", 1)[1] if "：" in target_node.title else target_node.title
-            arc_count = db.query(OutlineNode).filter(
-                OutlineNode.parent_id == target_node.id,
-                OutlineNode.node_type == "arc",
-            ).count()
-            arc_node = OutlineNode(
-                project_id=project_id,
-                parent_id=target_node.id,
-                node_type="arc",
-                title=f"第{arc_count + 1}篇：{subtitle}",
-                summary=target_node.summary or "",
-                sort_order=arc_count,
-            )
-            db.add(arc_node)
-            db.flush()
-            parent_id = arc_node.id
-        else:
-            parent_id = target_node.id
-
         for ci, ch in enumerate(all_chapters):
             db.add(OutlineNode(
                 project_id=project_id,
-                parent_id=parent_id,
+                parent_id=target_node.id,
                 node_type="chapter_plan",
                 title=f"第{ch.get('number', chapter_offset + ci + 1)}章：{ch.get('title', '未命名')}",
                 summary=ch.get("core_event"),
@@ -292,7 +280,7 @@ async def ai_full_generate_outline(
                 extra={
                     "foreshadow":    ch.get("foreshadow", ""),
                     "pacing":        ch.get("pacing", "medium"),
-                    "word_estimate": ch.get("word_estimate", 3000),
+                    "word_estimate": ch.get("word_estimate", TARGET_WORDS_PER_CHAPTER),
                     "end_hook":      ch.get("end_hook", ""),
                 },
             ))
@@ -307,7 +295,7 @@ async def ai_full_generate_outline(
     def get_expandable_nodes() -> list[OutlineNode]:
         """
         收集已有大纲中尚无章节计划的节点。
-        优先返回篇节点（arc）；若卷下无篇，则返回卷节点。
+        优先返回没有直接章节计划的卷；旧篇节点保留兼容展开。
         """
         existing_vols = db.query(OutlineNode).filter(
             OutlineNode.project_id == project_id,
@@ -340,8 +328,8 @@ async def ai_full_generate_outline(
 
         return expandable
 
-    # scale_hint → 默认章节数（续写模式用，规划模式由 AI 自主决定）
-    _default_chapters = {"short": 10, "medium": 15, "long": 20}.get(req.scale_hint, 15)
+    # scale_hint → 续写模式默认章节数；规划模式会按总篇幅目标校准。
+    _default_chapters = TARGET_CHAPTERS_PER_VOLUME
 
     async def stream():
         # ── Step 0: 清除现有大纲（可选）──────────────────
@@ -361,7 +349,7 @@ async def ai_full_generate_outline(
 
         if use_fill_mode:
             # ════════════════════════════════════════════
-            #  续写模式：直接填充已有空卷/篇，不新建卷
+            #  续写模式：直接填充已有空卷/旧篇，不新建卷
             # ════════════════════════════════════════════
             total_steps = len(expandable)
             names = "、".join(f"《{n.title}》" for n in expandable)
@@ -403,6 +391,7 @@ async def ai_full_generate_outline(
                     logline=project.logline or "",
                     world_summary=world_summary,
                     character_summary=char_summary,
+                    theme_statement=theme_statement,
                     scale_hint=req.scale_hint,
                 )
             except Exception as e:
@@ -418,10 +407,7 @@ async def ai_full_generate_outline(
                 yield f"data: {json.dumps({'event': 'error', 'message': 'AI 未返回有效的卷结构，请重试'}, ensure_ascii=False)}\n\n"
                 return
 
-            for vol in volumes_data:
-                pc = vol.get("planned_chapters")
-                if not isinstance(pc, int) or pc < 1:
-                    vol["planned_chapters"] = _default_chapters
+            volumes_data = normalize_volume_plan(volumes_data, req.scale_hint)
 
             total_steps = 1 + len(volumes_data)
             total_chapters_planned = sum(v["planned_chapters"] for v in volumes_data)
@@ -441,6 +427,12 @@ async def ai_full_generate_outline(
                     summary=vol.get("summary", ""),
                     hook=vol.get("hook", ""),
                     conflict=vol.get("conflict", ""),
+                    extra={
+                        "theme_stage": vol.get("theme_stage", ""),
+                        "character_arc": vol.get("character_arc", ""),
+                        "target_chapters": TARGET_CHAPTERS_PER_VOLUME,
+                        "target_words_per_chapter": TARGET_WORDS_PER_CHAPTER,
+                    },
                     sort_order=existing_vol_count + i,
                 )
                 db.add(node)
@@ -495,9 +487,7 @@ def commit_expand(
 ):
     """
     把前端确认的章节计划批量写入大纲树。
-    强制 卷 → 篇 → 章 三层结构：
-      若 parent 是 volume，自动建一个 arc 再挂章节；
-      若 parent 已是 arc，直接挂。
+    直接把章节计划挂到选中的卷或旧篇节点下；新生成不再创建篇节点。
     """
     parent = db.query(OutlineNode).filter(
         OutlineNode.id == req.parent_node_id,
@@ -506,34 +496,13 @@ def commit_expand(
     if not parent:
         raise HTTPException(404, "Parent node not found")
 
-    # 若父节点是卷，自动建篇包装
-    if parent.node_type == "volume":
-        subtitle = parent.title.split("：", 1)[1] if "：" in parent.title else parent.title
-        arc_count = db.query(OutlineNode).filter(
-            OutlineNode.parent_id == parent.id,
-            OutlineNode.node_type == "arc",
-        ).count()
-        arc_node = OutlineNode(
-            project_id=project_id,
-            parent_id=parent.id,
-            node_type="arc",
-            title=f"第{arc_count + 1}篇：{subtitle}",
-            summary=parent.summary or "",
-            sort_order=arc_count,
-        )
-        db.add(arc_node)
-        db.flush()
-        actual_parent_id = arc_node.id
-    else:
-        actual_parent_id = parent.id
-
     results = []
     for i, ch in enumerate(req.chapters):
         node = OutlineNode(
             project_id=project_id,
-            parent_id=actual_parent_id,
+            parent_id=parent.id,
             node_type="chapter_plan",
-            title=f"第{ch.get('number', i+1)}章：{ch.get('title', '未命名')}",
+            title=f"第{ch.get('number', i + 1)}章：{ch.get('title', '未命名')}",
             summary=ch.get("core_event"),
             hook=ch.get("opening_hook"),
             highlight=ch.get("end_hook"),    # 章末钩子放 highlight 字段
@@ -542,7 +511,7 @@ def commit_expand(
             extra={
                 "foreshadow":    ch.get("foreshadow", ""),
                 "pacing":        ch.get("pacing", "medium"),
-                "word_estimate": ch.get("word_estimate", 3000),
+                "word_estimate": ch.get("word_estimate", TARGET_WORDS_PER_CHAPTER),
                 "end_hook":      ch.get("end_hook", ""),
             },
         )

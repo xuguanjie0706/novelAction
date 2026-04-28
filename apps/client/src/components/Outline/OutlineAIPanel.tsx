@@ -242,13 +242,13 @@ function ChapterCardView({
 // ── Main Component ─────────────────────────────────────
 
 export default function OutlineAIPanel({ node, projectId, onCommitDone }: Props) {
-  const [chapterCount, setChapterCount] = useState(10)
+  const [chapterCount, setChapterCount] = useState(60)
   const [status, setStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
   const [result, setResult] = useState<ExpandResult | null>(null)
   const [committing, setCommitting] = useState(false)
   const [expandAll, setExpandAll] = useState(false)
 
-  const nodeLabel = node.node_type === 'volume' ? '卷' : '篇'
+  const nodeLabel = node.node_type === 'volume' ? '卷' : '旧篇'
 
   const handleGenerate = async () => {
     setStatus('loading')

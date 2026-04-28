@@ -22,14 +22,43 @@ class OutlineNode(Base):
     title = Column(String(300), nullable=False)
     summary = Column(Text)                          # 情节摘要
     hook = Column(Text)                             # 钩子/悬念
-    highlight = Column(Text)                        # 燃点
+    highlight = Column(Text)                        # 燃点/高潮点
     conflict = Column(Text)                         # 冲突
     sort_order = Column(Integer, default=0)
-    extra = Column(JSON, default=dict)
 
-    # 追读分析（针对 chapter_plan）
+    # ── 追读分析（针对 chapter_plan）──────────────────────────
     reader_hook_score = Column(Integer)             # 1-10 钩子强度预估
     expected_words = Column(Integer)
+
+    # ── 故事线关联 ────────────────────────────────────────────
+    storyline_ids = Column(JSON, default=list)      # 本节点推进的故事线 UUID 列表
+
+    # ── 出场人物与道具 ────────────────────────────────────────
+    involved_character_ids = Column(JSON, default=list)
+    # 本章出场的关键人物 UUID 列表
+    key_item_ids = Column(JSON, default=list)
+    # 本章涉及的关键道具 UUID 列表
+    key_skill_ids = Column(JSON, default=list)
+    # 本章涉及的关键技能 UUID 列表（首次亮相/突破/学会）
+
+    # ── 情感与节奏 ────────────────────────────────────────────
+    emotional_tone = Column(String(50))
+    # 情感基调：exciting/tense/sad/romantic/mysterious/funny/epic/calm
+
+    pacing = Column(String(20), default="normal")
+    # 节奏：slow/normal/fast/climax（快节奏、高潮章节特别标记）
+
+    # ── 实力里程碑（针对 chapter_plan / arc）────────────────────
+    power_milestone = Column(Text)
+    # 本节点内主角/重要人物的实力变化，如"主角突破斗者，习得天火流星拳"
+
+    # ── 章节伏笔管理 ──────────────────────────────────────────
+    foreshadows_laid = Column(JSON, default=list)
+    # 本章埋下的伏笔：[{id: "foreshadow_key", description: "..."}]
+    foreshadows_resolved = Column(JSON, default=list)
+    # 本章回收的伏笔：[{id: "foreshadow_key", description: "..."}]
+
+    extra = Column(JSON, default=dict)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())

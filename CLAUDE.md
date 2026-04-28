@@ -77,13 +77,30 @@ AI_MODEL=gemini-2.0-flash
 ```
 Project
   ├── WorldSetting（设定卡，有 category）
-  ├── Character + CharacterRelationship
+  ├── Character + CharacterRelationship（人物 + 关系）
   ├── OutlineNode（树形：volume → arc → chapter_plan）
   ├── Chapter + ChapterVersion
-  └── MemoryChunk（长篇记忆，后续接 pgvector embedding）
+  ├── MemoryChunk（长篇记忆，后续接 pgvector embedding）
+  ├── StoryLine（故事线：主线/支线/感情线/成长线/势力线...）
+  ├── PowerSystem（境界/力量体系，含结构化 levels 数组）
+  ├── Skill（功法/技能，关联 PowerSystem，记录掌握者）
+  ├── Item（道具/法宝，含稀有度、持有历史）
+  └── Faction（势力/宗门/国家，支持父子层级）
 ```
 
 所有 UUID 主键，`project_id` 外键贯穿所有表。
+
+### Character 增强字段（v2）
+新增：`alias`别名、`appearance`外貌、`clothing_style`服装、`current_realm`当前境界、
+`realm_rank`境界数字排序、`speech_style`说话风格、`values`价值观、`secrets`秘密、
+`trauma`心理创伤、`fear`恐惧、`arc_stages`结构化成长阶段、`known_skills`/`owned_items`
+快速引用、`current_status`当前状态（alive/dead...）、`current_location`位置、
+`author_notes`作者备注、`faction_id`/`faction_rank`关联势力表。
+
+### OutlineNode 增强字段（v2）
+新增：`storyline_ids`关联故事线、`involved_character_ids`出场人物、`key_item_ids`关键道具、
+`key_skill_ids`关键技能、`emotional_tone`情感基调、`pacing`节奏标记、
+`power_milestone`实力里程碑、`foreshadows_laid`/`foreshadows_resolved`伏笔管理。
 
 ---
 
@@ -97,6 +114,11 @@ Project
 | `/api/v1/projects/{pid}/outline/` | 大纲树 |
 | `/api/v1/projects/{pid}/chapters/` | 章节 |
 | `/api/v1/projects/{pid}/ai/` | 质检/建议/记忆提取 |
+| `/api/v1/projects/{pid}/storylines/` | 故事线 CRUD |
+| `/api/v1/projects/{pid}/power-systems/` | 境界体系 CRUD |
+| `/api/v1/projects/{pid}/skills/` | 功法技能 CRUD |
+| `/api/v1/projects/{pid}/items/` | 道具法宝 CRUD |
+| `/api/v1/projects/{pid}/factions/` | 势力组织 CRUD |
 | `POST /api/v1/bootstrap/stream` | **一句话→全量生成（SSE）** |
 
 ---
@@ -161,6 +183,9 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 - [ ] pgvector 语义记忆检索（`MemoryChunk.embedding` 字段已预留）
 - [ ] 导出 TXT / EPUB
 - [ ] 登录鉴权（目前无 auth）
+- [ ] 故事线/境界体系/技能/道具/势力的前端 UI
+- [ ] Bootstrap 生成时同步生成故事线、境界体系、核心技能与道具
+- [ ] AI 质检时结合故事线进度与境界体系做一致性检查
 
 ---
 

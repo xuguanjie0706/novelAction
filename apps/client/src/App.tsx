@@ -3,11 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-
 import { Toaster } from 'react-hot-toast'
 import ProjectsPage from './pages/ProjectsPage'
 import AppLayout from './components/Layout/AppLayout'
-import OutlinePage from './pages/OutlinePage'
-import WritePage from './pages/WritePage'
-import CharactersPage from './pages/CharactersPage'
-import SettingsPage from './pages/SettingsPage'
-import MemoryPage from './pages/MemoryPage'
+import ProjectCachedViews from './pages/ProjectCachedViews'
 import { projectsApi } from './api/client'
 import { useAppStore } from './store'
 
@@ -33,11 +29,7 @@ export default function App() {
         <Route path="/" element={<ProjectsPage />} />
         <Route path="/project/:projectId" element={<><ProjectLoader /><AppLayout /></>}>
           <Route index element={<Navigate to="outline" replace />} />
-          <Route path="outline"    element={<OutlinePage />} />
-          <Route path="write"      element={<WritePage />} />
-          <Route path="characters" element={<CharactersPage />} />
-          <Route path="settings"   element={<SettingsPage />} />
-          <Route path="memory"     element={<MemoryPage />} />
+          <Route path=":tab" element={<ProjectCachedViews />} />
         </Route>
       </Routes>
     </BrowserRouter>

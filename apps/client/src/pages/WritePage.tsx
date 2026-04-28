@@ -59,6 +59,7 @@ export default function WritePage() {
   const [syncing, setSyncing] = useState(false)
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [sidebarHidden, setSidebarHidden] = useState(false)  // 专注模式时收起左侧
 
   const loadData = useCallback(() => {
     if (!projectId) return
@@ -163,6 +164,14 @@ export default function WritePage() {
     ? findNode(outlineTree, activeChapter.outline_node_id) : undefined
   const hasOutline = outlineTree.length > 0
 
+  /** 上一章：按 sort_order 排序后取前一个 */
+  const prevChapter = useMemo(() => {
+    if (!activeChapter) return undefined
+    const sorted = [...chapters].sort((a, b) => a.sort_order - b.sort_order)
+    const idx = sorted.findIndex(c => c.id === activeChapter.id)
+    return idx > 0 ? sorted[idx - 1] : undefined
+  }, [activeChapter, chapters])
+
   const statusDot = (s: Chapter['status']) =>
     ({ draft: 'bg-gray-300', writing: 'bg-blue-400', done: 'bg-green-400', reviewed: 'bg-amber-400' }[s])
 
@@ -239,8 +248,11 @@ export default function WritePage() {
 
   return (
     <div className="flex h-full">
-      {/* 左侧：大纲驱动章节导航 */}
-      <div className="w-56 flex flex-col border-r border-gray-100 bg-white shrink-0">
+      {/* 左侧：大纲驱动章节导航（专注模式下隐藏）*/}
+      <div className={clsx(
+        'flex flex-col border-r border-gray-100 bg-white shrink-0 transition-all duration-200 overflow-hidden',
+        sidebarHidden ? 'w-0 border-r-0' : 'w-56',
+      )}>
         <div className="px-3 py-2.5 border-b border-gray-100 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">写作</span>
@@ -305,7 +317,13 @@ export default function WritePage() {
       {/* 右侧：编辑区 */}
       <div className="flex-1 min-w-0">
         {activeChapter ? (
-          <ChapterEditor projectId={projectId!} chapter={activeChapter} outlineNode={activeOutlineNode} />
+          <ChapterEditor
+            projectId={projectId!}
+            chapter={activeChapter}
+            outlineNode={activeOutlineNode}
+            prevChapter={prevChapter}
+            onFocusModeChange={setSidebarHidden}
+          />
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center gap-3 p-8">
             <PenLine size={32} className="text-gray-200" />

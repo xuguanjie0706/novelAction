@@ -29,11 +29,13 @@ services:
     build:
       context: ./apps/backend
       dockerfile: Dockerfile
+    working_dir: /app
     ports:
       - "${NOVEL_DOCKER_BACKEND_HOST_PORT:-18080}:8000"
     environment:
       DATABASE_URL: postgresql://novel:novel@postgres:5432/novel_db
       REDIS_URL: redis://redis:6379/0
+      PYTHONPATH: /app
     env_file:
       - ./apps/backend/.env
     depends_on:
@@ -54,7 +56,7 @@ services:
     volumes:
       - ./apps/client:/app
       - /app/node_modules
-    command: pnpm run dev -- --host
+    command: sh -lc "if ! command -v pnpm >/dev/null 2>&1; then npm i -g pnpm@9; fi; pnpm install --frozen-lockfile --force && pnpm exec vite --host 0.0.0.0 --port 3173"
 
   frontend:
     build:
@@ -67,7 +69,7 @@ services:
     volumes:
       - ./apps/frontend:/app
       - /app/node_modules
-    command: pnpm run dev -- --host --port 3174
+    command: sh -lc "if ! command -v pnpm >/dev/null 2>&1; then npm i -g pnpm@9; fi; pnpm install --frozen-lockfile --force && pnpm exec vite --host 0.0.0.0 --port 3174"
 
 volumes:
   postgres_data:

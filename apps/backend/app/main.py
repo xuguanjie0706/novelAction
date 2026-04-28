@@ -1,12 +1,79 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from app.config import settings
 from app.database import engine, Base
 from app.routers import projects, world_settings, characters, outline, chapters, ai, generate, admin_llm, llm_public
+from app.routers import storylines, power_systems, skills, items, factions
 from app.services.llm_config import seed_llm_from_env_if_empty
+
+
+def _ensure_outline_node_columns() -> None:
+    """
+    开发环境兼容迁移：为已有 outline_nodes 表补齐新字段，避免旧库因缺列直接 500。
+    """
+    ddl_statements = [
+        "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS storyline_ids JSON",
+        "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS involved_character_ids JSON",
+        "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS key_item_ids JSON",
+        "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS key_skill_ids JSON",
+        "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS emotional_tone VARCHAR(50)",
+        "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS pacing VARCHAR(20)",
+        "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS power_milestone TEXT",
+        "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS foreshadows_laid JSON",
+        "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS foreshadows_resolved JSON",
+    ]
+    with engine.begin() as conn:
+        for ddl in ddl_statements:
+            conn.execute(text(ddl))
+
+
+def _ensure_character_columns() -> None:
+    """
+    开发环境兼容迁移：为已有 characters 表补齐新字段，避免旧库缺列导致接口 500。
+    """
+    ddl_statements = [
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS alias JSON",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS gender VARCHAR(20)",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS age VARCHAR(50)",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(500)",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS faction VARCHAR(100)",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS faction_id UUID",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS faction_rank VARCHAR(100)",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS birthplace VARCHAR(200)",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS appearance TEXT",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS clothing_style TEXT",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS current_realm VARCHAR(100)",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS power_system_id UUID",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS realm_rank INTEGER",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS personality TEXT",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS speech_style TEXT",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS values TEXT",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS background TEXT",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS secrets TEXT",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS trauma TEXT",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS motivation TEXT",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS fear TEXT",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS arc TEXT",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS arc_stages JSON",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS strengths JSON",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS weaknesses JSON",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS special_traits JSON",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS known_skills JSON",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS owned_items JSON",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS current_status VARCHAR(20)",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS current_location VARCHAR(200)",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS author_notes TEXT",
+    ]
+    with engine.begin() as conn:
+        for ddl in ddl_statements:
+            conn.execute(text(ddl))
+
 
 # 自动建表（开发用，生产建议改用 Alembic）
 Base.metadata.create_all(bind=engine)
+_ensure_outline_node_columns()
+_ensure_character_columns()
 seed_llm_from_env_if_empty()
 
 app = FastAPI(
@@ -35,6 +102,12 @@ app.include_router(ai.router, prefix="/api/v1")
 app.include_router(generate.router, prefix="/api/v1")
 app.include_router(admin_llm.router, prefix="/api/v1")
 app.include_router(llm_public.router, prefix="/api/v1")
+# 新增模块路由
+app.include_router(storylines.router, prefix="/api/v1")
+app.include_router(power_systems.router, prefix="/api/v1")
+app.include_router(skills.router, prefix="/api/v1")
+app.include_router(items.router, prefix="/api/v1")
+app.include_router(factions.router, prefix="/api/v1")
 
 
 @app.get("/health")

@@ -70,10 +70,28 @@ def _ensure_character_columns() -> None:
             conn.execute(text(ddl))
 
 
+def _ensure_character_relationship_columns() -> None:
+    """
+    开发环境兼容迁移：为已有 character_relationships 表补齐新字段，避免旧库缺列导致接口 500。
+    """
+    ddl_statements = [
+        "ALTER TABLE character_relationships ADD COLUMN IF NOT EXISTS is_dynamic VARCHAR(20)",
+        "ALTER TABLE character_relationships ADD COLUMN IF NOT EXISTS evolution_note TEXT",
+    ]
+    with engine.begin() as conn:
+        for ddl in ddl_statements:
+            conn.execute(text(ddl))
+        # 历史数据兜底：旧记录如果为空，统一回填 stable
+        conn.execute(text(
+            "UPDATE character_relationships SET is_dynamic = 'stable' WHERE is_dynamic IS NULL"
+        ))
+
+
 # 自动建表（开发用，生产建议改用 Alembic）
 Base.metadata.create_all(bind=engine)
 _ensure_outline_node_columns()
 _ensure_character_columns()
+_ensure_character_relationship_columns()
 seed_llm_from_env_if_empty()
 
 app = FastAPI(

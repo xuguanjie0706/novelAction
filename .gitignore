@@ -19,9 +19,11 @@ node_modules/
 
 apps/client/dist/
 apps/client/.vite/
+apps/client/.pnpm-store/
 apps/client/package-lock.json
 apps/frontend/dist/
 apps/frontend/.vite/
+apps/frontend/.pnpm-store/
 apps/frontend/package-lock.json
 
 # Logs
@@ -37,3 +39,4 @@ yarn-error.log*
 
 
 .env
+.local/

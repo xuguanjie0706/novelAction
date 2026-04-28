@@ -12,7 +12,8 @@ SSE 事件格式:
 """
 import json
 import re
-from typing import AsyncGenerator, Literal
+from typing import AsyncGenerator, Literal, Optional
+from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.services.ai_service import AIService
@@ -109,10 +110,15 @@ def _normalize_outline(data: list) -> list:
 # ─────────────────────────────────────────────────────────────
 
 class GenerationService:
-    def __init__(self, db: Session):
+    def __init__(
+        self,
+        db: Session,
+        model_profile: Literal["local", "gemini"] = "local",
+        llm_provider_id: Optional[UUID] = None,
+    ):
         self.db = db
-        self.ai = AIService(db=db)
-        self.ai_gemini = AIService(profile="gemini", db=db)
+        ai_profile = "default" if model_profile == "local" else "gemini"
+        self.ai = AIService(profile=ai_profile, db=db, llm_provider_id=llm_provider_id)
 
     # ══════════════════════════════════════════════════════════
     #  入口：根据 mode 分发
@@ -247,7 +253,7 @@ class GenerationService:
 }}"""
 
         try:
-            raw = await self.ai_gemini._call_ai(system, prompt)
+            raw = await self.ai._call_ai(system, prompt)
             data = _parse_json(raw)
             yield _sse("step_done", step="all", count=1)
 

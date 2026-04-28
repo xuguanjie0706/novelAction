@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Literal
+from typing import Literal, Optional
 from sqlalchemy.orm import Session
+from uuid import UUID
 
 from app.database import get_db
 from app.services.generation_service import GenerationService
@@ -13,6 +14,8 @@ router = APIRouter(prefix="/bootstrap", tags=["bootstrap"])
 class BootstrapRequest(BaseModel):
     logline: str
     mode: Literal["sequential", "single_shot"] = "sequential"
+    model_profile: Literal["local", "gemini"] = "local"
+    llm_provider_id: Optional[UUID] = None
 
 
 @router.post("/stream")
@@ -26,7 +29,11 @@ async def bootstrap_stream(
     mode="sequential"  适合 qwen3:8b 等小模型（默认）
     mode="single_shot" 适合 Gemini / GPT-4o 等大 context 模型
     """
-    svc = GenerationService(db=db)
+    svc = GenerationService(
+        db=db,
+        model_profile=req.model_profile,
+        llm_provider_id=req.llm_provider_id,
+    )
 
     async def event_stream():
         async for chunk in svc.bootstrap(logline=req.logline, mode=req.mode):

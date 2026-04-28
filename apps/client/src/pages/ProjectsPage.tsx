@@ -1,11 +1,52 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, BookOpen, Sparkles } from 'lucide-react'
+import toast from 'react-hot-toast'
+import HomeSidebar from '../components/Home/HomeSidebar'
+import HomeTopBar from '../components/Home/HomeTopBar'
+import {
+  CreateProjectDialog,
+  HeroPanel,
+  InspirationPanel,
+  QuickActionsGrid,
+  RecentEdits,
+  RecommendationsPanel,
+  WritingStatsPanel,
+  type RecentEdit,
+} from '../components/Home/HomeDashboardSections'
+import GenerateWizard from '../components/Bootstrap/GenerateWizard'
 import { projectsApi } from '../api/client'
 import { useAppStore } from '../store'
 import type { Project } from '../types'
-import toast from 'react-hot-toast'
-import GenerateWizard from '../components/Bootstrap/GenerateWizard'
+import { HOME_RECENT_FALLBACK } from '../data/homeMock'
+
+const chapterLabels = [
+  '第23章 生死一线',
+  '第18章 命格觉醒',
+  '第15章 夜幕降临',
+  '第8章 吞噬之力',
+  '第3章 初入都市',
+]
+
+const mockNames = ['浮灯照长夜', '山海失序录', '裂星行者', '旧神便利店']
+
+function shortDateLabel(project: Project, index: number) {
+  if (index === 0) return '刚刚'
+  if (index === 1) return '2 小时前'
+  if (index === 2) return '昨天'
+  const date = project.updated_at ?? project.created_at
+  return new Date(date).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+}
+
+function buildRecentEdits(projects: Project[]): RecentEdit[] {
+  return projects.slice(0, 5).map((project, index) => ({
+    id: project.id,
+    title: project.title,
+    chapter: chapterLabels[index] ?? `第${index + 1}章 继续推进`,
+    words: [2560, 1872, 1320, 983, 654][index] ?? 800,
+    timeLabel: shortDateLabel(project, index),
+    project,
+  }))
+}
 
 export default function ProjectsPage() {
   const navigate = useNavigate()
@@ -17,13 +58,23 @@ export default function ProjectsPage() {
   const [form, setForm] = useState({ title: '', genre: '', logline: '' })
 
   useEffect(() => {
-    projectsApi.list().then(res => setProjects(res.data))
+    projectsApi.list()
+      .then(res => setProjects(res.data))
+      .catch(() => {
+        setProjects([])
+        toast.error('项目数据暂时不可用，已显示示例内容')
+      })
   }, [])
 
-  // 向导完成后刷新列表
+  const recentEdits = useMemo(
+    () => (projects.length > 0 ? buildRecentEdits(projects) : HOME_RECENT_FALLBACK),
+    [projects]
+  )
+  const firstProject = projects[0]
+
   const onWizardClose = () => {
     setShowWizard(false)
-    projectsApi.list().then(res => setProjects(res.data))
+    projectsApi.list().then(res => setProjects(res.data)).catch(() => {})
   }
 
   const create = async () => {
@@ -34,6 +85,7 @@ export default function ProjectsPage() {
       setProjects(prev => [res.data, ...prev])
       setShowForm(false)
       setForm({ title: '', genre: '', logline: '' })
+      setCurrentProject(res.data)
       navigate(`/project/${res.data.id}/outline`)
     } catch {
       toast.error('创建失败')
@@ -42,102 +94,104 @@ export default function ProjectsPage() {
     }
   }
 
-  const open = (p: Project) => {
-    setCurrentProject(p)
-    navigate(`/project/${p.id}/outline`)
+  const openProject = (project: Project | undefined, tab: 'outline' | 'write' | 'memory' | 'characters' = 'outline') => {
+    if (!project || !projects.some(p => p.id === project.id)) {
+      toast('这是示例内容，先新建一部小说即可开始创作')
+      return
+    }
+    setCurrentProject(project)
+    navigate(`/project/${project.id}/${tab}`)
+  }
+
+  const navigateFirstProject = (tab: 'outline' | 'write' | 'memory' | 'characters') => {
+    openProject(firstProject, tab)
+  }
+
+  const handleSidebarNavigate = (target: string) => {
+    const targetMap: Record<string, () => void> = {
+      home: () => window.scrollTo({ top: 0, behavior: 'smooth' }),
+      projects: () => document.getElementById('recent-projects')?.scrollIntoView({ behavior: 'smooth' }),
+      write: () => navigateFirstProject('write'),
+      memory: () => navigateFirstProject('memory'),
+      characters: () => navigateFirstProject('characters'),
+      outline: () => navigateFirstProject('outline'),
+      stats: () => toast('数据统计页正在建设中，当前先展示首页写作数据'),
+      trash: () => toast('回收站暂无内容'),
+    }
+    targetMap[target]?.()
+  }
+
+  const handleQuickAction = (actionId: string) => {
+    if (actionId === 'chapter') {
+      navigateFirstProject('write')
+      return
+    }
+    if (actionId === 'inspiration') {
+      navigateFirstProject('memory')
+      return
+    }
+    if (actionId === 'name') {
+      const nextName = mockNames[Math.floor(Math.random() * mockNames.length)]
+      toast.success(`灵感书名：${nextName}`)
+      return
+    }
+    toast('计时器功能正在建设中')
   }
 
   return (
-    <div className="min-h-screen bg-[#FAF8F4] p-8">
+    <div className="min-h-screen bg-[#f8fafc] text-gray-950 lg:flex">
       {showWizard && <GenerateWizard onClose={onWizardClose} />}
+      {showForm && (
+        <CreateProjectDialog
+          form={form}
+          creating={creating}
+          onChange={setForm}
+          onCreate={create}
+          onClose={() => setShowForm(false)}
+          onUseAi={() => {
+            setShowForm(false)
+            setShowWizard(true)
+          }}
+        />
+      )}
 
-      <div className="max-w-3xl mx-auto">
-        <div className="flex items-center justify-between mb-8">
-          <h1 className="text-2xl font-bold text-gray-900">我的小说</h1>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowWizard(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm rounded-lg"
-            >
-              <Sparkles size={15} /> AI 一键生成
-            </button>
-            <button
-              onClick={() => setShowForm(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 hover:border-gray-300 text-gray-700 text-sm rounded-lg"
-            >
-              <Plus size={15} /> 手动新建
-            </button>
-          </div>
-        </div>
+      <HomeSidebar todayWords={HOME_RECENT_FALLBACK[0].words} onNavigate={handleSidebarNavigate} />
 
-        {showForm && (
-          <div className="mb-6 p-5 bg-white rounded-xl border border-gray-100 shadow-sm space-y-3">
-            <h3 className="font-semibold text-gray-800">新建小说</h3>
-            <input
-              placeholder="小说名称 *"
-              value={form.title}
-              onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-amber-400"
-            />
-            <input
-              placeholder="类型（玄幻 / 都市 / 科幻...）"
-              value={form.genre}
-              onChange={e => setForm(f => ({ ...f, genre: e.target.value }))}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-amber-400"
-            />
-            <textarea
-              placeholder="一句话创意（选填）"
-              value={form.logline}
-              onChange={e => setForm(f => ({ ...f, logline: e.target.value }))}
-              rows={2}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-amber-400 resize-none"
-            />
-            <div className="flex gap-2">
-              <button
-                onClick={create}
-                disabled={creating}
-                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-sm rounded-lg"
-              >
-                {creating ? '创建中...' : '创建'}
-              </button>
-              <button
-                onClick={() => setShowForm(false)}
-                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 text-sm rounded-lg"
-              >
-                取消
-              </button>
-            </div>
-          </div>
-        )}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <HomeTopBar />
 
-        <div className="grid grid-cols-1 gap-3">
-          {projects.map(p => (
-            <button
-              key={p.id}
-              onClick={() => open(p)}
-              className="flex items-center gap-4 p-4 bg-white rounded-xl border border-gray-100 hover:border-amber-200 hover:shadow-sm text-left transition-all"
-            >
-              <div className="w-12 h-12 bg-amber-100 rounded-lg flex items-center justify-center shrink-0">
-                <BookOpen className="text-amber-600" size={22} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="font-semibold text-gray-900">{p.title}</div>
-                <div className="text-sm text-gray-400 truncate mt-0.5">
-                  {p.logline ?? p.genre ?? '暂无简介'}
+        <main className="min-w-0 flex-1 px-5 py-7 sm:px-8">
+          <div className="mx-auto max-w-[1110px]">
+            <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_322px]">
+              <section className="min-w-0">
+                <div>
+                  <h1 className="text-2xl font-bold tracking-normal text-gray-950 sm:text-[28px]">
+                    下午好，写作者
+                  </h1>
+                  <p className="mt-2 text-[15px] text-gray-500">今天也要元气满满地创作哦！</p>
                 </div>
-              </div>
-              <div className="text-xs text-gray-300 shrink-0">
-                {new Date(p.updated_at ?? p.created_at).toLocaleDateString()}
-              </div>
-            </button>
-          ))}
-          {projects.length === 0 && !showForm && (
-            <div className="text-center py-16 text-gray-400">
-              <BookOpen size={48} className="mx-auto mb-3 opacity-30" />
-              <p>还没有小说，点击「新建小说」开始创作</p>
+
+                <HeroPanel
+                  onCreate={() => setShowForm(true)}
+                  onContinue={() => openProject(firstProject, 'write')}
+                />
+
+                <QuickActionsGrid onAction={handleQuickAction} />
+
+                <RecentEdits
+                  edits={recentEdits}
+                  onOpen={project => openProject(project, 'write')}
+                />
+              </section>
+
+              <aside className="space-y-4">
+                <WritingStatsPanel />
+                <InspirationPanel />
+                <RecommendationsPanel />
+              </aside>
             </div>
-          )}
-        </div>
+          </div>
+        </main>
       </div>
     </div>
   )

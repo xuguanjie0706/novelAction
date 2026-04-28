@@ -1,7 +1,10 @@
-import React, { useState, useRef } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Sparkles, X, CheckCircle, Loader, AlertCircle, ChevronRight } from 'lucide-react'
 import clsx from 'clsx'
+import { llmApi } from '../../api/client'
+import type { LlmOverview } from '../../types'
+import { llmProviderIdFromRoute, modelProfileFromRoute, routeLlmProviderPayload, useAppStore } from '../../store'
 
 interface Props {
   onClose: () => void
@@ -30,6 +33,8 @@ type Mode = 'sequential' | 'single_shot'
 
 export default function GenerateWizard({ onClose }: Props) {
   const navigate = useNavigate()
+  const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
+  const setAiBackendRoute = useAppStore(s => s.setAiBackendRoute)
   const [phase, setPhase] = useState<'input' | 'generating' | 'done'>('input')
   const [logline, setLogline] = useState('')
   const [mode, setMode] = useState<Mode>('sequential')
@@ -38,8 +43,45 @@ export default function GenerateWizard({ onClose }: Props) {
   )
   const [errorMsg, setErrorMsg] = useState('')
   const [projectId, setProjectId] = useState<string | null>(null)
+  const [llmOverview, setLlmOverview] = useState<LlmOverview | null>(null)
+  const [llmLoading, setLlmLoading] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const isSubmittingRef = useRef(false)   // 防止重复提交
+
+  useEffect(() => {
+    let alive = true
+    setLlmLoading(true)
+    llmApi.overview()
+      .then(res => {
+        if (!alive) return
+        setLlmOverview(res.data)
+      })
+      .catch(() => {
+        if (!alive) return
+        setLlmOverview(null)
+      })
+      .finally(() => {
+        if (!alive) return
+        setLlmLoading(false)
+      })
+    return () => { alive = false }
+  }, [])
+
+  useEffect(() => {
+    if (!llmOverview?.remote_providers?.length) return
+    if (aiBackendRoute !== 'remote') return
+    const def = llmOverview.remote_providers.find(p => p.is_default) ?? llmOverview.remote_providers[0]
+    setAiBackendRoute(`remote:${def.id}`)
+  }, [llmOverview, aiBackendRoute, setAiBackendRoute])
+
+  const modelHint = useMemo(() => {
+    const selectedProviderId = llmProviderIdFromRoute(aiBackendRoute)
+    const selectedProvider = llmOverview?.remote_providers?.find(p => p.id === selectedProviderId)
+    if (selectedProvider) return `当前：远程 · ${selectedProvider.name} (${selectedProvider.model_name})`
+    if (aiBackendRoute === 'local') return `当前：本地 · ${llmOverview?.local_model_name ?? '默认'}`
+    if (llmOverview?.remote_ready) return `当前：远程 · 环境变量 (${llmOverview.effective_remote_model ?? '默认'})`
+    return '当前：远程（未配置）'
+  }, [aiBackendRoute, llmOverview])
 
   // ── 开始生成 ──────────────────────────────────────────────
   const startGenerate = async () => {
@@ -65,7 +107,12 @@ export default function GenerateWizard({ onClose }: Props) {
       const res = await fetch('/api/v1/bootstrap/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ logline: logline.trim(), mode }),
+        body: JSON.stringify({
+          logline: logline.trim(),
+          mode,
+          model_profile: modelProfileFromRoute(aiBackendRoute),
+          ...routeLlmProviderPayload(aiBackendRoute),
+        }),
         signal: abort.signal,
       })
 
@@ -166,6 +213,30 @@ export default function GenerateWizard({ onClose }: Props) {
             </div>
 
             {/* 模式选择 */}
+            <div>
+              <label className="text-sm font-medium text-gray-700 block mb-2">模型线路</label>
+              <select
+                value={aiBackendRoute}
+                onChange={e => setAiBackendRoute(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                disabled={llmLoading}
+              >
+                <option value="local">本地 · {llmLoading ? '加载中…' : (llmOverview?.local_model_name ?? '默认')}</option>
+                {!!llmOverview?.remote_providers?.length && llmOverview.remote_providers.map(p => (
+                  <option key={p.id} value={`remote:${p.id}`}>
+                    远程 · {p.name} ({p.model_name}){p.is_default ? ' ★' : ''}
+                  </option>
+                ))}
+                {!llmLoading && llmOverview?.remote_ready && (llmOverview.remote_providers?.length ?? 0) === 0 && (
+                  <option value="remote">远程 · 环境变量 ({llmOverview.effective_remote_model ?? '—'})</option>
+                )}
+                {!llmLoading && !llmOverview?.remote_ready && (llmOverview?.remote_providers?.length ?? 0) === 0 && (
+                  <option value="remote" disabled>远程（未配置）</option>
+                )}
+              </select>
+              <p className="text-xs text-gray-400 mt-1">{modelHint}</p>
+            </div>
+
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-2">生成方案</label>
               <div className="grid grid-cols-2 gap-3">

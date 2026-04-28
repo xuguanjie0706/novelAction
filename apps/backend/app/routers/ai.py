@@ -27,7 +27,7 @@ router = APIRouter(prefix="/projects/{project_id}/ai", tags=["ai"])
 
 class QualityCheckRequest(BaseModel):
     chapter_id: str
-    check_types: List[str] = ["plot", "character", "setting_consistency", "pacing", "hooks"]
+    check_types: List[str] = ["plot", "character", "setting_consistency", "pacing", "hooks", "outline_alignment"]
     model_profile: Literal["local", "gemini"] = "local"
     llm_provider_id: Optional[UUID] = None
 

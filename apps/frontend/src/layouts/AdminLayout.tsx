@@ -1,5 +1,5 @@
 import { Layout, Menu, theme } from 'antd'
-import { ExperimentOutlined } from '@ant-design/icons'
+import { ExperimentOutlined, ReadOutlined } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useMemo } from 'react'
 
@@ -13,6 +13,7 @@ export default function AdminLayout() {
   } = theme.useToken()
 
   const selected = useMemo(() => {
+    if (loc.pathname.startsWith('/reading-review')) return ['/reading-review']
     if (loc.pathname.startsWith('/llm')) return ['/llm']
     return ['/llm']
   }, [loc.pathname])
@@ -44,6 +45,12 @@ export default function AdminLayout() {
               icon: <ExperimentOutlined />,
               label: '大模型',
               onClick: () => navigate('/llm'),
+            },
+            {
+              key: '/reading-review',
+              icon: <ReadOutlined />,
+              label: '小说评测',
+              onClick: () => navigate('/reading-review'),
             },
           ]}
         />

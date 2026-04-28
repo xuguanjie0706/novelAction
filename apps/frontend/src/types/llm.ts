@@ -19,3 +19,19 @@ export interface LlmProvider {
   created_at?: string
   updated_at?: string
 }
+
+export interface RemoteProviderBrief {
+  id: string
+  name: string
+  model_name: string
+  is_default: boolean
+}
+
+export interface LlmOverview {
+  local_model_name: string
+  remote_ready: boolean
+  effective_remote_model: string | null
+  remote_agent: RemoteProviderBrief | null
+  remote_source: 'database' | 'env' | 'none'
+  remote_providers: RemoteProviderBrief[]
+}

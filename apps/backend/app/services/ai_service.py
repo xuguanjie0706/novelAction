@@ -120,9 +120,10 @@ class AIService:
   "dimensions": {{
     "plot": {{"score": 9, "status": "pass", "comment": "情节推进是否有效"}},
     "character": {{"score": 8, "status": "pass", "comment": "人物行为是否符合设定"}},
-    "consistency": {{"score": 7, "status": "warning", "comment": "境界/技能/位置是否前后一致"}},
+    "setting_consistency": {{"score": 7, "status": "warning", "comment": "境界/技能/位置是否前后一致"}},
     "pacing": {{"score": 8, "status": "pass", "comment": "节奏是否合适"}},
-    "hooks": {{"score": 9, "status": "excellent", "comment": "钩子和悬念是否到位"}}
+    "hooks": {{"score": 9, "status": "excellent", "comment": "钩子和悬念是否到位"}},
+    "outline_alignment": {{"score": 8, "status": "pass", "comment": "本章内容与大纲节点目标的匹配度"}}
   }},
   "issues": [{{"type": "warning", "description": "具体问题描述，如：林默在第X章记录位置为青云城，本章却出现在远水城"}}],
   "suggestions": ["具体可操作的修改建议"],

@@ -154,6 +154,14 @@ export interface QualityReport {
   summary: string
 }
 
+/** GET /api/v1/llm/overview — 启用的远程线路列表（不含密钥） */
+export interface RemoteProviderBrief {
+  id: string
+  name: string
+  model_name: string
+  is_default: boolean
+}
+
 /** GET /api/v1/llm/overview — 后端登记的远程智能体 / 本地模型摘要 */
 export interface LlmOverview {
   local_model_name: string
@@ -163,6 +171,8 @@ export interface LlmOverview {
     id: string
     name: string
     model_name: string
+    is_default?: boolean
   } | null
   remote_source: 'database' | 'env' | 'none'
+  remote_providers: RemoteProviderBrief[]
 }

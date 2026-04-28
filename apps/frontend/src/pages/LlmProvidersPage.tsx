@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { App, Button, Form, Input, InputNumber, Modal, Space, Switch, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { PlusOutlined, StarOutlined } from '@ant-design/icons'
+import { ApiOutlined, PlusOutlined, StarOutlined } from '@ant-design/icons'
 import { http } from '../api/http'
-import type { LlmProvider } from '../types/llm'
+import type { LlmProvider, LlmTestConnectionResult } from '../types/llm'
 
 const { Text } = Typography
 
@@ -25,6 +25,10 @@ export default function LlmProvidersPage() {
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<LlmProvider | null>(null)
   const [form] = Form.useForm<FormValues>()
+  const [testing, setTesting] = useState(false)
+  const [testQuickOpen, setTestQuickOpen] = useState(false)
+  const [testQuickForm] = Form.useForm<{ base_url: string; model_name: string; api_key?: string }>()
+  const [testQuickResult, setTestQuickResult] = useState<LlmTestConnectionResult | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -120,6 +124,88 @@ export default function LlmProvidersPage() {
     await load()
   }
 
+  const showTestResult = (res: LlmTestConnectionResult) => {
+    if (res.ok) {
+      message.success(
+        `${res.message}${res.latency_ms != null ? `（${res.latency_ms} ms）` : ''}`,
+        5,
+      )
+    } else {
+      message.error(`${res.message}${res.latency_ms != null ? `（${res.latency_ms} ms）` : ''}`, 8)
+    }
+  }
+
+  const testSavedRow = async (row: LlmProvider) => {
+    setTesting(true)
+    try {
+      const { data } = await http.post<LlmTestConnectionResult>(
+        `/api/v1/admin/llm-providers/${row.id}/test-connection`,
+      )
+      setTestQuickResult(null)
+      showTestResult(data)
+    } catch {
+      message.error('测试请求失败（网络或后端）')
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const testCurrentModalForm = async () => {
+    try {
+      await form.validateFields(['base_url', 'model_name'])
+      const vals = form.getFieldsValue()
+      const base_url = vals.base_url?.trim() ?? ''
+      const model_name = vals.model_name?.trim() ?? ''
+      const api_key = vals.api_key?.trim()
+      setTesting(true)
+      let data: LlmTestConnectionResult
+      if (editing && !api_key) {
+        const r = await http.post<LlmTestConnectionResult>(
+          `/api/v1/admin/llm-providers/${editing.id}/test-connection`,
+        )
+        data = r.data
+      } else {
+        const r = await http.post<LlmTestConnectionResult>('/api/v1/admin/llm-providers/test-connection', {
+          base_url,
+          model_name,
+          api_key: api_key || undefined,
+        })
+        data = r.data
+      }
+      showTestResult(data)
+    } catch (e: unknown) {
+      if ((e as { errorFields?: unknown }).errorFields) return
+      message.error('测试失败')
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const openQuickTest = () => {
+    setTestQuickResult(null)
+    testQuickForm.resetFields()
+    setTestQuickOpen(true)
+  }
+
+  const submitQuickTest = async () => {
+    try {
+      const v = await testQuickForm.validateFields()
+      setTesting(true)
+      const { data } = await http.post<LlmTestConnectionResult>('/api/v1/admin/llm-providers/test-connection', {
+        base_url: v.base_url.trim(),
+        model_name: v.model_name.trim(),
+        api_key: v.api_key?.trim() || undefined,
+      })
+      setTestQuickResult(data)
+      showTestResult(data)
+    } catch (e: unknown) {
+      if ((e as { errorFields?: unknown }).errorFields) return
+      message.error('测试失败')
+    } finally {
+      setTesting(false)
+    }
+  }
+
   const columns: ColumnsType<LlmProvider> = [
     {
       title: '名称',
@@ -169,10 +255,19 @@ export default function LlmProvidersPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 220,
+      width: 280,
       fixed: 'right',
       render: (_, row) => (
-        <Space size="small">
+        <Space size="small" wrap>
+          <Button
+            type="link"
+            size="small"
+            icon={<ApiOutlined />}
+            loading={testing}
+            onClick={() => void testSavedRow(row)}
+          >
+            测试
+          </Button>
           {!row.is_default ? (
             <Button type="link" size="small" icon={<StarOutlined />} onClick={() => void setDefault(row)}>
               设默认
@@ -201,9 +296,14 @@ export default function LlmProvidersPage() {
               创作端选择「Gemini / 远程」时使用<strong>一条启用且标记为默认</strong>的记录；若无则回退环境变量 GEMINI_*。
             </Text>
           </div>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            新增
-          </Button>
+          <Space>
+            <Button icon={<ApiOutlined />} onClick={openQuickTest}>
+              测试联通
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              新增
+            </Button>
+          </Space>
         </Space>
 
         <Table<LlmProvider>
@@ -224,6 +324,17 @@ export default function LlmProvidersPage() {
         confirmLoading={saving}
         destroyOnClose
         width={560}
+        footer={(
+          <Space style={{ justifyContent: 'flex-end', width: '100%' }}>
+            <Button onClick={() => void testCurrentModalForm()} loading={testing} icon={<ApiOutlined />}>
+              测试联通（不保存）
+            </Button>
+            <Button onClick={() => setOpen(false)}>取消</Button>
+            <Button type="primary" loading={saving} onClick={() => void submit()}>
+              保存
+            </Button>
+          </Space>
+        )}
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="name" label="显示名称" rules={[{ required: true, message: '必填' }]}>
@@ -259,6 +370,52 @@ export default function LlmProvidersPage() {
             <InputNumber min={0} style={{ width: '100%' }} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="测试远程网关联通"
+        open={testQuickOpen}
+        onCancel={() => setTestQuickOpen(false)}
+        onOk={() => void submitQuickTest()}
+        confirmLoading={testing}
+        okText="发起测试"
+        destroyOnClose
+        width={520}
+      >
+        <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+          使用 OpenAI 兼容 <code>/chat/completions</code> 发一条最小请求；密钥仅发往你的后端，由后端转发上游。
+        </Text>
+        <Form form={testQuickForm} layout="vertical">
+          <Form.Item name="base_url" label="网关 Base URL" rules={[{ required: true, message: '必填' }]}>
+            <Input placeholder="http://host:3333 或已带 /v1 的地址" />
+          </Form.Item>
+          <Form.Item name="model_name" label="模型 ID" rules={[{ required: true, message: '必填' }]}>
+            <Input placeholder="例如 gemini-3-flash-free" />
+          </Form.Item>
+          <Form.Item name="api_key" label="API Key（可选）">
+            <Input.Password placeholder="无密钥可留空" autoComplete="new-password" />
+          </Form.Item>
+        </Form>
+        {testQuickResult ? (
+          <div
+            style={{
+              marginTop: 12,
+              padding: 12,
+              borderRadius: 8,
+              background: testQuickResult.ok ? '#f6ffed' : '#fff2f0',
+              border: `1px solid ${testQuickResult.ok ? '#b7eb8f' : '#ffccc7'}`,
+            }}
+          >
+            <Text strong>{testQuickResult.ok ? '成功' : '失败'}</Text>
+            <div style={{ marginTop: 6, fontSize: 13 }}>{testQuickResult.message}</div>
+            {(testQuickResult.latency_ms != null || testQuickResult.http_status != null) && (
+              <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: 'block' }}>
+                {testQuickResult.http_status != null ? `HTTP ${testQuickResult.http_status}` : ''}
+                {testQuickResult.latency_ms != null ? ` · ${testQuickResult.latency_ms} ms` : ''}
+              </Text>
+            )}
+          </div>
+        ) : null}
       </Modal>
     </div>
   )

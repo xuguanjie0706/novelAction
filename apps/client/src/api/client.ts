@@ -84,8 +84,16 @@ export const llmApi = {
 
 export const aiApi = {
   qualityCheck: (pid: string, data: any) => api.post(`/projects/${pid}/ai/quality-check`, data),
-  extractMemory: (pid: string, chapterId: string, modelProfile: 'local' | 'gemini' = 'local') =>
-    api.post(`/projects/${pid}/ai/extract-memory?chapter_id=${chapterId}&model_profile=${modelProfile}`),
+  extractMemory: (
+    pid: string,
+    chapterId: string,
+    modelProfile: 'local' | 'gemini' = 'local',
+    llmProviderId?: string,
+  ) => {
+    const q = new URLSearchParams({ chapter_id: chapterId, model_profile: modelProfile })
+    if (llmProviderId) q.set('llm_provider_id', llmProviderId)
+    return api.post(`/projects/${pid}/ai/extract-memory?${q.toString()}`)
+  },
   listMemory: (pid: string, type?: string) =>
     api.get(`/projects/${pid}/ai/memory${type ? `?memory_type=${type}` : ''}`),
 }

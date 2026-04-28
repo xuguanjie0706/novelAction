@@ -1,21 +1,49 @@
 import { create } from 'zustand'
 import type { Project, Chapter, OutlineNode, Character, WorldSetting, MemoryChunk, GenTask, GenProgressItem } from '../types'
 
-const AI_MODEL_STORAGE_KEY = 'novelAction:ai-model-profile'
+const AI_ROUTE_STORAGE_KEY = 'novelAction:ai-backend-route'
+const LEGACY_AI_MODEL_KEY = 'novelAction:ai-model-profile'
 
-function readStoredAiModelProfile(): 'local' | 'gemini' {
+/**
+ * 全局模型路由：
+ * - `local`：本地 Ollama（settings.AI_MODEL）
+ * - `remote`：远程默认（DB 默认启用项或 GEMINI_* 环境变量）
+ * - `remote:<uuid>`：指定 LlmProvider
+ */
+function readStoredAiBackendRoute(): string {
   try {
-    const v = localStorage.getItem(AI_MODEL_STORAGE_KEY)
-    if (v === 'gemini' || v === 'local') return v
-    const legacy = localStorage.getItem('novelAction:draft-model-profile')
-    if (legacy === 'gemini' || legacy === 'local') return legacy
+    const v = localStorage.getItem(AI_ROUTE_STORAGE_KEY)
+    if (v === 'local' || v === 'remote') return v
+    if (v?.startsWith('remote:') && v.length > 8) return v
+    const legacy = localStorage.getItem(LEGACY_AI_MODEL_KEY)
+    if (legacy === 'gemini') return 'remote'
+    if (legacy === 'local') return 'local'
+    const draftLegacy = localStorage.getItem('novelAction:draft-model-profile')
+    if (draftLegacy === 'gemini') return 'remote'
+    if (draftLegacy === 'local') return 'local'
   } catch { /* ignore */ }
   return 'local'
 }
 
+export function modelProfileFromRoute(route: string): 'local' | 'gemini' {
+  return route === 'local' ? 'local' : 'gemini'
+}
+
+/** 仅当 route 为 `remote:<uuid>` 时返回 uuid，否则 undefined（走后端默认远程） */
+export function llmProviderIdFromRoute(route: string): string | undefined {
+  if (route.startsWith('remote:')) return route.slice('remote:'.length) || undefined
+  return undefined
+}
+
 /** 写作/质检等用 local|gemini；大纲 ai-expand / full-generate 用 default 表示本地 */
-export function toOutlineApiModelProfile(p: 'local' | 'gemini'): 'default' | 'gemini' {
-  return p === 'gemini' ? 'gemini' : 'default'
+export function toOutlineApiModelProfile(route: string): 'default' | 'gemini' {
+  return route === 'local' ? 'default' : 'gemini'
+}
+
+/** 请求体中可选字段：指定远程线路时使用 */
+export function routeLlmProviderPayload(route: string): { llm_provider_id?: string } {
+  const id = llmProviderIdFromRoute(route)
+  return id ? { llm_provider_id: id } : {}
 }
 
 interface AppState {
@@ -59,9 +87,12 @@ interface AppState {
   aiPanelOpen: boolean
   setAiPanelOpen: (v: boolean) => void
 
-  /** 全局 AI 模型：写作起笔、质检、建议、记忆提取、大纲展开等均用此项 */
-  aiModelProfile: 'local' | 'gemini'
-  setAiModelProfile: (p: 'local' | 'gemini') => void
+  /**
+   * 全局 AI 线路：`local` | `remote` | `remote:<LlmProvider uuid>`
+   * 见 readStoredAiBackendRoute
+   */
+  aiBackendRoute: string
+  setAiBackendRoute: (route: string) => void
 
   // ── 大纲生成队列 ──────────────────────────────────
   genQueue: GenTask[]
@@ -127,12 +158,12 @@ export const useAppStore = create<AppState>((set) => ({
   aiPanelOpen: false,
   setAiPanelOpen: (v) => set({ aiPanelOpen: v }),
 
-  aiModelProfile: readStoredAiModelProfile(),
-  setAiModelProfile: (p) => {
+  aiBackendRoute: readStoredAiBackendRoute(),
+  setAiBackendRoute: (route) => {
     try {
-      localStorage.setItem(AI_MODEL_STORAGE_KEY, p)
+      localStorage.setItem(AI_ROUTE_STORAGE_KEY, route)
     } catch { /* ignore */ }
-    set({ aiModelProfile: p })
+    set({ aiBackendRoute: route })
   },
 
   // ── 生成队列 ─────────────────────────────────────

@@ -1,3 +1,11 @@
+/** POST .../test-connection 响应 */
+export interface LlmTestConnectionResult {
+  ok: boolean
+  message: string
+  latency_ms?: number | null
+  http_status?: number | null
+}
+
 export interface LlmProvider {
   id: string
   name: string

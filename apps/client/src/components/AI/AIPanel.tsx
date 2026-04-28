@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react'
 import { X, Zap, BookMarked, MessageSquare } from 'lucide-react'
-import { useAppStore } from '../../store'
+import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload, llmProviderIdFromRoute } from '../../store'
 import { aiApi } from '../../api/client'
 import type { QualityReport } from '../../types'
 import clsx from 'clsx'
@@ -23,9 +23,11 @@ export default function AIPanel({ projectId }: Props) {
     if (!activeChapterId) return toast.error('请先选择一个章节')
     setLoading(true)
     try {
+      const route = useAppStore.getState().aiBackendRoute
       const res = await aiApi.qualityCheck(projectId, {
         chapter_id: activeChapterId,
-        model_profile: useAppStore.getState().aiModelProfile,
+        model_profile: modelProfileFromRoute(route),
+        ...routeLlmProviderPayload(route),
       })
       setReport(res.data)
     } finally {
@@ -39,6 +41,7 @@ export default function AIPanel({ projectId }: Props) {
     setStreamOutput('')
     setLoading(true)
     try {
+      const route = useAppStore.getState().aiBackendRoute
       const response = await fetch(
         `/api/v1/projects/${projectId}/ai/suggest/stream`,
         {
@@ -47,7 +50,8 @@ export default function AIPanel({ projectId }: Props) {
           body: JSON.stringify({
             chapter_id: activeChapterId,
             prompt: suggestText,
-            model_profile: useAppStore.getState().aiModelProfile,
+            model_profile: modelProfileFromRoute(route),
+            ...routeLlmProviderPayload(route),
           }),
         }
       )
@@ -76,7 +80,13 @@ export default function AIPanel({ projectId }: Props) {
     if (!activeChapterId) return toast.error('请先选择一个章节')
     setLoading(true)
     try {
-      const res = await aiApi.extractMemory(projectId, activeChapterId, useAppStore.getState().aiModelProfile)
+      const route = useAppStore.getState().aiBackendRoute
+      const res = await aiApi.extractMemory(
+        projectId,
+        activeChapterId,
+        modelProfileFromRoute(route),
+        llmProviderIdFromRoute(route),
+      )
       setMemories([...memories, ...res.data])
       toast.success(`提取了 ${res.data.length} 条记忆`)
     } finally {

@@ -17,7 +17,7 @@ import {
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import type { OutlineNode } from '../../types'
-import { useAppStore, toOutlineApiModelProfile } from '../../store'
+import { useAppStore, toOutlineApiModelProfile, routeLlmProviderPayload } from '../../store'
 
 // ── Types ─────────────────────────────────────────────
 
@@ -256,13 +256,15 @@ export default function OutlineAIPanel({ node, projectId, onCommitDone }: Props)
 
     try {
       const url = `/api/v1/projects/${projectId}/outline/ai-expand`
+      const route = useAppStore.getState().aiBackendRoute
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           node_id: node.id,
           chapter_count: chapterCount,
-          model_profile: toOutlineApiModelProfile(useAppStore.getState().aiModelProfile),
+          model_profile: toOutlineApiModelProfile(route),
+          ...routeLlmProviderPayload(route),
         }),
       })
 

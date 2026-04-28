@@ -5,7 +5,7 @@ import {
   Sparkles, BookOpen,
 } from 'lucide-react'
 import { chaptersApi, outlineApi } from '../api/client'
-import { useAppStore, toOutlineApiModelProfile } from '../store'
+import { useAppStore, toOutlineApiModelProfile, routeLlmProviderPayload } from '../store'
 import type { OutlineNode } from '../types'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
@@ -23,7 +23,12 @@ function FullGenConfigModal({
   projectId: string
   hasExistingOutline: boolean
   onClose: () => void
-  onDispatch: (params: { scale_hint: string; model_profile: string; clear_existing: boolean }) => void
+  onDispatch: (params: {
+    scale_hint: string
+    model_profile: string
+    clear_existing: boolean
+    llm_provider_id?: string
+  }) => void
 }) {
   const [scaleHint, setScaleHint] = useState<'auto' | 'short' | 'medium' | 'long'>('auto')
   // 已有大纲时默认勾选「清除重建」，避免重复叠加旧内容
@@ -31,10 +36,12 @@ function FullGenConfigModal({
 
   const handleStart = () => {
     if (clearExisting && !window.confirm('将清除现有全部大纲节点，确定继续？')) return
+    const route = useAppStore.getState().aiBackendRoute
     onDispatch({
       scale_hint: scaleHint,
-      model_profile: toOutlineApiModelProfile(useAppStore.getState().aiModelProfile),
+      model_profile: toOutlineApiModelProfile(route),
       clear_existing: clearExisting,
+      ...routeLlmProviderPayload(route),
     })
     onClose()
   }
@@ -320,7 +327,12 @@ export default function OutlinePage() {
   }
 
   // ── 全量生成 → 派发到队列 ─────────────────────────────────
-  const handleDispatchFullGen = (params: { scale_hint: string; model_profile: string; clear_existing: boolean }) => {
+  const handleDispatchFullGen = (params: {
+    scale_hint: string
+    model_profile: string
+    clear_existing: boolean
+    llm_provider_id?: string
+  }) => {
     if (!projectId) return
     addGenTask({
       type: 'full_generate',
@@ -339,7 +351,8 @@ export default function OutlinePage() {
       toast.error('没有可展开的卷/篇（可能已全部有章节计划，或大纲为空）')
       return
     }
-    const modelProfile = toOutlineApiModelProfile(useAppStore.getState().aiModelProfile)
+    const route = useAppStore.getState().aiBackendRoute
+    const modelProfile = toOutlineApiModelProfile(route)
     addGenTask({
       type: 'batch_expand',
       projectId,
@@ -348,6 +361,7 @@ export default function OutlinePage() {
         nodes: targets.map(n => ({ id: n.id, title: n.title })),
         chapterCount,
         modelProfile,
+        ...routeLlmProviderPayload(route),
       },
     })
     toast.success('已加入生成队列，右下角可查看进度')

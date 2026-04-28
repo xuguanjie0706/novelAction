@@ -49,6 +49,23 @@ class LlmProviderOut(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class LlmTestConnectionIn(BaseModel):
+    """临时测试：不要求已入库。"""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    base_url: str = Field(..., max_length=2000)
+    model_name: str = Field(..., max_length=200)
+    api_key: Optional[str] = Field(None, max_length=4000)
+
+
+class LlmTestConnectionOut(BaseModel):
+    ok: bool
+    message: str
+    latency_ms: Optional[int] = None
+    http_status: Optional[int] = None
+
+
 def mask_api_key_hint(raw: Optional[str]) -> tuple[bool, Optional[str]]:
     """是否有密钥 + 末尾提示（不脱敏全文）。"""
     if not raw or not raw.strip():

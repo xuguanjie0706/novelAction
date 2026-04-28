@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List, Literal
+from uuid import UUID
 import json
 import re
 
@@ -18,12 +19,14 @@ class QualityCheckRequest(BaseModel):
     chapter_id: str
     check_types: List[str] = ["plot", "character", "setting_consistency", "pacing", "hooks"]
     model_profile: Literal["local", "gemini"] = "local"
+    llm_provider_id: Optional[UUID] = None
 
 
 class SuggestRequest(BaseModel):
     chapter_id: str
     prompt: str
     model_profile: Literal["local", "gemini"] = "local"
+    llm_provider_id: Optional[UUID] = None
 
 
 # ── 质检 ──────────────────────────────────────────────
@@ -47,7 +50,11 @@ async def quality_check(
         WorldSetting.project_id == project_id
     ).all()
 
-    svc = AIService("gemini" if req.model_profile == "gemini" else "default", db=db)
+    svc = AIService(
+        "gemini" if req.model_profile == "gemini" else "default",
+        db=db,
+        llm_provider_id=req.llm_provider_id,
+    )
     result = await svc.quality_check(
         chapter_content=chapter.content,
         chapter_title=chapter.title,
@@ -79,7 +86,11 @@ async def suggest_stream(
     if not chapter:
         raise HTTPException(404, "Chapter not found")
 
-    svc = AIService("gemini" if req.model_profile == "gemini" else "default", db=db)
+    svc = AIService(
+        "gemini" if req.model_profile == "gemini" else "default",
+        db=db,
+        llm_provider_id=req.llm_provider_id,
+    )
 
     async def event_stream():
         async for chunk in svc.suggest_stream(
@@ -98,7 +109,8 @@ async def extract_memory(
     project_id: str,
     chapter_id: str,
     model_profile: Literal["local", "gemini"] = "local",
-    db: Session = Depends(get_db)
+    llm_provider_id: Optional[UUID] = None,
+    db: Session = Depends(get_db),
 ):
     chapter = db.query(Chapter).filter(
         Chapter.id == chapter_id, Chapter.project_id == project_id
@@ -106,7 +118,11 @@ async def extract_memory(
     if not chapter:
         raise HTTPException(404, "Chapter not found")
 
-    svc = AIService("gemini" if model_profile == "gemini" else "default", db=db)
+    svc = AIService(
+        "gemini" if model_profile == "gemini" else "default",
+        db=db,
+        llm_provider_id=llm_provider_id,
+    )
     extracted = await svc.extract_memory(
         chapter_content=chapter.content,
         chapter_title=chapter.title,
@@ -133,6 +149,7 @@ async def extract_memory(
 class DraftAssistRequest(BaseModel):
     chapter_id: str
     model_profile: Literal["local", "gemini"] = "local"
+    llm_provider_id: Optional[UUID] = None
     """作者补充说明：风格、禁忌、情节走向等，会并入提示词"""
     user_prompt: Optional[str] = None
     """为 True 时按「整章重写」生成，不把长正文当作续写衔接"""
@@ -202,7 +219,11 @@ async def draft_assist_stream(
     # ── 当前章节正文（strip HTML）────────────────────
     existing_content = re.sub(r"<[^>]+>", "", chapter.content or "")
 
-    svc = AIService("gemini" if req.model_profile == "gemini" else "default", db=db)
+    svc = AIService(
+        "gemini" if req.model_profile == "gemini" else "default",
+        db=db,
+        llm_provider_id=req.llm_provider_id,
+    )
 
     async def event_stream():
         try:

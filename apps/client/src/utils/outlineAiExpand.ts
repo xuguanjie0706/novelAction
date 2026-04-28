@@ -56,16 +56,19 @@ export async function fetchOutlineExpandResult(
   projectId: string,
   nodeId: string,
   chapterCount: number,
-  modelProfile: 'default' | 'gemini'
+  modelProfile: 'default' | 'gemini',
+  llmProviderId?: string,
 ): Promise<ExpandResult> {
+  const body: Record<string, unknown> = {
+    node_id: nodeId,
+    chapter_count: chapterCount,
+    model_profile: modelProfile,
+  }
+  if (llmProviderId) body.llm_provider_id = llmProviderId
   const res = await fetch(`/api/v1/projects/${projectId}/outline/ai-expand`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      node_id: nodeId,
-      chapter_count: chapterCount,
-      model_profile: modelProfile,
-    }),
+    body: JSON.stringify(body),
   })
 
   if (!res.ok) throw new Error(`HTTP ${res.status}`)

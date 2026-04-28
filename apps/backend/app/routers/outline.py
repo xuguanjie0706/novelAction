@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import List, Optional
+from uuid import UUID
 import json
 
 from app.database import get_db
@@ -90,6 +91,7 @@ class ExpandRequest(BaseModel):
     node_id: str
     chapter_count: int = 10
     model_profile: str = "default"   # default / gemini
+    llm_provider_id: Optional[UUID] = None
 
 
 @router.post("/ai-expand")
@@ -126,7 +128,7 @@ async def ai_expand_outline(
         for c in characters[:5]
     )
 
-    svc = AIService(profile=req.model_profile, db=db)
+    svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
 
     async def stream():
         yield f"data: {json.dumps({'event': 'start'}, ensure_ascii=False)}\n\n"
@@ -167,6 +169,7 @@ async def ai_expand_outline(
 class FullGenerateRequest(BaseModel):
     scale_hint: str = "auto"      # auto / short / medium / long — 篇幅倾向，AI 自主决定结构
     model_profile: str = "default"
+    llm_provider_id: Optional[UUID] = None
     clear_existing: bool = False
 
 
@@ -198,7 +201,7 @@ async def ai_full_generate_outline(
         for c in characters[:5]
     )
 
-    svc = AIService(profile=req.model_profile, db=db)
+    svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
 
     # ── 共用：按批次为单个节点生成并写入章节计划 ──────────────
     async def fill_node_with_chapters(
@@ -490,7 +493,12 @@ def commit_expand(
     req: CommitExpandRequest,
     db: Session = Depends(get_db),
 ):
-    """把前端确认的章节计划批量写入大纲树"""
+    """
+    把前端确认的章节计划批量写入大纲树。
+    强制 卷 → 篇 → 章 三层结构：
+      若 parent 是 volume，自动建一个 arc 再挂章节；
+      若 parent 已是 arc，直接挂。
+    """
     parent = db.query(OutlineNode).filter(
         OutlineNode.id == req.parent_node_id,
         OutlineNode.project_id == project_id,
@@ -498,11 +506,32 @@ def commit_expand(
     if not parent:
         raise HTTPException(404, "Parent node not found")
 
+    # 若父节点是卷，自动建篇包装
+    if parent.node_type == "volume":
+        subtitle = parent.title.split("：", 1)[1] if "：" in parent.title else parent.title
+        arc_count = db.query(OutlineNode).filter(
+            OutlineNode.parent_id == parent.id,
+            OutlineNode.node_type == "arc",
+        ).count()
+        arc_node = OutlineNode(
+            project_id=project_id,
+            parent_id=parent.id,
+            node_type="arc",
+            title=f"第{arc_count + 1}篇：{subtitle}",
+            summary=parent.summary or "",
+            sort_order=arc_count,
+        )
+        db.add(arc_node)
+        db.flush()
+        actual_parent_id = arc_node.id
+    else:
+        actual_parent_id = parent.id
+
     results = []
     for i, ch in enumerate(req.chapters):
         node = OutlineNode(
             project_id=project_id,
-            parent_id=parent.id,
+            parent_id=actual_parent_id,
             node_type="chapter_plan",
             title=f"第{ch.get('number', i+1)}章：{ch.get('title', '未命名')}",
             summary=ch.get("core_event"),

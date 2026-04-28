@@ -1,5 +1,6 @@
 """解析创作端「远程/Gemini」_profile 使用的连接信息。"""
 from typing import Optional, Tuple
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -31,11 +32,24 @@ def pick_active_provider(db: Session) -> Optional[LlmProvider]:
     )
 
 
-def resolve_gemini_connection(db: Optional[Session]) -> Optional[Tuple[str, str, str]]:
+def resolve_gemini_connection(
+    db: Optional[Session],
+    provider_id: Optional[UUID] = None,
+) -> Optional[Tuple[str, str, str]]:
     """
     返回 (base_url 原始, model_name, api_key 或空字符串)。
-    优先级：数据库默认/启用的提供者 > 环境变量 GEMINI_*（兼容旧部署）。
+    - 指定 provider_id：使用该条（须 enabled）。
+    - 未指定且 db 可用：数据库默认/启用的提供者 > 环境变量 GEMINI_*（兼容旧部署）。
     """
+    if db is not None and provider_id is not None:
+        row = (
+            db.query(LlmProvider)
+            .filter(LlmProvider.id == provider_id, LlmProvider.enabled.is_(True))
+            .first()
+        )
+        if row:
+            return (row.base_url, row.model_name, row.api_key or "")
+        return None
     if db is not None:
         row = pick_active_provider(db)
         if row:

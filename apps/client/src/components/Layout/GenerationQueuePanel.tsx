@@ -122,6 +122,7 @@ async function runBatchExpand(
   const nodes: Array<{ id: string; title: string }> = params.nodes ?? []
   const chapterCount: number = params.chapterCount ?? 10
   const modelProfile: 'default' | 'gemini' = params.modelProfile ?? 'default'
+  const llmProviderId: string | undefined = params.llm_provider_id
 
   let successCount = 0
   for (let i = 0; i < nodes.length; i++) {
@@ -133,7 +134,13 @@ async function runBatchExpand(
     const stepLabel = `${node.title}（${i + 1}/${nodes.length}）`
     pushProgress({ step: i + 1, label: `正在展开 ${stepLabel}…`, done: false, error: false })
     try {
-      const result = await fetchOutlineExpandResult(projectId, node.id, chapterCount, modelProfile)
+      const result = await fetchOutlineExpandResult(
+        projectId,
+        node.id,
+        chapterCount,
+        modelProfile,
+        llmProviderId,
+      )
       await commitOutlineExpand(projectId, node.id, result.chapters)
       pushProgress({ step: i + 1, label: `✓ ${stepLabel}，写入 ${result.chapters.length} 章`, done: true, error: false })
       successCount++

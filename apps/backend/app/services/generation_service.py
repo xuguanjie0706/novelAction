@@ -51,18 +51,35 @@ def _sse(event: str, **kwargs) -> str:
 
 def _normalize_outline(data: list) -> list:
     """
-    容错归并：
-    1. 同一卷下若 AI 返回多个篇节点（重复/分割），合并为单篇
-    2. 修正每级子节点的 sort_order，保证从 0 连续递增
+    容错归并，统一强制 卷 → 篇 → 章 三层结构：
+    1. 卷下无篇但有章 → 自动补插一个篇节点，把章节包进去
+    2. 卷下多篇 → 合并所有章节到第一篇下
+    3. 修正每级子节点的 sort_order，保证从 0 连续递增
     """
     for vol in data:
         if vol.get("node_type") != "volume":
             continue
         children = vol.get("children", [])
         arcs = [c for c in children if c.get("node_type") == "arc"]
-        non_arcs = [c for c in children if c.get("node_type") != "arc"]
+        loose_chapters = [c for c in children if c.get("node_type") == "chapter_plan"]
 
-        if len(arcs) > 1:
+        if not arcs and loose_chapters:
+            # 无篇但有章 → 补插一个篇，把散落章节包进去
+            vol_title = vol.get("title", "")
+            arc_title = vol_title.split("：", 1)[1] if "：" in vol_title else vol_title
+            for i, ch in enumerate(loose_chapters):
+                ch["sort_order"] = i
+            synthetic_arc = {
+                "node_type": "arc",
+                "title": f"第一篇：{arc_title}",
+                "sort_order": 0,
+                "children": loose_chapters,
+            }
+            # 保留非章节的其他子节点（如有），再加合成篇
+            other_children = [c for c in children if c.get("node_type") not in ("arc", "chapter_plan")]
+            vol["children"] = [synthetic_arc] + other_children
+
+        elif len(arcs) > 1:
             # 多篇 → 合并所有章节到第一篇下
             merged_chapters: list = []
             for arc in arcs:
@@ -71,18 +88,14 @@ def _normalize_outline(data: list) -> list:
                 ch["sort_order"] = i
             first_arc = dict(arcs[0])
             first_arc["children"] = merged_chapters
+            non_arcs = [c for c in children if c.get("node_type") != "arc"]
             vol["children"] = [first_arc] + non_arcs
+
         else:
-            # 单篇 or 无篇，只修正 chapter_plan 的 sort_order
+            # 单篇：只修正篇下章节的 sort_order
             for arc in arcs:
                 for i, ch in enumerate(arc.get("children", [])):
                     ch["sort_order"] = i
-            # chapter_plan 直接在卷下的也修正
-            chap_idx = 0
-            for child in non_arcs:
-                if child.get("node_type") == "chapter_plan":
-                    child["sort_order"] = chap_idx
-                    chap_idx += 1
 
         # 修正当前层子节点 sort_order
         for i, child in enumerate(vol.get("children", [])):

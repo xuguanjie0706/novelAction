@@ -4,6 +4,7 @@ AI Service — 统一使用 OpenAI 兼容协议
 """
 import json
 from typing import List, AsyncGenerator, Optional
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -12,7 +13,12 @@ from app.services.llm_config import normalize_openai_base_url, resolve_gemini_co
 
 
 class AIService:
-    def __init__(self, profile: str = "default", db: Optional[Session] = None):
+    def __init__(
+        self,
+        profile: str = "default",
+        db: Optional[Session] = None,
+        llm_provider_id: Optional[UUID] = None,
+    ):
         self.profile = profile
         self._db = db
         self.model = settings.AI_MODEL
@@ -20,7 +26,7 @@ class AIService:
         self.api_key = settings.LLM_API_KEY
         self._gemini_unconfigured = False
         if profile == "gemini":
-            conn = resolve_gemini_connection(db)
+            conn = resolve_gemini_connection(db, llm_provider_id)
             if conn:
                 self.base_url = normalize_openai_base_url(conn[0])
                 self.model = conn[1]

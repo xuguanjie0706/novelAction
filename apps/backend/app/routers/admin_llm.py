@@ -1,6 +1,8 @@
-from typing import List
+import time
+from typing import List, Optional
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -10,11 +12,79 @@ from app.schemas.llm_provider import (
     LlmProviderCreate,
     LlmProviderUpdate,
     LlmProviderOut,
+    LlmTestConnectionIn,
+    LlmTestConnectionOut,
     mask_api_key_hint,
 )
-from app.services.llm_config import clear_other_defaults
+from app.services.llm_config import clear_other_defaults, normalize_openai_base_url
 
 router = APIRouter(prefix="/admin/llm-providers", tags=["admin-llm"])
+
+
+def _run_openai_compatible_ping(base_url: str, model_name: str, api_key: Optional[str]) -> LlmTestConnectionOut:
+    """对 OpenAI 兼容网关发一条最小 chat 请求，验证联通与鉴权。"""
+    base = normalize_openai_base_url(base_url.strip())
+    url = f"{base.rstrip('/')}/chat/completions"
+    key = (api_key or "").strip() or "not-required"
+    t0 = time.perf_counter()
+    try:
+        with httpx.Client(timeout=25.0, follow_redirects=True) as client:
+            r = client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model_name.strip(),
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "max_tokens": 8,
+                },
+            )
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        if r.status_code >= 400:
+            preview = (r.text or "")[:400]
+            return LlmTestConnectionOut(
+                ok=False,
+                message=f"HTTP {r.status_code}: {preview or r.reason_phrase}",
+                latency_ms=latency_ms,
+                http_status=r.status_code,
+            )
+        try:
+            data = r.json()
+        except Exception:
+            return LlmTestConnectionOut(
+                ok=False,
+                message="响应不是合法 JSON",
+                latency_ms=latency_ms,
+                http_status=r.status_code,
+            )
+        if isinstance(data, dict) and data.get("choices"):
+            return LlmTestConnectionOut(
+                ok=True,
+                message="上游已返回 choices，联通正常",
+                latency_ms=latency_ms,
+                http_status=r.status_code,
+            )
+        err = data.get("error") if isinstance(data, dict) else None
+        if isinstance(err, dict):
+            msg = err.get("message") or str(err)
+        elif isinstance(err, str):
+            msg = err
+        else:
+            msg = (r.text or "")[:300] or "未返回 choices"
+        return LlmTestConnectionOut(
+            ok=False,
+            message=msg,
+            latency_ms=latency_ms,
+            http_status=r.status_code,
+        )
+    except httpx.TimeoutException:
+        return LlmTestConnectionOut(ok=False, message="连接超时（>25s）")
+    except httpx.ConnectError as e:
+        return LlmTestConnectionOut(ok=False, message=f"无法连接网关：{e!s}")
+    except Exception as e:
+        return LlmTestConnectionOut(ok=False, message=f"请求异常：{e!s}")
 
 
 def _to_out(row: LlmProvider) -> LlmProviderOut:
@@ -32,6 +102,25 @@ def _to_out(row: LlmProvider) -> LlmProviderOut:
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+@router.post("/test-connection", response_model=LlmTestConnectionOut)
+def test_connection_adhoc(payload: LlmTestConnectionIn):
+    """使用表单中的 base_url / model / key 做一次联通性检测（不写库）。"""
+    return _run_openai_compatible_ping(
+        payload.base_url,
+        payload.model_name,
+        payload.api_key,
+    )
+
+
+@router.post("/{provider_id}/test-connection", response_model=LlmTestConnectionOut)
+def test_connection_saved(provider_id: UUID, db: Session = Depends(get_db)):
+    """对已保存的一条配置做联通性检测（使用库中密钥）。"""
+    row = db.query(LlmProvider).filter(LlmProvider.id == provider_id).first()
+    if not row:
+        raise HTTPException(404, "大模型配置不存在")
+    return _run_openai_compatible_ping(row.base_url, row.model_name, row.api_key)
 
 
 @router.get("/", response_model=List[LlmProviderOut])

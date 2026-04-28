@@ -4,7 +4,7 @@ import StarterKit from '@tiptap/starter-kit'
 import CharacterCount from '@tiptap/extension-character-count'
 import Placeholder from '@tiptap/extension-placeholder'
 import { chaptersApi } from '../../api/client'
-import { useAppStore } from '../../store'
+import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload } from '../../store'
 import type { Chapter, OutlineNode } from '../../types'
 import toast from 'react-hot-toast'
 import { BookOpen, Sparkles, X, Zap, Target, Users, Flag, GitBranch, RefreshCw } from 'lucide-react'
@@ -128,12 +128,14 @@ export default function ChapterEditor({ projectId, chapter, outlineNode }: Props
     setShowDraft(true)
     let accumulated = ''
     try {
+      const route = useAppStore.getState().aiBackendRoute
       const res = await fetch(`/api/v1/projects/${projectId}/ai/draft-assist/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chapter_id: chapter.id,
-          model_profile: useAppStore.getState().aiModelProfile,
+          model_profile: modelProfileFromRoute(route),
+          ...routeLlmProviderPayload(route),
           user_prompt: aiExtraPrompt.trim() || null,
           replace_existing: !!opts?.replaceExisting,
         }),

@@ -6,25 +6,26 @@
 
 ```bash
 # 1. 复制并填写 API Key
-cp backend/.env.example backend/.env
-# 编辑 backend/.env，填入 ANTHROPIC_API_KEY 或 OPENAI_API_KEY
+cp apps/backend/.env.example apps/backend/.env
+# 编辑 apps/backend/.env，填入 API Key 等
 
 # 2. 启动所有服务
 docker-compose up -d
 
-# 访问（Compose 将容器端口映射到宿主机，避免与本地 ./restart.sh 默认端口混淆）
-# 前端: http://localhost:19173
-# 后端 API 文档: http://localhost:18080/docs
+# 访问（Compose 将容器端口映射到宿主机）
+# 创作端（小说）: http://localhost:19173
+# 管理后台:       http://localhost:19174
+# 后端 API 文档:   http://localhost:18080/docs
 ```
 
 **端口对照（宿主机）**
 
-| 场景 | 前端 | 后端 API |
-|------|------|----------|
-| Docker Compose（默认映射） | 19173 | 18080 |
-| 本地 `./restart.sh`（默认） | 5173 | 8000 |
+| 场景 | 创作端 client | 管理后台 frontend | 后端 API |
+|------|---------------|-------------------|----------|
+| Docker Compose（默认映射） | 19173 | 19174 | 18080 |
+| 本地 `./restart.sh` | 3173（见 env） | 3174（见 env） | 9000（见 env） |
 
-覆盖 Compose 映射时可导出环境变量后再执行 `docker-compose up`，例如：`NOVEL_DOCKER_BACKEND_HOST_PORT=28080`。本地端口可复制 `env.local.ports.example` 为 `.env.local.ports` 后修改；若前端端口不是 5173，请在 `backend/.env` 中配置 `CORS_ORIGINS`（JSON 数组）包含对应 `http://localhost:端口`。
+覆盖 Compose 映射时可导出环境变量后再执行 `docker-compose up`，例如：`NOVEL_DOCKER_BACKEND_HOST_PORT=28080`。本地端口可复制 `env.local.ports.example` 为 `.env.local.ports` 后修改；若前端端口不是默认，请在 `apps/backend/.env` 中配置 `CORS_ORIGINS`（JSON 数组）包含对应 `http://localhost:端口`。
 
 #### Colima 用户说明（macOS）
 
@@ -57,71 +58,66 @@ docker-compose restart backend
 
 ### 方式二：本地开发
 
-默认端口为前端 **5173**、后端 **8000**（与 Docker 宿主机映射 **19173 / 18080** 不同）。一键启动可用 `./restart.sh`；改端口可复制 `env.local.ports.example` 为 `.env.local.ports`。
+**一键启动（后端 + 创作端 + 管理后台）**：`./restart.sh`（端口见 `env.local.ports.example`，需已安装 **pnpm**，推荐 `corepack enable && corepack prepare pnpm@9 --activate`）。
 
-依赖与环境可执行 **`bash bootstrap.sh`**：在 **Windows** 上会使用 [penv](https://github.com/hmasdev/penv)（嵌入版 Python）创建 `backend/.venv`；在 **macOS / Linux** 上默认使用 **[uv](https://github.com/astral-sh/uv)**（安装解释器、建 `backend/.venv`、按 `requirements.txt` 装包）。若不想用 uv，可执行 `BOOTSTRAP_USE_UV=0 bash bootstrap.sh`，将回退到 **`python3.12 -m venv` + pip**。
+依赖与环境可执行 **`bash bootstrap.sh`**：在 **Windows** 上会使用 [penv](https://github.com/hmasdev/penv) 创建 `apps/backend/.venv`；在 **macOS / Linux** 上默认使用 **[uv](https://github.com/astral-sh/uv)**（安装解释器、建 `apps/backend/.venv`、按 `requirements.txt` 装包）。若不想用 uv，可执行 `BOOTSTRAP_USE_UV=0 bash bootstrap.sh`，将回退到 **`python3.12 -m venv` + pip**。前端在存在 **`pnpm-workspace.yaml`** 时于**仓库根目录**执行一次 **`pnpm install`**（含创作端与管理后台）；也可手动执行 **`pnpm install`** 后使用根目录脚本 **`pnpm dev:admin`** 等。
 
 **后端**
+
 ```bash
-cd backend
+cd apps/backend
 python -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env            # 填入 API Key 和数据库配置
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 9000
 ```
 
-**前端**
+**创作端（小说）**
+
 ```bash
-cd frontend
-npm install
-VITE_API_PROXY_TARGET=http://127.0.0.1:8000 npm run dev
+cd apps/client
+pnpm install
+pnpm run dev
+```
+
+**管理后台**
+
+```bash
+cd apps/frontend
+pnpm install
+pnpm run dev
 ```
 
 ## 项目结构
 
 ```
 novel-system/
-├── backend/
-│   ├── app/
-│   │   ├── main.py              # FastAPI 入口
-│   │   ├── config.py            # 配置（读取 .env）
-│   │   ├── database.py          # SQLAlchemy 连接
-│   │   ├── models/              # 数据库模型
-│   │   │   ├── project.py
-│   │   │   ├── world_setting.py
-│   │   │   ├── character.py
-│   │   │   ├── outline.py
-│   │   │   ├── chapter.py
-│   │   │   └── memory.py
-│   │   ├── schemas/             # Pydantic schemas
-│   │   ├── routers/             # API 路由
-│   │   │   ├── projects.py
-│   │   │   ├── world_settings.py
-│   │   │   ├── characters.py
-│   │   │   ├── outline.py
-│   │   │   ├── chapters.py
-│   │   │   └── ai.py
-│   │   └── services/
-│   │       └── ai_service.py    # Claude/GPT 调用封装
-│   ├── requirements.txt
-│   └── Dockerfile
-├── frontend/
-│   ├── src/
-│   │   ├── App.tsx              # 路由配置
-│   │   ├── types/               # TypeScript 类型
-│   │   ├── api/client.ts        # Axios API 客户端
-│   │   ├── store/index.ts       # Zustand 全局状态
-│   │   ├── components/
-│   │   │   ├── Layout/          # AppLayout / Sidebar / TopBar
-│   │   │   ├── Writing/         # ChapterEditor (TipTap)
-│   │   │   └── AI/              # AIPanel (质检/建议/记忆库)
-│   │   └── pages/
-│   │       ├── ProjectsPage.tsx
-│   │       ├── OutlinePage.tsx
-│   │       └── WritePage.tsx
-│   └── package.json
-└── docker-compose.yml
+├── pnpm-workspace.yaml    # pnpm 工作区：apps/client + apps/frontend
+├── package.json           # 根脚本：pnpm dev:client / dev:admin / build:*
+├── pnpm-lock.yaml
+├── .github/workflows/js-apps.yml   # CI：两端 build 校验
+├── apps/
+│   ├── backend/           # FastAPI
+│   │   ├── app/
+│   │   │   ├── main.py
+│   │   │   ├── config.py
+│   │   │   ├── database.py
+│   │   │   ├── models/
+│   │   │   ├── schemas/
+│   │   │   ├── routers/
+│   │   │   └── services/
+│   │   ├── requirements.txt
+│   │   └── Dockerfile
+│   ├── client/            # 小说创作端（Vite + React）
+│   │   ├── src/
+│   │   └── package.json
+│   └── frontend/          # 管理后台（Vite + React，占位壳）
+│       ├── src/
+│       └── package.json
+├── docker-compose.yml
+├── bootstrap.sh
+└── restart.sh
 ```
 
 ## API 路由总览

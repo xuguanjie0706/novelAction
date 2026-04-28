@@ -1,0 +1,12 @@
+{
+  "name": "novel-action",
+  "private": true,
+  "packageManager": "pnpm@9.15.5",
+  "scripts": {
+    "dev:client": "pnpm --filter novel-system-frontend dev",
+    "dev:admin": "pnpm --filter novel-admin dev",
+    "build:client": "pnpm --filter novel-system-frontend build",
+    "build:admin": "pnpm --filter novel-admin build",
+    "build:js": "pnpm -r --filter './apps/*' run build"
+  }
+}

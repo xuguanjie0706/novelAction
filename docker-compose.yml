@@ -1,11 +1,12 @@
 version: "3.9"
 
 # 宿主机端口（浏览器 / 宿主机进程访问）与容器内端口：
-#   前端    NOVEL_DOCKER_FRONTEND_HOST_PORT（默认 19173） -> 容器 5173
-#   后端    NOVEL_DOCKER_BACKEND_HOST_PORT（默认 18080） -> 容器 8000
+#   创作端 apps/client    NOVEL_DOCKER_CLIENT_HOST_PORT（默认 19173） -> 容器 3173
+#   管理后台 apps/frontend NOVEL_DOCKER_ADMIN_HOST_PORT（默认 19174） -> 容器 3174
+#   后端 apps/backend      NOVEL_DOCKER_BACKEND_HOST_PORT（默认 18080） -> 容器 8000
 #   Postgres NOVEL_DOCKER_POSTGRES_HOST_PORT（默认 5432） -> 容器 5432
 #   Redis   NOVEL_DOCKER_REDIS_HOST_PORT（默认 6379）    -> 容器 6379
-# 本地裸跑（./restart.sh）默认 8000/5173，见 env.local.ports.example；改 Postgres/Redis 映射时须同步 backend/.env 的 DATABASE_URL / REDIS_URL 端口。
+# 本地裸跑（./restart.sh）一键：backend + client + frontend（pnpm）。
 
 services:
   postgres:
@@ -26,7 +27,7 @@ services:
 
   backend:
     build:
-      context: ./backend
+      context: ./apps/backend
       dockerfile: Dockerfile
     ports:
       - "${NOVEL_DOCKER_BACKEND_HOST_PORT:-18080}:8000"
@@ -34,26 +35,39 @@ services:
       DATABASE_URL: postgresql://novel:novel@postgres:5432/novel_db
       REDIS_URL: redis://redis:6379/0
     env_file:
-      - ./backend/.env
+      - ./apps/backend/.env
     depends_on:
       - postgres
       - redis
     volumes:
-      - ./backend:/app
+      - ./apps/backend:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-  frontend:
+  client:
     build:
-      context: ./frontend
+      context: ./apps/client
       dockerfile: Dockerfile
     ports:
-      - "${NOVEL_DOCKER_FRONTEND_HOST_PORT:-19173}:5173"
+      - "${NOVEL_DOCKER_CLIENT_HOST_PORT:-19173}:3173"
     environment:
       VITE_API_PROXY_TARGET: http://backend:8000
     volumes:
-      - ./frontend:/app
+      - ./apps/client:/app
       - /app/node_modules
-    command: npm run dev -- --host
+    command: pnpm run dev -- --host
+
+  frontend:
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${NOVEL_DOCKER_ADMIN_HOST_PORT:-19174}:3174"
+    environment:
+      VITE_API_PROXY_TARGET: http://backend:8000
+    volumes:
+      - ./apps/frontend:/app
+      - /app/node_modules
+    command: pnpm run dev -- --host --port 3174
 
 volumes:
   postgres_data:

@@ -1,34 +1,53 @@
-# multi-agent-demo 研发指引
+# novelAction 研发指引
 
-由全部功能计划自动生成。最近更新：2026-04-08
+由 Speckit 计划与仓库上下文维护。最近更新：2026-04-28
 
 ## 当前技术栈
 
-[从全部 plan.md 抽取]
+- **创作端 client**：TypeScript 5.4+、React 18、Vite 5、Tailwind CSS 3、Zustand、TipTap、react-router-dom、axios、react-query（目录 `apps/client/`）
+- **管理后台 frontend**：React 18、Vite 5（目录 `apps/frontend/`，默认端口 3174）
+- **后端**：Python、FastAPI、SQLAlchemy、PostgreSQL（目录 `apps/backend/`，详见 `CLAUDE.md`）
 
 ## 项目结构
 
 ```text
-[来自计划的实际结构]
+pnpm-workspace.yaml   # 根目录 pnpm 工作区（apps/client + apps/frontend）
+package.json          # 根脚本：pnpm dev:client / dev:admin / build:admin 等
+.github/workflows/js-apps.yml  # GitHub Actions：管理端与创作端 build
+apps/backend/app/     # FastAPI：routers、models、services；配置 apps/backend/.env
+apps/client/src/      # 小说创作 SPA：pages、components、store、api
+apps/frontend/src/    # 管理后台 SPA
+specs/<branch>/       # spec.md、plan.md、research.md、contracts/、quickstart.md
 ```
 
 ## 常用命令
 
-[仅包含当前技术栈相关命令]
+```bash
+# 推荐在仓库根目录安装（读取 pnpm-workspace.yaml）
+pnpm install
+pnpm dev:client
+pnpm dev:admin
+pnpm build:admin
+
+# 后端与一键启动见 README / CLAUDE.md（./restart.sh、docker-compose）
+```
 
 ## 代码风格
 
-[按实际使用语言填写]
+- 创作端：与现有 TSX 一致；样式优先语义化 Tailwind + `apps/client/src/index.css` 变量（见 `specs/001-enrich-novel-ui/plan.md`）。
+- 后端：本特性默认不改；若未来加偏好 API 须补契约与测试。
 
 ## 近期变更
 
-[最近 3 个功能及其新增内容]
+- **001-enrich-novel-ui**：小说创作工作台视觉与内容情境增强 — 规格 `specs/001-enrich-novel-ui/spec.md`，计划与契约见同目录 `plan.md`、`contracts/ui-surfaces.md`。（规格文档里的 `frontend/` 路径在迁移后对应 **`apps/client/`**。）
 
 <!-- 手工补充开始 -->
 <!-- 手工补充结束 -->
 
 ## Active Technologies
-- Python 3.11+（backend）、TypeScript/React（client / frontend） (010-unified-program)
+
+- TypeScript / React / Vite / Tailwind / TipTap（`001-enrich-novel-ui` 实现面在 **`apps/client`**）
 
 ## Recent Changes
-- 010-unified-program: 合并原 001/002/003 规格为单一目录；Speckit 使用 `export SPECIFY_FEATURE=010-unified-program`
+
+- `001-enrich-novel-ui`：`/speckit.plan` 已生成 `plan.md`、`research.md`、`data-model.md`、`contracts/ui-surfaces.md`、`quickstart.md`。验收见 `quickstart.md`。

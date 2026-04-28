@@ -1,0 +1,4 @@
+# pnpm 工作区：统一管理创作端与管理后台（根目录执行 pnpm install）
+packages:
+  - 'apps/client'
+  - 'apps/frontend'

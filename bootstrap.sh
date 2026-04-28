@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # novelAction 环境 bootstrap
-# - Windows：用 https://github.com/hmasdev/penv 创建 backend/.venv（嵌入版 Python）
+# - Windows：用 https://github.com/hmasdev/penv 创建 apps/backend/.venv（嵌入版 Python）
 # - macOS / Linux：默认用 Astral「uv」管理 Python + venv + 依赖（https://github.com/astral-sh/uv）
 #   若 uv 不可用且未跳过安装，会回退到 python -m venv + pip
 #   BOOTSTRAP_USE_UV=0 可强制走旧版 venv；BOOTSTRAP_SKIP_UV_INSTALL=1 不自动装 uv
@@ -11,14 +11,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PYTHON_VERSION_FILE="$ROOT_DIR/.python-version"
-BACKEND_DIR="$ROOT_DIR/backend"
+BACKEND_DIR="$ROOT_DIR/apps/backend"
 BACKEND_PYPROJECT="$BACKEND_DIR/pyproject.toml"
 BACKEND_REQUIREMENTS="$BACKEND_DIR/requirements.txt"
-FRONTEND_DIR="$ROOT_DIR/frontend"
-FRONTEND_PACKAGE_JSON="$FRONTEND_DIR/package.json"
-FRONTEND_PNPM_LOCK="$FRONTEND_DIR/pnpm-lock.yaml"
-FRONTEND_YARN_LOCK="$FRONTEND_DIR/yarn.lock"
-FRONTEND_PACKAGE_LOCK="$FRONTEND_DIR/package-lock.json"
+CLIENT_DIR="$ROOT_DIR/apps/client"
+ADMIN_DIR="$ROOT_DIR/apps/frontend"
 
 PENV_GIT_URL="${PENV_GIT_URL:-https://github.com/hmasdev/penv.git}"
 
@@ -58,7 +55,7 @@ normalize_backend_python_version() {
       return 0
       ;;
   esac
-  warn "Python ${v} 与当前 backend/requirements.txt 不兼容，改用 3.12.7。"
+  warn "Python ${v} 与当前 apps/backend/requirements.txt 不兼容，改用 3.12.7。"
   echo "3.12.7"
 }
 
@@ -112,18 +109,18 @@ install_backend_uv_unix() {
   py_ver="$(normalize_backend_python_version "$(read_embed_python_version)")"
 
   if [ -d "$BACKEND_DIR/.venv" ] && [ "${BOOTSTRAP_RECREATE_VENV:-0}" = "1" ]; then
-    warn "BOOTSTRAP_RECREATE_VENV=1，删除已有 backend/.venv …"
+    warn "BOOTSTRAP_RECREATE_VENV=1，删除已有 apps/backend/.venv …"
     rm -rf "$BACKEND_DIR/.venv"
   fi
 
-  info "使用 uv 创建 backend/.venv（Python ${py_ver}，缺解释器时会自动下载）…"
+  info "使用 uv 创建 apps/backend/.venv（Python ${py_ver}，缺解释器时会自动下载）…"
   (cd "$BACKEND_DIR" && uv venv .venv --python "$py_ver")
 
   if [ -f "$BACKEND_REQUIREMENTS" ]; then
     info "使用 uv pip 按 requirements.txt 安装后端依赖…"
     (cd "$BACKEND_DIR" && uv pip install -r requirements.txt)
   else
-    warn "未找到 backend/requirements.txt，跳过依赖安装。"
+    warn "未找到 apps/backend/requirements.txt，跳过依赖安装。"
   fi
 
   success "后端 uv 环境就绪（macOS/Linux）"
@@ -299,7 +296,7 @@ install_backend_penv_windows() {
   }
 
   ver="$(normalize_backend_python_version "$(read_embed_python_version)")"
-  info "使用 penv 安装嵌入版 Python ${ver} 到 backend/.venv …"
+  info "使用 penv 安装嵌入版 Python ${ver} 到 apps/backend/.venv …"
 
   "$py_boot" -m pip install --disable-pip-version-check -q "git+${PENV_GIT_URL}"
 
@@ -327,7 +324,7 @@ install_backend_penv_windows() {
     info "按 requirements.txt 安装后端依赖…"
     "$venv_py" -m pip install --default-timeout=120 --retries 5 -r "$BACKEND_REQUIREMENTS"
   else
-    warn "未找到 backend/requirements.txt，跳过 pip 依赖。"
+    warn "未找到 apps/backend/requirements.txt，跳过 pip 依赖。"
   fi
 
   success "后端 penv 环境就绪（Windows）"
@@ -348,18 +345,18 @@ install_backend_venv_legacy_unix() {
       ;;
   esac
 
-  info "使用标准库 venv 创建 backend/.venv（未使用 uv）。"
+  info "使用标准库 venv 创建 apps/backend/.venv（未使用 uv）。"
 
   if [ -d "$BACKEND_DIR/.venv" ] && [ "${BOOTSTRAP_RECREATE_VENV:-0}" = "1" ]; then
-    warn "BOOTSTRAP_RECREATE_VENV=1，删除已有 backend/.venv …"
+    warn "BOOTSTRAP_RECREATE_VENV=1，删除已有 apps/backend/.venv …"
     rm -rf "$BACKEND_DIR/.venv"
   fi
 
   if [ ! -d "$BACKEND_DIR/.venv" ]; then
-    info "创建 venv: backend/.venv …"
+    info "创建 venv: apps/backend/.venv …"
     "$BOOTSTRAP_PYTHON312" -m venv "$BACKEND_DIR/.venv"
   else
-    success "复用已有 backend/.venv（若 Python 版本不对请设置 BOOTSTRAP_RECREATE_VENV=1 后重跑）"
+    success "复用已有 apps/backend/.venv（若 Python 版本不对请设置 BOOTSTRAP_RECREATE_VENV=1 后重跑）"
   fi
 
   local venv_py="$BACKEND_DIR/.venv/bin/python"
@@ -369,7 +366,7 @@ install_backend_venv_legacy_unix() {
     if "$venv_py" -m ensurepip --upgrade 2>/dev/null; then
       success "ensurepip 已恢复 pip"
     else
-      warn "ensurepip 失败，删除并重建 backend/.venv …"
+      warn "ensurepip 失败，删除并重建 apps/backend/.venv …"
       rm -rf "$BACKEND_DIR/.venv"
       "$BOOTSTRAP_PYTHON312" -m venv "$BACKEND_DIR/.venv"
       if ! "$venv_py" -m pip --version >/dev/null 2>&1; then
@@ -388,7 +385,7 @@ install_backend_venv_legacy_unix() {
     info "按 requirements.txt 安装后端依赖…"
     "$venv_py" -m pip install --default-timeout=120 --retries 5 -r "$BACKEND_REQUIREMENTS"
   else
-    warn "未找到 backend/requirements.txt，跳过 pip 依赖。"
+    warn "未找到 apps/backend/requirements.txt，跳过 pip 依赖。"
   fi
 
   success "后端 venv 环境就绪（Unix，legacy）"
@@ -422,6 +419,22 @@ install_backend_dependencies() {
   fi
 }
 
+ensure_pnpm() {
+  if command -v pnpm >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v corepack >/dev/null 2>&1; then
+    info "启用 corepack 并激活 pnpm 9..."
+    corepack enable >/dev/null 2>&1 || true
+    corepack prepare pnpm@9 --activate >/dev/null 2>&1 || true
+  fi
+  if command -v pnpm >/dev/null 2>&1; then
+    return 0
+  fi
+  error "未找到 pnpm。Node 18+ 可执行: corepack enable && corepack prepare pnpm@9 --activate；或 npm install -g pnpm"
+  exit 1
+}
+
 ensure_node() {
   if command -v npm >/dev/null 2>&1; then
     return 0
@@ -452,44 +465,37 @@ ensure_node() {
   esac
 }
 
+install_node_dependencies_in() {
+  local APP_DIR="$1"
+  local LABEL="${2:-前端}"
+  local PKG_JSON="$APP_DIR/package.json"
+
+  if [ ! -f "$PKG_JSON" ]; then
+    return 0
+  fi
+
+  ensure_node
+  ensure_pnpm
+  info "pnpm install ${LABEL}: $APP_DIR"
+  (cd "$APP_DIR" && pnpm install)
+}
+
 install_frontend_dependencies() {
   if [ "${BOOTSTRAP_SKIP_FRONTEND:-0}" = "1" ]; then
     warn "已设置 BOOTSTRAP_SKIP_FRONTEND=1，跳过前端依赖安装。"
     return 0
   fi
 
-  if [ ! -f "$FRONTEND_PACKAGE_JSON" ]; then
+  if [ -f "$ROOT_DIR/pnpm-workspace.yaml" ] && [ -f "$ROOT_DIR/package.json" ]; then
+    ensure_node
+    ensure_pnpm
+    info "pnpm install（仓库根 workspace：apps/client + apps/frontend）"
+    (cd "$ROOT_DIR" && pnpm install)
     return 0
   fi
 
-  ensure_node
-
-  if [ -f "$FRONTEND_PNPM_LOCK" ]; then
-    if command -v pnpm >/dev/null 2>&1; then
-      info "检测到 pnpm-lock.yaml，使用 pnpm 安装前端依赖..."
-      (cd "$FRONTEND_DIR" && pnpm install)
-      return 0
-    fi
-
-    info "检测到 pnpm-lock.yaml，使用 npx pnpm 安装前端依赖..."
-    (cd "$FRONTEND_DIR" && npx --yes pnpm@9 install)
-    return 0
-  fi
-
-  if [ -f "$FRONTEND_YARN_LOCK" ] && command -v yarn >/dev/null 2>&1; then
-    info "检测到 yarn.lock，使用 yarn 安装前端依赖..."
-    (cd "$FRONTEND_DIR" && yarn install)
-    return 0
-  fi
-
-  if [ -f "$FRONTEND_PACKAGE_LOCK" ]; then
-    info "检测到 package-lock.json，使用 npm install 补齐前端依赖..."
-    (cd "$FRONTEND_DIR" && npm install)
-    return 0
-  fi
-
-  info "使用 npm install 安装前端依赖..."
-  (cd "$FRONTEND_DIR" && npm install)
+  install_node_dependencies_in "$CLIENT_DIR" "创作端 (apps/client)"
+  install_node_dependencies_in "$ADMIN_DIR" "管理后台 (apps/frontend)"
 }
 
 main() {
@@ -508,13 +514,13 @@ main() {
   success "bootstrap 完成"
   echo ""
   echo "下一步："
-  echo "  cp backend/.env.example backend/.env   # 填写 API Key 等"
+  echo "  cp apps/backend/.env.example apps/backend/.env   # 填写 API Key 等"
   echo "  ./restart.sh"
   echo ""
   if is_windows_env; then
     echo "Windows：后端虚拟环境由 penv 创建；可选 BOOTSTRAP_PENV_CLEAR=1 强制清空重建。"
   else
-    echo "macOS/Linux：默认用 uv 管理 backend/.venv；强制旧逻辑: BOOTSTRAP_USE_UV=0 bash bootstrap.sh"
+    echo "macOS/Linux：默认用 uv 管理 apps/backend/.venv；强制旧逻辑: BOOTSTRAP_USE_UV=0 bash bootstrap.sh"
     echo "常用工具：uv（本脚本）| pyenv（多版本）| pipenv / poetry（Pipfile/lock）| conda（科学栈）"
   fi
 }

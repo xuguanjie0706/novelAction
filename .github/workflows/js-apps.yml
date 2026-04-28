@@ -1,0 +1,46 @@
+# 管理前端工程（apps/frontend）与创作端（apps/client）：安装依赖 + 生产构建校验
+name: JS apps
+
+on:
+  push:
+    paths:
+      - 'apps/client/**'
+      - 'apps/frontend/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/js-apps.yml'
+  pull_request:
+    paths:
+      - 'apps/client/**'
+      - 'apps/frontend/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/js-apps.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build client
+        run: pnpm --filter novel-system-frontend run build
+
+      - name: Build admin (frontend)
+        run: pnpm --filter novel-admin run build

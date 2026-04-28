@@ -12,8 +12,25 @@
 
 **技术栈**：
 - 后端：FastAPI + SQLAlchemy + PostgreSQL（含 pgvector）
-- 前端：React + TypeScript + Vite + TailwindCSS + Zustand + TipTap
+- 创作端（client）：React + TypeScript + Vite + TailwindCSS + Zustand + TipTap
+- 管理后台（frontend）：React + TypeScript + Vite（与 API 同域代理 `/api`）
 - AI：统一走 OpenAI 兼容协议（`AsyncOpenAI(base_url=..., api_key=...)`）
+
+---
+
+## 仓库结构（monorepo）
+
+根目录下 **`apps/`** 三个子项目，勿与旧路径 `backend/`、`frontend/`（根级）混淆：
+
+| 路径 | 说明 |
+|------|------|
+| `pnpm-workspace.yaml` + 根 `package.json` | pnpm 工作区，统一安装/脚本（如 `pnpm dev:admin`） |
+| `.github/workflows/js-apps.yml` | CI：创作端 + 管理后台 `pnpm build` |
+| `apps/backend/` | FastAPI；环境变量读 `apps/backend/.env`（由 `.env.example` 复制） |
+| `apps/client/` | 小说创作 SPA（原「前端」主产品） |
+| `apps/frontend/` | 管理后台 SPA（占位壳，端口默认 3174） |
+
+本地一键：`./restart.sh` 启后端 + **client**；管理后台需另开终端 `cd apps/frontend && npm run dev`。Docker：`docker-compose.yml` 中服务名为 `backend`、`client`、`frontend`（对应上表）。
 
 ---
 
@@ -117,7 +134,7 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 ## 前端状态管理约定
 
-全局用 **Zustand**（`src/store/index.ts`），规则：
+创作端全局用 **Zustand**（`apps/client/src/store/index.ts`），规则：
 - 列表数据（`chapters[]`、`characters[]`等）存 store
 - 组件内临时 UI 状态（loading、modal open）用 `useState`
 - API 调用后用 `upsert*` 系列方法更新 store，不要重新 fetch 整个列表
@@ -149,23 +166,33 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 ## 开发建议（给未来的 Claude）
 
-1. **改 AI 调用**：只需动 `app/services/ai_service.py`，不要在 router 层直接调 openai
-2. **加新数据表**：在 `models/` 新建文件 → `models/__init__.py` 导出 → `schemas/` 对应 → `routers/` 路由 → `main.py` 注册
+1. **改 AI 调用**：只需动 `apps/backend/app/services/ai_service.py`，不要在 router 层直接调 openai
+2. **加新数据表**：在 `apps/backend/app/models/` 新建文件 → `models/__init__.py` 导出 → `schemas/` 对应 → `routers/` 路由 → `main.py` 注册
 3. **Prompt 优化**：prompt 字符串统一放在 service 层，方便整体调整；8b 模型 prompt 末尾加 "只返回JSON，不要任何解释文字"
 4. **JSON 解析**：所有 `_call_ai` 的 JSON 解析用 `_parse_json()` 统一处理，不要 try/except 分散在各处
 5. **pgvector**：embedding 字段已在 `MemoryChunk` 预留，启用时需 `CREATE EXTENSION vector;` 并取消 `memory.py` 中的条件导入
+6. **改创作端 UI**：主要改 `apps/client/`；**管理后台**改 `apps/frontend/`（与 client 独立依赖与构建）
 
 ---
 
 ## 本地启动命令
 
 ```bash
-# Docker 一键启动
+# 环境与依赖（根目录）
+bash bootstrap.sh
+
+# Docker 一键启动（含 backend + client + frontend 管理端）
 docker-compose up -d
 
-# 手动启动后端
-cd backend && uvicorn app.main:app --reload
+# 本地裸跑：后端 + 创作端 + 管理后台（pnpm；端口见 env.local.ports.example）
+./restart.sh
 
-# 手动启动前端
-cd frontend && npm run dev
+# 仅手动启后端
+cd apps/backend && source .venv/bin/activate && uvicorn app.main:app --reload --port 9000
+
+# 仅手动启创作端
+cd apps/client && pnpm run dev
+
+# 仅手动启管理后台（默认 http://localhost:3174）
+cd apps/frontend && pnpm run dev
 ```

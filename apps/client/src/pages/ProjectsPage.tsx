@@ -115,6 +115,7 @@ export default function ProjectsPage() {
       memory: () => navigateFirstProject('memory'),
       characters: () => navigateFirstProject('characters'),
       outline: () => navigateFirstProject('outline'),
+      coherence: () => navigate('/coherence-check'),
       stats: () => toast('数据统计页正在建设中，当前先展示首页写作数据'),
       trash: () => toast('回收站暂无内容'),
     }

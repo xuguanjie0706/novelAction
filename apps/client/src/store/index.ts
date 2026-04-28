@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Project, Chapter, OutlineNode, Character, WorldSetting, MemoryChunk, GenTask, GenProgressItem } from '../types'
+import type { Project, Chapter, OutlineNode, Character, WorldSetting, MemoryChunk, GenTask, GenProgressItem, StoryLine, PowerSystem, Skill, Item, Faction } from '../types'
 
 const AI_ROUTE_STORAGE_KEY = 'novelAction:ai-backend-route'
 const LEGACY_AI_MODEL_KEY = 'novelAction:ai-model-profile'
@@ -81,6 +81,36 @@ interface AppState {
   memories: MemoryChunk[]
   setMemories: (m: MemoryChunk[]) => void
 
+  // 故事线
+  storyLines: StoryLine[]
+  setStoryLines: (s: StoryLine[]) => void
+  upsertStoryLine: (s: StoryLine) => void
+  removeStoryLine: (id: string) => void
+
+  // 境界体系
+  powerSystems: PowerSystem[]
+  setPowerSystems: (s: PowerSystem[]) => void
+  upsertPowerSystem: (s: PowerSystem) => void
+  removePowerSystem: (id: string) => void
+
+  // 功法技能
+  skills: Skill[]
+  setSkills: (s: Skill[]) => void
+  upsertSkill: (s: Skill) => void
+  removeSkill: (id: string) => void
+
+  // 道具法宝
+  items: Item[]
+  setItems: (s: Item[]) => void
+  upsertItem: (s: Item) => void
+  removeItem: (id: string) => void
+
+  // 势力组织
+  factions: Faction[]
+  setFactions: (s: Faction[]) => void
+  upsertFaction: (s: Faction) => void
+  removeFaction: (id: string) => void
+
   // UI 状态
   sidebarTab: 'outline' | 'characters' | 'settings' | 'memory'
   setSidebarTab: (t: AppState['sidebarTab']) => void
@@ -152,6 +182,51 @@ export const useAppStore = create<AppState>((set) => ({
 
   memories: [],
   setMemories: (m) => set({ memories: m }),
+
+  storyLines: [],
+  setStoryLines: (s) => set({ storyLines: s }),
+  upsertStoryLine: (s) => set((state) => ({
+    storyLines: state.storyLines.find(x => x.id === s.id)
+      ? state.storyLines.map(x => x.id === s.id ? s : x)
+      : [...state.storyLines, s]
+  })),
+  removeStoryLine: (id) => set((state) => ({ storyLines: state.storyLines.filter(x => x.id !== id) })),
+
+  powerSystems: [],
+  setPowerSystems: (s) => set({ powerSystems: s }),
+  upsertPowerSystem: (s) => set((state) => ({
+    powerSystems: state.powerSystems.find(x => x.id === s.id)
+      ? state.powerSystems.map(x => x.id === s.id ? s : x)
+      : [...state.powerSystems, s]
+  })),
+  removePowerSystem: (id) => set((state) => ({ powerSystems: state.powerSystems.filter(x => x.id !== id) })),
+
+  skills: [],
+  setSkills: (s) => set({ skills: s }),
+  upsertSkill: (s) => set((state) => ({
+    skills: state.skills.find(x => x.id === s.id)
+      ? state.skills.map(x => x.id === s.id ? s : x)
+      : [...state.skills, s]
+  })),
+  removeSkill: (id) => set((state) => ({ skills: state.skills.filter(x => x.id !== id) })),
+
+  items: [],
+  setItems: (s) => set({ items: s }),
+  upsertItem: (s) => set((state) => ({
+    items: state.items.find(x => x.id === s.id)
+      ? state.items.map(x => x.id === s.id ? s : x)
+      : [...state.items, s]
+  })),
+  removeItem: (id) => set((state) => ({ items: state.items.filter(x => x.id !== id) })),
+
+  factions: [],
+  setFactions: (s) => set({ factions: s }),
+  upsertFaction: (s) => set((state) => ({
+    factions: state.factions.find(x => x.id === s.id)
+      ? state.factions.map(x => x.id === s.id ? s : x)
+      : [...state.factions, s]
+  })),
+  removeFaction: (id) => set((state) => ({ factions: state.factions.filter(x => x.id !== id) })),
 
   sidebarTab: 'outline',
   setSidebarTab: (t) => set({ sidebarTab: t }),

@@ -63,56 +63,180 @@ class AIService:
         memories: List[str],
         settings_summary: List[str],
         check_types: List[str],
+        # 新增：人物当前状态、故事线、大纲节点上下文
+        character_states: List[str] = None,
+        storylines_context: List[str] = None,
+        power_systems_summary: List[str] = None,
+        outline_context: str = "",
     ) -> dict:
-        memory_text = "\n".join(f"- {m}" for m in memories[:30]) if memories else "暂无记忆条目"
-        settings_text = "\n".join(f"- {s}" for s in settings_summary[:10]) if settings_summary else "暂无设定"
+        memory_text = "\n".join(f"- {m}" for m in memories[:20]) if memories else "暂无记忆条目"
+        settings_text = "\n".join(f"- {s}" for s in settings_summary[:8]) if settings_summary else "暂无设定"
+
+        # 人物当前状态（用于一致性检查的核心）
+        char_state_text = ""
+        if character_states:
+            char_state_text = "\n人物当前状态（一致性检查关键依据）：\n"
+            char_state_text += "\n".join(f"- {c}" for c in character_states[:10])
+
+        # 故事线进展
+        storyline_text = ""
+        if storylines_context:
+            storyline_text = "\n当前活跃故事线：\n"
+            storyline_text += "\n".join(f"- {s}" for s in storylines_context[:5])
+
+        # 本章大纲计划
+        outline_text = f"\n本章大纲计划：{outline_context}" if outline_context else ""
 
         system = """你是专业的网络小说编辑，负责对章节内容进行质量检查。
-请严格按照 JSON 格式返回结果，不要有任何额外文字。"""
+请严格按照 JSON 格式返回结果，不要有任何额外文字。
+
+特别关注以下一致性问题：
+1. 人物使用了超出其当前境界的技能/能力
+2. 人物出现在与记录不符的位置
+3. 已死亡/封印的人物突然出现
+4. 人物行为违背其价值观和动机
+5. 使用了尚未习得的技能或尚未获得的道具"""
 
         prompt = f"""请对以下章节进行质检，返回 JSON 格式。
 
 章节标题：{chapter_title}
 章节正文（前2000字）：
 {chapter_content[:2000]}
+{char_state_text}
+{storyline_text}
+{outline_text}
 
-已有记忆条目（供一致性参考）：
+近期记忆条目（供参考）：
 {memory_text}
 
-世界观设定摘要：
+世界观设定：
 {settings_text}
 
 检查维度：{", ".join(check_types)}
 
-返回格式：
+返回格式（字段名固定）：
 {{
   "overall_score": 8.5,
   "dimensions": {{
-    "plot": {{"score": 9, "status": "pass", "comment": "..."}},
-    "character": {{"score": 8, "status": "pass", "comment": "..."}},
-    "setting_consistency": {{"score": 7, "status": "warning", "comment": "..."}},
-    "pacing": {{"score": 8, "status": "pass", "comment": "..."}},
-    "hooks": {{"score": 9, "status": "excellent", "comment": "..."}}
+    "plot": {{"score": 9, "status": "pass", "comment": "情节推进是否有效"}},
+    "character": {{"score": 8, "status": "pass", "comment": "人物行为是否符合设定"}},
+    "consistency": {{"score": 7, "status": "warning", "comment": "境界/技能/位置是否前后一致"}},
+    "pacing": {{"score": 8, "status": "pass", "comment": "节奏是否合适"}},
+    "hooks": {{"score": 9, "status": "excellent", "comment": "钩子和悬念是否到位"}}
   }},
-  "issues": [{{"type": "warning", "description": "..."}}],
-  "suggestions": ["...", "..."],
+  "issues": [{{"type": "warning", "description": "具体问题描述，如：林默在第X章记录位置为青云城，本章却出现在远水城"}}],
+  "suggestions": ["具体可操作的修改建议"],
   "summary": "整体评价一句话"
 }}"""
 
         response = await self._call_ai(system, prompt)
         try:
-            # 提取 JSON
+            import re
             text = response.strip()
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
             if "```" in text:
-                text = text.split("```")[1]
-                if text.startswith("json"):
-                    text = text[4:]
+                fence = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
+                if fence:
+                    text = fence.group(1).strip()
+            start = text.find("{")
+            if start != -1:
+                text = text[start:]
             return json.loads(text)
         except Exception:
             return {
                 "overall_score": 0,
                 "raw_response": response,
                 "error": "Failed to parse AI response"
+            }
+
+    # ── 多章节连贯性检测 ────────────────────────────────
+    async def chapter_coherence_check(
+        self,
+        project_title: str,
+        chapters: List[dict],
+    ) -> dict:
+        """
+        对多章进行连贯性检查：
+        1) 标题与内容是否匹配
+        2) 章节间剧情推进是否连贯
+        """
+        chapter_blocks = []
+        for idx, chapter in enumerate(chapters, start=1):
+            title = chapter.get("title", "未命名章节")
+            content = (chapter.get("content") or "").strip()
+            content_preview = content[:1800] if content else "（正文为空）"
+            chapter_blocks.append(
+                f"[样本{idx}] 章节ID={chapter.get('id')} | 顺序={chapter.get('sort_order', idx - 1)}\n"
+                f"标题：{title}\n"
+                f"正文（截断）：\n{content_preview}"
+            )
+        chapters_text = "\n\n".join(chapter_blocks)
+
+        system = """你是资深网文编辑，擅长检查章节标题与剧情的一致性，以及多章连续阅读时的剧情连贯性。
+必须严格返回 JSON，不要输出任何解释性文字。"""
+
+        prompt = f"""小说：{project_title}
+
+下面是按章节顺序选出的正文样本，请做连贯性检测：
+{chapters_text}
+
+请重点检查：
+1. 每章“标题-正文”是否匹配（是否标题党、偏题、内容兑现不足）
+2. 章节之间剧情推进是否自然（动机、冲突、信息承接、时间线）
+3. 是否存在明显断层（人物状态突变、因果缺失、场景跳跃）
+
+返回 JSON（字段名固定）：
+{{
+  "title_match_score": 8.2,
+  "continuity_score": 7.6,
+  "overall_score": 7.9,
+  "chapter_evaluations": [
+    {{
+      "chapter_id": "uuid",
+      "chapter_title": "第12章 ...",
+      "title_match_score": 8,
+      "title_match_comment": "标题与正文主事件基本一致",
+      "risk_level": "low"
+    }}
+  ],
+  "cross_chapter_issues": [
+    {{
+      "type": "continuity_gap",
+      "severity": "warning",
+      "description": "第12章结尾主角重伤，第13章开头直接满状态出战，缺少恢复或解释"
+    }}
+  ],
+  "suggestions": [
+    "按章节顺序给出可执行修改建议"
+  ],
+  "summary": "一句话总评"
+}}"""
+
+        response = await self._call_ai(system, prompt, max_tokens=2200)
+        try:
+            import re
+
+            text = response.strip()
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            if "```" in text:
+                fence = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
+                if fence:
+                    text = fence.group(1).strip()
+            start = text.find("{")
+            if start != -1:
+                text = text[start:]
+            return json.loads(text)
+        except Exception:
+            return {
+                "title_match_score": 0,
+                "continuity_score": 0,
+                "overall_score": 0,
+                "chapter_evaluations": [],
+                "cross_chapter_issues": [],
+                "suggestions": [],
+                "summary": "",
+                "error": "Failed to parse AI response",
+                "raw_response": response,
             }
 
     # ── 流式建议 ──────────────────────────────────────
@@ -331,10 +455,14 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         existing_content: str,
         user_prompt: str = "",
         replace_existing: bool = False,
+        # 新增：故事线、实力里程碑、情感基调
+        storyline_summary: str = "",
+        outline_power_milestone: str = "",
+        outline_emotional_tone: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
-        像一位有30年经验的作家，把世界观、人物弧、伏笔自然织入文字。
+        像一位有30年经验的作家，把世界观、人物弧、伏笔、故事线进展自然织入文字。
         """
         has_content = bool(
             not replace_existing and existing_content and len(existing_content.strip()) > 50
@@ -345,11 +473,12 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 
 写作原则：
 1. 严格遵循「开篇钩子」意图，第一句话就要抓人
-2. 世界观和人物设定要自然融入场景，不要生硬介绍背景
+2. 世界观、人物当前境界和状态要自然融入，不要与已知人物设定矛盾
 3. 人物的行动和心理要符合其弧线和动机
 4. 注意上一章结尾的衔接，保持情感和节奏的连续性
-5. 伏笔要埋得不着痕迹
-6. 直接给出正文，不要解释、不要旁白、不要说"好的"之类的废话"""
+5. 如果本章有实力里程碑（如突破境界），要让这一刻有分量
+6. 故事线进展要顺势推进，切勿无视当前活跃的冲突线
+7. 直接给出正文，不要解释、不要旁白、不要说"好的"之类的废话"""
 
         if replace_existing:
             task_line = (
@@ -361,19 +490,24 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         else:
             task_line = "请根据章节计划，写出本章开篇约600字，第一句话必须立刻抓住读者："
 
-        # 控制 prompt 总长度（8b 模型 context 约 8k）
-        world_part = world_summary[:250] if world_summary else "（未设定）"
-        char_part = character_summary[:200] if character_summary else "（未设定）"
-        mem_part = f"\n近期关键事件：{memory_summary[:200]}" if memory_summary else ""
+        # 控制 prompt 总长度（8b 模型 context 约 8k，每段严格限字）
+        world_part = world_summary[:200] if world_summary else "（未设定）"
+        char_part = character_summary[:300] if character_summary else "（未设定）"
+        mem_part = f"\n近期关键事件：{memory_summary[:150]}" if memory_summary else ""
         prev_part = prev_chapter_tail[-300:] if prev_chapter_tail else "（这是第一章，无前情）"
+
+        # 故事线与本章特殊目标
+        storyline_part = f"\n当前活跃故事线：{storyline_summary[:200]}" if storyline_summary else ""
+        milestone_part = f"\n本章实力里程碑：{outline_power_milestone}" if outline_power_milestone else ""
+        tone_part = f"\n情感基调：{outline_emotional_tone}" if outline_emotional_tone else ""
 
         extra = ""
         if user_prompt and user_prompt.strip():
-            extra = f"\n\n【作者补充要求】\n{user_prompt.strip()[:1200]}"
+            extra = f"\n\n【作者补充要求】\n{user_prompt.strip()[:800]}"
 
         prompt = f"""【故事背景】
 世界观：{world_part}
-主要人物：{char_part}{mem_part}
+主要人物（含境界/位置/技能）：{char_part}{mem_part}{storyline_part}
 
 【上章结尾】
 {prev_part}
@@ -381,15 +515,131 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 【本章大纲计划】
 标题：{chapter_title}
 开篇钩子：{outline_hook or "（未填写）"}
-核心事件（删掉会损失什么）：{outline_summary or "（未填写）"}
+核心事件：{outline_summary or "（未填写）"}
 人物变化：{outline_conflict or "（未填写）"}
-章末方向：{outline_highlight or "（未填写）"}
+章末方向：{outline_highlight or "（未填写）"}{milestone_part}{tone_part}
 {f"伏笔管理：{outline_foreshadow}" if outline_foreshadow else ""}
 
 {task_line}{extra}"""
 
         async for chunk in self._stream_ai(system, prompt):
             yield chunk
+
+    # ── 自动复盘提取 ──────────────────────────────────
+    async def auto_extract_debrief(
+        self,
+        chapter_content: str,
+        chapter_title: str,
+        chapter_number: int,
+        character_states: List[dict],    # [{"id":…,"name":…,"current_realm":…,"current_location":…,"current_status":…}]
+        storylines: List[dict],          # [{"id":…,"name":…,"line_type":…,"status":…,"core_conflict":…}]
+    ) -> dict:
+        """
+        AI 读取章节正文，对照人物当前状态和故事线，
+        自动提取本章发生的状态变化和故事节拍。
+        返回结构化建议供前端预填复盘表单。
+        """
+        # 精简人物列表（token 控制）
+        char_lines = []
+        for c in character_states[:10]:
+            parts = [f"- {c['name']}（id:{c['id']}）"]
+            if c.get("current_realm"):
+                parts.append(f"境界:{c['current_realm']}")
+            if c.get("current_location"):
+                parts.append(f"位置:{c['current_location']}")
+            if c.get("current_status"):
+                parts.append(f"状态:{c['current_status']}")
+            char_lines.append("".join(parts))
+        chars_text = "\n".join(char_lines) or "（无人物数据）"
+
+        sl_lines = [
+            f"- {s['name']}（id:{s['id']}，{s['line_type']}，当前:{s['status']}）：{(s.get('core_conflict') or '')[:60]}"
+            for s in storylines[:8]
+        ]
+        sl_text = "\n".join(sl_lines) or "（无故事线数据）"
+
+        system = "你是网络小说助手，从章节内容中提取人物状态变化和故事线推进，只返回JSON，不要任何解释。"
+
+        prompt = f"""章节{chapter_number}《{chapter_title}》正文（前2500字）：
+{chapter_content[:2500]}
+
+当前人物状态（对照基准）：
+{chars_text}
+
+当前故事线（对照基准）：
+{sl_text}
+
+请分析本章内容，提取：
+1. 哪些人物的境界/位置/状态发生了变化
+2. 哪些人物习得了新技能
+3. 哪些故事线有了推进（节拍）
+
+只提取文中明确发生的变化，不要推断或猜测。
+如果某字段没有变化，不要包含它。
+
+返回JSON（严格遵守字段名）：
+{{
+  "character_updates": [
+    {{
+      "character_id": "人物id",
+      "character_name": "人物名称（供显示）",
+      "current_realm": "新境界（如有变化）",
+      "current_location": "新位置（如有变化）",
+      "current_status": "新状态 alive/dead/missing/sealed（如有变化）",
+      "add_skill_name": "习得的技能名（如有）",
+      "add_skill_mastery": "掌握程度，如：初学/熟练/精通"
+    }}
+  ],
+  "storyline_updates": [
+    {{
+      "storyline_id": "故事线id",
+      "storyline_name": "故事线名称（供显示）",
+      "status": "新状态 planned/active/climax/resolved/dropped（如有变化）",
+      "beat": "本章该故事线发生了什么（一句话）"
+    }}
+  ],
+  "summary": "本章整体复盘总结（一句话）"
+}}"""
+
+        response = await self._call_ai(system, prompt, max_tokens=1500)
+        try:
+            import re as _re
+            text = response.strip()
+            text = _re.sub(r"<think>.*?</think>", "", text, flags=_re.DOTALL).strip()
+            if "```" in text:
+                fence = _re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
+                if fence:
+                    text = fence.group(1).strip()
+            start = text.find("{")
+            if start != -1:
+                text = text[start:]
+            data = json.loads(text)
+            # 清理空字段
+            char_updates = []
+            for cu in data.get("character_updates", []):
+                cleaned = {k: v for k, v in cu.items() if v and k not in ("character_name",)}
+                if len(cleaned) > 1:  # 除 character_id 外还有其他字段
+                    cleaned["character_name"] = cu.get("character_name", "")
+                    char_updates.append(cleaned)
+            sl_updates = []
+            for su in data.get("storyline_updates", []):
+                cleaned = {k: v for k, v in su.items() if v and k not in ("storyline_name",)}
+                if len(cleaned) > 1:
+                    cleaned["storyline_name"] = su.get("storyline_name", "")
+                    sl_updates.append(cleaned)
+            return {
+                "character_updates": char_updates,
+                "storyline_updates": sl_updates,
+                "summary": data.get("summary", ""),
+            }
+        except Exception as e:
+            return {
+                "character_updates": [],
+                "storyline_updates": [],
+                "summary": "",
+                "error": f"解析失败: {e}",
+                "raw": response[:300],
+            }
 
     # ── 底层调用 ──────────────────────────────────────
     async def _call_ai(self, system: str, prompt: str, max_tokens: int = 2048) -> str:

@@ -8,6 +8,7 @@ import {
   FileText,
   Home,
   Lightbulb,
+  Link2,
   PenLine,
   Trash2,
   UserRound,
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
   { id: 'memory', label: '灵感库', icon: Lightbulb },
   { id: 'characters', label: '角色设定', icon: UserRound },
   { id: 'outline', label: '大纲', icon: FileText },
+  { id: 'coherence', label: '连贯性测试', icon: Link2 },
   { id: 'stats', label: '数据统计', icon: BarChart3 },
   { id: 'trash', label: '回收站', icon: Trash2 },
 ]

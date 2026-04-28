@@ -45,6 +45,46 @@ export const charactersApi = {
   createRelationship: (pid: string, data: any) => api.post(`/projects/${pid}/characters/relationships`, data),
 }
 
+// ── StoryLines ────────────────────────────────────────
+export const storylinesApi = {
+  list: (pid: string) => api.get(`/projects/${pid}/storylines/`),
+  create: (pid: string, data: any) => api.post(`/projects/${pid}/storylines/`, data),
+  update: (pid: string, id: string, data: any) => api.patch(`/projects/${pid}/storylines/${id}`, data),
+  delete: (pid: string, id: string) => api.delete(`/projects/${pid}/storylines/${id}`),
+}
+
+// ── PowerSystems ──────────────────────────────────────
+export const powerSystemsApi = {
+  list: (pid: string) => api.get(`/projects/${pid}/power-systems/`),
+  create: (pid: string, data: any) => api.post(`/projects/${pid}/power-systems/`, data),
+  update: (pid: string, id: string, data: any) => api.patch(`/projects/${pid}/power-systems/${id}`, data),
+  delete: (pid: string, id: string) => api.delete(`/projects/${pid}/power-systems/${id}`),
+}
+
+// ── Skills ────────────────────────────────────────────
+export const skillsApi = {
+  list: (pid: string) => api.get(`/projects/${pid}/skills/`),
+  create: (pid: string, data: any) => api.post(`/projects/${pid}/skills/`, data),
+  update: (pid: string, id: string, data: any) => api.patch(`/projects/${pid}/skills/${id}`, data),
+  delete: (pid: string, id: string) => api.delete(`/projects/${pid}/skills/${id}`),
+}
+
+// ── Items ─────────────────────────────────────────────
+export const itemsApi = {
+  list: (pid: string) => api.get(`/projects/${pid}/items/`),
+  create: (pid: string, data: any) => api.post(`/projects/${pid}/items/`, data),
+  update: (pid: string, id: string, data: any) => api.patch(`/projects/${pid}/items/${id}`, data),
+  delete: (pid: string, id: string) => api.delete(`/projects/${pid}/items/${id}`),
+}
+
+// ── Factions ──────────────────────────────────────────
+export const factionsApi = {
+  list: (pid: string) => api.get(`/projects/${pid}/factions/`),
+  create: (pid: string, data: any) => api.post(`/projects/${pid}/factions/`, data),
+  update: (pid: string, id: string, data: any) => api.patch(`/projects/${pid}/factions/${id}`, data),
+  delete: (pid: string, id: string) => api.delete(`/projects/${pid}/factions/${id}`),
+}
+
 // ── Outline ───────────────────────────────────────────
 export const outlineApi = {
   getTree: (pid: string) => api.get(`/projects/${pid}/outline/`),
@@ -96,4 +136,52 @@ export const aiApi = {
   },
   listMemory: (pid: string, type?: string) =>
     api.get(`/projects/${pid}/ai/memory${type ? `?memory_type=${type}` : ''}`),
+  /** AI 自动分析章节，提取人物/故事线变化建议（不写库，只返回建议） */
+  autoDebrief: (pid: string, data: {
+    chapter_id: string
+    model_profile?: 'local' | 'gemini'
+  }) => api.post(`/projects/${pid}/ai/auto-debrief`, data),
+
+  /** 章节写完后批量提交状态更新 */
+  chapterDebrief: (pid: string, data: {
+    chapter_id: string
+    character_updates?: Array<{
+      character_id: string
+      current_realm?: string
+      realm_rank?: number
+      current_location?: string
+      current_status?: string
+      add_skill?: { skill_id?: string; skill_name: string; mastery?: string }
+      add_item?: { item_id?: string; item_name: string; acquired_chapter?: number }
+      remove_item_id?: string
+    }>
+    storyline_updates?: Array<{
+      storyline_id: string
+      status?: string
+      append_beat?: string
+    }>
+    notes?: string
+  }) => api.post(`/projects/${pid}/ai/chapter-debrief`, data),
+
+  chapterCoherenceCheck: (
+    pid: string,
+    data: {
+      chapter_ids: string[]
+      model_profile?: 'local' | 'gemini'
+      llm_provider_id?: string
+    }
+  ) => api.post(`/projects/${pid}/ai/chapter-coherence-check`, data),
+
+  saveChapterCoherenceReport: (
+    pid: string,
+    data: {
+      name?: string
+      model_profile?: 'local' | 'gemini'
+      selected_chapter_ids: string[]
+      result: Record<string, any>
+    }
+  ) => api.post(`/projects/${pid}/ai/chapter-coherence-reports`, data),
+
+  listChapterCoherenceReports: (pid: string, limit = 20) =>
+    api.get(`/projects/${pid}/ai/chapter-coherence-reports?limit=${limit}`),
 }

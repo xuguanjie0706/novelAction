@@ -3,14 +3,15 @@ import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import CharacterCount from '@tiptap/extension-character-count'
 import Placeholder from '@tiptap/extension-placeholder'
-import { chaptersApi } from '../../api/client'
-import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload } from '../../store'
-import type { Chapter, Character, OutlineNode } from '../../types'
+import { chaptersApi, aiApi, storylinesApi } from '../../api/client'
+import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload, llmProviderIdFromRoute } from '../../store'
+import type { Chapter, Character, OutlineNode, StoryLine } from '../../types'
 import toast from 'react-hot-toast'
 import {
   BookOpen, Sparkles, X, Zap, Target, Users, Flag, GitBranch, RefreshCw,
   Maximize2, Minimize2, Clock, StickyNote, ChevronDown,
   Wand2, Feather, Flame, MessageSquare, PenLine,
+  CheckSquare, TrendingUp, MapPin, Swords, Bot,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -40,6 +41,11 @@ function parseSseDataLine(line: string): { text?: string; error?: string; done?:
   const raw = t.slice(5).trimStart()
   if (raw === '[DONE]') return { done: true }
   try { return JSON.parse(raw) } catch { return null }
+}
+
+function isUuidLike(s?: string): boolean {
+  if (!s) return false
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s)
 }
 
 /** 剥离 HTML 取末尾 N 字作为「上章结尾」预览 */
@@ -95,18 +101,22 @@ const ROLE_BADGE: Record<Character['role'], { label: string; cls: string }> = {
   protagonist: { label: '主角', cls: 'bg-amber-100 text-amber-700' },
   supporting:  { label: '配角', cls: 'bg-blue-50 text-blue-600' },
   antagonist:  { label: '反派', cls: 'bg-red-50 text-red-600' },
+  neutral:     { label: '中立', cls: 'bg-gray-100 text-gray-600' },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ChapterEditor({
   projectId, chapter, outlineNode, prevChapter, onFocusModeChange,
 }: Props) {
-  const { upsertChapter, characters } = useAppStore()
+  const { upsertChapter, characters, storyLines, setStoryLines, setMemories } = useAppStore()
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
+  const storylineAutoSyncingRef = useRef(false)
+  const memoryAutoSyncingRef = useRef(false)
+  const lastMemoryAutoExtractAtRef = useRef(0)
 
   // ── 面板 UI 状态 ───────────────────────────────────────────────────
   const [contextOpen, setContextOpen]   = useState(!!outlineNode)
-  const [contextTab, setContextTab]     = useState<'plan' | 'scene' | 'notes'>('plan')
+  const [contextTab, setContextTab]     = useState<'plan' | 'scene' | 'notes' | 'debrief'>('plan')
   const [focusMode, setFocusMode]       = useState(false)
   const [statusOpen, setStatusOpen]     = useState(false)
   const statusRef = useRef<HTMLDivElement>(null)
@@ -126,6 +136,27 @@ export default function ChapterEditor({
   // ── 选中文字快捷 AI ────────────────────────────────────────────────
   const [selectionText, setSelectionText]       = useState('')
   const [showSelectionBar, setShowSelectionBar] = useState(false)
+
+  // ── 章节复盘（写完后提交状态更新）────────────────────────────────
+  const [debriefSubmitting, setDebriefSubmitting] = useState(false)
+  const [autoDebriefing, setAutoDebriefing]       = useState(false)
+  // charUpdates: map of characterId → partial update
+  const [charUpdates, setCharUpdates] = useState<Record<string, {
+    current_realm?: string
+    current_location?: string
+    current_status?: string
+    add_skill_name?: string
+    add_skill_mastery?: string
+  }>>({})
+  const [storylineBeats, setStorylineBeats] = useState<Record<string, {
+    status?: string
+    beat?: string
+  }>>({})
+  const [debriefNotes, setDebriefNotes] = useState('')
+  // AI 自动建议：记录哪些字段是 AI 预填的，用于显示标注
+  const [aiSuggestedCharIds, setAiSuggestedCharIds]   = useState<Set<string>>(new Set())
+  const [aiSuggestedSlIds, setAiSuggestedSlIds]       = useState<Set<string>>(new Set())
+  const [aiDebriefSummary, setAiDebriefSummary]       = useState('')
 
   // ── 写作统计 ───────────────────────────────────────────────────────
   const sessionStartWords = useRef<number>(chapter.word_count)
@@ -223,8 +254,91 @@ export default function ChapterEditor({
     try {
       const res = await chaptersApi.update(projectId, chapter.id, { content })
       upsertChapter(res.data)
+      // 自动保存路径也纳入记忆提取，但做节流避免高频触发
+      const now = Date.now()
+      const plainLen = (content || '').replace(/<[^>]+>/g, '').trim().length
+      if (plainLen >= 120 && now - lastMemoryAutoExtractAtRef.current > 90_000) {
+        await autoExtractMemoryAfterChapter(false)
+        lastMemoryAutoExtractAtRef.current = now
+      }
     } catch { /* 静默失败 */ }
   }, [projectId, chapter.id, upsertChapter])
+
+  const autoSyncStorylinesAfterChapter = async (showToast = false) => {
+    if (storylineAutoSyncingRef.current) return
+    storylineAutoSyncingRef.current = true
+    try {
+      const route = useAppStore.getState().aiBackendRoute
+      const auto = await aiApi.autoDebrief(projectId, {
+        chapter_id: chapter.id,
+        model_profile: modelProfileFromRoute(route),
+      })
+      const data = auto.data as {
+        storyline_updates?: Array<{ storyline_id?: string; storyline_name?: string; status?: string; beat?: string }>
+      }
+
+      const storylineUpdates = (data.storyline_updates || [])
+        .map((su) => {
+          const fields: Record<string, any> = {}
+          if (su.status) fields.status = su.status
+          if (su.beat) fields.append_beat = su.beat
+          if (Object.keys(fields).length === 0) return null
+
+          let resolvedId = su.storyline_id || ''
+          if (!isUuidLike(resolvedId) && su.storyline_name) {
+            const byName = storyLines.find(sl => sl.name === su.storyline_name)
+            if (byName?.id && isUuidLike(byName.id)) resolvedId = byName.id
+          }
+          if (!isUuidLike(resolvedId)) return null
+          return { storyline_id: resolvedId, ...fields }
+        })
+        .filter((x): x is { storyline_id: string; status?: string; append_beat?: string } => !!x)
+
+      if (storylineUpdates.length === 0) return
+
+      await aiApi.chapterDebrief(projectId, {
+        chapter_id: chapter.id,
+        storyline_updates: storylineUpdates,
+      })
+
+      // 提交后刷新故事线，保证写作页复盘面板与数据库一致
+      const refreshed = await storylinesApi.list(projectId)
+      setStoryLines(refreshed.data)
+      if (showToast) toast.success(`已自动推进 ${storylineUpdates.length} 条故事线`)
+    } catch {
+      if (showToast) toast.error('自动更新故事线失败，请在复盘面板手动提交')
+    } finally {
+      storylineAutoSyncingRef.current = false
+    }
+  }
+
+  const autoExtractMemoryAfterChapter = async (showToast = false) => {
+    if (memoryAutoSyncingRef.current) return
+    memoryAutoSyncingRef.current = true
+    try {
+      const route = useAppStore.getState().aiBackendRoute
+      const extracted = await aiApi.extractMemory(
+        projectId,
+        chapter.id,
+        modelProfileFromRoute(route),
+        llmProviderIdFromRoute(route),
+      )
+      const count = Array.isArray(extracted.data) ? extracted.data.length : 0
+
+      // 刷新全量记忆，确保和后端一致
+      const allMemories = await aiApi.listMemory(projectId)
+      setMemories(allMemories.data)
+
+      if (showToast) {
+        if (count > 0) toast.success(`已自动提取 ${count} 条记忆`)
+        else toast('本章未提取到新记忆', { icon: 'ℹ️' })
+      }
+    } catch {
+      if (showToast) toast.error('自动提取记忆失败，请在 AI 面板手动提取')
+    } finally {
+      memoryAutoSyncingRef.current = false
+    }
+  }
 
   const manualSave = async () => {
     if (!editor) return
@@ -232,6 +346,8 @@ export default function ChapterEditor({
       const res = await chaptersApi.update(projectId, chapter.id, { content: editor.getHTML() })
       upsertChapter(res.data)
       await chaptersApi.snapshot(projectId, chapter.id, '手动保存')
+      await autoExtractMemoryAfterChapter(true)
+      await autoSyncStorylinesAfterChapter(true)
       toast.success('已保存快照')
     } catch { toast.error('保存失败') }
   }
@@ -241,6 +357,10 @@ export default function ChapterEditor({
     try {
       const res = await chaptersApi.update(projectId, chapter.id, { status })
       upsertChapter(res.data)
+      if (status === 'done' || status === 'reviewed') {
+        await autoExtractMemoryAfterChapter(true)
+        await autoSyncStorylinesAfterChapter(true)
+      }
       toast.success(`状态 → 「${STATUS_OPTIONS.find(o => o.value === status)?.label}」`)
     } catch { toast.error('状态更新失败') }
   }
@@ -274,6 +394,8 @@ export default function ChapterEditor({
     try {
       const res = await chaptersApi.update(projectId, chapter.id, { content: editor.getHTML() })
       upsertChapter(res.data)
+      await autoExtractMemoryAfterChapter(false)
+      lastMemoryAutoExtractAtRef.current = Date.now()
       toast.success(replace ? '已替换全文并保存' : '已插入文末并保存')
       setShowDraft(false); setDraftText('')
     } catch { toast.error('保存失败，请点顶部「保存」重试') }
@@ -324,6 +446,8 @@ export default function ChapterEditor({
       if (!accumulated.trim()) { toast.error('未收到内容，请检查模型或稍后重试'); return }
       toast.success('生成完成')
       if (autoInsertAfterDraft) await insertDraftToEditorAndSave(accumulated, !!opts?.replaceExisting)
+      // 生成完成后自动触发 AI 复盘分析（后台静默运行，完成后弹提示）
+      void runAutoDebrief()
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'AI 生成失败')
     } finally {
@@ -336,6 +460,140 @@ export default function ChapterEditor({
       if (!window.confirm('「重新生成本章」将按大纲重写当前正文。建议先手动保存快照。确定继续？')) return
     }
     void triggerGenerate(undefined, opts)
+  }
+
+  /** 调用 AI 自动分析章节，预填复盘面板 */
+  const runAutoDebrief = async () => {
+    setAutoDebriefing(true)
+    try {
+      const route = useAppStore.getState().aiBackendRoute
+      const res = await aiApi.autoDebrief(projectId, {
+        chapter_id: chapter.id,
+        model_profile: modelProfileFromRoute(route),
+      })
+      const data = res.data as {
+        character_updates: Array<{
+          character_id: string; character_name?: string
+          current_realm?: string; current_location?: string
+          current_status?: string; add_skill_name?: string; add_skill_mastery?: string
+        }>
+        storyline_updates: Array<{
+          storyline_id: string; storyline_name?: string
+          status?: string; beat?: string
+        }>
+        summary?: string
+        error?: string
+      }
+
+      if (data.error) {
+        toast.error(`AI 自动复盘解析失败：${data.error}`)
+        return
+      }
+
+      // 预填人物更新
+      const newCharUpdates: typeof charUpdates = {}
+      const suggestedCharIds = new Set<string>()
+      for (const cu of data.character_updates || []) {
+        const { character_id, character_name: _n, ...fields } = cu
+        if (character_id && Object.keys(fields).some(k => (fields as any)[k])) {
+          newCharUpdates[character_id] = fields
+          suggestedCharIds.add(character_id)
+        }
+      }
+
+      // 预填故事线更新
+      const newSlBeats: typeof storylineBeats = {}
+      const suggestedSlIds = new Set<string>()
+      for (const su of data.storyline_updates || []) {
+        const { storyline_id, storyline_name, ...fields } = su
+        if (!Object.keys(fields).some(k => (fields as any)[k])) continue
+
+        let resolvedId = storyline_id
+        if (!isUuidLike(resolvedId)) {
+          const byName = storyline_name
+            ? storyLines.find(sl => sl.name === storyline_name)
+            : undefined
+          if (byName?.id && isUuidLike(byName.id)) resolvedId = byName.id
+        }
+
+        if (resolvedId && isUuidLike(resolvedId)) {
+          newSlBeats[resolvedId] = fields
+          suggestedSlIds.add(resolvedId)
+        }
+      }
+
+      setCharUpdates(prev => ({ ...prev, ...newCharUpdates }))
+      setStorylineBeats(prev => ({ ...prev, ...newSlBeats }))
+      setAiSuggestedCharIds(suggestedCharIds)
+      setAiSuggestedSlIds(suggestedSlIds)
+      if (data.summary) setAiDebriefSummary(data.summary)
+
+      const total = suggestedCharIds.size + suggestedSlIds.size
+      if (total > 0) {
+        toast.success(`AI 自动提取了 ${suggestedCharIds.size} 个人物变化、${suggestedSlIds.size} 条故事线更新，请确认后提交`)
+        // 自动打开复盘面板
+        setContextOpen(true)
+        setContextTab('debrief')
+      } else {
+        toast('AI 未检测到明确的状态变化', { icon: 'ℹ️' })
+      }
+    } catch {
+      toast.error('AI 自动复盘失败，请手动填写')
+    } finally {
+      setAutoDebriefing(false)
+    }
+  }
+
+  const submitDebrief = async () => {
+    const characterUpdates = Object.entries(charUpdates)
+      .map(([character_id, upd]) => {
+        const entry: Record<string, any> = { character_id }
+        if (upd.current_realm) entry.current_realm = upd.current_realm
+        if (upd.current_location) entry.current_location = upd.current_location
+        if (upd.current_status) entry.current_status = upd.current_status
+        if (upd.add_skill_name) {
+          entry.add_skill = {
+            skill_name: upd.add_skill_name,
+            mastery: upd.add_skill_mastery || '初学',
+          }
+        }
+        return entry
+      })
+      .filter(e => Object.keys(e).length > 1) // exclude empty updates
+
+    const storylineUpdates = Object.entries(storylineBeats)
+      .map(([storyline_id, upd]) => {
+        if (!isUuidLike(storyline_id)) return null
+        const entry: Record<string, any> = { storyline_id }
+        if (upd.status) entry.status = upd.status
+        if (upd.beat) entry.append_beat = upd.beat
+        return entry
+      })
+      .filter((e): e is Record<string, any> => !!e && Object.keys(e).length > 1)
+
+    if (characterUpdates.length === 0 && storylineUpdates.length === 0 && !debriefNotes) {
+      toast('没有需要提交的更新', { icon: 'ℹ️' })
+      return
+    }
+
+    setDebriefSubmitting(true)
+    try {
+      const res = await aiApi.chapterDebrief(projectId, {
+        chapter_id: chapter.id,
+        character_updates: characterUpdates as any,
+        storyline_updates: storylineUpdates as any,
+        notes: debriefNotes || undefined,
+      })
+      toast.success(res.data.message)
+      // 清空表单
+      setCharUpdates({})
+      setStorylineBeats({})
+      setDebriefNotes('')
+    } catch {
+      toast.error('复盘提交失败')
+    } finally {
+      setDebriefSubmitting(false)
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -445,6 +703,19 @@ export default function ChapterEditor({
                   ? 'bg-novel-panel border-novel-border text-novel-accent'
                   : 'border-novel-border text-novel-ink-muted hover:bg-novel-panel')}>
               <BookOpen size={12} />计划
+            </button>
+          )}
+
+          {/* 复盘 */}
+          {!focusMode && (
+            <button type="button"
+              onClick={() => { setContextOpen(v => !(v && contextTab === 'debrief')); setContextTab('debrief') }}
+              title="章节复盘（更新人物状态/故事线）"
+              className={clsx('flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-novel border transition-novel',
+                contextOpen && contextTab === 'debrief'
+                  ? 'bg-novel-panel border-novel-border text-novel-accent'
+                  : 'border-novel-border text-novel-ink-muted hover:bg-novel-panel')}>
+              <CheckSquare size={12} />复盘
             </button>
           )}
 
@@ -635,9 +906,10 @@ export default function ChapterEditor({
             <div className="flex items-center border-b border-novel-border bg-novel-card/80 shrink-0">
               {(
                 [
-                  { key: 'plan',  label: '章节计划', icon: <BookOpen size={11} /> },
-                  { key: 'scene', label: '场景助手', icon: <Users size={11} /> },
-                  { key: 'notes', label: '便笺本',   icon: <StickyNote size={11} /> },
+                  { key: 'plan',    label: '计划',  icon: <BookOpen size={11} /> },
+                  { key: 'scene',   label: '场景',  icon: <Users size={11} /> },
+                  { key: 'debrief', label: '复盘',  icon: <CheckSquare size={11} /> },
+                  { key: 'notes',   label: '便笺',  icon: <StickyNote size={11} /> },
                 ] as const
               ).map(tab => (
                 <button key={tab.key} type="button"
@@ -689,6 +961,34 @@ export default function ChapterEditor({
                         <PlanCard icon={<GitBranch size={12} className="text-green-500" />}
                           label="伏笔管理" sublabel="埋[…] 收[…]"
                           content={(outlineNode.extra as Record<string, string>).foreshadow} accent="green" />
+                      )}
+                      {outlineNode.power_milestone && (
+                        <PlanCard icon={<TrendingUp size={12} className="text-indigo-500" />}
+                          label="实力里程碑" sublabel="本章境界突破或技能习得"
+                          content={outlineNode.power_milestone} accent="indigo" />
+                      )}
+                      {outlineNode.emotional_tone && (
+                        <div className="rounded-novel border border-gray-100 bg-gray-50/70 px-3 py-2">
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            <span className="text-[10px] font-semibold text-gray-500">情感基调</span>
+                          </div>
+                          <p className="text-xs text-novel-ink">{outlineNode.emotional_tone}</p>
+                        </div>
+                      )}
+                      {outlineNode.foreshadows_laid && outlineNode.foreshadows_laid.length > 0 && (
+                        <div className="rounded-novel border border-green-100 bg-green-50/60 px-3 py-2">
+                          <div className="flex items-center gap-1.5 mb-1.5">
+                            <GitBranch size={12} className="text-green-500" />
+                            <span className="text-xs font-semibold text-green-700">本章埋设的伏笔</span>
+                          </div>
+                          <ul className="space-y-1">
+                            {outlineNode.foreshadows_laid.map((f, i) => (
+                              <li key={i} className="text-xs text-novel-ink leading-snug before:content-['·'] before:mr-1.5 before:text-green-400">
+                                {typeof f === 'string' ? f : f.description}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
                       )}
                       {!hasOutlineContent && (
                         <p className="text-xs text-novel-ink-faint text-center py-6 italic leading-relaxed">
@@ -750,6 +1050,30 @@ export default function ChapterEditor({
                 </div>
               )}
 
+              {/* ── 复盘 Tab ── */}
+              {contextTab === 'debrief' && (
+                <DebriefPanel
+                  projectId={projectId}
+                  chapter={chapter}
+                  outlineNode={outlineNode}
+                  characters={characters}
+                  storyLines={storyLines}
+                  charUpdates={charUpdates}
+                  setCharUpdates={setCharUpdates}
+                  storylineBeats={storylineBeats}
+                  setStorylineBeats={setStorylineBeats}
+                  debriefNotes={debriefNotes}
+                  setDebriefNotes={setDebriefNotes}
+                  submitting={debriefSubmitting}
+                  autoDebriefing={autoDebriefing}
+                  aiSuggestedCharIds={aiSuggestedCharIds}
+                  aiSuggestedSlIds={aiSuggestedSlIds}
+                  aiSummary={aiDebriefSummary}
+                  onAutoDebrief={runAutoDebrief}
+                  onSubmit={submitDebrief}
+                />
+              )}
+
               {/* ── 便笺本 Tab ── */}
               {contextTab === 'notes' && (
                 <div className="p-4 flex flex-col" style={{ minHeight: '320px' }}>
@@ -780,13 +1104,14 @@ export default function ChapterEditor({
 }
 
 // ─── 子组件：PlanCard ────────────────────────────────────────────────────────
-type AccentColor = 'amber' | 'blue' | 'purple' | 'red' | 'green'
+type AccentColor = 'amber' | 'blue' | 'purple' | 'red' | 'green' | 'indigo'
 const accentCls: Record<AccentColor, { border: string; label: string; bg: string }> = {
   amber:  { border: 'border-amber-100',  label: 'text-amber-700',  bg: 'bg-amber-50/70' },
   blue:   { border: 'border-blue-100',   label: 'text-blue-700',   bg: 'bg-blue-50/70' },
   purple: { border: 'border-purple-100', label: 'text-purple-700', bg: 'bg-purple-50/70' },
   red:    { border: 'border-red-100',    label: 'text-red-700',    bg: 'bg-red-50/70' },
   green:  { border: 'border-green-100',  label: 'text-green-700',  bg: 'bg-green-50/70' },
+  indigo: { border: 'border-indigo-100', label: 'text-indigo-700', bg: 'bg-indigo-50/70' },
 }
 
 function PlanCard({ icon, label, sublabel, content, accent }: {
@@ -838,23 +1163,360 @@ function CharacterMiniCard({ character }: { character: Character }) {
         )} />
       </button>
 
-      {expanded && (character.motivation || character.personality || character.arc || character.faction) && (
+      {expanded && (
         <div className="px-3 pb-2.5 pt-2 border-t border-novel-border space-y-1.5">
+          {character.current_realm    && <InfoRow label="境界" value={character.current_realm} highlight />}
+          {character.current_location && <InfoRow label="位置" value={character.current_location} highlight />}
+          {character.current_status && character.current_status !== 'alive' && (
+            <InfoRow label="状态" value={character.current_status} highlight />
+          )}
           {character.motivation  && <InfoRow label="动机" value={character.motivation} />}
           {character.personality && <InfoRow label="性格" value={character.personality} />}
           {character.arc         && <InfoRow label="弧线" value={character.arc} />}
           {character.faction     && <InfoRow label="阵营" value={character.faction} />}
+          {character.known_skills && (character.known_skills as any[]).length > 0 && (
+            <InfoRow label="技能"
+              value={(character.known_skills as any[])
+                .slice(0, 4)
+                .map(s => typeof s === 'string' ? s : s.skill_name || '')
+                .filter(Boolean)
+                .join('、')} />
+          )}
         </div>
       )}
     </div>
   )
 }
 
-function InfoRow({ label, value }: { label: string; value: string }) {
+function InfoRow({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
     <div className="flex gap-2">
       <span className="text-[10px] text-novel-ink-faint shrink-0 w-8">{label}</span>
-      <span className="text-[10px] text-novel-ink leading-relaxed">{value}</span>
+      <span className={clsx(
+        'text-[10px] leading-relaxed',
+        highlight ? 'text-novel-accent font-medium' : 'text-novel-ink',
+      )}>{value}</span>
+    </div>
+  )
+}
+
+// ─── 章节复盘面板 ───────────────────────────────────────────────────────────
+interface DebriefPanelProps {
+  projectId: string
+  chapter: Chapter
+  outlineNode?: OutlineNode
+  characters: Character[]
+  storyLines: StoryLine[]
+  charUpdates: Record<string, { current_realm?: string; current_location?: string; current_status?: string; add_skill_name?: string; add_skill_mastery?: string }>
+  setCharUpdates: React.Dispatch<React.SetStateAction<DebriefPanelProps['charUpdates']>>
+  storylineBeats: Record<string, { status?: string; beat?: string }>
+  setStorylineBeats: React.Dispatch<React.SetStateAction<DebriefPanelProps['storylineBeats']>>
+  debriefNotes: string
+  setDebriefNotes: (v: string) => void
+  submitting: boolean
+  autoDebriefing?: boolean
+  aiSuggestedCharIds?: Set<string>
+  aiSuggestedSlIds?: Set<string>
+  aiSummary?: string
+  onAutoDebrief?: () => void
+  onSubmit: () => void
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  alive: '存活', dead: '死亡', missing: '失踪', sealed: '封印', transformed: '变异',
+}
+const STORYLINE_STATUS_LABEL: Record<string, string> = {
+  planned: '规划中', active: '进行中', climax: '高潮', resolved: '已结局', dropped: '已废弃',
+}
+
+function DebriefPanel({
+  chapter, outlineNode, characters, storyLines,
+  charUpdates, setCharUpdates,
+  storylineBeats, setStorylineBeats,
+  debriefNotes, setDebriefNotes,
+  submitting, autoDebriefing,
+  aiSuggestedCharIds = new Set(),
+  aiSuggestedSlIds = new Set(),
+  aiSummary,
+  onAutoDebrief,
+  onSubmit,
+}: DebriefPanelProps) {
+  // 本章出场人物（优先从大纲节点 involved_character_ids 取，否则展示全部）
+  const involvedIds = new Set(outlineNode?.involved_character_ids?.map(String) || [])
+  const displayChars = involvedIds.size > 0
+    ? characters.filter(c => involvedIds.has(String(c.id)))
+    : characters.slice(0, 8)
+
+  // 活跃故事线（只显示 active/climax/planned）
+  const activeStorylines = storyLines.filter(s =>
+    ['active', 'climax', 'planned'].includes(s.status)
+  )
+
+  const updateChar = (id: string, field: string, value: string) => {
+    setCharUpdates(prev => ({
+      ...prev,
+      [id]: { ...prev[id], [field]: value },
+    }))
+  }
+
+  const updateStoryline = (id: string, field: string, value: string) => {
+    setStorylineBeats(prev => ({
+      ...prev,
+      [id]: { ...prev[id], [field]: value },
+    }))
+  }
+
+  const hasAiSuggestions = aiSuggestedCharIds.size > 0 || aiSuggestedSlIds.size > 0
+
+  return (
+    <div className="p-4 space-y-4">
+
+      {/* AI 自动分析区 */}
+      {hasAiSuggestions && aiSummary ? (
+        <div className="rounded-novel border border-amber-200 bg-amber-50/80 px-3 py-2.5">
+          <div className="flex items-center gap-1.5 mb-1">
+            <Bot size={12} className="text-amber-500" />
+            <span className="text-[11px] font-semibold text-amber-700">AI 已自动分析本章</span>
+          </div>
+          <p className="text-[11px] text-amber-800 leading-relaxed">{aiSummary}</p>
+          <p className="text-[10px] text-amber-500 mt-1">
+            已预填 {aiSuggestedCharIds.size} 个人物、{aiSuggestedSlIds.size} 条故事线，请检查后提交
+          </p>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between">
+          <p className="text-[10px] text-novel-ink-faint leading-relaxed">
+            写完本章后，让 AI 自动提取变化，或手动填写后提交
+          </p>
+          {onAutoDebrief && (
+            <button
+              type="button"
+              onClick={onAutoDebrief}
+              disabled={autoDebriefing || !chapter.content?.trim()}
+              className="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-novel border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 transition-novel shrink-0"
+            >
+              <Bot size={11} className={autoDebriefing ? 'animate-pulse' : ''} />
+              {autoDebriefing ? '分析中…' : 'AI 自动复盘'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* 加载中遮罩 */}
+      {autoDebriefing && (
+        <div className="flex items-center justify-center gap-2 py-3 text-amber-600">
+          <Bot size={14} className="animate-pulse" />
+          <span className="text-xs">AI 正在读取章节并提取变化…</span>
+        </div>
+      )}
+
+      {/* 人物状态更新 */}
+      {displayChars.length > 0 && (
+        <section>
+          <div className="flex items-center gap-1.5 mb-2">
+            <Users size={11} className="text-novel-ink-muted" />
+            <span className="text-[10px] font-semibold text-novel-ink-muted uppercase tracking-wider">
+              人物状态更新
+            </span>
+          </div>
+          <div className="space-y-3">
+            {displayChars.map(c => {
+              const upd = charUpdates[c.id] || {}
+              const hasChange = Object.values(upd).some(Boolean)
+              const isAiSuggested = aiSuggestedCharIds.has(c.id)
+              return (
+                <div key={c.id} className={clsx(
+                  'rounded-novel border px-3 py-2.5 space-y-2',
+                  isAiSuggested ? 'border-amber-300 bg-amber-50/60 ring-1 ring-amber-200'
+                    : hasChange ? 'border-novel-accent/40 bg-amber-50/40'
+                    : 'border-novel-border bg-novel-card',
+                )}>
+                  <div className="flex items-center gap-2">
+                    <div className="w-5 h-5 rounded-full bg-novel-shell flex items-center justify-center shrink-0">
+                      <span className="text-[9px] text-novel-ink-muted font-semibold">{c.name[0]}</span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs font-medium text-novel-ink">{c.name}</span>
+                        {isAiSuggested && (
+                          <span className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded-full bg-amber-200 text-amber-700 font-medium">
+                            <Bot size={8} />AI 建议
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {c.current_realm && (
+                          <span className="text-[10px] text-novel-accent">{c.current_realm}</span>
+                        )}
+                        {c.current_location && (
+                          <span className="text-[10px] text-novel-ink-faint">
+                            <MapPin size={8} className="inline mr-0.5" />{c.current_location}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <div>
+                      <label className="text-[9px] text-novel-ink-faint block mb-0.5">新境界</label>
+                      <input
+                        type="text"
+                        value={upd.current_realm || ''}
+                        onChange={e => updateChar(c.id, 'current_realm', e.target.value)}
+                        placeholder={c.current_realm || '不变'}
+                        className="w-full text-[11px] border border-novel-border rounded px-2 py-1 bg-white text-novel-ink placeholder:text-novel-ink-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-novel-accent"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] text-novel-ink-faint block mb-0.5">新位置</label>
+                      <input
+                        type="text"
+                        value={upd.current_location || ''}
+                        onChange={e => updateChar(c.id, 'current_location', e.target.value)}
+                        placeholder={c.current_location || '不变'}
+                        className="w-full text-[11px] border border-novel-border rounded px-2 py-1 bg-white text-novel-ink placeholder:text-novel-ink-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-novel-accent"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] text-novel-ink-faint block mb-0.5">状态</label>
+                      <select
+                        value={upd.current_status || ''}
+                        onChange={e => updateChar(c.id, 'current_status', e.target.value)}
+                        className="w-full text-[11px] border border-novel-border rounded px-2 py-1 bg-white text-novel-ink focus:outline-none focus-visible:ring-1 focus-visible:ring-novel-accent"
+                      >
+                        <option value="">不变（{STATUS_LABEL[c.current_status || 'alive'] || c.current_status}）</option>
+                        {Object.entries(STATUS_LABEL).map(([v, l]) => (
+                          <option key={v} value={v}>{l}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[9px] text-novel-ink-faint block mb-0.5">习得技能</label>
+                      <input
+                        type="text"
+                        value={upd.add_skill_name || ''}
+                        onChange={e => updateChar(c.id, 'add_skill_name', e.target.value)}
+                        placeholder="技能名称（可空）"
+                        className="w-full text-[11px] border border-novel-border rounded px-2 py-1 bg-white text-novel-ink placeholder:text-novel-ink-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-novel-accent"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* 故事线推进 */}
+      {activeStorylines.length > 0 && (
+        <section>
+          <div className="flex items-center gap-1.5 mb-2">
+            <Swords size={11} className="text-novel-ink-muted" />
+            <span className="text-[10px] font-semibold text-novel-ink-muted uppercase tracking-wider">
+              故事线推进
+            </span>
+          </div>
+          <div className="space-y-2">
+            {activeStorylines.map(sl => {
+              const upd = storylineBeats[sl.id] || {}
+              const hasChange = Object.values(upd).some(Boolean)
+              const isAiSuggested = aiSuggestedSlIds.has(sl.id)
+              return (
+                <div key={sl.id} className={clsx(
+                  'rounded-novel border px-3 py-2.5 space-y-1.5',
+                  isAiSuggested ? 'border-amber-300 bg-amber-50/60 ring-1 ring-amber-200'
+                    : hasChange ? 'border-novel-accent/40 bg-amber-50/40'
+                    : 'border-novel-border bg-novel-card',
+                )}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-xs font-medium text-novel-ink truncate">{sl.name}</span>
+                      {isAiSuggested && (
+                        <span className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded-full bg-amber-200 text-amber-700 font-medium shrink-0">
+                          <Bot size={8} />AI
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-novel-ink-faint shrink-0">
+                      {STORYLINE_STATUS_LABEL[sl.status] || sl.status}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <div>
+                      <label className="text-[9px] text-novel-ink-faint block mb-0.5">更新状态</label>
+                      <select
+                        value={upd.status || ''}
+                        onChange={e => updateStoryline(sl.id, 'status', e.target.value)}
+                        className="w-full text-[11px] border border-novel-border rounded px-2 py-1 bg-white text-novel-ink focus:outline-none focus-visible:ring-1 focus-visible:ring-novel-accent"
+                      >
+                        <option value="">不变</option>
+                        {Object.entries(STORYLINE_STATUS_LABEL).map(([v, l]) => (
+                          <option key={v} value={v}>{l}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[9px] text-novel-ink-faint block mb-0.5">本章节拍</label>
+                      <input
+                        type="text"
+                        value={upd.beat || ''}
+                        onChange={e => updateStoryline(sl.id, 'beat', e.target.value)}
+                        placeholder="发生了什么（可空）"
+                        className="w-full text-[11px] border border-novel-border rounded px-2 py-1 bg-white text-novel-ink placeholder:text-novel-ink-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-novel-accent"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* 作者备注 */}
+      <section>
+        <label className="text-[10px] font-semibold text-novel-ink-muted block mb-1.5">作者备注（可选）</label>
+        <textarea
+          value={debriefNotes}
+          onChange={e => setDebriefNotes(e.target.value)}
+          rows={2}
+          placeholder="本章写作感受、待调整之处……"
+          className="w-full text-[11px] border border-novel-border rounded-novel px-3 py-2 bg-novel-card text-novel-ink placeholder:text-novel-ink-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-novel-accent resize-none"
+        />
+      </section>
+
+      {/* 空状态提示 */}
+      {displayChars.length === 0 && activeStorylines.length === 0 && (
+        <p className="text-xs text-novel-ink-faint italic text-center py-4">
+          暂无人物或活跃故事线<br />
+          <span className="text-[10px]">请先在「人物」和「世界」页创建数据，<br />并在大纲节点上标注本章出场人物</span>
+        </p>
+      )}
+
+      {/* 操作按钮区 */}
+      <div className="flex gap-2">
+        {onAutoDebrief && (
+          <button
+            type="button"
+            onClick={onAutoDebrief}
+            disabled={autoDebriefing || submitting || !chapter.content?.trim()}
+            className="flex items-center justify-center gap-1.5 text-xs py-2 px-3 border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-novel font-medium disabled:opacity-50 transition-novel shrink-0"
+          >
+            <Bot size={12} className={autoDebriefing ? 'animate-pulse' : ''} />
+            {autoDebriefing ? '分析中' : hasAiSuggestions ? '重新分析' : 'AI 分析'}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={submitting || autoDebriefing}
+          className="flex-1 flex items-center justify-center gap-2 text-sm py-2.5 bg-novel-accent hover:bg-novel-accent-hover text-white rounded-novel font-medium disabled:opacity-60 transition-novel"
+        >
+          <CheckSquare size={14} className={submitting ? 'animate-pulse' : ''} />
+          {submitting ? '提交中…' : hasAiSuggestions ? '确认并提交' : '提交复盘'}
+        </button>
+      </div>
     </div>
   )
 }

@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import {
   Plus, Loader2, RefreshCw, ChevronRight, ChevronDown, PenLine, FileText, BookOpen,
 } from 'lucide-react'
-import { chaptersApi, outlineApi } from '../api/client'
+import { chaptersApi, outlineApi, storylinesApi } from '../api/client'
 import { useAppStore } from '../store'
 import ChapterEditor from '../components/Writing/ChapterEditor'
 import clsx from 'clsx'
@@ -53,6 +53,7 @@ export default function WritePage() {
     chapters, setChapters, upsertChapter,
     activeChapterId, setActiveChapterId,
     outlineTree, setOutlineTree,
+    setStoryLines,
   } = useAppStore()
 
   const [creating, setCreating] = useState(false)
@@ -64,11 +65,12 @@ export default function WritePage() {
   const loadData = useCallback(() => {
     if (!projectId) return
     setLoadState('loading')
-    Promise.all([outlineApi.getTree(projectId), chaptersApi.list(projectId)])
-      .then(([oRes, cRes]) => {
+    Promise.all([outlineApi.getTree(projectId), chaptersApi.list(projectId), storylinesApi.list(projectId)])
+      .then(([oRes, cRes, slRes]) => {
         setOutlineTree(oRes.data)
         setExpanded(new Set<string>(oRes.data.map((n: OutlineNode) => n.id)))
         setChapters(cRes.data)
+        setStoryLines(slRes.data)
         if (!activeChapterId && cRes.data.length > 0) setActiveChapterId(cRes.data[0].id)
         setLoadState('ready')
       })

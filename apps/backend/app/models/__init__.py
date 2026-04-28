@@ -11,6 +11,7 @@ from app.models.power_system import PowerSystem
 from app.models.skill import Skill
 from app.models.item import Item
 from app.models.faction import Faction
+from app.models.chapter_coherence_report import ChapterCoherenceReport
 
 __all__ = [
     "Project",
@@ -25,4 +26,5 @@ __all__ = [
     "Skill",
     "Item",
     "Faction",
+    "ChapterCoherenceReport",
 ]

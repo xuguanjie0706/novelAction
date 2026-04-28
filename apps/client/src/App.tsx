@@ -4,6 +4,7 @@ import { Toaster } from 'react-hot-toast'
 import ProjectsPage from './pages/ProjectsPage'
 import AppLayout from './components/Layout/AppLayout'
 import ProjectCachedViews from './pages/ProjectCachedViews'
+import ChapterCoherencePage from './pages/ChapterCoherencePage'
 import { projectsApi } from './api/client'
 import { useAppStore } from './store'
 
@@ -27,6 +28,7 @@ export default function App() {
       <Toaster position="top-right" toastOptions={{ duration: 3000 }} />
       <Routes>
         <Route path="/" element={<ProjectsPage />} />
+        <Route path="/coherence-check" element={<ChapterCoherencePage />} />
         <Route path="/project/:projectId" element={<><ProjectLoader /><AppLayout /></>}>
           <Route index element={<Navigate to="outline" replace />} />
           <Route path=":tab" element={<ProjectCachedViews />} />

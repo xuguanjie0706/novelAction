@@ -6,8 +6,9 @@ import WritePage from './WritePage'
 import CharactersPage from './CharactersPage'
 import SettingsPage from './SettingsPage'
 import MemoryPage from './MemoryPage'
+import WorldBuildingPage from './WorldBuildingPage'
 
-const TABS = ['outline', 'write', 'characters', 'settings', 'memory'] as const
+const TABS = ['outline', 'write', 'characters', 'worldbuilding', 'settings', 'memory'] as const
 type Tab = (typeof TABS)[number]
 
 function isTab(s: string | undefined): s is Tab {
@@ -48,11 +49,12 @@ export default function ProjectCachedViews() {
 
   return (
     <div className="h-full min-h-0">
-      {wrap('outline', <OutlinePage />)}
-      {wrap('write', <WritePage />)}
-      {wrap('characters', <CharactersPage />)}
-      {wrap('settings', <SettingsPage />)}
-      {wrap('memory', <MemoryPage />)}
+      {wrap('outline',       <OutlinePage />)}
+      {wrap('write',         <WritePage />)}
+      {wrap('characters',    <CharactersPage />)}
+      {wrap('worldbuilding', <WorldBuildingPage />)}
+      {wrap('settings',      <SettingsPage />)}
+      {wrap('memory',        <MemoryPage />)}
     </div>
   )
 }

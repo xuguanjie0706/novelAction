@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ChevronRight, ChevronDown, Plus, Trash2, Pencil, Check, X,
-  Sparkles, BookOpen,
+  Sparkles, BookOpen, Users, TrendingUp, GitBranch,
 } from 'lucide-react'
 import { chaptersApi, outlineApi } from '../api/client'
 import { useAppStore, toOutlineApiModelProfile, routeLlmProviderPayload } from '../store'
@@ -435,35 +435,25 @@ export default function OutlinePage() {
           <div className="flex items-center gap-1 shrink-0">
             <button
               type="button"
-              onClick={() => setShowFullGenModal(true)}
-              className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
-              title="AI 从零生成完整大纲（卷+章节），后台运行"
-            >
-              <BookOpen size={12} />
-              全量生成
-            </button>
-            <button
-              type="button"
               onClick={() => {
                 if (expandableCount === 0) {
                   toast.error('没有可展开的卷/篇')
                   return
                 }
-                setShowBatchModal(true)
+                setShowFullGenModal(true)
               }}
               disabled={outlineTree.length === 0}
               className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg border border-amber-200 text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed"
-              title="对尚未生成章节计划的卷/篇批量 AI 展开，后台运行"
             >
               <Sparkles size={12} />
-              全部展开
-              {expandableCount > 0 && (
+              全部生成
+              {/* {expandableCount > 0 && (
                 <span className="ml-0.5 bg-amber-200 text-amber-800 text-[9px] font-bold px-1 rounded-full">
                   {expandableCount}
                 </span>
-              )}
+              )} */}
             </button>
-            <button
+            {/* <button
               onClick={async () => {
                 if (!projectId) return
                 try {
@@ -482,7 +472,7 @@ export default function OutlinePage() {
               title="新建卷"
             >
               <Plus size={14} />
-            </button>
+            </button> */}
           </div>
         </div>
         <div className="flex-1 overflow-auto py-1.5">
@@ -558,6 +548,7 @@ function NodeDetailPanel({
   onSaved: (updated: OutlineNode) => void
   onAICommitDone: () => void
 }) {
+  const { characters, storyLines } = useAppStore()
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({
@@ -566,12 +557,31 @@ function NodeDetailPanel({
     hook: node.hook ?? '',
     highlight: node.highlight ?? '',
     conflict: node.conflict ?? '',
+    // v2 新增字段（章节节点）
+    power_milestone: node.power_milestone ?? '',
+    emotional_tone: node.emotional_tone ?? '',
+    involved_character_ids: (node.involved_character_ids ?? []).map(String),
+    storyline_ids: (node.storyline_ids ?? []).map(String),
   })
 
   const handleSave = async () => {
     setSaving(true)
     try {
-      const res = await outlineApi.update(projectId, node.id, form)
+      const payload: Record<string, any> = {
+        title: form.title,
+        summary: form.summary,
+        hook: form.hook,
+        highlight: form.highlight,
+        conflict: form.conflict,
+      }
+      // 章节节点才传新字段，避免干扰卷/篇节点
+      if (node.node_type === 'chapter_plan') {
+        payload.power_milestone = form.power_milestone || null
+        payload.emotional_tone = form.emotional_tone || null
+        payload.involved_character_ids = form.involved_character_ids
+        payload.storyline_ids = form.storyline_ids
+      }
+      const res = await outlineApi.update(projectId, node.id, payload)
       onSaved(res.data)
       setEditing(false)
       toast.success('保存成功')
@@ -583,6 +593,24 @@ function NodeDetailPanel({
   }
 
   const isExpandable = node.node_type === 'volume' || node.node_type === 'arc'
+
+  const toggleCharacter = (id: string) => {
+    setForm(f => ({
+      ...f,
+      involved_character_ids: f.involved_character_ids.includes(id)
+        ? f.involved_character_ids.filter(x => x !== id)
+        : [...f.involved_character_ids, id],
+    }))
+  }
+
+  const toggleStoryline = (id: string) => {
+    setForm(f => ({
+      ...f,
+      storyline_ids: f.storyline_ids.includes(id)
+        ? f.storyline_ids.filter(x => x !== id)
+        : [...f.storyline_ids, id],
+    }))
+  }
 
   return (
     <div className="p-6 max-w-2xl">
@@ -624,6 +652,157 @@ function NodeDetailPanel({
         <Field label="钩子 / 悬念" sublabel="读者最想知道答案的核心问题" value={form.hook} editing={editing} onChange={v => setForm(f => ({ ...f, hook: v }))} />
         <Field label="燃点 / 高潮" sublabel="情绪最高点" value={form.highlight} editing={editing} onChange={v => setForm(f => ({ ...f, highlight: v }))} />
         <Field label="核心冲突" sublabel="不可调和的矛盾" value={form.conflict} editing={editing} onChange={v => setForm(f => ({ ...f, conflict: v }))} />
+
+        {/* 章节专属字段 */}
+        {node.node_type === 'chapter_plan' && (
+          <>
+            {/* 实力里程碑 */}
+            <div>
+              <div className="flex items-baseline gap-2 mb-1">
+                <TrendingUp size={12} className="text-indigo-400 shrink-0 mt-0.5" />
+                <label className="text-xs font-medium text-gray-600">实力里程碑</label>
+                <span className="text-[10px] text-gray-400">本章境界突破或关键技能习得</span>
+              </div>
+              {editing ? (
+                <input
+                  value={form.power_milestone}
+                  onChange={e => setForm(f => ({ ...f, power_milestone: e.target.value }))}
+                  placeholder="例：林默突破炼气九层，踏入筑基"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+                />
+              ) : (
+                <div className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-gray-50">
+                  {form.power_milestone || <span className="text-gray-400 italic">—</span>}
+                </div>
+              )}
+            </div>
+
+            {/* 情感基调 */}
+            <div>
+              <div className="flex items-baseline gap-2 mb-1">
+                <label className="text-xs font-medium text-gray-600">情感基调</label>
+                <span className="text-[10px] text-gray-400">本章整体氛围</span>
+              </div>
+              {editing ? (
+                <input
+                  value={form.emotional_tone}
+                  onChange={e => setForm(f => ({ ...f, emotional_tone: e.target.value }))}
+                  placeholder="例：压抑→绝地反杀→爽快，或：温情、紧张悬疑……"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+                />
+              ) : (
+                <div className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-gray-50">
+                  {form.emotional_tone || <span className="text-gray-400 italic">—</span>}
+                </div>
+              )}
+            </div>
+
+            {/* 出场人物 */}
+            <div>
+              <div className="flex items-center gap-1.5 mb-2">
+                <Users size={12} className="text-blue-400 shrink-0" />
+                <label className="text-xs font-medium text-gray-600">出场人物</label>
+                <span className="text-[10px] text-gray-400">
+                  {editing ? '点击选择/取消' : `${form.involved_character_ids.length} 位`}
+                </span>
+              </div>
+              {characters.length === 0 ? (
+                <p className="text-xs text-gray-400 italic">暂无人物数据，请先在「人物」页创建</p>
+              ) : editing ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {characters.map(c => {
+                    const selected = form.involved_character_ids.includes(String(c.id))
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => toggleCharacter(String(c.id))}
+                        className={clsx(
+                          'text-xs px-2.5 py-1 rounded-full border transition-all',
+                          selected
+                            ? 'bg-blue-500 border-blue-500 text-white'
+                            : 'border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-600',
+                        )}
+                      >
+                        {c.name}
+                        {c.current_realm && <span className="ml-1 opacity-70 text-[10px]">{c.current_realm}</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {form.involved_character_ids.length === 0 ? (
+                    <span className="text-xs text-gray-400 italic">—</span>
+                  ) : (
+                    form.involved_character_ids.map(id => {
+                      const c = characters.find(x => String(x.id) === id)
+                      return c ? (
+                        <span key={id} className="text-xs px-2.5 py-1 rounded-full bg-blue-50 border border-blue-100 text-blue-700">
+                          {c.name}
+                          {c.current_realm && <span className="ml-1 opacity-60">{c.current_realm}</span>}
+                        </span>
+                      ) : null
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* 关联故事线 */}
+            <div>
+              <div className="flex items-center gap-1.5 mb-2">
+                <GitBranch size={12} className="text-green-500 shrink-0" />
+                <label className="text-xs font-medium text-gray-600">关联故事线</label>
+                <span className="text-[10px] text-gray-400">
+                  {editing ? '本章推进了哪些故事线' : `${form.storyline_ids.length} 条`}
+                </span>
+              </div>
+              {storyLines.length === 0 ? (
+                <p className="text-xs text-gray-400 italic">暂无故事线，请先在「世界」→「故事线」中创建</p>
+              ) : editing ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {storyLines.map(sl => {
+                    const selected = form.storyline_ids.includes(String(sl.id))
+                    return (
+                      <button
+                        key={sl.id}
+                        type="button"
+                        onClick={() => toggleStoryline(String(sl.id))}
+                        className={clsx(
+                          'text-xs px-2.5 py-1 rounded-full border transition-all',
+                          selected
+                            ? 'bg-green-500 border-green-500 text-white'
+                            : 'border-gray-200 text-gray-600 hover:border-green-300 hover:text-green-700',
+                        )}
+                      >
+                        {sl.name}
+                        <span className="ml-1 opacity-70 text-[10px]">
+                          {sl.line_type === 'main' ? '主线' : sl.line_type === 'romance' ? '感情' : sl.line_type === 'growth' ? '成长' : sl.line_type}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {form.storyline_ids.length === 0 ? (
+                    <span className="text-xs text-gray-400 italic">—</span>
+                  ) : (
+                    form.storyline_ids.map(id => {
+                      const sl = storyLines.find(x => String(x.id) === id)
+                      return sl ? (
+                        <span key={id} className="text-xs px-2.5 py-1 rounded-full bg-green-50 border border-green-100 text-green-700">
+                          {sl.name}
+                        </span>
+                      ) : null
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       {node.node_type === 'chapter_plan' && (

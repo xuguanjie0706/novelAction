@@ -106,7 +106,7 @@ export default function LlmAgentMenu() {
         {!loading &&
           data?.remote_providers?.map(p => (
             <option key={p.id} value={`remote:${p.id}`}>
-              远程 · {p.name} ({p.model_name}){p.is_default ? ' ★' : ''}
+              远程 · {p.name} 
             </option>
           ))}
         {!loading && data?.remote_ready && (data.remote_providers?.length ?? 0) === 0 && (

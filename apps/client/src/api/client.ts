@@ -1,15 +1,57 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
 import type { LlmOverview } from '../types'
+import {
+  extractUsage,
+  finishLlmCall,
+  installLlmFetchLogger,
+  isLlmRelatedEndpoint,
+  startLlmCall,
+} from '../utils/llmCallLogger'
 
 const api = axios.create({
   baseURL: '/api/v1',
   headers: { 'Content-Type': 'application/json' },
 })
 
+installLlmFetchLogger()
+
+api.interceptors.request.use((config) => {
+  const endpoint = config.url || ''
+  if (isLlmRelatedEndpoint(endpoint)) {
+    const callId = startLlmCall({
+      method: config.method || 'GET',
+      endpoint,
+      context: { source: 'axios' },
+      requestPayload: config.data,
+    })
+    ;(config as any).__llmCallId = callId
+  }
+  return config
+})
+
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    const callId = (res.config as any).__llmCallId as string | undefined
+    if (callId) {
+      finishLlmCall(callId, {
+        status: res.status,
+        responsePayload: res.data,
+        usage: extractUsage(res.data),
+      })
+    }
+    return res
+  },
   (err) => {
+    const callId = (err.config as any)?.__llmCallId as string | undefined
+    if (callId) {
+      finishLlmCall(callId, {
+        status: err.response?.status ?? 'network_error',
+        responsePayload: err.response?.data,
+        usage: extractUsage(err.response?.data),
+        error: err.response?.data?.detail || err.message || '请求失败',
+      })
+    }
     const msg = err.response?.data?.detail || err.message || '请求失败'
     toast.error(msg)
     return Promise.reject(err)
@@ -83,6 +125,25 @@ export const factionsApi = {
   create: (pid: string, data: any) => api.post(`/projects/${pid}/factions/`, data),
   update: (pid: string, id: string, data: any) => api.patch(`/projects/${pid}/factions/${id}`, data),
   delete: (pid: string, id: string) => api.delete(`/projects/${pid}/factions/${id}`),
+}
+
+// ── Foreshadows ───────────────────────────────────────
+export const foreshadowsApi = {
+  list: (pid: string, status?: string) =>
+    api.get(`/projects/${pid}/foreshadows/${status ? `?status=${status}` : ''}`),
+  create: (pid: string, data: any) => api.post(`/projects/${pid}/foreshadows/`, data),
+  update: (pid: string, id: string, data: any) => api.patch(`/projects/${pid}/foreshadows/${id}`, data),
+  delete: (pid: string, id: string) => api.delete(`/projects/${pid}/foreshadows/${id}`),
+}
+
+// ── Chapter Indexes ───────────────────────────────────
+export const chapterIndexesApi = {
+  list: (pid: string) => api.get(`/projects/${pid}/chapter-indexes/`),
+  getByChapter: (pid: string, chapterId: string) =>
+    api.get(`/projects/${pid}/chapter-indexes/chapter/${chapterId}`),
+  upsert: (pid: string, data: any) => api.post(`/projects/${pid}/chapter-indexes/`, data),
+  update: (pid: string, chapterId: string, data: any) =>
+    api.patch(`/projects/${pid}/chapter-indexes/chapter/${chapterId}`, data),
 }
 
 // ── Outline ───────────────────────────────────────────

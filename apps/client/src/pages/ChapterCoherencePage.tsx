@@ -92,6 +92,30 @@ export default function ChapterCoherencePage() {
 
   const canCheck = selectedProjectId && selectedChapterIds.length >= 2 && !checking
 
+  const persistReport = async (
+    result: CoherenceReport,
+    options?: { silent?: boolean }
+  ) => {
+    if (!selectedProjectId) return false
+    setSaving(true)
+    try {
+      const res = await aiApi.saveChapterCoherenceReport(selectedProjectId, {
+        model_profile: modelProfile,
+        selected_chapter_ids: selectedChapterIds,
+        result: result as Record<string, any>,
+      })
+      const newItem = res.data as CoherenceReportHistoryItem
+      setHistory(prev => [newItem, ...prev])
+      if (!options?.silent) toast.success('评测记录已保存')
+      return true
+    } catch {
+      if (!options?.silent) toast.error('评测记录保存失败')
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const toggleChapter = (chapterId: string) => {
     setSelectedChapterIds(prev =>
       prev.includes(chapterId) ? prev.filter(id => id !== chapterId) : [...prev, chapterId]
@@ -108,8 +132,14 @@ export default function ChapterCoherencePage() {
         chapter_ids: selectedChapterIds,
         model_profile: modelProfile,
       })
-      setReport(res.data as CoherenceReport)
-      toast.success('检测完成')
+      const result = res.data as CoherenceReport
+      setReport(result)
+      const saved = await persistReport(result, { silent: true })
+      if (saved) {
+        toast.success('检测完成，记录已自动保存')
+      } else {
+        toast('检测完成，但自动保存失败，可手动重试', { icon: '⚠️' })
+      }
     } catch {
       setReport(null)
     } finally {
@@ -118,22 +148,8 @@ export default function ChapterCoherencePage() {
   }
 
   const saveCurrentReport = async () => {
-    if (!selectedProjectId || !report) return
-    setSaving(true)
-    try {
-      const res = await aiApi.saveChapterCoherenceReport(selectedProjectId, {
-        model_profile: modelProfile,
-        selected_chapter_ids: selectedChapterIds,
-        result: report as Record<string, any>,
-      })
-      const newItem = res.data as CoherenceReportHistoryItem
-      setHistory(prev => [newItem, ...prev])
-      toast.success('已保存到检测历史')
-    } catch {
-      // noop
-    } finally {
-      setSaving(false)
-    }
+    if (!report) return
+    await persistReport(report)
   }
 
   return (
@@ -248,7 +264,7 @@ export default function ChapterCoherencePage() {
                     disabled={saving || checking}
                     className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {saving ? '保存中...' : '保存本次检测'}
+                    {saving ? '保存中...' : '重新保存本次检测'}
                   </button>
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-3">

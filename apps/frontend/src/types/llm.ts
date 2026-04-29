@@ -35,3 +35,25 @@ export interface LlmOverview {
   remote_source: 'database' | 'env' | 'none'
   remote_providers: RemoteProviderBrief[]
 }
+
+export interface LlmCallTokenUsage {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  estimated: boolean
+}
+
+export interface LlmCallRecord {
+  id: string
+  created_at: string
+  mode: string
+  model: string
+  llm_endpoint: string
+  status: 'ok' | 'error'
+  duration_ms: number
+  context: Record<string, unknown>
+  token_usage: LlmCallTokenUsage
+  error?: string | null
+  input_payload?: unknown
+  output_payload?: unknown
+}

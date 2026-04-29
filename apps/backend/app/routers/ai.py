@@ -20,11 +20,15 @@ from app.models import (
     StoryLine,
     PowerSystem,
     ChapterCoherenceReport,
+    Foreshadow,
 )
 from app.schemas import MemoryChunkCreate, MemoryChunkOut
 from app.services.ai_service import AIService
 
 router = APIRouter(prefix="/projects/{project_id}/ai", tags=["ai"])
+
+_ALLOWED_CHARACTER_STATUS = {"alive", "dead", "missing", "sealed", "transformed"}
+_ALLOWED_STORYLINE_STATUS = {"planned", "active", "climax", "resolved", "dropped"}
 
 
 def _plain_text(html: str | None) -> str:
@@ -34,6 +38,45 @@ def _plain_text(html: str | None) -> str:
 def _truncate(text: str | None, limit: int) -> str:
     clean = (text or "").strip()
     return clean[:limit]
+
+
+def _normalize_character_status(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    text = raw.strip().lower()
+    if not text:
+        return None
+    token = re.split(r"[\s（(，,;；。!！]", text, maxsplit=1)[0]
+    alias = {
+        "normal": "alive",
+        "living": "alive",
+        "active": "alive",
+        "deaded": "dead",
+        "deceased": "dead",
+    }
+    candidate = alias.get(token, token)
+    if candidate in _ALLOWED_CHARACTER_STATUS:
+        return candidate
+    if "dead" in text or "死亡" in text:
+        return "dead"
+    if "missing" in text or "失踪" in text:
+        return "missing"
+    if "sealed" in text or "封印" in text:
+        return "sealed"
+    if "transform" in text or "变身" in text or "异化" in text:
+        return "transformed"
+    if "alive" in text or "存活" in text or "生还" in text or "活着" in text:
+        return "alive"
+    return None
+
+
+def _normalize_storyline_status(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    token = re.split(r"[\s（(，,;；。!！]", raw.strip().lower(), maxsplit=1)[0]
+    if token in _ALLOWED_STORYLINE_STATUS:
+        return token
+    return None
 
 
 def _build_continuity_context(
@@ -131,6 +174,22 @@ def _build_continuity_context(
     if outline_node and (outline_node.foreshadows_resolved or outline_node.foreshadows_laid):
         bridge_lines.append("伏笔必须有前因后果；不得凭空写角色已经知道未在前文出现的信息。")
 
+    # ── 全局伏笔管理表：优先传 open 状态伏笔 ────────────────────────────
+    global_foreshadows = db.query(Foreshadow).filter(
+        Foreshadow.project_id == project_id,
+        Foreshadow.status == "open",
+    ).order_by(Foreshadow.priority.desc(), Foreshadow.created_at).limit(12).all()
+    foreshadow_lines = []
+    for f in global_foreshadows:
+        parts = [f.code or "F-?", f.title]
+        if f.laid_chapter_number:
+            parts.append(f"(第{f.laid_chapter_number}章埋)")
+        if f.planned_resolve_chapter:
+            parts.append(f"→预计第{f.planned_resolve_chapter}章回收")
+        if f.description:
+            parts.append(f"：{_truncate(f.description, 60)}")
+        foreshadow_lines.append("、".join(parts[:3]) + ("".join(parts[3:]) if len(parts) > 3 else ""))
+
     ban_lines = [
         "人物境界、位置、状态不得倒退或跳变，除非本章明确写出代价、原因和过渡。",
         "不得让角色掌握前文未获得的情报；新情报必须通过看见、听见、推理或前文伏笔获得。",
@@ -147,6 +206,9 @@ def _build_continuity_context(
         "未解决承接点：" + ("；".join(bridge_lines) if bridge_lines else "无"),
         "禁止事项：" + "；".join(ban_lines),
     ]
+    if foreshadow_lines:
+        sections.insert(5, "⚠️未回收伏笔（必须可回收或持续铺垫，不得矛盾违背）：\n" +
+                         "\n".join(f"  · {l}" for l in foreshadow_lines))
     return "\n".join(sections)
 
 
@@ -255,10 +317,12 @@ async def quality_check(
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "Project not found")
+    large_context = req.model_profile == "gemini"
 
-    memories = db.query(MemoryChunk).filter(
+    memory_query = db.query(MemoryChunk).filter(
         MemoryChunk.project_id == project_id
-    ).order_by(MemoryChunk.chapter_number).limit(50).all()
+    ).order_by(MemoryChunk.chapter_number)
+    memories = memory_query.limit(200 if large_context else 50).all()
 
     settings = db.query(WorldSetting).filter(
         WorldSetting.project_id == project_id
@@ -302,10 +366,27 @@ async def quality_check(
     power_systems = db.query(PowerSystem).filter(
         PowerSystem.project_id == project_id
     ).all()
-    power_systems_summary = [
-        f"{ps.name}：最高境界={ps.levels[-1].get('name','') if ps.levels else '未知'}，主角当前={ps.protagonist_current_rank or '未知'}"
-        for ps in power_systems
-    ]
+    power_systems_summary = []
+    for ps in power_systems:
+        if large_context:
+            levels = []
+            for level in (ps.levels or []):
+                if isinstance(level, dict):
+                    rank = level.get("rank")
+                    name = level.get("name") or ""
+                    requirement = level.get("requirement") or level.get("description") or ""
+                    levels.append(f"{rank}.{name}({requirement})" if rank else f"{name}({requirement})")
+                else:
+                    levels.append(str(level))
+            rules = ps.special_rules or ps.breakthrough_condition or ps.description or ""
+            power_systems_summary.append(
+                f"{ps.name}：等级={' > '.join(levels) or '未知'}；"
+                f"主角当前={ps.protagonist_current_rank or '未知'}；规则={rules}"
+            )
+        else:
+            power_systems_summary.append(
+                f"{ps.name}：最高境界={ps.levels[-1].get('name','') if ps.levels else '未知'}，主角当前={ps.protagonist_current_rank or '未知'}"
+            )
 
     # ── 大纲上下文（本章节点）────────────────────────────
     outline_context = ""
@@ -317,6 +398,12 @@ async def quality_check(
             parts = []
             if node.summary:
                 parts.append(f"本章摘要：{node.summary}")
+            if large_context and node.hook:
+                parts.append(f"开篇钩子：{node.hook}")
+            if large_context and node.conflict:
+                parts.append(f"核心冲突：{node.conflict}")
+            if large_context and node.highlight:
+                parts.append(f"章末方向：{node.highlight}")
             if node.power_milestone:
                 parts.append(f"实力里程碑：{node.power_milestone}")
             if node.emotional_tone:
@@ -328,6 +415,18 @@ async def quality_check(
                 ]
                 parts.append(f"本章埋下伏笔：{'；'.join(foreshadow_descs)}")
             outline_context = "；".join(parts)
+
+    continuity_context = _build_continuity_context(
+        db=db,
+        project_id=project_id,
+        chapter=chapter,
+        outline_node=node if chapter.outline_node_id else None,
+    )
+    chapter_index_context = _build_chapter_index_context(
+        db=db,
+        project_id=project_id,
+        chapter=chapter,
+    )
 
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
@@ -344,6 +443,8 @@ async def quality_check(
         storylines_context=storylines_context,
         power_systems_summary=power_systems_summary,
         outline_context=outline_context,
+        continuity_context=continuity_context,
+        chapter_index_context=chapter_index_context,
     )
 
     # 缓存质检结果
@@ -368,6 +469,7 @@ async def chapter_coherence_check(
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "Project not found")
+    large_context = req.model_profile == "gemini"
 
     chapters = db.query(Chapter).filter(
         Chapter.project_id == project_id,
@@ -377,6 +479,82 @@ async def chapter_coherence_check(
         raise HTTPException(400, "存在无效章节ID，或章节不属于当前小说")
 
     chapters = sorted(chapters, key=lambda c: c.sort_order)
+    selected_numbers = [c.sort_order + 1 for c in chapters]
+    min_selected = min(selected_numbers)
+    max_selected = max(selected_numbers)
+
+    project_context_parts = []
+    if project.premise:
+        project_context_parts.append(f"作品基本面：{_truncate(project.premise, 4000 if large_context else 600)}")
+
+    settings = db.query(WorldSetting).filter(WorldSetting.project_id == project_id).all()
+    if settings:
+        setting_limit = 60 if large_context else 8
+        setting_len = 1200 if large_context else 160
+        project_context_parts.append(
+            "世界观设定：\n" + "\n".join(
+                f"- {s.title}: {_truncate(s.content, setting_len)}"
+                for s in settings[:setting_limit]
+            )
+        )
+
+    characters = db.query(Character).filter(Character.project_id == project_id).all()
+    if characters:
+        char_limit = 80 if large_context else 12
+        project_context_parts.append(
+            "人物状态：\n" + "\n".join(
+                f"- {c.name}: 境界={c.current_realm or '未知'}；位置={c.current_location or '未知'}；"
+                f"状态={c.current_status or 'alive'}；动机={_truncate(c.motivation, 180 if large_context else 50)}"
+                for c in characters[:char_limit]
+            )
+        )
+
+    storylines = db.query(StoryLine).filter(
+        StoryLine.project_id == project_id,
+        StoryLine.status.in_(["planned", "active", "climax"]),
+    ).order_by(StoryLine.sort_order).all()
+    if storylines:
+        storyline_limit = 50 if large_context else 8
+        project_context_parts.append(
+            "故事线进度：\n" + "\n".join(
+                f"- {s.name}（{s.status}）：{_truncate(s.core_conflict or s.description, 500 if large_context else 100)}；"
+                f"关键节拍={json.dumps(s.key_beats or [], ensure_ascii=False)[:1600 if large_context else 260]}"
+                for s in storylines[:storyline_limit]
+            )
+        )
+
+    indexes = db.query(ChapterIndex).filter(
+        ChapterIndex.project_id == project_id,
+        ChapterIndex.chapter_number <= max_selected,
+    ).order_by(ChapterIndex.chapter_number).all()
+    if indexes:
+        index_window = [
+            idx for idx in indexes
+            if large_context or idx.chapter_number >= max(1, min_selected - 5)
+        ]
+        project_context_parts.append(
+            "章节索引与伏笔：\n" + "\n".join(
+                f"- 第{idx.chapter_number}章：核心事件={json.dumps(idx.core_events or [], ensure_ascii=False)[:700]}; "
+                f"章末钩子={idx.ending_hook or ''}; "
+                f"未回收/已回收伏笔={json.dumps(idx.actual_foreshadows_laid or [], ensure_ascii=False)[:700]} / "
+                f"{json.dumps(idx.actual_foreshadows_resolved or [], ensure_ascii=False)[:700]}"
+                for idx in index_window
+            )
+        )
+
+    memories = db.query(MemoryChunk).filter(
+        MemoryChunk.project_id == project_id,
+        MemoryChunk.chapter_number <= max_selected,
+    ).order_by(MemoryChunk.chapter_number.desc()).limit(100 if large_context else 20).all()
+    if memories:
+        project_context_parts.append(
+            "记忆库：\n" + "\n".join(
+                f"- 第{m.chapter_number or '?'}章 {m.title or m.memory_type}: {_truncate(m.content, 700 if large_context else 120)}"
+                for m in memories
+            )
+        )
+
+    project_context = "\n\n".join(project_context_parts)
     payload = [
         {
             "id": str(c.id),
@@ -395,6 +573,7 @@ async def chapter_coherence_check(
     result = await svc.chapter_coherence_check(
         project_title=project.title,
         chapters=payload,
+        project_context=project_context,
     )
     result["selected_chapter_count"] = len(payload)
     result["selected_chapter_ids"] = [p["id"] for p in payload]
@@ -568,6 +747,7 @@ async def draft_assist_stream(
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "Project not found")
+    large_context = req.model_profile == "gemini"
 
     # ── 大纲节点（可选）──────────────────────────────
     outline_node = None
@@ -580,9 +760,15 @@ async def draft_assist_stream(
     settings = db.query(WorldSetting).filter(
         WorldSetting.project_id == project_id
     ).all()
-    world_summary = " | ".join(
-        f"{s.title}: {(s.content or '')[:70]}" for s in settings[:5]
-    )
+    if large_context:
+        world_summary = "\n".join(
+            f"- [{s.category.name if s.category else 'setting'}] {s.title}: {_truncate(s.content, 2400)}"
+            for s in settings
+        )
+    else:
+        world_summary = " | ".join(
+            f"{s.title}: {(s.content or '')[:70]}" for s in settings[:5]
+        )
 
     # ── 人物（含新增状态字段）────────────────────────────
     characters = db.query(Character).filter(
@@ -597,9 +783,10 @@ async def draft_assist_stream(
     def _char_skill_names(known_skills) -> str:
         if not known_skills:
             return ""
+        skill_limit = 10 if large_context else 3
         names = [
             sk.get("skill_name", "") if isinstance(sk, dict) else str(sk)
-            for sk in known_skills[:3]
+            for sk in known_skills[:skill_limit]
         ]
         return "、".join(n for n in names if n)
 
@@ -611,13 +798,17 @@ async def draft_assist_stream(
         display_chars = priority          # 不补全非清单人物
         chapter_manifest_names = [c.name for c in priority]
     else:
-        display_chars = characters[:6]    # 兼容旧大纲，无清单约束
+        display_chars = characters if large_context else characters[:6]    # 兼容旧大纲，无清单约束
 
     char_lines = []
     for c in display_chars:
         parts = [f"{c.name}（{c.role}"]
+        if large_context and c.alias:
+            parts.append(f"别名:{c.alias}")
         if c.current_realm:
             parts.append(f"境界:{c.current_realm}")
+        if large_context and c.realm_rank is not None:
+            parts.append(f"境界序号:{c.realm_rank}")
         if c.current_location:
             parts.append(f"位置:{c.current_location}")
         if c.current_status and c.current_status != "alive":
@@ -627,28 +818,53 @@ async def draft_assist_stream(
             parts.append(f"技能:[{skills_str}]")
         parts.append(f"）性格:{(c.personality or '')[:40]}")
         if c.motivation:
-            parts.append(f"动机:{c.motivation[:30]}")
+            parts.append(f"动机:{_truncate(c.motivation, 180 if large_context else 30)}")
+        if large_context and c.values:
+            parts.append(f"价值观:{_truncate(c.values, 180)}")
+        if large_context and c.fear:
+            parts.append(f"恐惧:{_truncate(c.fear, 140)}")
+        if large_context and c.secrets:
+            parts.append(f"秘密:{_truncate(c.secrets, 180)}")
+        if large_context and c.known_skills:
+            parts.append(f"技能明细:{json.dumps(c.known_skills, ensure_ascii=False)[:1200]}")
+        if large_context and c.owned_items:
+            parts.append(f"持有物:{json.dumps(c.owned_items, ensure_ascii=False)[:1200]}")
         char_lines.append("".join(parts))
 
-    char_summary = " | ".join(char_lines)
+    char_summary = "\n".join(char_lines) if large_context else " | ".join(char_lines)
 
     # ── 活跃故事线（draft 用）────────────────────────────
+    active_statuses = ["planned", "active", "climax"] if large_context else ["active", "climax"]
     active_storylines_draft = db.query(StoryLine).filter(
         StoryLine.project_id == project_id,
-        StoryLine.status.in_(["active", "climax"])
-    ).all()
-    storyline_summary = "；".join(
-        f"{s.name}（{s.line_type}）：{(s.core_conflict or s.description or '')[:60]}"
-        for s in active_storylines_draft[:4]
-    )
+        StoryLine.status.in_(active_statuses)
+    ).order_by(StoryLine.sort_order).all()
+    if large_context:
+        storyline_summary = "\n".join(
+            f"- {s.name}（{s.line_type}/{s.status}）："
+            f"{_truncate(s.core_conflict or s.description, 500)}；"
+            f"关键节拍={json.dumps(s.key_beats or [], ensure_ascii=False)[:1600]}"
+            for s in active_storylines_draft
+        )
+    else:
+        storyline_summary = "；".join(
+            f"{s.name}（{s.line_type}）：{(s.core_conflict or s.description or '')[:60]}"
+            for s in active_storylines_draft[:4]
+        )
 
     # ── 记忆库（最近事件）────────────────────────────
     memories = db.query(MemoryChunk).filter(
         MemoryChunk.project_id == project_id
-    ).order_by(MemoryChunk.chapter_number.desc()).limit(12).all()
-    memory_summary = " | ".join(
-        f"{m.title or m.memory_type}: {m.content[:60]}" for m in memories
-    )
+    ).order_by(MemoryChunk.chapter_number.desc()).limit(80 if large_context else 12).all()
+    if large_context:
+        memory_summary = "\n".join(
+            f"- 第{m.chapter_number or '?'}章 {m.title or m.memory_type}: {_truncate(m.content, 600)}"
+            for m in memories
+        )
+    else:
+        memory_summary = " | ".join(
+            f"{m.title or m.memory_type}: {m.content[:60]}" for m in memories
+        )
 
     # ── 上一章结尾（衔接用）──────────────────────────
     prev_chapter = db.query(Chapter).filter(
@@ -659,7 +875,8 @@ async def draft_assist_stream(
     prev_tail = ""
     if prev_chapter and prev_chapter.content:
         clean = _plain_text(prev_chapter.content)
-        prev_tail = clean[-400:] if len(clean) > 400 else clean
+        prev_limit = 3000 if large_context else 400
+        prev_tail = clean[-prev_limit:] if len(clean) > prev_limit else clean
 
     # ── 当前章节正文（strip HTML）────────────────────
     existing_content = _plain_text(chapter.content)
@@ -828,13 +1045,15 @@ def chapter_debrief(
             continue
 
         if cu.current_realm is not None:
-            char.current_realm = cu.current_realm
+            char.current_realm = cu.current_realm.strip()[:100]
         if cu.realm_rank is not None:
             char.realm_rank = cu.realm_rank
         if cu.current_location is not None:
-            char.current_location = cu.current_location
+            char.current_location = cu.current_location.strip()[:200]
         if cu.current_status is not None:
-            char.current_status = cu.current_status
+            normalized_status = _normalize_character_status(cu.current_status)
+            if normalized_status:
+                char.current_status = normalized_status
 
         # 追加新技能
         if cu.add_skill:
@@ -900,7 +1119,9 @@ def chapter_debrief(
             continue
 
         if su.status is not None:
-            sl.status = su.status
+            normalized_storyline_status = _normalize_storyline_status(su.status)
+            if normalized_storyline_status:
+                sl.status = normalized_storyline_status
         if su.append_beat:
             beats = list(sl.key_beats or [])
             beats.append({
@@ -969,7 +1190,11 @@ def chapter_debrief(
         db.add(memory)
         added_memories.append(memory.title)
 
-    db.commit()
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(400, f"章节复盘提交失败：{exc.__class__.__name__}")
 
     return {
         "ok": True,

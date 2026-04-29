@@ -253,6 +253,8 @@ export interface Chapter {
   sort_order: number
   status: 'draft' | 'writing' | 'done' | 'reviewed'
   last_quality_score?: number
+  last_quality_report?: QualityReport
+  quality_checked_at?: string
   created_at: string
   updated_at?: string
 }
@@ -305,6 +307,42 @@ export interface GenTask {
    *  rewrite_chapter: { chapterId, userPrompt, modelProfile, llm_provider_id } */
   params: Record<string, any>
   createdAt: number
+}
+
+// ── Foreshadow ────────────────────────────────────────
+export interface Foreshadow {
+  id: string
+  project_id: string
+  code?: string
+  title: string
+  description?: string
+  laid_chapter_id?: string
+  laid_chapter_number?: number
+  resolved_chapter_id?: string
+  resolved_chapter_number?: number
+  planned_resolve_chapter?: number
+  status: 'open' | 'resolved' | 'dropped'
+  priority: number   // 1–5
+  created_at: string
+  updated_at?: string
+}
+
+// ── ChapterIndex ──────────────────────────────────────
+export interface ChapterIndex {
+  id: string
+  project_id: string
+  chapter_id: string
+  chapter_number: number
+  story_day?: string
+  core_events: Array<Record<string, unknown> | string>
+  first_appearances: Array<Record<string, unknown>>
+  actual_foreshadows_laid: Array<Record<string, unknown>>
+  actual_foreshadows_resolved: Array<Record<string, unknown>>
+  ending_hook?: string
+  hook_strength: number
+  continuity_notes: Array<Record<string, unknown> | string>
+  created_at: string
+  updated_at?: string
 }
 
 // ── AI ────────────────────────────────────────────────

@@ -3,8 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from app.config import settings
 from app.database import engine, Base
-from app.routers import projects, world_settings, characters, outline, chapters, chapter_indexes, ai, generate, admin_llm, llm_public
+from app.routers import projects, world_settings, characters, outline, chapters, chapter_indexes, ai, generate, admin_llm, llm_public, admin_llm_calls
 from app.routers import storylines, power_systems, skills, items, factions
+from app.routers import foreshadows
 from app.services.llm_config import seed_llm_from_env_if_empty
 
 
@@ -133,6 +134,7 @@ app.include_router(chapter_indexes.router, prefix="/api/v1")
 app.include_router(ai.router, prefix="/api/v1")
 app.include_router(generate.router, prefix="/api/v1")
 app.include_router(admin_llm.router, prefix="/api/v1")
+app.include_router(admin_llm_calls.router, prefix="/api/v1")
 app.include_router(llm_public.router, prefix="/api/v1")
 # 新增模块路由
 app.include_router(storylines.router, prefix="/api/v1")
@@ -140,6 +142,7 @@ app.include_router(power_systems.router, prefix="/api/v1")
 app.include_router(skills.router, prefix="/api/v1")
 app.include_router(items.router, prefix="/api/v1")
 app.include_router(factions.router, prefix="/api/v1")
+app.include_router(foreshadows.router, prefix="/api/v1")
 
 
 @app.get("/health")

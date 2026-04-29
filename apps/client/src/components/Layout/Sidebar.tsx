@@ -1,6 +1,6 @@
 import React from 'react'
 import { NavLink } from 'react-router-dom'
-import { BookOpen, Users, Map, FileText, Brain, Globe } from 'lucide-react'
+import { BookOpen, Users, Map, FileText, Brain, Globe, Bookmark } from 'lucide-react'
 import clsx from 'clsx'
 
 interface Props { projectId: string }
@@ -11,7 +11,8 @@ const NAV = [
   { to: 'characters',    icon: Users,    label: '人物' },
   { to: 'worldbuilding', icon: Globe,    label: '世界' },
   { to: 'settings',      icon: Map,      label: '设定' },
-  { to: 'memory',        icon: Brain,    label: '记忆库' },
+  { to: 'memory',        icon: Brain,     label: '记忆库' },
+  { to: 'clues',         icon: Bookmark,  label: '线索' },
 ]
 
 export default function Sidebar({ projectId }: Props) {

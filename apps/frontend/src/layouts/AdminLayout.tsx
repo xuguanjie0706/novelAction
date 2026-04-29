@@ -1,5 +1,5 @@
 import { Layout, Menu, theme } from 'antd'
-import { BookOutlined, ExperimentOutlined, ReadOutlined } from '@ant-design/icons'
+import { BookOutlined, ExperimentOutlined, ReadOutlined, DatabaseOutlined } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useMemo } from 'react'
 
@@ -15,6 +15,7 @@ export default function AdminLayout() {
   const selected = useMemo(() => {
     if (loc.pathname.startsWith('/novels')) return ['/novels']
     if (loc.pathname.startsWith('/reading-review')) return ['/reading-review']
+    if (loc.pathname.startsWith('/llm-calls')) return ['/llm-calls']
     if (loc.pathname.startsWith('/llm')) return ['/llm']
     return ['/novels']
   }, [loc.pathname])
@@ -52,6 +53,12 @@ export default function AdminLayout() {
               icon: <ExperimentOutlined />,
               label: '大模型',
               onClick: () => navigate('/llm'),
+            },
+            {
+              key: '/llm-calls',
+              icon: <DatabaseOutlined />,
+              label: 'LLM调用记录',
+              onClick: () => navigate('/llm-calls'),
             },
             {
               key: '/reading-review',

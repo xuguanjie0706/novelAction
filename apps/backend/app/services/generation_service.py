@@ -238,10 +238,43 @@ class GenerationService:
     }}
   ],
   "settings": [
-    {{"title": "作品立意", "content": "作品定位、主题命题、核心矛盾、情感基调、禁忌边界（200字+）", "tags": ["立意", "主题"], "extra": {{"category": "世界背景"}}}},
-    {{"title": "世界底层规则", "content": "详细描述", "tags": ["规则"], "extra": {{"category": "规则法则"}}}},
-    {{"title": "历史谜团与禁忌", "content": "详细描述", "tags": ["历史"], "extra": {{"category": "历史传说"}}}},
-    {{"title": "大陆地图与地缘格局", "content": "详细描述", "tags": ["地图"], "extra": {{"category": "地理场景"}}}}
+    {{
+      "title": "作品立意",
+      "content": "作品定位、主题命题、核心矛盾、情感基调、禁忌边界（200字+）",
+      "tags": ["立意", "主题"],
+      "extra": {{
+        "category": "世界背景",
+        "core": {{
+          "core_concept": "一句话核心",
+          "genre_position": "类型定位",
+          "protagonist_drive": "主角驱动力",
+          "core_conflict": "核心矛盾",
+          "reader_hook": "追读钩子",
+          "emotional_tone": "情感基调",
+          "boundaries": "禁忌边界",
+          "ending_direction": "结局倾向"
+        }}
+      }}
+    }},
+    {{
+      "title": "世界底层规则",
+      "content": "详细描述",
+      "tags": ["规则"],
+      "extra": {{
+        "category": "规则法则",
+        "focus": {{
+          "summary": "核心摘要",
+          "story_function": "故事作用",
+          "conflict_seed": "冲突种子",
+          "cost_or_risk": "代价/风险",
+          "affected_people": "影响对象",
+          "exception_or_loophole": "例外/漏洞",
+          "visual_anchor": "画面锚点"
+        }}
+      }}
+    }},
+    {{"title": "历史谜团与禁忌", "content": "详细描述", "tags": ["历史"], "extra": {{"category": "历史传说", "focus": {{"summary": "核心摘要", "story_function": "故事作用", "conflict_seed": "冲突种子", "cost_or_risk": "代价/风险", "affected_people": "影响对象", "exception_or_loophole": "例外/漏洞", "visual_anchor": "画面锚点"}}}}}},
+    {{"title": "大陆地图与地缘格局", "content": "详细描述", "tags": ["地图"], "extra": {{"category": "地理场景", "focus": {{"summary": "核心摘要", "story_function": "故事作用", "conflict_seed": "冲突种子", "cost_or_risk": "代价/风险", "affected_people": "影响对象", "exception_or_loophole": "例外/漏洞", "visual_anchor": "画面锚点"}}}}}}
   ],
   "outline": [
     {{
@@ -259,6 +292,7 @@ class GenerationService:
 }}
 factions: 4~6个，涵盖主角阵营/反派/中立。active_period 只能是 early/mid/late/full。
 skills: 5~8个关键技能。items: 5~8个关键道具。characters: 8个（1主角+配角+反派）。
+settings: 作品立意必须填写 extra.core 全字段；其他设定卡必须填写 extra.focus 全字段。
 outline: 4~8卷，planned_chapters 只能是 30 或 60。"""
 
         try:
@@ -555,43 +589,112 @@ status 只能是: intact / damaged / destroyed / lost / unknown
     "title": "作品立意",
     "content": "作品定位、目标读者、类型与篇幅、主题命题、核心矛盾、情感基调、结局倾向、禁忌边界（至少200字，可落地执行）",
     "tags": ["立意", "主题"],
-    "extra": {{"category": "世界背景"}}
+    "extra": {{
+      "category": "世界背景",
+      "core": {{
+        "core_concept": "一句话讲清这本书：谁在什么压迫下，通过什么方式完成什么逆转",
+        "genre_position": "题材、目标读者、篇幅规模、同类差异化",
+        "protagonist_drive": "主角为什么必须行动，停下来会失去什么",
+        "core_conflict": "贯穿全书的核心对抗/价值冲突/压迫结构",
+        "reader_hook": "读者每十章愿意追下去的疑问、爽点和承诺",
+        "emotional_tone": "热血、压抑、克制、复仇、成长等主要味道",
+        "boundaries": "不能写偏的禁忌边界，尤其避免人物工具化和主题漂移",
+        "ending_direction": "最终收束方向、胜利形态、代价或余味"
+      }}
+    }}
   }},
   {{
     "title": "世界底层规则",
     "content": "2~3条最重要的世界法则，含违反代价与例外情况",
     "tags": ["规则", "法则"],
-    "extra": {{"category": "规则法则"}}
+    "extra": {{
+      "category": "规则法则",
+      "focus": {{
+        "summary": "最重要的世界规则一句话",
+        "story_function": "它如何制造成长压力、阶层压迫或剧情限制",
+        "conflict_seed": "这条规则会引发的核心冲突",
+        "cost_or_risk": "违反规则或钻漏洞的代价",
+        "affected_people": "受影响的阶层、势力或角色",
+        "exception_or_loophole": "例外情况、漏洞或禁区",
+        "visual_anchor": "能写进正文的规则呈现场景"
+      }}
+    }}
   }},
   {{
     "title": "历史谜团与禁忌",
     "content": "驱动长线追读的历史真相、远古秘密与禁忌边界",
     "tags": ["历史", "谜团"],
-    "extra": {{"category": "历史传说"}}
+    "extra": {{
+      "category": "历史传说",
+      "focus": {{
+        "summary": "历史谜团一句话",
+        "story_function": "它如何推动长线主线或反派计划",
+        "conflict_seed": "揭开它会撕裂哪些人物/势力关系",
+        "cost_or_risk": "追查或公开真相的代价",
+        "affected_people": "被历史真相影响的人群或势力",
+        "exception_or_loophole": "被篡改、封印或误读的关键处",
+        "visual_anchor": "遗迹、碑文、禁书、仪式等画面锚点"
+      }}
+    }}
   }},
   {{
     "title": "大陆地图与地缘格局",
     "content": "主要地区、关键地点、资源分布与地缘政治态势",
     "tags": ["地图", "地理"],
-    "extra": {{"category": "地理场景"}}
+    "extra": {{
+      "category": "地理场景",
+      "focus": {{
+        "summary": "世界空间格局一句话",
+        "story_function": "地图如何决定主角路线、升级节奏和冲突升级",
+        "conflict_seed": "资源/边界/禁地引发的地缘冲突",
+        "cost_or_risk": "穿越、占领或进入关键地区的代价",
+        "affected_people": "受地理格局影响的势力和民众",
+        "exception_or_loophole": "隐秘通道、失落区域、禁区漏洞",
+        "visual_anchor": "最有画面感的地标或危险区域"
+      }}
+    }}
   }},
   {{
     "title": "文化与民俗",
     "content": "主要文化圈、礼仪习俗、宗教信仰与日常生活质感",
     "tags": ["文化", "风俗"],
-    "extra": {{"category": "文化风俗"}}
+    "extra": {{
+      "category": "文化风俗",
+      "focus": {{
+        "summary": "文化气质一句话",
+        "story_function": "它如何影响人物选择、羞耻感、荣誉感或社会秩序",
+        "conflict_seed": "传统与主角目标之间的矛盾",
+        "cost_or_risk": "违背习俗、誓言或信仰的后果",
+        "affected_people": "最受文化规训的人群",
+        "exception_or_loophole": "被少数人利用或反叛的习俗漏洞",
+        "visual_anchor": "节庆、仪式、服饰、称谓或日常场景"
+      }}
+    }}
   }},
   {{
     "title": "稀缺资源与经济体系",
     "content": "修炼资源稀缺性与流通规则、阶层分化来源，不重复境界体系内容",
     "tags": ["资源", "经济"],
-    "extra": {{"category": "规则法则"}}
+    "extra": {{
+      "category": "规则法则",
+      "focus": {{
+        "summary": "资源分配机制一句话",
+        "story_function": "它如何支撑爽点、压迫感和升级门槛",
+        "conflict_seed": "围绕资源发生的争夺、垄断或黑市冲突",
+        "cost_or_risk": "获取、吞服、交易或透支资源的代价",
+        "affected_people": "资源体系下的受益者与被剥削者",
+        "exception_or_loophole": "主角可利用但必须付代价的破局点",
+        "visual_anchor": "拍卖、矿脉、丹市、贡赋、秘境采集等画面"
+      }}
+    }}
   }}
 ]
 要求：
 1) "作品立意"必须是第一张，聚焦创作基本面，不写世界规则细节
-2) 每张卡 content 至少120字，有可落地的名词、规则、代价
-3) 不要重复已有的境界体系或势力信息
+2) "作品立意"必须填写 extra.core 的全部字段，每个字段一句短句，不要空泛
+3) 其他卡必须填写 extra.focus 的全部字段，每个字段一句短句，先给作者可扫读抓手
+4) 每张卡 content 至少120字，有可落地的名词、规则、代价
+5) 不要重复已有的境界体系或势力信息
 只返回JSON数组，不要解释。"""
 
         raw = await self._call_with_retry(system, prompt)
@@ -602,6 +705,8 @@ status 只能是: intact / damaged / destroyed / lost / unknown
         results = []
         for item in data:
             extra = item.get("extra", {})
+            if not isinstance(extra, dict):
+                extra = {}
             s = WorldSetting(
                 project_id=project.id,
                 title=item.get("title", "设定"),
@@ -1100,12 +1205,15 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
 
         # 世界观设定卡（纯叙事类）
         for s in data.get("settings", []):
+            extra = s.get("extra", {})
+            if not isinstance(extra, dict):
+                extra = {}
             self.db.add(WorldSetting(
                 project_id=project.id,
                 title=s.get("title", "设定"),
                 content=s.get("content", ""),
                 tags=s.get("tags", []),
-                extra=s.get("extra", {}),
+                extra=extra,
             ))
 
         char_map = {}

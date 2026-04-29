@@ -49,7 +49,7 @@ def test_chapter_debrief_accepts_storyline_name_without_uuid():
 async def test_draft_prompt_includes_premise_and_full_chapter_target():
     captured = {}
 
-    async def fake_stream(system: str, prompt: str, max_tokens: int = 4096):
+    async def fake_stream(system: str, prompt: str, max_tokens: int = 4096, context=None):
         captured["system"] = system
         captured["prompt"] = prompt
         captured["max_tokens"] = max_tokens
@@ -87,7 +87,7 @@ async def test_draft_prompt_includes_premise_and_full_chapter_target():
 async def test_draft_prompt_includes_continuity_ledger():
     captured = {}
 
-    async def fake_stream(system: str, prompt: str, max_tokens: int = 4096):
+    async def fake_stream(system: str, prompt: str, max_tokens: int = 4096, context=None):
         captured["prompt"] = prompt
         yield "正文"
 
@@ -123,7 +123,7 @@ async def test_draft_prompt_includes_continuity_ledger():
 async def test_auto_debrief_extracts_memory_updates_for_foreshadow_and_information_source():
     captured = {}
 
-    async def fake_call(system: str, prompt: str, max_tokens: int = 2048):
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
         captured["prompt"] = prompt
         return """
         {
@@ -192,7 +192,7 @@ async def test_auto_debrief_extracts_memory_updates_for_foreshadow_and_informati
 
 @pytest.mark.asyncio
 async def test_auto_debrief_extracts_chapter_index():
-    async def fake_call(system: str, prompt: str, max_tokens: int = 2048):
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
         assert "章节索引" in prompt
         assert "章末钩子强度" in prompt
         return """
@@ -234,7 +234,7 @@ async def test_auto_debrief_extracts_chapter_index():
 async def test_draft_prompt_includes_chapter_index_context():
     captured = {}
 
-    async def fake_stream(system: str, prompt: str, max_tokens: int = 4096):
+    async def fake_stream(system: str, prompt: str, max_tokens: int = 4096, context=None):
         captured["prompt"] = prompt
         yield "正文"
 
@@ -259,3 +259,124 @@ async def test_draft_prompt_includes_chapter_index_context():
 
     assert "【章节速查索引】" in captured["prompt"]
     assert "未回收伏笔：黑雾与魂殿有关" in captured["prompt"]
+    assert "【章节速查索引输出模板（必须追加在正文结尾）】" in captured["prompt"]
+    assert "### ch_章节号（3位补零）　章节标题" in captured["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_gemini_draft_prompt_uses_expanded_story_context():
+    captured = {}
+
+    async def fake_stream(system: str, prompt: str, max_tokens: int = 4096, context=None):
+        captured["prompt"] = prompt
+        captured["max_tokens"] = max_tokens
+        yield "正文"
+
+    svc = AIService(profile="gemini")
+    svc._stream_ai = fake_stream
+
+    async for _ in svc.draft_assist_stream(
+        chapter_title="第18章：旧誓回响",
+        outline_hook="主角看见上一章留下的血印",
+        outline_summary="主角必须兑现旧誓并付出代价",
+        outline_conflict="从逃避承诺到主动承担",
+        outline_highlight="旧誓牵出宗门秘案",
+        outline_foreshadow="回收第16章血印伏笔",
+        prev_chapter_tail="上一章关键承诺：不得让师姐独自入阵。" + "乙" * 900 + "上一章章末钩子。",
+        world_summary="世界深层规则：誓约会反噬违约者。" + "界" * 1200,
+        character_summary="师姐状态：重伤但清醒，位置在阵门外。" + "人" * 900,
+        memory_summary="第16章血印来自宗门旧案。" + "忆" * 900,
+        existing_content="旧稿深层线索：主角袖中藏着半枚血印。" + "甲" * 1200 + "旧稿末尾。",
+        premise="读者承诺：每次逆转都必须先付代价。" + "立" * 1200,
+        continuity_context="连续性深层约束：师姐不能突然满状态参战。" + "续" * 2000,
+        chapter_index_context="第16章索引：血印未回收。" + "索" * 2000,
+    ):
+        pass
+
+    assert "上一章关键承诺：不得让师姐独自入阵" in captured["prompt"]
+    assert "旧稿深层线索：主角袖中藏着半枚血印" in captured["prompt"]
+    assert "世界深层规则：誓约会反噬违约者" in captured["prompt"]
+    assert "连续性深层约束：师姐不能突然满状态参战" in captured["prompt"]
+    assert "第16章索引：血印未回收" in captured["prompt"]
+    assert captured["max_tokens"] >= 8192
+
+
+@pytest.mark.asyncio
+async def test_gemini_quality_check_reads_full_chapter_and_continuity_context():
+    captured = {}
+
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+        captured["prompt"] = prompt
+        captured["max_tokens"] = max_tokens
+        return """
+        {
+          "overall_score": 8,
+          "dimensions": {},
+          "issues": [],
+          "suggestions": [],
+          "summary": "连贯性可读。"
+        }
+        """
+
+    svc = AIService(profile="gemini")
+    svc._call_ai = fake_call
+
+    long_chapter = "开头事件。" + "文" * 2600 + "章末关键矛盾：师姐仍在阵门外，主角独自入阵。"
+    result = await svc.quality_check(
+        chapter_content=long_chapter,
+        chapter_title="第18章：旧誓回响",
+        memories=["第16章血印来自宗门旧案。" + "忆" * 600],
+        settings_summary=["誓约规则：违约者会被血印反噬。" + "设" * 600],
+        check_types=["plot", "setting_consistency", "outline_alignment"],
+        character_states=["师姐：境界=筑基，位置=阵门外，状态=重伤，已知技能=[剑阵]"],
+        storylines_context=["宗门旧案（active）：血印来源尚未公开"],
+        power_systems_summary=["修真境界：炼气 > 筑基 > 金丹；突破必须闭关"],
+        outline_context="本章必须兑现旧誓，不能让师姐突然参战。",
+        continuity_context="连续性账本：师姐不能突然满状态参战。",
+        chapter_index_context="第16章索引：血印伏笔未回收。",
+    )
+
+    assert result["overall_score"] == 8
+    assert "章末关键矛盾：师姐仍在阵门外" in captured["prompt"]
+    assert "连续性账本：师姐不能突然满状态参战" in captured["prompt"]
+    assert "第16章索引：血印伏笔未回收" in captured["prompt"]
+    assert "修真境界：炼气 > 筑基 > 金丹" in captured["prompt"]
+    assert captured["max_tokens"] >= 4096
+
+
+@pytest.mark.asyncio
+async def test_gemini_chapter_coherence_uses_full_text_and_project_context():
+    captured = {}
+
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+        captured["prompt"] = prompt
+        captured["max_tokens"] = max_tokens
+        return """
+        {
+          "title_match_score": 8,
+          "continuity_score": 8,
+          "overall_score": 8,
+          "chapter_evaluations": [],
+          "cross_chapter_issues": [],
+          "suggestions": [],
+          "summary": "连贯。"
+        }
+        """
+
+    svc = AIService(profile="gemini")
+    svc._call_ai = fake_call
+
+    long_content = "开章承诺。" + "章" * 2600 + "末尾事实：主角还不知道魂殿真名。"
+    result = await svc.chapter_coherence_check(
+        project_title="苍穹丹祖",
+        chapters=[
+            {"id": "c1", "sort_order": 0, "title": "第1章", "content": long_content},
+            {"id": "c2", "sort_order": 1, "title": "第2章", "content": "主角只看见黑雾，并未听见魂殿二字。"},
+        ],
+        project_context="项目事实：魂殿真名尚未公开，角色不得凭空知道。",
+    )
+
+    assert result["overall_score"] == 8
+    assert "末尾事实：主角还不知道魂殿真名" in captured["prompt"]
+    assert "项目事实：魂殿真名尚未公开" in captured["prompt"]
+    assert captured["max_tokens"] >= 8192

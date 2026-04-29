@@ -7,8 +7,9 @@ import CharactersPage from './CharactersPage'
 import SettingsPage from './SettingsPage'
 import MemoryPage from './MemoryPage'
 import WorldBuildingPage from './WorldBuildingPage'
+import CluesPage from './CluesPage'
 
-const TABS = ['outline', 'write', 'characters', 'worldbuilding', 'settings', 'memory'] as const
+const TABS = ['outline', 'write', 'characters', 'worldbuilding', 'settings', 'memory', 'clues'] as const
 type Tab = (typeof TABS)[number]
 
 function isTab(s: string | undefined): s is Tab {
@@ -55,6 +56,7 @@ export default function ProjectCachedViews() {
       {wrap('worldbuilding', <WorldBuildingPage />)}
       {wrap('settings',      <SettingsPage />)}
       {wrap('memory',        <MemoryPage />)}
+      {wrap('clues',         <CluesPage />)}
     </div>
   )
 }

@@ -71,6 +71,9 @@ export default function ReadingReviewPage() {
 
   const [coherenceLoading, setCoherenceLoading] = useState(false)
   const [selectedCoherenceChapters, setSelectedCoherenceChapters] = useState<string[]>([])
+  const [rangeStartId, setRangeStartId] = useState<string>()
+  const [rangeEndId, setRangeEndId] = useState<string>()
+  const [anchorChapterId, setAnchorChapterId] = useState<string>()
   const [coherenceResult, setCoherenceResult] = useState<ChapterCoherenceResult | null>(null)
   const [saveLoading, setSaveLoading] = useState(false)
   const [reportNameForm] = Form.useForm<{ name: string }>()
@@ -153,10 +156,23 @@ export default function ReadingReviewPage() {
     setQualityReport(null)
     setCoherenceResult(null)
     setSelectedCoherenceChapters([])
+    setRangeStartId(undefined)
+    setRangeEndId(undefined)
+    setAnchorChapterId(undefined)
     setCompareIds([])
     void loadChapters(projectId)
     void loadHistory(projectId)
   }, [projectId, loadChapters, loadHistory])
+
+  useEffect(() => {
+    if (chapters.length === 0) return
+    if (!rangeStartId) setRangeStartId(chapters[0].id)
+    if (!rangeEndId) setRangeEndId(chapters[Math.min(chapters.length - 1, 9)].id)
+    if (!anchorChapterId) setAnchorChapterId(chapters[Math.min(chapters.length - 1, 9)].id)
+    if (selectedCoherenceChapters.length === 0) {
+      setSelectedCoherenceChapters(chapters.slice(0, 10).map((c) => c.id))
+    }
+  }, [anchorChapterId, chapters, rangeEndId, rangeStartId, selectedCoherenceChapters.length])
 
   const runQualityCheck = async () => {
     if (!projectId || !selectedChapterId) {
@@ -208,6 +224,26 @@ export default function ReadingReviewPage() {
       setCoherenceLoading(false)
     }
   }
+
+  const applyContinuousRange = useCallback((startId?: string, endId?: string) => {
+    if (!startId || !endId) return
+    const startIndex = chapters.findIndex((c) => c.id === startId)
+    const endIndex = chapters.findIndex((c) => c.id === endId)
+    if (startIndex < 0 || endIndex < 0) return
+    const [from, to] = startIndex <= endIndex ? [startIndex, endIndex] : [endIndex, startIndex]
+    setSelectedCoherenceChapters(chapters.slice(from, to + 1).map((c) => c.id))
+  }, [chapters])
+
+  const applyAnchorWindow = useCallback((size: number, direction: 'prev' | 'next') => {
+    if (!anchorChapterId) return
+    const anchorIndex = chapters.findIndex((c) => c.id === anchorChapterId)
+    if (anchorIndex < 0) return
+    const from = direction === 'prev' ? Math.max(0, anchorIndex - size + 1) : anchorIndex
+    const to = direction === 'prev' ? anchorIndex : Math.min(chapters.length - 1, anchorIndex + size - 1)
+    setRangeStartId(chapters[from]?.id)
+    setRangeEndId(chapters[to]?.id)
+    setSelectedCoherenceChapters(chapters.slice(from, to + 1).map((c) => c.id))
+  }, [anchorChapterId, chapters])
 
   const saveCoherenceReport = async () => {
     if (!projectId || !coherenceResult) {
@@ -280,6 +316,13 @@ export default function ReadingReviewPage() {
   const compareRows = historyRows.filter((row) => compareIds.includes(row.id))
   const compareA = compareRows[0]
   const compareB = compareRows[1]
+  const selectedCoherenceChapterNos = chapters
+    .filter((c) => selectedCoherenceChapters.includes(c.id))
+    .map((c) => c.sort_order + 1)
+    .sort((a, b) => a - b)
+  const selectedRangeHint = selectedCoherenceChapterNos.length
+    ? `第${selectedCoherenceChapterNos[0]}章 ~ 第${selectedCoherenceChapterNos[selectedCoherenceChapterNos.length - 1]}章`
+    : '尚未选择章节'
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
@@ -456,6 +499,47 @@ export default function ReadingReviewPage() {
                       <Button onClick={() => setSelectedCoherenceChapters(chapters.slice(-5).map((c) => c.id))}>最近5章</Button>
                       <Button onClick={() => setSelectedCoherenceChapters(chapters.slice(-10).map((c) => c.id))}>最近10章</Button>
                     </Space>
+                    <Space wrap>
+                      <Select
+                        style={{ width: 260 }}
+                        placeholder="起始章节"
+                        options={chapterOptions}
+                        value={rangeStartId}
+                        onChange={(val) => {
+                          setRangeStartId(val)
+                          applyContinuousRange(val, rangeEndId)
+                        }}
+                      />
+                      <Select
+                        style={{ width: 260 }}
+                        placeholder="结束章节"
+                        options={chapterOptions}
+                        value={rangeEndId}
+                        onChange={(val) => {
+                          setRangeEndId(val)
+                          applyContinuousRange(rangeStartId, val)
+                        }}
+                      />
+                      <Button onClick={() => applyContinuousRange(rangeStartId, rangeEndId)}>应用连续范围</Button>
+                    </Space>
+                    <Space wrap>
+                      <Select
+                        style={{ width: 260 }}
+                        placeholder="先选一个锚点章节"
+                        options={chapterOptions}
+                        value={anchorChapterId}
+                        onChange={setAnchorChapterId}
+                      />
+                      <Button onClick={() => applyAnchorWindow(3, 'prev')}>选中该章及前2章</Button>
+                      <Button onClick={() => applyAnchorWindow(5, 'prev')}>选中该章及前4章</Button>
+                      <Button onClick={() => applyAnchorWindow(10, 'prev')}>选中该章及前9章</Button>
+                      <Button onClick={() => applyAnchorWindow(3, 'next')}>选中该章及后2章</Button>
+                      <Button onClick={() => applyAnchorWindow(5, 'next')}>选中该章及后4章</Button>
+                      <Button onClick={() => applyAnchorWindow(10, 'next')}>选中该章及后9章</Button>
+                    </Space>
+                    <Typography.Text type="secondary">
+                      已选 {selectedCoherenceChapters.length} 章（{selectedRangeHint}）
+                    </Typography.Text>
                     <Checkbox.Group
                       style={{ width: '100%' }}
                       value={selectedCoherenceChapters}

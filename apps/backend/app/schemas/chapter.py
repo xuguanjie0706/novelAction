@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 import uuid
 
@@ -28,6 +28,8 @@ class ChapterOut(BaseModel):
     sort_order: int
     status: str
     last_quality_score: Optional[float]
+    last_quality_report: Optional[Dict[str, Any]] = None
+    quality_checked_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime]
 

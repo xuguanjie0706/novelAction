@@ -1,9 +1,18 @@
 import React, { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Trash2, Globe, Map, BookOpen, Landmark, Scale, Folder } from 'lucide-react'
+import { Plus, Trash2, Globe, Map, BookOpen, Landmark, Scale, Folder, Target, Compass, Flame, Eye, ShieldCheck, Flag, Sparkles } from 'lucide-react'
 import { projectsApi, settingsApi } from '../api/client'
 import { useAppStore } from '../store'
 import type { WorldSetting } from '../types'
+import {
+  getPremiseCoreFromExtra,
+  getSettingFocusFromExtra,
+  getSettingPreview,
+  hasPremiseCore,
+  hasSettingFocus,
+  type PremiseCore,
+  type SettingFocus,
+} from '../utils/settingsPresentation'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 
@@ -27,6 +36,37 @@ const CATEGORY_KEYS = CATEGORIES.map(c => c.key).filter(k => k !== 'all') as Exc
 
 const GEO_LOCATION_TYPES = ['城市/城镇', '宗门/门派', '王宫/皇城', '远古遗迹', '秘境/异空间', '山脉/荒野', '大陆/地区', '其他']
 const GEO_ALIGNMENT_OPTIONS = ['无明确势力', '主角阵营', '反派阵营', '中立势力']
+
+const PREMISE_CORE_FIELDS: {
+  key: keyof PremiseCore
+  label: string
+  icon: React.ElementType
+  multiline?: boolean
+  placeholder: string
+}[] = [
+  { key: 'core_concept', label: '一句话核心', icon: Sparkles, multiline: true, placeholder: '这本书最核心的读者承诺：谁在什么压迫下，通过什么方式完成什么逆转。' },
+  { key: 'genre_position', label: '类型定位', icon: BookOpen, placeholder: '题材、读者、篇幅、同类差异化。' },
+  { key: 'protagonist_drive', label: '主角驱动力', icon: Flame, placeholder: '主角为什么必须行动，停下来会失去什么。' },
+  { key: 'core_conflict', label: '核心矛盾', icon: Target, multiline: true, placeholder: '贯穿全书的对抗关系、压迫结构或价值冲突。' },
+  { key: 'reader_hook', label: '追读钩子', icon: Eye, multiline: true, placeholder: '读者每十章想继续追的疑问、爽点或承诺。' },
+  { key: 'emotional_tone', label: '情感基调', icon: Compass, placeholder: '热血、压抑、克制、复仇、成长等主要味道。' },
+  { key: 'boundaries', label: '禁忌边界', icon: ShieldCheck, multiline: true, placeholder: '哪些方向不能写偏，哪些角色/主题不能工具化。' },
+  { key: 'ending_direction', label: '结局倾向', icon: Flag, placeholder: '最终收束的胜利形态、代价或余味。' },
+]
+
+const FOCUS_FIELDS: {
+  key: keyof SettingFocus
+  label: string
+  placeholder: string
+}[] = [
+  { key: 'summary', label: '核心摘要', placeholder: '这张卡一句话讲清楚什么。' },
+  { key: 'story_function', label: '故事作用', placeholder: '它服务哪条剧情、人物弧或读者期待。' },
+  { key: 'conflict_seed', label: '冲突种子', placeholder: '它会制造什么矛盾、悬念或选择。' },
+  { key: 'cost_or_risk', label: '代价/风险', placeholder: '违反、使用或接近它会付出什么代价。' },
+  { key: 'affected_people', label: '影响对象', placeholder: '哪些阶层、势力或角色会被它影响。' },
+  { key: 'exception_or_loophole', label: '例外/漏洞', placeholder: '有没有漏洞、禁区、例外情况。' },
+  { key: 'visual_anchor', label: '画面锚点', placeholder: '一个能被写进正文的视觉/场景锚点。' },
+]
 
 // ─────────────────────────────────────────────────────────
 //  工具函数
@@ -125,6 +165,96 @@ function GeoStructuredFields({ extra, onChange }: {
   )
 }
 
+function PremiseCorePanel({
+  core,
+  onChange,
+}: {
+  core: PremiseCore
+  onChange: (key: keyof PremiseCore, val: string) => void
+}) {
+  const hasContent = hasPremiseCore(core)
+
+  return (
+    <div className="bg-white rounded-xl p-5 border border-amber-100 shadow-sm space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-sm font-bold text-gray-900">核心设定圣经</div>
+          <p className="text-xs text-gray-400 mt-1">先抓住这本书的方向，再看下面的详细描述。</p>
+        </div>
+        <span className={clsx(
+          'text-xs px-2 py-1 rounded-lg border shrink-0',
+          hasContent ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-gray-50 text-gray-400 border-gray-200'
+        )}>
+          {hasContent ? '已结构化' : '待提炼'}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {PREMISE_CORE_FIELDS.map(({ key, label, icon: Icon, multiline, placeholder }) => (
+          <Field key={key} label={label}>
+            <div className="relative">
+              <Icon size={14} className="absolute left-3 top-2.5 text-amber-500" />
+              {multiline ? (
+                <textarea
+                  value={core[key]}
+                  onChange={e => onChange(key, e.target.value)}
+                  rows={key === 'core_concept' ? 2 : 3}
+                  placeholder={placeholder}
+                  className="w-full border border-gray-200 rounded-lg pl-8 pr-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-400 resize-none leading-relaxed"
+                />
+              ) : (
+                <input
+                  value={core[key]}
+                  onChange={e => onChange(key, e.target.value)}
+                  placeholder={placeholder}
+                  className="w-full border border-gray-200 rounded-lg pl-8 pr-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-400"
+                />
+              )}
+            </div>
+          </Field>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function FocusPanel({
+  focus,
+  onChange,
+}: {
+  focus: SettingFocus
+  onChange: (key: keyof SettingFocus, val: string) => void
+}) {
+  const visibleFields = hasSettingFocus(focus)
+    ? FOCUS_FIELDS
+    : FOCUS_FIELDS.slice(0, 4)
+
+  return (
+    <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-sm font-bold text-gray-900">设定焦点</div>
+          <p className="text-xs text-gray-400 mt-1">把长设定拆成可扫读的写作抓手。</p>
+        </div>
+        <span className="text-xs text-gray-400 shrink-0">{visibleFields.length} 项</span>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {visibleFields.map(({ key, label, placeholder }) => (
+          <Field key={key} label={label}>
+            <TArea
+              value={focus[key]}
+              onChange={v => onChange(key, v)}
+              rows={key === 'summary' ? 2 : 3}
+              placeholder={placeholder}
+            />
+          </Field>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ─────────────────────────────────────────────────────────
 //  设定卡详情
 // ─────────────────────────────────────────────────────────
@@ -165,6 +295,18 @@ function SettingDetail({
   const setExtra = (key: string, val: string) =>
     setForm(f => ({ ...f, extra: { ...f.extra, [key]: val } }))
 
+  const setNestedExtra = (section: 'core' | 'focus', key: string, val: string) =>
+    setForm(f => ({
+      ...f,
+      extra: {
+        ...f.extra,
+        [section]: {
+          ...((f.extra[section] && typeof f.extra[section] === 'object') ? f.extra[section] : {}),
+          [key]: val,
+        },
+      },
+    }))
+
   const addTag = () => {
     const t = tagInput.trim()
     if (!t || form.tags.includes(t)) return
@@ -173,9 +315,12 @@ function SettingDetail({
   }
   const removeTag = (t: string) => setForm(f => ({ ...f, tags: f.tags.filter(x => x !== t) }))
 
-  const category = (form.extra.category as Exclude<CategoryKey, 'all'>) ?? '其他'
+  const isPremise = isPremiseSetting(form.title, form.tags)
+  const category = (CATEGORY_KEYS.includes(form.extra.category as any) ? form.extra.category : '其他') as Exclude<CategoryKey, 'all'>
   const catMeta = getCategoryMeta(category)
   const CatIcon = catMeta.icon
+  const premiseCore = getPremiseCoreFromExtra(form.extra)
+  const settingFocus = getSettingFocusFromExtra(form.extra)
 
   const CONTENT_PLACEHOLDER: Record<string, string> = {
     '世界背景': '宏观世界背景、宇宙构成、天地法则...',
@@ -232,10 +377,22 @@ function SettingDetail({
         <GeoStructuredFields extra={form.extra} onChange={setExtra} />
       )}
 
+      {isPremise ? (
+        <PremiseCorePanel
+          core={premiseCore}
+          onChange={(key, value) => setNestedExtra('core', key, value)}
+        />
+      ) : (
+        <FocusPanel
+          focus={settingFocus}
+          onChange={(key, value) => setNestedExtra('focus', key, value)}
+        />
+      )}
+
       {/* 内容 */}
       <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm space-y-2">
         <div className="text-xs font-semibold text-gray-500">
-          {category === '地理场景' ? '场景描写 / 补充说明' : '详细描述'}
+          {isPremise ? '完整立意说明' : category === '地理场景' ? '场景描写 / 补充说明' : '详细描述'}
         </div>
         <TArea value={form.content} onChange={v => setForm(f => ({ ...f, content: v }))} rows={10}
           placeholder={CONTENT_PLACEHOLDER[category] ?? CONTENT_PLACEHOLDER['其他']} />
@@ -329,7 +486,13 @@ export default function SettingsPage() {
     } catch { toast.error('删除失败') }
   }
 
-  const filtered = activeCat === 'all' ? settings : settings.filter(s => getCategory(s) === activeCat)
+  const orderedSettings = [...settings].sort((a, b) => {
+    const aPremise = isPremiseSetting(a.title, a.tags)
+    const bPremise = isPremiseSetting(b.title, b.tags)
+    if (aPremise !== bPremise) return aPremise ? -1 : 1
+    return 0
+  })
+  const filtered = activeCat === 'all' ? orderedSettings : orderedSettings.filter(s => getCategory(s) === activeCat)
   const countByCategory = (k: CategoryKey) =>
     k === 'all' ? settings.length : settings.filter(s => getCategory(s) === k).length
 
@@ -381,9 +544,9 @@ export default function SettingsPage() {
                 <Icon size={14} className={meta.color} />
                 <div className="min-w-0">
                   <div className="text-sm font-medium text-gray-800 truncate">{s.title}</div>
-                  {s.tags.length > 0 && (
-                    <div className="text-xs text-gray-400 truncate">{s.tags.slice(0, 2).join(' · ')}</div>
-                  )}
+                  <div className="text-xs text-gray-400 truncate">
+                    {getSettingPreview(s) || s.tags.slice(0, 2).join(' · ') || meta.label}
+                  </div>
                 </div>
               </button>
             )

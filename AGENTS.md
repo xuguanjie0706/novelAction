@@ -73,6 +73,43 @@ AI_MODEL=gemini-2.0-flash
 - Gemini 支持 100 万 token context，可以切换到**方案 B（单次全量生成）**
 - `generation_service.py` 里 `mode="single_shot"` 已预留，切换只需改前端请求参数
 
+### Gemini 章节写作与质检核心流程
+
+当前正文生成、单章质检、多章连贯性检测都按 **model_profile** 分流：
+
+- `local/default`：保留 qwen3:8b 的短上下文策略，严格裁剪 prompt，避免 8k context 溢出。
+- `gemini`：启用长上下文策略，不优先考虑 token 节省，而优先保证故事事实、人物状态、伏笔和章节承接完整。
+
+核心链路如下：
+
+```
+章节写作请求
+  → apps/backend/app/routers/ai.py 聚合项目事实
+  → AIService.draft_assist_stream 组装长上下文 prompt
+  → Gemini 流式生成正文 + 章节速查索引
+  → 写完后 chapter-debrief / auto-extract 产出记忆与章节索引
+  → 下一章生成与质检继续读取这些事实
+```
+
+生成正文时，Gemini 分支会尽量传入：
+
+- 作品基本面：`Project.premise`
+- 本章大纲：开篇钩子、核心事件、人物变化、章末方向、实力里程碑、情感基调、伏笔要求
+- 世界观设定：更多 `WorldSetting` 完整内容
+- 人物事实：境界、位置、状态、技能、道具、价值观、恐惧、秘密等
+- 故事线：planned / active / climax 的故事线与关键节拍
+- 近期记忆：更多 `MemoryChunk`
+- 上一章尾部：Gemini 读取更长的前章结尾用于情绪和因果衔接
+- 连续性账本：人物状态、力量体系、最近章节、未解决承接点、禁止事项
+- 章节速查索引：最近章节核心事件、章末钩子、未回收伏笔
+
+质检分两层：
+
+- **单章质检** `/quality-check`：Gemini 读取完整正文，结合连续性账本、章节索引、人物状态、故事线和力量体系，重点查境界/技能/位置/状态/信息来源是否矛盾。
+- **多章连贯性检测** `/chapter-coherence-check`：Gemini 读取所选章节更完整正文，并额外读取项目事实、世界观、人物状态、故事线、章节索引和记忆库，用来检查标题兑现、跨章因果、时间线、人物状态突变和伏笔承接。
+
+重要原则：**Gemini 路径不要回退到“小模型省 token”思路。** 如果连贯性差，优先检查是否漏传了结构化事实（章节索引、复盘记忆、人物状态、故事线节拍、伏笔表），而不是继续缩短 prompt。
+
 ---
 
 ## 数据模型速查

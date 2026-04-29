@@ -10,8 +10,17 @@ interface Props { projectId: string }
 
 type Tab = 'check' | 'suggest' | 'memory'
 
+const DIMENSION_LABELS: Record<string, string> = {
+  plot: '情节',
+  character: '人物',
+  setting_consistency: '设定一致性',
+  pacing: '节奏',
+  hooks: '悬念',
+  outline_alignment: '大纲对齐',
+}
+
 export default function AIPanel({ projectId }: Props) {
-  const { setAiPanelOpen, activeChapterId, memories, setMemories } = useAppStore()
+  const { setAiPanelOpen, activeChapterId, memories, setMemories, chapters } = useAppStore()
   const [tab, setTab] = useState<Tab>('check')
   const [loading, setLoading] = useState(false)
   const [report, setReport] = useState<QualityReport | null>(null)
@@ -29,6 +38,18 @@ export default function AIPanel({ projectId }: Props) {
       : [],
     [activeChapterId, memories],
   )
+
+  useEffect(() => {
+    if (!activeChapterId) {
+      setReport(null)
+      return
+    }
+    const chapter = chapters.find((c) => c.id === activeChapterId)
+    const cached = chapter && 'last_quality_report' in chapter
+      ? (chapter as { last_quality_report?: QualityReport }).last_quality_report
+      : undefined
+    setReport(cached ?? null)
+  }, [activeChapterId, chapters])
 
   // ── 质检 ──────────────────────────────────────────────
   const runQualityCheck = async () => {
@@ -117,6 +138,8 @@ export default function AIPanel({ projectId }: Props) {
     fail: 'bg-red-100 text-red-600',
   }[status] ?? 'bg-gray-100 text-gray-600')
 
+  const dimensionLabel = (key: string) => DIMENSION_LABELS[key] ?? key
+
   return (
     <aside className="w-80 flex flex-col border-l border-gray-100 bg-white shrink-0">
       {/* 标题栏 */}
@@ -160,7 +183,7 @@ export default function AIPanel({ projectId }: Props) {
               disabled={loading}
               className="w-full py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-sm rounded-lg"
             >
-              {loading ? '检查中...' : '开始质检当前章节'}
+              {loading ? '检查中...' : report ? '重新质检当前章节' : '开始质检当前章节'}
             </button>
             {report && (
               <>
@@ -178,7 +201,7 @@ export default function AIPanel({ projectId }: Props) {
                         {dim.score}
                       </span>
                       <div>
-                        <div className="text-xs font-medium text-gray-700 capitalize">{key}</div>
+                        <div className="text-xs font-medium text-gray-700">{dimensionLabel(key)}</div>
                         <div className="text-xs text-gray-500">{dim.comment}</div>
                       </div>
                     </div>

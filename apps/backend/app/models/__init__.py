@@ -13,6 +13,8 @@ from app.models.skill import Skill
 from app.models.item import Item
 from app.models.faction import Faction
 from app.models.chapter_coherence_report import ChapterCoherenceReport
+from app.models.foreshadow import Foreshadow
+from app.models.llm_call_log import LlmCallLog
 
 __all__ = [
     "Project",
@@ -29,4 +31,6 @@ __all__ = [
     "Item",
     "Faction",
     "ChapterCoherenceReport",
+    "Foreshadow",
+    "LlmCallLog",
 ]

@@ -5,6 +5,7 @@ from app.schemas.outline import OutlineNodeCreate, OutlineNodeUpdate, OutlineNod
 from app.schemas.chapter import ChapterCreate, ChapterUpdate, ChapterOut, ChapterVersionOut
 from app.schemas.chapter_index import ChapterIndexCreate, ChapterIndexUpdate, ChapterIndexOut
 from app.schemas.memory import MemoryChunkCreate, MemoryChunkOut
+from app.schemas.foreshadow import ForeshadowCreate, ForeshadowUpdate, ForeshadowOut
 
 __all__ = [
     "ProjectCreate", "ProjectUpdate", "ProjectOut",
@@ -14,4 +15,5 @@ __all__ = [
     "ChapterCreate", "ChapterUpdate", "ChapterOut", "ChapterVersionOut",
     "ChapterIndexCreate", "ChapterIndexUpdate", "ChapterIndexOut",
     "MemoryChunkCreate", "MemoryChunkOut",
+    "ForeshadowCreate", "ForeshadowUpdate", "ForeshadowOut",
 ]

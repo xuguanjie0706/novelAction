@@ -3,14 +3,14 @@ import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import CharacterCount from '@tiptap/extension-character-count'
 import Placeholder from '@tiptap/extension-placeholder'
-import { chaptersApi, aiApi, storylinesApi } from '../../api/client'
+import { chaptersApi, aiApi, storylinesApi, foreshadowsApi, chapterIndexesApi } from '../../api/client'
 import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload, llmProviderIdFromRoute } from '../../store'
-import type { Chapter, Character, OutlineNode, StoryLine } from '../../types'
+import type { Chapter, Character, OutlineNode, StoryLine, Foreshadow, ChapterIndex } from '../../types'
 import toast from 'react-hot-toast'
 import {
   BookOpen, Sparkles, X, Zap, Target, Users, Flag, GitBranch, RefreshCw,
-  Maximize2, Minimize2, Clock, ChevronDown,
-  Feather, PenLine, ListPlus,
+  Maximize2, Minimize2, Clock, ChevronDown, ChevronRight, Anchor,
+  Feather, PenLine, ListPlus, CheckCircle, Circle,
   CheckSquare, TrendingUp, MapPin, Swords, Bot, Save, Trash2,
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -149,6 +149,20 @@ export default function ChapterEditor({
   const [aiSuggestedCharIds, setAiSuggestedCharIds]   = useState<Set<string>>(new Set())
   const [aiSuggestedSlIds, setAiSuggestedSlIds]       = useState<Set<string>>(new Set())
   const [aiDebriefSummary, setAiDebriefSummary]       = useState('')
+
+  // ── 底部伏笔面板 ───────────────────────────────────────────────────
+  const [bottomPanelOpen, setBottomPanelOpen]   = useState(false)
+  const [openForeshadows, setOpenForeshadows]   = useState<Foreshadow[]>([])
+  const [currentChIndex, setCurrentChIndex]     = useState<ChapterIndex | null>(null)
+
+  // 切换章节时重新拉取伏笔 + 情节档案
+  useEffect(() => {
+    if (!projectId) return
+    foreshadowsApi.list(projectId, 'open').then(r => setOpenForeshadows(r.data)).catch(() => {})
+    chapterIndexesApi.getByChapter(projectId, chapter.id)
+      .then(r => setCurrentChIndex(r.data))
+      .catch(() => setCurrentChIndex(null))
+  }, [projectId, chapter.id])
 
   // ── 写作统计 ───────────────────────────────────────────────────────
   const sessionStartWords = useRef<number>(chapter.word_count)
@@ -947,6 +961,104 @@ export default function ChapterEditor({
                 </div>
 
               </div>
+            </div>
+          )}
+
+          {/* ── 底部伏笔快查面板（专注模式隐藏）── */}
+          {!focusMode && (openForeshadows.length > 0 || currentChIndex) && (
+            <div className="border-t border-amber-100 bg-amber-50/40 shrink-0">
+              {/* 折叠头 */}
+              <button
+                type="button"
+                onClick={() => setBottomPanelOpen(v => !v)}
+                className="w-full flex items-center justify-between px-4 py-2 text-xs text-amber-700 hover:bg-amber-50 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Anchor size={12} />
+                  <span className="font-medium">线索面板</span>
+                  {openForeshadows.length > 0 && (
+                    <span className="bg-amber-200 text-amber-800 text-[10px] px-1.5 py-0.5 rounded-full font-medium">
+                      {openForeshadows.length} 条未回收伏笔
+                    </span>
+                  )}
+                  {currentChIndex && (
+                    <span className="bg-blue-100 text-blue-600 text-[10px] px-1.5 py-0.5 rounded-full font-medium">
+                      情节档案已生成
+                    </span>
+                  )}
+                </div>
+                {bottomPanelOpen
+                  ? <ChevronDown size={12} className="text-amber-400" />
+                  : <ChevronRight size={12} className="text-amber-400" />}
+              </button>
+
+              {/* 展开内容 */}
+              {bottomPanelOpen && (
+                <div className="px-4 pb-3 space-y-3 max-h-52 overflow-auto">
+                  {/* 未回收伏笔列表 */}
+                  {openForeshadows.length > 0 && (
+                    <div>
+                      <div className="text-[10px] font-semibold text-amber-600 uppercase tracking-wider mb-1.5">
+                        未回收伏笔 · {openForeshadows.length} 条
+                      </div>
+                      <div className="space-y-1">
+                        {openForeshadows.map(f => (
+                          <div key={f.id} className="flex items-start gap-2 text-xs">
+                            <Circle size={8} className="text-amber-400 shrink-0 mt-0.5" />
+                            <div className="min-w-0">
+                              <span className="font-medium text-gray-700">{f.title}</span>
+                              {f.code && (
+                                <span className="ml-1.5 font-mono text-[10px] text-gray-400">{f.code}</span>
+                              )}
+                              {f.planned_resolve_chapter && (
+                                <span className="ml-1.5 text-[10px] text-amber-500">
+                                  预计第 {f.planned_resolve_chapter} 章回收
+                                </span>
+                              )}
+                              {f.description && (
+                                <p className="text-[11px] text-gray-400 mt-0.5 truncate">{f.description}</p>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 当前章情节档案摘要 */}
+                  {currentChIndex && (
+                    <div>
+                      <div className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider mb-1.5">
+                        情节档案 · 第 {currentChIndex.chapter_number} 章
+                      </div>
+                      {currentChIndex.core_events?.length > 0 && (
+                        <div className="space-y-0.5">
+                          {currentChIndex.core_events.slice(0, 3).map((ev, i) => (
+                            <div key={i} className="text-[11px] text-gray-600 flex gap-1.5">
+                              <span className="text-blue-300 shrink-0">•</span>
+                              <span>{typeof ev === 'string' ? ev : JSON.stringify(ev)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {currentChIndex.ending_hook && (
+                        <p className="text-[11px] text-gray-400 italic mt-1">
+                          钩子："{currentChIndex.ending_hook}"
+                        </p>
+                      )}
+                      {currentChIndex.actual_foreshadows_laid?.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {currentChIndex.actual_foreshadows_laid.map((f, i) => (
+                            <span key={i} className="text-[10px] bg-amber-50 text-amber-600 border border-amber-100 px-1.5 py-0.5 rounded">
+                              埋：{typeof f === 'string' ? f : (f.description as string)}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

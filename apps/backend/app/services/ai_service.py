@@ -3,6 +3,8 @@ AI Service — 统一使用 OpenAI 兼容协议
 支持本地 Ollama (qwen3:8b) 及任意自定义 base_url + api_key 的端点
 """
 import json
+import re
+import time
 from typing import List, AsyncGenerator, Optional
 from uuid import UUID
 
@@ -10,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.services.llm_config import normalize_openai_base_url, resolve_gemini_connection
+from app.services.llm_call_log import log_llm_call
 
 
 class AIService:
@@ -34,6 +37,27 @@ class AIService:
             else:
                 self._gemini_unconfigured = True
         self._client = None
+
+    def _large_context_enabled(self) -> bool:
+        return self.profile == "gemini"
+
+    def _clip_context(
+        self,
+        text: str | None,
+        local_limit: int,
+        large_limit: int,
+        from_end: bool = False,
+    ) -> str:
+        clean = (text or "").strip()
+        if not clean:
+            return ""
+        limit = large_limit if self._large_context_enabled() else local_limit
+        if len(clean) <= limit:
+            return clean
+        return clean[-limit:] if from_end else clean[:limit]
+
+    def _plain_text(self, content: str | None) -> str:
+        return re.sub(r"<[^>]+>", "", content or "").strip()
 
     def _get_client(self):
         """
@@ -68,24 +92,63 @@ class AIService:
         storylines_context: List[str] = None,
         power_systems_summary: List[str] = None,
         outline_context: str = "",
+        continuity_context: str = "",
+        chapter_index_context: str = "",
     ) -> dict:
-        memory_text = "\n".join(f"- {m}" for m in memories[:20]) if memories else "暂无记忆条目"
-        settings_text = "\n".join(f"- {s}" for s in settings_summary[:8]) if settings_summary else "暂无设定"
+        large_context = self._large_context_enabled()
+        memory_count = 120 if large_context else 20
+        setting_count = 80 if large_context else 8
+        character_count = 80 if large_context else 10
+        storyline_count = 40 if large_context else 5
+        power_count = 20 if large_context else 5
+
+        memory_text = (
+            "\n".join(
+                f"- {self._clip_context(m, 180, 1600)}"
+                for m in memories[:memory_count]
+            )
+            if memories else "暂无记忆条目"
+        )
+        settings_text = (
+            "\n".join(
+                f"- {self._clip_context(s, 220, 2400)}"
+                for s in settings_summary[:setting_count]
+            )
+            if settings_summary else "暂无设定"
+        )
 
         # 人物当前状态（用于一致性检查的核心）
         char_state_text = ""
         if character_states:
             char_state_text = "\n人物当前状态（一致性检查关键依据）：\n"
-            char_state_text += "\n".join(f"- {c}" for c in character_states[:10])
+            char_state_text += "\n".join(f"- {c}" for c in character_states[:character_count])
 
         # 故事线进展
         storyline_text = ""
         if storylines_context:
             storyline_text = "\n当前活跃故事线：\n"
-            storyline_text += "\n".join(f"- {s}" for s in storylines_context[:5])
+            storyline_text += "\n".join(f"- {s}" for s in storylines_context[:storyline_count])
+
+        power_text = ""
+        if power_systems_summary:
+            power_text = "\n力量体系与境界规则：\n"
+            power_text += "\n".join(f"- {s}" for s in power_systems_summary[:power_count])
 
         # 本章大纲计划
         outline_text = f"\n本章大纲计划：{outline_context}" if outline_context else ""
+        continuity_text = (
+            f"\n连续性账本（必须据此检查前后承接）：\n"
+            f"{self._clip_context(continuity_context, 1200, 20000)}"
+            if continuity_context else ""
+        )
+        chapter_index_text = (
+            f"\n章节速查索引（最近章节与未回收伏笔）：\n"
+            f"{self._clip_context(chapter_index_context, 1600, 20000)}"
+            if chapter_index_context else ""
+        )
+        chapter_plain = self._plain_text(chapter_content)
+        chapter_body = self._clip_context(chapter_plain, 2000, 120000)
+        chapter_label = "完整正文" if large_context else "正文（前2000字）"
 
         system = """你是专业的网络小说编辑，负责对章节内容进行质量检查。
 请严格按照 JSON 格式返回结果，不要有任何额外文字。
@@ -100,11 +163,14 @@ class AIService:
         prompt = f"""请对以下章节进行质检，返回 JSON 格式。
 
 章节标题：{chapter_title}
-章节正文（前2000字）：
-{chapter_content[:2000]}
+章节{chapter_label}：
+{chapter_body}
 {char_state_text}
 {storyline_text}
+{power_text}
 {outline_text}
+{continuity_text}
+{chapter_index_text}
 
 近期记忆条目（供参考）：
 {memory_text}
@@ -130,7 +196,12 @@ class AIService:
   "summary": "整体评价一句话"
 }}"""
 
-        response = await self._call_ai(system, prompt)
+        response = await self._call_ai(
+            system,
+            prompt,
+            max_tokens=8192 if large_context else 2048,
+            context={"operation": "quality_check", "chapter_title": chapter_title},
+        )
         try:
             import re
             text = response.strip()
@@ -155,28 +226,37 @@ class AIService:
         self,
         project_title: str,
         chapters: List[dict],
+        project_context: str = "",
     ) -> dict:
         """
         对多章进行连贯性检查：
         1) 标题与内容是否匹配
         2) 章节间剧情推进是否连贯
         """
+        large_context = self._large_context_enabled()
         chapter_blocks = []
         for idx, chapter in enumerate(chapters, start=1):
             title = chapter.get("title", "未命名章节")
-            content = (chapter.get("content") or "").strip()
-            content_preview = content[:1800] if content else "（正文为空）"
+            content = self._plain_text(chapter.get("content") or "")
+            content_preview = self._clip_context(content, 1800, 60000) if content else "（正文为空）"
+            content_label = "完整正文" if large_context else "正文（截断）"
             chapter_blocks.append(
                 f"[样本{idx}] 章节ID={chapter.get('id')} | 顺序={chapter.get('sort_order', idx - 1)}\n"
                 f"标题：{title}\n"
-                f"正文（截断）：\n{content_preview}"
+                f"{content_label}：\n{content_preview}"
             )
         chapters_text = "\n\n".join(chapter_blocks)
+        context_text = (
+            f"\n\n项目连续性资料（优先作为判断依据）：\n"
+            f"{self._clip_context(project_context, 1200, 30000)}"
+            if project_context else ""
+        )
 
         system = """你是资深网文编辑，擅长检查章节标题与剧情的一致性，以及多章连续阅读时的剧情连贯性。
 必须严格返回 JSON，不要输出任何解释性文字。"""
 
         prompt = f"""小说：{project_title}
+{context_text}
 
 下面是按章节顺序选出的正文样本，请做连贯性检测：
 {chapters_text}
@@ -213,7 +293,12 @@ class AIService:
   "summary": "一句话总评"
 }}"""
 
-        response = await self._call_ai(system, prompt, max_tokens=2200)
+        response = await self._call_ai(
+            system,
+            prompt,
+            max_tokens=8192 if large_context else 2200,
+            context={"operation": "chapter_coherence_check"},
+        )
         try:
             import re
 
@@ -254,7 +339,7 @@ class AIService:
 
 请给出具体的修改建议和示例。"""
 
-        async for chunk in self._stream_ai(system, prompt):
+        async for chunk in self._stream_ai(system, prompt, context={"operation": "suggest_stream"}):
             yield chunk
 
     # ── 记忆提取 ──────────────────────────────────────
@@ -283,7 +368,7 @@ class AIService:
 
 memory_type 只能是: event / character_state / foreshadow / setting / conflict"""
 
-        response = await self._call_ai(system, prompt)
+        response = await self._call_ai(system, prompt, context={"operation": "extract_memory", "chapter_title": chapter_title})
         try:
             text = response.strip()
             if "```" in text:
@@ -359,7 +444,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 
         # gemini 有大 context，可以给更多 token；小模型控制在 4096 防止 OOM
         max_tok = 8192 if self.profile == "gemini" else 4096
-        response = await self._call_ai(system, prompt, max_tokens=max_tok)
+        response = await self._call_ai(system, prompt, max_tokens=max_tok, context={"operation": "expand_outline", "node_title": node_title})
         try:
             import re
             text = response.strip()
@@ -435,7 +520,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 6. 悬念递进，每卷末尾都要有足够的钩子让读者追下一卷
 7. 标题要有画面感，能让读者一眼感受到本卷的核心氛围"""
 
-        response = await self._call_ai(system, prompt)
+        response = await self._call_ai(system, prompt, context={"operation": "plan_full_structure"})
         import re
         try:
             text = response.strip()
@@ -486,6 +571,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         has_content = bool(
             not replace_existing and existing_content and len(existing_content.strip()) > 50
         )
+        large_context = self._large_context_enabled()
 
         system = """你是拥有30年经验的网络小说作家，文笔老练，深谙追读节奏。
 你的任务是根据章节计划和故事背景，为作者提供一段高质量的正文文字。
@@ -498,7 +584,8 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 5. 如果本章有实力里程碑（如突破境界），要让这一刻有分量
 6. 故事线进展要顺势推进，切勿无视当前活跃的冲突线
 7. 每一场戏都必须服务作品基本面：读者定位、核心命题、爽点承诺、禁忌边界
-8. 直接给出正文，不要解释、不要旁白、不要说"好的"之类的废话"""
+8. 写完正文后，必须追加「章节速查索引」区块，使用固定模板，便于后续复盘与连续性追踪
+9. 直接给出正文，不要解释、不要旁白、不要说"好的"之类的废话"""
 
         if replace_existing:
             task_line = (
@@ -506,29 +593,47 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
                 "不要复述或抄袭旧稿套话；若旧稿与大纲冲突，以大纲为准。"
             )
         elif has_content:
-            task_line = f"当前已写内容（最后500字供衔接参考）：\n{existing_content[-500:]}\n\n请根据章节计划，续写接下来约1200-1600字的正文，保持章节爽点与情绪推进："
+            existing_tail_limit = 4000 if large_context else 500
+            task_line = (
+                f"当前已写内容（最后{existing_tail_limit}字供衔接参考）：\n"
+                f"{self._clip_context(existing_content, 500, 4000, from_end=True)}\n\n"
+                "请根据章节计划，续写接下来约1200-1600字的正文，保持章节爽点与情绪推进："
+            )
         else:
             task_line = "请根据章节计划，写出本章完整初稿约2200-2400字，第一句话必须立刻抓住读者，并在章末留下追读钩子："
 
-        # 控制 prompt 总长度（8b 模型 context 约 8k，每段严格限字）
-        premise_part = premise[:1200] if premise else "（未填写；请从创意、人物和大纲中提炼作品基本面，但不得违背既有设定）"
-        world_part = world_summary[:200] if world_summary else "（未设定）"
-        char_part = character_summary[:300] if character_summary else "（未设定）"
-        mem_part = f"\n近期关键事件：{memory_summary[:150]}" if memory_summary else ""
-        prev_part = prev_chapter_tail[-300:] if prev_chapter_tail else "（这是第一章，无前情）"
+        # 本地小模型仍保持短上下文；Gemini 使用长上下文，优先保证故事连续性。
+        premise_part = (
+            self._clip_context(premise, 1200, 12000)
+            if premise
+            else "（未填写；请从创意、人物和大纲中提炼作品基本面，但不得违背既有设定）"
+        )
+        world_part = self._clip_context(world_summary, 200, 12000) if world_summary else "（未设定）"
+        char_part = self._clip_context(character_summary, 300, 12000) if character_summary else "（未设定）"
+        mem_part = (
+            f"\n近期关键事件：{self._clip_context(memory_summary, 150, 12000)}"
+            if memory_summary else ""
+        )
+        prev_part = (
+            self._clip_context(prev_chapter_tail, 300, 4000, from_end=True)
+            if prev_chapter_tail else "（这是第一章，无前情）"
+        )
         continuity_part = (
-            f"\n【连续性账本 / 不得违背】\n{continuity_context[:1200]}\n"
+            f"\n【连续性账本 / 不得违背】\n{self._clip_context(continuity_context, 1200, 20000)}\n"
             if continuity_context
             else ""
         )
         chapter_index_part = (
-            f"\n【章节速查索引】\n{chapter_index_context[:1600]}\n"
+            f"\n【章节速查索引】\n{self._clip_context(chapter_index_context, 1600, 20000)}\n"
             if chapter_index_context
             else ""
         )
 
         # 故事线与本章特殊目标
-        storyline_part = f"\n当前活跃故事线：{storyline_summary[:200]}" if storyline_summary else ""
+        storyline_part = (
+            f"\n当前活跃故事线：{self._clip_context(storyline_summary, 200, 8000)}"
+            if storyline_summary else ""
+        )
         milestone_part = f"\n本章实力里程碑：{outline_power_milestone}" if outline_power_milestone else ""
         tone_part = f"\n情感基调：{outline_emotional_tone}" if outline_emotional_tone else ""
         day_part = f"\n故事日：{story_day}" if story_day else ""
@@ -548,7 +653,19 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 
         extra = ""
         if user_prompt and user_prompt.strip():
-            extra = f"\n\n【作者补充要求】\n{user_prompt.strip()[:800]}"
+            extra = f"\n\n【作者补充要求】\n{self._clip_context(user_prompt, 800, 4000)}"
+
+        index_template = """
+【章节速查索引输出模板（必须追加在正文结尾）】
+### ch_章节号（3位补零）　章节标题
+**核心事件**：
+1. 事件1
+2. 事件2
+3. 事件3
+**首次出场**：角色A（身份）
+**章末钩子强度**：⭐到⭐⭐⭐⭐⭐（并在括号内写一句钩子描述）
+**伏笔埋设**：F-编号（伏笔描述，ch_回收章号回收）
+"""
 
         prompt = f"""【立意与类型 / PREMISE】
 {premise_part}
@@ -570,9 +687,11 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 章末方向：{outline_highlight or "（未填写）"}{milestone_part}{tone_part}
 {f"伏笔管理：{outline_foreshadow}" if outline_foreshadow else ""}{manifest_constraint}
 
-{task_line}{extra}"""
+{task_line}
+{index_template}{extra}"""
 
-        async for chunk in self._stream_ai(system, prompt, max_tokens=4096):
+        max_tokens = 8192 if large_context else 4096
+        async for chunk in self._stream_ai(system, prompt, max_tokens=max_tokens, context={"operation": "draft_assist_stream", "chapter_title": chapter_title}):
             yield chunk
 
     # ── 自动复盘提取 ──────────────────────────────────
@@ -629,6 +748,13 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 
 只提取文中明确发生的变化，不要推断或猜测。
 如果某字段没有变化，不要包含它。
+`character_updates.current_status` 只能填写以下枚举之一：
+- alive
+- dead
+- missing
+- sealed
+- transformed
+禁止输出任何附加说明，例如 "alive（受伤）"、"dead-被刺杀"、"active"。
 
 返回JSON（严格遵守字段名）：
 {{
@@ -638,7 +764,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
       "character_name": "人物名称（供显示）",
       "current_realm": "新境界（如有变化）",
       "current_location": "新位置（如有变化）",
-      "current_status": "新状态 alive/dead/missing/sealed（如有变化）",
+      "current_status": "新状态（仅允许 alive/dead/missing/sealed/transformed 之一）",
       "add_skill_name": "习得的技能名（如有）",
       "add_skill_mastery": "掌握程度，如：初学/熟练/精通"
     }}
@@ -672,7 +798,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
   "summary": "本章整体复盘总结（一句话）"
 }}"""
 
-        response = await self._call_ai(system, prompt, max_tokens=1500)
+        response = await self._call_ai(system, prompt, max_tokens=1500, context={"operation": "auto_extract_debrief", "chapter_title": chapter_title})
         try:
             import re as _re
             text = response.strip()
@@ -766,30 +892,126 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             }
 
     # ── 底层调用 ──────────────────────────────────────
-    async def _call_ai(self, system: str, prompt: str, max_tokens: int = 2048) -> str:
+    async def _call_ai(self, system: str, prompt: str, max_tokens: int = 2048, context: Optional[dict] = None) -> str:
         client = self._get_client()
-        resp = await client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=max_tokens,
-        )
-        return resp.choices[0].message.content or ""
+        start = time.perf_counter()
+        try:
+            resp = await client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=max_tokens,
+            )
+            content = resp.choices[0].message.content or ""
+            usage_obj = getattr(resp, "usage", None)
+            usage = {
+                "prompt_tokens": getattr(usage_obj, "prompt_tokens", None),
+                "completion_tokens": getattr(usage_obj, "completion_tokens", None),
+                "total_tokens": getattr(usage_obj, "total_tokens", None),
+            } if usage_obj is not None else {}
+            log_llm_call(
+                mode=self.profile,
+                model=self.model,
+                llm_endpoint=f"{self.base_url.rstrip('/')}/chat/completions",
+                context=context or {},
+                duration_ms=int((time.perf_counter() - start) * 1000),
+                status="ok",
+                prompt_text=f"{system}\n{prompt}",
+                completion_text=content,
+                usage=usage,
+                input_payload={
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": max_tokens,
+                },
+                output_payload={"text": content},
+                db=self._db,
+            )
+            return content
+        except Exception as e:
+            log_llm_call(
+                mode=self.profile,
+                model=self.model,
+                llm_endpoint=f"{self.base_url.rstrip('/')}/chat/completions",
+                context=context or {},
+                duration_ms=int((time.perf_counter() - start) * 1000),
+                status="error",
+                prompt_text=f"{system}\n{prompt}",
+                error=str(e),
+                input_payload={
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": max_tokens,
+                },
+                db=self._db,
+            )
+            raise
 
-    async def _stream_ai(self, system: str, prompt: str, max_tokens: int = 2048) -> AsyncGenerator[str, None]:
+    async def _stream_ai(self, system: str, prompt: str, max_tokens: int = 2048, context: Optional[dict] = None) -> AsyncGenerator[str, None]:
         client = self._get_client()
-        stream = await client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=max_tokens,
-            stream=True,
-        )
-        async for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
+        start = time.perf_counter()
+        output_chunks: List[str] = []
+        try:
+            stream = await client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=max_tokens,
+                stream=True,
+            )
+            async for chunk in stream:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    output_chunks.append(delta)
+                    yield delta
+            log_llm_call(
+                mode=self.profile,
+                model=self.model,
+                llm_endpoint=f"{self.base_url.rstrip('/')}/chat/completions",
+                context=context or {},
+                duration_ms=int((time.perf_counter() - start) * 1000),
+                status="ok",
+                prompt_text=f"{system}\n{prompt}",
+                completion_text="".join(output_chunks),
+                input_payload={
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": max_tokens,
+                    "stream": True,
+                },
+                output_payload={"text": "".join(output_chunks)},
+                db=self._db,
+            )
+        except Exception as e:
+            log_llm_call(
+                mode=self.profile,
+                model=self.model,
+                llm_endpoint=f"{self.base_url.rstrip('/')}/chat/completions",
+                context=context or {},
+                duration_ms=int((time.perf_counter() - start) * 1000),
+                status="error",
+                prompt_text=f"{system}\n{prompt}",
+                completion_text="".join(output_chunks),
+                error=str(e),
+                input_payload={
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": max_tokens,
+                    "stream": True,
+                },
+                output_payload={"text": "".join(output_chunks)},
+                db=self._db,
+            )
+            raise

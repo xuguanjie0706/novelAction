@@ -1012,7 +1012,7 @@ export default function ChapterEditor({
                               )}
                               {f.planned_resolve_chapter && (
                                 <span className="ml-1.5 text-[10px] text-amber-500">
-                                  预计第 {f.planned_resolve_chapter} 章回收
+                                  预计第 {f.planned_resolve_chapter} 章{f.planned_action === 'develop' ? '铺垫' : '回收'}
                                 </span>
                               )}
                               {f.description && (

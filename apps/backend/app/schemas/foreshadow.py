@@ -15,6 +15,7 @@ class ForeshadowBase(BaseModel):
     resolved_chapter_id: Optional[uuid.UUID] = None
     resolved_chapter_number: Optional[int] = None
     planned_resolve_chapter: Optional[int] = None
+    planned_action: str = Field(default="resolve", pattern="^(resolve|develop)$")
 
     status: str = Field(default="open", pattern="^(open|resolved|dropped)$")
     priority: int = Field(default=3, ge=1, le=5)
@@ -35,6 +36,7 @@ class ForeshadowUpdate(BaseModel):
     resolved_chapter_id: Optional[uuid.UUID] = None
     resolved_chapter_number: Optional[int] = None
     planned_resolve_chapter: Optional[int] = None
+    planned_action: Optional[str] = Field(default=None, pattern="^(resolve|develop)$")
 
     status: Optional[str] = Field(default=None, pattern="^(open|resolved|dropped)$")
     priority: Optional[int] = Field(default=None, ge=1, le=5)

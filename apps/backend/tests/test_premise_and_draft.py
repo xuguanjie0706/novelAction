@@ -1,7 +1,15 @@
 import pytest
 
 from app.schemas.project import ProjectCreate, ProjectOut
-from app.routers.ai import ChapterDebriefRequest
+from app.models.chapter import Chapter
+from app.models.foreshadow import Foreshadow
+from app.routers.foreshadows import _repair_duplicate_codes
+from app.routers.ai import (
+    ChapterDebriefRequest,
+    ChapterIndexPayload,
+    _foreshadow_payload_from_index_item,
+    _sync_chapter_index_foreshadows,
+)
 from app.services.ai_service import AIService
 
 
@@ -43,6 +51,186 @@ def test_chapter_debrief_accepts_storyline_name_without_uuid():
 
     assert req.storyline_updates[0].storyline_id is None
     assert req.storyline_updates[0].storyline_name == "主线：黑雾来处"
+
+
+def test_foreshadow_payload_parses_ai_index_marker():
+    payload = _foreshadow_payload_from_index_item(
+        {
+            "description": "F-017：林家火灵晶矿脉的异常震动，暗示地下矿脉被非法开采或藏有异宝（ch_015回收）",
+            "status": "open",
+        }
+    )
+
+    assert payload == {
+        "code": "F-017",
+        "title": "林家火灵晶矿脉的异常震动，暗示地下矿脉被非法开采或藏有异宝",
+        "description": "林家火灵晶矿脉的异常震动，暗示地下矿脉被非法开采或藏有异宝（ch_015回收）",
+        "planned_resolve_chapter": 15,
+        "planned_action": "resolve",
+        "status": "open",
+    }
+
+
+def test_foreshadow_payload_parses_develop_marker():
+    payload = _foreshadow_payload_from_index_item(
+        {
+            "description": "F-037：慕容倾城展现的冰系法则强度远超同阶，暗示其在圣地获得了极高的造化，但可能也付出了某种代价（ch_029铺垫）。",
+            "status": "open",
+        }
+    )
+
+    assert payload == {
+        "code": "F-037",
+        "title": "慕容倾城展现的冰系法则强度远超同阶，暗示其在圣地获得了极高的造化，但可能也付出了某种代价",
+        "description": "慕容倾城展现的冰系法则强度远超同阶，暗示其在圣地获得了极高的造化，但可能也付出了某种代价（ch_029铺垫）。",
+        "planned_resolve_chapter": 29,
+        "planned_action": "develop",
+        "status": "open",
+    }
+
+
+def test_sync_chapter_index_foreshadows_creates_global_record():
+    class EmptyQuery:
+        def filter(self, *args):
+            return self
+
+        def count(self):
+            return 0
+
+        def first(self):
+            return None
+
+    class FakeDb:
+        def __init__(self):
+            self.added = []
+
+        def query(self, model):
+            return EmptyQuery()
+
+        def add(self, obj):
+            self.added.append(obj)
+
+    db = FakeDb()
+    chapter = Chapter(
+        id="00000000-0000-0000-0000-000000000015",
+        project_id="00000000-0000-0000-0000-000000000001",
+        title="第15章：火灵晶矿",
+        sort_order=14,
+    )
+    chapter_index = ChapterIndexPayload(
+        actual_foreshadows_laid=[
+            {
+                "description": "F-017：林家火灵晶矿脉的异常震动，暗示地下矿脉被非法开采或藏有异宝（ch_015回收）",
+                "status": "open",
+            }
+        ]
+    )
+
+    stats = _sync_chapter_index_foreshadows(
+        db,
+        "00000000-0000-0000-0000-000000000001",
+        chapter,
+        chapter_index,
+    )
+
+    assert stats == {"created": 1, "updated": 0, "resolved": 0}
+    assert len(db.added) == 1
+    foreshadow = db.added[0]
+    assert foreshadow.code == "F-017"
+    assert foreshadow.title == "林家火灵晶矿脉的异常震动，暗示地下矿脉被非法开采或藏有异宝"
+    assert foreshadow.laid_chapter_number == 15
+    assert foreshadow.planned_resolve_chapter == 15
+    assert foreshadow.planned_action == "resolve"
+    assert foreshadow.status == "open"
+
+
+def test_sync_chapter_index_foreshadows_assigns_unique_codes_for_batch_items_without_codes():
+    class EmptyQuery:
+        def __init__(self):
+            self.calls = 0
+
+        def filter(self, *args):
+            return self
+
+        def count(self):
+            return 0
+
+        def first(self):
+            return None
+
+        def all(self):
+            return []
+
+    class FakeDb:
+        def __init__(self):
+            self.added = []
+            self.query_obj = EmptyQuery()
+
+        def query(self, model):
+            return self.query_obj
+
+        def add(self, obj):
+            self.added.append(obj)
+
+    db = FakeDb()
+    chapter = Chapter(
+        id="00000000-0000-0000-0000-000000000016",
+        project_id="00000000-0000-0000-0000-000000000001",
+        title="第16章：邪火初现",
+        sort_order=15,
+    )
+    chapter_index = ChapterIndexPayload(
+        actual_foreshadows_laid=[
+            {"description": "赵无极提到的圣地软甲防守能力，为林炎杀招能否奏效埋下悬念"},
+            {"description": "焚老沉睡前的警告，暗示神碑封印动摇（ch_022回收）"},
+        ]
+    )
+
+    stats = _sync_chapter_index_foreshadows(
+        db,
+        "00000000-0000-0000-0000-000000000001",
+        chapter,
+        chapter_index,
+    )
+
+    assert stats == {"created": 2, "updated": 0, "resolved": 0}
+    assert [f.code for f in db.added] == ["F-001", "F-002"]
+
+
+def test_repair_duplicate_foreshadow_codes_keeps_first_and_renumbers_duplicates():
+    items = [
+        Foreshadow(code="F-001", title="第一条"),
+        Foreshadow(code="F-001", title="重复一"),
+        Foreshadow(code="F-004", title="第四条"),
+        Foreshadow(code="F-004", title="重复四"),
+    ]
+
+    class FakeQuery:
+        def filter(self, *args):
+            return self
+
+        def order_by(self, *args):
+            return self
+
+        def all(self):
+            return items
+
+    class FakeDb:
+        def __init__(self):
+            self.committed = False
+
+        def query(self, model):
+            return FakeQuery()
+
+        def commit(self):
+            self.committed = True
+
+    db = FakeDb()
+
+    _repair_duplicate_codes(db, "00000000-0000-0000-0000-000000000001")
+
+    assert [item.code for item in items] == ["F-001", "F-002", "F-004", "F-005"]
+    assert db.committed is True
 
 
 @pytest.mark.asyncio

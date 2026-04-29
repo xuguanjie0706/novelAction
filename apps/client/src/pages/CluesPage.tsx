@@ -24,6 +24,14 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
   resolved: <CheckCircle size={12} />,
   dropped: <XCircle size={12} />,
 }
+const PLANNED_ACTION_LABEL: Record<'resolve' | 'develop', string> = {
+  resolve: '预计回收',
+  develop: '预计铺垫',
+}
+const PLANNED_ACTION_COLOR: Record<'resolve' | 'develop', string> = {
+  resolve: 'bg-amber-50 text-amber-600',
+  develop: 'bg-indigo-50 text-indigo-600',
+}
 const PRIORITY_STARS = (p: number) =>
   Array.from({ length: 5 }).map((_, i) => (
     <Star key={i} size={10} className={i < p ? 'text-amber-400 fill-amber-400' : 'text-gray-200'} />
@@ -47,6 +55,9 @@ function ForeshadowForm({ initial = {}, onSave, onCancel }: ForeshadowFormProps)
   const [plannedNum, setPlannedNum] = useState<string>(
     initial.planned_resolve_chapter?.toString() ?? '',
   )
+  const [plannedAction, setPlannedAction] = useState<'resolve' | 'develop'>(
+    initial.planned_action ?? 'resolve',
+  )
   const [status, setStatus] = useState<Foreshadow['status']>(initial.status ?? 'open')
   const [priority, setPriority] = useState(initial.priority ?? 3)
 
@@ -59,6 +70,7 @@ function ForeshadowForm({ initial = {}, onSave, onCancel }: ForeshadowFormProps)
       laid_chapter_number: laidNum ? Number(laidNum) : undefined,
       resolved_chapter_number: resolvedNum ? Number(resolvedNum) : undefined,
       planned_resolve_chapter: plannedNum ? Number(plannedNum) : undefined,
+      planned_action: plannedAction,
       status,
       priority,
     })
@@ -86,14 +98,25 @@ function ForeshadowForm({ initial = {}, onSave, onCancel }: ForeshadowFormProps)
           onChange={e => setDescription(e.target.value)}
         />
       </div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         <div>
           <label className="block text-xs text-gray-500 mb-1">埋设章节号</label>
           <input type="number" min={1} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
             value={laidNum} onChange={e => setLaidNum(e.target.value)} placeholder="第 N 章" />
         </div>
         <div>
-          <label className="block text-xs text-gray-500 mb-1">预计回收章节</label>
+          <label className="block text-xs text-gray-500 mb-1">计划动作</label>
+          <select
+            className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+            value={plannedAction}
+            onChange={e => setPlannedAction(e.target.value as 'resolve' | 'develop')}
+          >
+            <option value="resolve">回收</option>
+            <option value="develop">铺垫</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">计划章节</label>
           <input type="number" min={1} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
             value={plannedNum} onChange={e => setPlannedNum(e.target.value)} placeholder="约第 N 章" />
         </div>
@@ -152,6 +175,7 @@ interface ForeshadowCardProps {
 
 function ForeshadowCard({ item, onEdit, onDelete, onStatusChange }: ForeshadowCardProps) {
   const [expanded, setExpanded] = useState(false)
+  const plannedAction = item.planned_action ?? 'resolve'
 
   return (
     <div className={clsx(
@@ -189,8 +213,8 @@ function ForeshadowCard({ item, onEdit, onDelete, onStatusChange }: ForeshadowCa
                 </span>
               )}
               {item.planned_resolve_chapter != null && item.status === 'open' && (
-                <span className="text-[10px] bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded">
-                  预计回收：第 {item.planned_resolve_chapter} 章
+                <span className={clsx('text-[10px] px-1.5 py-0.5 rounded', PLANNED_ACTION_COLOR[plannedAction])}>
+                  {PLANNED_ACTION_LABEL[plannedAction]}：第 {item.planned_resolve_chapter} 章
                 </span>
               )}
               {item.resolved_chapter_number != null && (

@@ -100,12 +100,28 @@ def _ensure_project_columns() -> None:
             conn.execute(text(ddl))
 
 
+def _ensure_foreshadow_columns() -> None:
+    """
+    开发环境兼容迁移：为已有 foreshadows 表补齐计划动作字段。
+    """
+    ddl_statements = [
+        "ALTER TABLE foreshadows ADD COLUMN IF NOT EXISTS planned_action VARCHAR(20)",
+    ]
+    with engine.begin() as conn:
+        for ddl in ddl_statements:
+            conn.execute(text(ddl))
+        conn.execute(text(
+            "UPDATE foreshadows SET planned_action = 'resolve' WHERE planned_action IS NULL"
+        ))
+
+
 # 自动建表（开发用，生产建议改用 Alembic）
 Base.metadata.create_all(bind=engine)
 _ensure_project_columns()
 _ensure_outline_node_columns()
 _ensure_character_columns()
 _ensure_character_relationship_columns()
+_ensure_foreshadow_columns()
 seed_llm_from_env_if_empty()
 
 app = FastAPI(

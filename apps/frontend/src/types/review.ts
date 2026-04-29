@@ -34,6 +34,8 @@ export interface QualityReport {
   issues: QualityIssue[]
   suggestions: string[]
   summary: string
+  error?: string
+  raw_response?: string
 }
 
 export interface ChapterCoherenceResult {
@@ -54,6 +56,8 @@ export interface ChapterCoherenceResult {
   }>
   suggestions: string[]
   summary: string
+  error?: string
+  raw_response?: string
   selected_chapter_count?: number
   selected_chapter_ids?: string[]
 }

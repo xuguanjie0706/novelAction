@@ -6,8 +6,6 @@ import {
   Checkbox,
   Col,
   Empty,
-  Form,
-  Input,
   List,
   Row,
   Select,
@@ -76,7 +74,6 @@ export default function ReadingReviewPage() {
   const [anchorChapterId, setAnchorChapterId] = useState<string>()
   const [coherenceResult, setCoherenceResult] = useState<ChapterCoherenceResult | null>(null)
   const [saveLoading, setSaveLoading] = useState(false)
-  const [reportNameForm] = Form.useForm<{ name: string }>()
 
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyRows, setHistoryRows] = useState<CoherenceReportRecord[]>([])
@@ -187,6 +184,11 @@ export default function ReadingReviewPage() {
         check_types: CHECK_TYPES,
         llm_provider_id: selectedProviderId,
       })
+      if (data.error) {
+        setQualityReport(null)
+        message.error(`单章评测失败：${data.error}`)
+        return
+      }
       setQualityReport(data)
       message.success('单章评测完成')
       await loadChapters(projectId)
@@ -196,6 +198,35 @@ export default function ReadingReviewPage() {
       setQualityLoading(false)
     }
   }
+
+  const saveCoherenceReport = useCallback(async (result: ChapterCoherenceResult) => {
+    if (!projectId) return
+    setSaveLoading(true)
+    try {
+      const selectedNos = chapters
+        .filter((c) => selectedCoherenceChapters.includes(c.id))
+        .map((c) => c.sort_order + 1)
+        .sort((a, b) => a - b)
+      const chapterRangeText = selectedNos.length > 0
+        ? selectedNos[0] === selectedNos[selectedNos.length - 1]
+          ? `${selectedNos[0]}章`
+          : `${selectedNos[0]}-${selectedNos[selectedNos.length - 1]}章`
+        : `${selectedCoherenceChapters.length}章`
+      const projectTitle = projects.find((p) => p.id === projectId)?.title || '未命名小说'
+      await http.post(`/api/v1/projects/${projectId}/ai/chapter-coherence-reports`, {
+        name: `${projectTitle}｜${chapterRangeText}`,
+        model_profile: modelProfile,
+        selected_chapter_ids: selectedCoherenceChapters,
+        result,
+      })
+      await loadHistory(projectId)
+      message.success('连贯性评测完成并已自动保存')
+    } catch {
+      message.warning('连贯性评测完成，但自动保存失败，可稍后重试')
+    } finally {
+      setSaveLoading(false)
+    }
+  }, [chapters, loadHistory, message, modelProfile, projectId, projects, selectedCoherenceChapters])
 
   const runCoherenceCheck = async () => {
     if (!projectId) {
@@ -216,8 +247,13 @@ export default function ReadingReviewPage() {
           llm_provider_id: selectedProviderId,
         },
       )
+      if (data.error) {
+        setCoherenceResult(null)
+        message.error(`连贯性评测失败：${data.error}`)
+        return
+      }
       setCoherenceResult(data)
-      message.success('连贯性评测完成')
+      await saveCoherenceReport(data)
     } catch {
       message.error('连贯性评测失败')
     } finally {
@@ -244,31 +280,6 @@ export default function ReadingReviewPage() {
     setRangeEndId(chapters[to]?.id)
     setSelectedCoherenceChapters(chapters.slice(from, to + 1).map((c) => c.id))
   }, [anchorChapterId, chapters])
-
-  const saveCoherenceReport = async () => {
-    if (!projectId || !coherenceResult) {
-      message.warning('请先完成一次连贯性评测')
-      return
-    }
-    const values = await reportNameForm.validateFields().catch(() => null)
-    if (!values) return
-    setSaveLoading(true)
-    try {
-      await http.post(`/api/v1/projects/${projectId}/ai/chapter-coherence-reports`, {
-        name: values.name.trim() || undefined,
-        model_profile: modelProfile,
-        selected_chapter_ids: selectedCoherenceChapters,
-        result: coherenceResult,
-      })
-      message.success('连贯性报告已保存')
-      reportNameForm.resetFields()
-      await loadHistory(projectId)
-    } catch {
-      message.error('保存报告失败')
-    } finally {
-      setSaveLoading(false)
-    }
-  }
 
   const chapterOptions = useMemo(
     () =>
@@ -540,19 +551,30 @@ export default function ReadingReviewPage() {
                     <Typography.Text type="secondary">
                       已选 {selectedCoherenceChapters.length} 章（{selectedRangeHint}）
                     </Typography.Text>
-                    <Checkbox.Group
-                      style={{ width: '100%' }}
-                      value={selectedCoherenceChapters}
-                      onChange={(vals) => setSelectedCoherenceChapters(vals as string[])}
+                    <div
+                      style={{
+                        maxHeight: 280,
+                        overflowY: 'auto',
+                        padding: 12,
+                        border: '1px solid #f0f0f0',
+                        borderRadius: 8,
+                        background: '#fafafa',
+                      }}
                     >
-                      <Row gutter={[12, 12]}>
-                        {chapters.map((c) => (
-                          <Col key={c.id} span={8}>
-                            <Checkbox value={c.id}>第{c.sort_order + 1}章 · {c.title || '未命名'}</Checkbox>
-                          </Col>
-                        ))}
-                      </Row>
-                    </Checkbox.Group>
+                      <Checkbox.Group
+                        style={{ width: '100%' }}
+                        value={selectedCoherenceChapters}
+                        onChange={(vals) => setSelectedCoherenceChapters(vals as string[])}
+                      >
+                        <Row gutter={[12, 12]}>
+                          {chapters.map((c) => (
+                            <Col key={c.id} span={8}>
+                              <Checkbox value={c.id}>第{c.sort_order + 1}章 · {c.title || '未命名'}</Checkbox>
+                            </Col>
+                          ))}
+                        </Row>
+                      </Checkbox.Group>
+                    </div>
                     <Button type="primary" loading={coherenceLoading} onClick={() => void runCoherenceCheck()}>
                       开始连贯性评测
                     </Button>
@@ -585,21 +607,10 @@ export default function ReadingReviewPage() {
                         )}
                       />
                     </Card>
-                    <Card title="保存报告">
-                      <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
-                        <Form form={reportNameForm} layout="inline">
-                          <Form.Item
-                            name="name"
-                            label="报告名称"
-                            rules={[{ required: true, message: '请输入报告名称' }]}
-                          >
-                            <Input style={{ width: 320 }} placeholder="例如：前10章连贯性巡检" />
-                          </Form.Item>
-                        </Form>
-                        <Button type="primary" loading={saveLoading} onClick={() => void saveCoherenceReport()}>
-                          保存到历史
-                        </Button>
-                      </Space>
+                    <Card title="保存状态">
+                      <Typography.Text type={saveLoading ? 'secondary' : 'success'}>
+                        {saveLoading ? '正在自动保存报告...' : '评测结果已自动保存到历史记录'}
+                      </Typography.Text>
                     </Card>
                   </Space>
                 ) : null}

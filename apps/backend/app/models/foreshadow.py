@@ -26,6 +26,7 @@ class Foreshadow(Base):
     resolved_chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)
     resolved_chapter_number = Column(Integer)   # 冗余
     planned_resolve_chapter = Column(Integer)   # 预计回收章节号
+    planned_action = Column(String(20), default="resolve")  # resolve / develop
 
     # 状态与优先级
     status = Column(String(20), default="open")  # open / resolved / dropped

@@ -321,6 +321,7 @@ export interface Foreshadow {
   resolved_chapter_id?: string
   resolved_chapter_number?: number
   planned_resolve_chapter?: number
+  planned_action?: 'resolve' | 'develop'
   status: 'open' | 'resolved' | 'dropped'
   priority: number   // 1–5
   created_at: string

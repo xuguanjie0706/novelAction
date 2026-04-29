@@ -229,6 +229,7 @@ export const aiApi = {
       content: string
       tags?: string[]
     }>
+    asset_updates?: Record<string, unknown>
     chapter_index?: {
       story_day?: string
       core_events?: Array<Record<string, unknown> | string>

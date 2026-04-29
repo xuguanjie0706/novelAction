@@ -2,6 +2,7 @@ import { aiApi } from '../api/client'
 
 type ModelProfile = 'local' | 'gemini'
 type MemoryType = 'event' | 'character_state' | 'foreshadow' | 'setting' | 'conflict'
+type AssetUpdates = Record<string, unknown>
 
 interface AutoDebriefResult {
   character_updates?: Array<{
@@ -24,6 +25,7 @@ interface AutoDebriefResult {
     content?: string
     tags?: string[]
   }>
+  asset_updates?: AssetUpdates
   chapter_index?: {
     story_day?: string
     core_events?: Array<Record<string, unknown> | string>
@@ -42,6 +44,8 @@ export interface GeneratedChapterDebriefStats {
   characterCount: number
   storylineCount: number
   memoryCount: number
+  assetCreatedCount: number
+  assetUpdatedCount: number
   chapterIndexSaved: boolean
   chapterIndexError?: string
 }
@@ -102,9 +106,10 @@ export async function autoCommitGeneratedChapterDebrief(
     }))
 
   const hasChapterIndex = Boolean(data.chapter_index && Object.keys(data.chapter_index).length > 0)
+  const hasAssetUpdates = Boolean(data.asset_updates && Object.values(data.asset_updates).some(value => Array.isArray(value) && value.length > 0))
 
-  if (characterUpdates.length === 0 && storylineUpdates.length === 0 && memoryUpdates.length === 0 && !hasChapterIndex && !data.summary) {
-    return { characterCount: 0, storylineCount: 0, memoryCount: 0, chapterIndexSaved: false }
+  if (characterUpdates.length === 0 && storylineUpdates.length === 0 && memoryUpdates.length === 0 && !hasChapterIndex && !hasAssetUpdates && !data.summary) {
+    return { characterCount: 0, storylineCount: 0, memoryCount: 0, assetCreatedCount: 0, assetUpdatedCount: 0, chapterIndexSaved: false }
   }
 
   const commitRes = await aiApi.chapterDebrief(projectId, {
@@ -112,14 +117,25 @@ export async function autoCommitGeneratedChapterDebrief(
     character_updates: characterUpdates as any,
     storyline_updates: storylineUpdates as any,
     memory_updates: memoryUpdates,
+    asset_updates: data.asset_updates,
     chapter_index: data.chapter_index,
     notes: data.summary ? `AI生成自动复盘：${data.summary}` : undefined,
   })
+
+  const assetStats = commitRes.data?.asset_updates || {}
+  const assetCreatedCount = Number(assetStats.created_items || 0)
+    + Number(assetStats.created_skills || 0)
+    + Number(assetStats.created_factions || 0)
+  const assetUpdatedCount = Number(assetStats.updated_items || 0)
+    + Number(assetStats.updated_skills || 0)
+    + Number(assetStats.updated_factions || 0)
 
   return {
     characterCount: characterUpdates.length,
     storylineCount: storylineUpdates.length,
     memoryCount: memoryUpdates.length,
+    assetCreatedCount,
+    assetUpdatedCount,
     chapterIndexSaved: !!commitRes.data?.chapter_index_saved,
     chapterIndexError: commitRes.data?.chapter_index_error,
   }

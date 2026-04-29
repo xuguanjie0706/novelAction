@@ -2,11 +2,20 @@ import pytest
 
 from app.schemas.project import ProjectCreate, ProjectOut
 from app.models.chapter import Chapter
+from app.models.character import Character
+from app.models.faction import Faction
 from app.models.foreshadow import Foreshadow
+from app.models.item import Item
+from app.models.outline import OutlineNode
+from app.models.skill import Skill
 from app.routers.foreshadows import _repair_duplicate_codes
 from app.routers.ai import (
+    AssetUpdates,
     ChapterDebriefRequest,
     ChapterIndexPayload,
+    NewItemAsset,
+    _apply_asset_updates,
+    _build_writing_brief_context,
     _foreshadow_payload_from_index_item,
     _sync_chapter_index_foreshadows,
 )
@@ -233,6 +242,191 @@ def test_repair_duplicate_foreshadow_codes_keeps_first_and_renumbers_duplicates(
     assert db.committed is True
 
 
+def test_writing_brief_context_activates_bound_assets_and_factions():
+    class FakeQuery:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def filter(self, *args):
+            return self
+
+        def order_by(self, *args):
+            return self
+
+        def limit(self, *_args):
+            return self
+
+        def all(self):
+            return self.rows
+
+    class FakeDb:
+        def __init__(self):
+            self.rows_by_model = {}
+
+        def query(self, model):
+            return FakeQuery(self.rows_by_model.get(model, []))
+
+    faction = Faction(
+        id="00000000-0000-0000-0000-000000000011",
+        project_id="00000000-0000-0000-0000-000000000001",
+        name="丹火盟",
+        alignment="protagonist",
+        attitude_to_protagonist="neutral",
+        goals="寻找焚荒传承",
+        resources="丹塔内层资格",
+    )
+    character = Character(
+        id="00000000-0000-0000-0000-000000000101",
+        project_id="00000000-0000-0000-0000-000000000001",
+        name="林炎",
+        faction_id=faction.id,
+        owned_items=[
+            {
+                "item_id": "00000000-0000-0000-0000-000000000201",
+                "item_name": "焚荒古戒",
+            }
+        ],
+        known_skills=[
+            {
+                "skill_id": "00000000-0000-0000-0000-000000000301",
+                "skill_name": "焚天诀",
+                "mastery": "初窥门径",
+            }
+        ],
+    )
+    item = Item(
+        id="00000000-0000-0000-0000-000000000201",
+        project_id="00000000-0000-0000-0000-000000000001",
+        name="焚荒古戒",
+        item_type="artifact",
+        rarity="unique",
+        effects="辅助炼化世间万火",
+        limitations="过度抽取戒能会沉睡",
+        status="stirred",
+        story_significance="主角与焚老建立联系的纽带",
+    )
+    skill = Skill(
+        id="00000000-0000-0000-0000-000000000301",
+        project_id="00000000-0000-0000-0000-000000000001",
+        name="焚天诀",
+        skill_type="combat",
+        grade="divine",
+        effects="催动一缕荒火",
+        limitations="境界不足时反噬经脉",
+    )
+    outline = OutlineNode(
+        id="00000000-0000-0000-0000-000000000401",
+        project_id="00000000-0000-0000-0000-000000000001",
+        title="第7章",
+        involved_character_ids=[str(character.id)],
+        key_item_ids=[str(item.id)],
+        key_skill_ids=[str(skill.id)],
+    )
+    chapter = Chapter(title="第7章：火戒初醒", sort_order=6)
+    db = FakeDb()
+    db.rows_by_model = {
+        Character: [character],
+        Faction: [faction],
+        Item: [item],
+        Skill: [skill],
+    }
+
+    brief = _build_writing_brief_context(
+        db=db,
+        project_id="00000000-0000-0000-0000-000000000001",
+        chapter=chapter,
+        outline_node=outline,
+        large_context=False,
+    )
+
+    assert "【本章写前 Brief / 激活资产】" in brief
+    assert "激活势力：丹火盟" in brief
+    assert "激活道具/法宝：焚荒古戒" in brief
+    assert "辅助炼化世间万火" in brief
+    assert "激活功法/技能：焚天诀" in brief
+    assert "境界不足时反噬经脉" in brief
+    assert "C级临时资产" in brief
+
+
+def test_apply_asset_updates_creates_b_tier_item_and_links_owner():
+    class QueryByModel:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def filter(self, *args):
+            return self
+
+        def first(self):
+            return self.rows[0] if self.rows else None
+
+    class FakeDb:
+        def __init__(self, character):
+            self.character = character
+            self.items = []
+            self.added = []
+
+        def query(self, model):
+            if model is Character:
+                return QueryByModel([self.character])
+            if model is Item:
+                return QueryByModel(self.items)
+            return QueryByModel([])
+
+        def add(self, obj):
+            self.added.append(obj)
+            if isinstance(obj, Item):
+                self.items.append(obj)
+
+    character = Character(
+        id="00000000-0000-0000-0000-000000000101",
+        project_id="00000000-0000-0000-0000-000000000001",
+        name="林炎",
+        owned_items=[],
+    )
+    db = FakeDb(character)
+    chapter = Chapter(
+        id="00000000-0000-0000-0000-000000000007",
+        project_id="00000000-0000-0000-0000-000000000001",
+        title="第7章：火戒初醒",
+        sort_order=6,
+    )
+
+    stats = _apply_asset_updates(
+        db=db,
+        project_id="00000000-0000-0000-0000-000000000001",
+        chapter=chapter,
+        asset_updates=AssetUpdates(
+            new_items=[
+                NewItemAsset(
+                    tier="B",
+                    name="涅槃火精残息",
+                    item_type="material",
+                    rarity="rare",
+                    description="古戒感应到的一缕火精残息。",
+                    effects="可辅助后续突破。",
+                    limitations="本章不能直接炼化完整火精。",
+                    current_owner_id=str(character.id),
+                    story_significance="作为焚荒古戒苏醒后的第一条资源线索。",
+                )
+            ]
+        ),
+    )
+
+    assert stats == {"created_items": 1, "updated_items": 0, "created_skills": 0, "updated_skills": 0, "created_factions": 0, "updated_factions": 0}
+    assert len(db.added) == 1
+    created_item = db.added[0]
+    assert created_item.name == "涅槃火精残息"
+    assert created_item.first_appearance_chapter == 7
+    assert created_item.extra["asset_tier"] == "B"
+    assert character.owned_items == [
+        {
+            "item_id": str(created_item.id),
+            "item_name": "涅槃火精残息",
+            "acquired_chapter": 7,
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_draft_prompt_includes_premise_and_full_chapter_target():
     captured = {}
@@ -269,6 +463,37 @@ async def test_draft_prompt_includes_premise_and_full_chapter_target():
     assert "2200-2400字" in captured["prompt"]
     assert "约600字" not in captured["prompt"]
     assert captured["max_tokens"] >= 4096
+
+
+@pytest.mark.asyncio
+async def test_draft_prompt_includes_writing_brief_context():
+    captured = {}
+
+    async def fake_stream(system: str, prompt: str, max_tokens: int = 4096, context=None):
+        captured["prompt"] = prompt
+        yield "正文"
+
+    svc = AIService()
+    svc._stream_ai = fake_stream
+
+    async for _ in svc.draft_assist_stream(
+        chapter_title="第7章：火戒初醒",
+        outline_hook="古戒第一次发烫",
+        outline_summary="林炎借古戒感应涅槃火精残息",
+        outline_conflict="从怀疑传承到决定冒险",
+        outline_highlight="戒中传来焚老第一声叹息",
+        outline_foreshadow="焚荒古戒不能完全开启",
+        prev_chapter_tail="林炎把戒指握在掌心。",
+        world_summary="万火皆有灵性",
+        character_summary="林炎（protagonist）",
+        memory_summary="",
+        existing_content="",
+        writing_brief_context="【本章写前 Brief / 激活资产】\n激活道具/法宝：焚荒古戒；消费方式=只出现微弱反应，不完全开启。",
+    ):
+        pass
+
+    assert "【本章写前 Brief / 激活资产】" in captured["prompt"]
+    assert "只出现微弱反应，不完全开启" in captured["prompt"]
 
 
 @pytest.mark.asyncio
@@ -416,6 +641,62 @@ async def test_auto_debrief_extracts_chapter_index():
     assert result["chapter_index"]["story_day"] == "Day 8"
     assert result["chapter_index"]["hook_strength"] == 4
     assert result["chapter_index"]["actual_foreshadows_laid"][0]["status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_auto_debrief_extracts_asset_updates_without_replacing_memory():
+    captured = {}
+
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+        captured["prompt"] = prompt
+        return """
+        {
+          "character_updates": [],
+          "storyline_updates": [],
+          "memory_updates": [
+            {
+              "memory_type": "event",
+              "title": "林炎获得涅槃火精残息",
+              "content": "第7章林炎通过焚荒古戒感应并收起涅槃火精残息，这是后续突破的资源线索。",
+              "tags": ["林炎", "涅槃火精残息"]
+            }
+          ],
+          "asset_updates": {
+            "new_items": [
+              {
+                "tier": "B",
+                "name": "涅槃火精残息",
+                "item_type": "material",
+                "rarity": "rare",
+                "description": "古戒感应到的一缕火精残息。",
+                "effects": "可辅助后续突破。",
+                "limitations": "本章不能直接炼化完整火精。",
+                "current_owner_name": "林炎",
+                "story_significance": "作为焚荒古戒苏醒后的第一条资源线索。"
+              }
+            ]
+          },
+          "chapter_index": {},
+          "summary": "资产与记忆分开记录。"
+        }
+        """
+
+    svc = AIService()
+    svc._call_ai = fake_call
+
+    result = await svc.auto_extract_debrief(
+        chapter_content="林炎通过焚荒古戒感应到涅槃火精残息，并将其收入玉瓶。",
+        chapter_title="第7章：火戒初醒",
+        chapter_number=7,
+        character_states=[],
+        storylines=[],
+    )
+
+    assert "资产表只记录" in captured["prompt"]
+    assert "记忆库记录" in captured["prompt"]
+    assert result["memory_updates"][0]["title"] == "林炎获得涅槃火精残息"
+    assert result["asset_updates"]["new_items"][0]["name"] == "涅槃火精残息"
+    assert result["asset_updates"]["new_items"][0]["tier"] == "B"
 
 
 @pytest.mark.asyncio

@@ -149,6 +149,7 @@ export default function ChapterEditor({
   const [aiSuggestedCharIds, setAiSuggestedCharIds]   = useState<Set<string>>(new Set())
   const [aiSuggestedSlIds, setAiSuggestedSlIds]       = useState<Set<string>>(new Set())
   const [aiDebriefSummary, setAiDebriefSummary]       = useState('')
+  const [aiSuggestedAssetUpdates, setAiSuggestedAssetUpdates] = useState<Record<string, unknown> | null>(null)
 
   // ── 底部伏笔面板 ───────────────────────────────────────────────────
   const [bottomPanelOpen, setBottomPanelOpen]   = useState(false)
@@ -217,6 +218,7 @@ export default function ChapterEditor({
     setAiDrafting(false)
     setSelectionText('')
     setShowSelectionBar(false)
+    setAiSuggestedAssetUpdates(null)
   }, [chapter.id])
 
   /** 同步大纲节点变化时自动展开 */
@@ -437,8 +439,16 @@ export default function ChapterEditor({
           modelProfileFromRoute(route),
           llmProviderIdFromRoute(route),
         )
-        if (applied.characterCount > 0 || applied.storylineCount > 0 || applied.memoryCount > 0) {
-          toast.success(`已自动复盘 ${applied.characterCount} 个人物/${applied.storylineCount} 条故事线/${applied.memoryCount} 条记忆`)
+        if (
+          applied.characterCount > 0
+          || applied.storylineCount > 0
+          || applied.memoryCount > 0
+          || applied.assetCreatedCount > 0
+          || applied.assetUpdatedCount > 0
+        ) {
+          toast.success(
+            `已自动复盘 ${applied.characterCount} 个人物/${applied.storylineCount} 条故事线/${applied.memoryCount} 条记忆，资产新增${applied.assetCreatedCount}/更新${applied.assetUpdatedCount}`,
+          )
         }
       } catch (e: unknown) {
         toast.error(e instanceof Error ? `自动复盘失败：${e.message}` : '自动复盘失败')
@@ -548,6 +558,7 @@ export default function ChapterEditor({
           storyline_id: string; storyline_name?: string
           status?: string; beat?: string
         }>
+        asset_updates?: Record<string, unknown>
         summary?: string
         error?: string
       }
@@ -593,11 +604,18 @@ export default function ChapterEditor({
       setStorylineBeats(prev => ({ ...prev, ...newSlBeats }))
       setAiSuggestedCharIds(suggestedCharIds)
       setAiSuggestedSlIds(suggestedSlIds)
+      setAiSuggestedAssetUpdates(data.asset_updates || null)
       if (data.summary) setAiDebriefSummary(data.summary)
 
       const total = suggestedCharIds.size + suggestedSlIds.size
-      if (total > 0) {
-        toast.success(`AI 自动提取了 ${suggestedCharIds.size} 个人物变化、${suggestedSlIds.size} 条故事线更新，请确认后提交`)
+      const assetCount = data.asset_updates
+        ? Object.values(data.asset_updates).reduce<number>(
+          (sum, value) => sum + (Array.isArray(value) ? value.length : 0),
+          0,
+        )
+        : 0
+      if (total > 0 || assetCount > 0) {
+        toast.success(`AI 自动提取了 ${suggestedCharIds.size} 个人物变化、${suggestedSlIds.size} 条故事线更新、${assetCount} 条资产变化，请确认后提交`)
         // 自动打开复盘面板
         setContextOpen(true)
         setContextTab('debrief')
@@ -638,7 +656,12 @@ export default function ChapterEditor({
       })
       .filter((e): e is Record<string, any> => !!e && Object.keys(e).length > 1)
 
-    if (characterUpdates.length === 0 && storylineUpdates.length === 0 && !debriefNotes) {
+    const hasAssetUpdates = Boolean(
+      aiSuggestedAssetUpdates
+      && Object.values(aiSuggestedAssetUpdates).some(value => Array.isArray(value) && value.length > 0),
+    )
+
+    if (characterUpdates.length === 0 && storylineUpdates.length === 0 && !debriefNotes && !hasAssetUpdates) {
       toast('没有需要提交的更新', { icon: 'ℹ️' })
       return
     }
@@ -649,6 +672,7 @@ export default function ChapterEditor({
         chapter_id: chapter.id,
         character_updates: characterUpdates as any,
         storyline_updates: storylineUpdates as any,
+        asset_updates: hasAssetUpdates ? aiSuggestedAssetUpdates || undefined : undefined,
         notes: debriefNotes || undefined,
       })
       toast.success(res.data.message)
@@ -661,6 +685,7 @@ export default function ChapterEditor({
       // 清空表单
       setCharUpdates({})
       setStorylineBeats({})
+      setAiSuggestedAssetUpdates(null)
       setDebriefNotes('')
     } catch {
       toast.error('复盘提交失败')

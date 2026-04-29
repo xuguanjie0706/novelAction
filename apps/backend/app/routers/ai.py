@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 import json
 import re
 
@@ -21,6 +21,9 @@ from app.models import (
     PowerSystem,
     ChapterCoherenceReport,
     Foreshadow,
+    Faction,
+    Item,
+    Skill,
 )
 from app.schemas import MemoryChunkCreate, MemoryChunkOut
 from app.services.ai_service import AIService
@@ -409,6 +412,162 @@ def _fmt_index_item(item) -> str:
             or json.dumps(item, ensure_ascii=False)
         )
     return str(item)
+
+
+def _string_ids(values) -> set[str]:
+    return {str(value) for value in (values or []) if value}
+
+
+def _json_ref_ids(values, key: str) -> set[str]:
+    ids = set()
+    for value in values or []:
+        if isinstance(value, dict) and value.get(key):
+            ids.add(str(value.get(key)))
+    return ids
+
+
+def _brief_text(value: str | None, limit: int = 90) -> str:
+    return _truncate(value, limit).replace("\n", " ")
+
+
+def _format_brief_line(name: str, attrs: list[str]) -> str:
+    clean_attrs = [attr for attr in attrs if attr]
+    return f"{name}（{'；'.join(clean_attrs)}）" if clean_attrs else name
+
+
+def _build_writing_brief_context(
+    db: Session,
+    project_id: str,
+    chapter: Chapter,
+    outline_node: Optional[OutlineNode],
+    large_context: bool = False,
+) -> str:
+    """Activate only the assets this chapter may consume: factions, items, and skills."""
+    current_chapter_number = chapter.sort_order + 1
+    involved_ids = _string_ids(outline_node.involved_character_ids if outline_node else [])
+    key_item_ids = _string_ids(outline_node.key_item_ids if outline_node else [])
+    key_skill_ids = _string_ids(outline_node.key_skill_ids if outline_node else [])
+
+    characters = db.query(Character).filter(
+        Character.project_id == project_id
+    ).order_by(Character.role, Character.name).all()
+    if involved_ids:
+        active_characters = [c for c in characters if str(c.id) in involved_ids]
+    else:
+        active_characters = [
+            c for c in characters
+            if c.role in {"protagonist", "antagonist"}
+        ][:6] or characters[:6]
+    active_character_ids = {str(c.id) for c in active_characters}
+    owned_item_ids = set().union(*[
+        _json_ref_ids(c.owned_items, "item_id") for c in active_characters
+    ]) if active_characters else set()
+    known_skill_ids = set().union(*[
+        _json_ref_ids(c.known_skills, "skill_id") for c in active_characters
+    ]) if active_characters else set()
+    faction_ids = {str(c.faction_id) for c in active_characters if c.faction_id}
+    faction_names = {c.faction for c in active_characters if c.faction}
+
+    items = db.query(Item).filter(
+        Item.project_id == project_id
+    ).order_by(Item.sort_order, Item.created_at).all()
+    activated_items = []
+    for item in items:
+        item_id = str(item.id)
+        owner_id = str(item.current_owner_id) if item.current_owner_id else ""
+        first_seen = item.first_appearance_chapter or 0
+        is_core_by_rarity = item.rarity in {"unique", "mythic", "legendary"} and (
+            owner_id in active_character_ids
+            or (first_seen and first_seen <= current_chapter_number)
+        )
+        if (
+            item_id in key_item_ids
+            or item_id in owned_item_ids
+            or owner_id in active_character_ids
+            or is_core_by_rarity
+        ):
+            activated_items.append(item)
+
+    skills = db.query(Skill).filter(
+        Skill.project_id == project_id
+    ).order_by(Skill.sort_order, Skill.created_at).all()
+    activated_skills = []
+    for skill in skills:
+        skill_id = str(skill.id)
+        mastered_by = _string_ids(skill.mastered_by_character_ids)
+        first_seen = skill.first_appearance_chapter or 0
+        if (
+            skill_id in key_skill_ids
+            or skill_id in known_skill_ids
+            or bool(mastered_by & active_character_ids)
+            or (first_seen and first_seen <= current_chapter_number and skill.grade in {"divine", "supreme"})
+        ):
+            activated_skills.append(skill)
+
+    factions = db.query(Faction).filter(
+        Faction.project_id == project_id
+    ).order_by(Faction.sort_order, Faction.created_at).all()
+    activated_factions = [
+        f for f in factions
+        if str(f.id) in faction_ids or f.name in faction_names
+    ]
+
+    item_limit = 12 if large_context else 5
+    skill_limit = 12 if large_context else 5
+    faction_limit = 10 if large_context else 4
+    sections = ["【本章写前 Brief / 激活资产】"]
+
+    if activated_factions:
+        faction_lines = []
+        for faction in activated_factions[:faction_limit]:
+            faction_lines.append(_format_brief_line(
+                faction.name,
+                [
+                    f"立场={faction.alignment}" if faction.alignment else "",
+                    f"对主角态度={faction.attitude_to_protagonist}" if faction.attitude_to_protagonist else "",
+                    f"资源={_brief_text(faction.resources)}" if faction.resources else "",
+                    f"目标={_brief_text(faction.goals)}" if faction.goals else "",
+                ],
+            ))
+        sections.append("激活势力：" + "；".join(faction_lines))
+        sections.append("势力消费方式：只把势力当作身份、资源、阻力或冲突来源；本章后若关系变化，章后复盘更新态度或故事线。")
+
+    if activated_items:
+        item_lines = []
+        for item in activated_items[:item_limit]:
+            item_lines.append(_format_brief_line(
+                item.name,
+                [
+                    "/".join(part for part in [item.item_type, item.rarity] if part),
+                    f"状态={item.status}" if item.status else "",
+                    f"效果={_brief_text(item.effects)}" if item.effects else "",
+                    f"限制={_brief_text(item.limitations)}" if item.limitations else "",
+                    f"意义={_brief_text(item.story_significance)}" if item.story_significance else "",
+                ],
+            ))
+        sections.append("激活道具/法宝：" + "；".join(item_lines))
+        sections.append("道具消费方式：只使用已激活道具的已知能力；不得临场赋予新能力。若新增B级道具影响后文，章后入库并记录持有者、状态和限制。")
+
+    if activated_skills:
+        skill_lines = []
+        for skill in activated_skills[:skill_limit]:
+            skill_lines.append(_format_brief_line(
+                skill.name,
+                [
+                    "/".join(part for part in [skill.skill_type, skill.grade] if part),
+                    f"要求={_brief_text(skill.level_required)}" if skill.level_required else "",
+                    f"效果={_brief_text(skill.effects)}" if skill.effects else "",
+                    f"限制={_brief_text(skill.limitations)}" if skill.limitations else "",
+                ],
+            ))
+        sections.append("激活功法/技能：" + "；".join(skill_lines))
+        sections.append("技能消费方式：必须符合掌握者、境界、熟练度和代价；升级必须在正文写出原因，并在章后复盘更新人物技能。")
+
+    if len(sections) == 1:
+        return ""
+
+    sections.append("C级临时资产：允许出现无名、一次性的丹药/符箓/小势力/普通招式；不得解决主冲突；若影响后续，章后复盘升格入库。")
+    return "\n".join(sections)
 
 
 def _build_chapter_index_context(db: Session, project_id: str, chapter: Chapter) -> str:
@@ -1078,6 +1237,13 @@ async def draft_assist_stream(
         project_id=project_id,
         chapter=chapter,
     )
+    writing_brief_context = _build_writing_brief_context(
+        db=db,
+        project_id=project_id,
+        chapter=chapter,
+        outline_node=outline_node,
+        large_context=large_context,
+    )
 
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
@@ -1140,6 +1306,7 @@ async def draft_assist_stream(
                 replace_existing=req.replace_existing,
                 continuity_context=continuity_context,
                 chapter_index_context=chapter_index_context,
+                writing_brief_context=writing_brief_context,
             ):
                 yield f"data: {json.dumps({'text': chunk})}\n\n"
         except Exception as e:
@@ -1176,6 +1343,94 @@ class MemoryUpdate(BaseModel):
     content: str
     tags: List[str] = []
 
+
+class NewItemAsset(BaseModel):
+    tier: Literal["A", "B", "C"] = "B"
+    name: str
+    item_type: str = "artifact"
+    rarity: str = "rare"
+    description: Optional[str] = None
+    origin: Optional[str] = None
+    effects: Optional[str] = None
+    limitations: Optional[str] = None
+    current_owner_id: Optional[str] = None
+    current_owner_name: Optional[str] = None
+    story_significance: Optional[str] = None
+    status: str = "intact"
+    reason_to_store: Optional[str] = None
+
+
+class ItemAssetUpdate(BaseModel):
+    item_id: Optional[str] = None
+    item_name: Optional[str] = None
+    status: Optional[str] = None
+    current_owner_id: Optional[str] = None
+    current_owner_name: Optional[str] = None
+    effects: Optional[str] = None
+    limitations: Optional[str] = None
+    story_significance: Optional[str] = None
+    event_note: Optional[str] = None
+
+
+class NewSkillAsset(BaseModel):
+    tier: Literal["A", "B", "C"] = "B"
+    name: str
+    skill_type: str = "combat"
+    grade: str = "earth"
+    source: Optional[str] = None
+    level_required: Optional[str] = None
+    prerequisites: Optional[str] = None
+    description: Optional[str] = None
+    effects: Optional[str] = None
+    limitations: Optional[str] = None
+    mastered_by_character_ids: List[str] = Field(default_factory=list)
+    mastered_by_character_names: List[str] = Field(default_factory=list)
+    reason_to_store: Optional[str] = None
+
+
+class SkillAssetUpdate(BaseModel):
+    skill_id: Optional[str] = None
+    skill_name: Optional[str] = None
+    effects: Optional[str] = None
+    limitations: Optional[str] = None
+    add_mastered_by_character_id: Optional[str] = None
+    add_mastered_by_character_name: Optional[str] = None
+    mastery: Optional[str] = None
+    event_note: Optional[str] = None
+
+
+class NewFactionAsset(BaseModel):
+    tier: Literal["A", "B", "C"] = "B"
+    name: str
+    faction_type: str = "other"
+    alignment: str = "neutral"
+    description: Optional[str] = None
+    territory: Optional[str] = None
+    strength_level: Optional[str] = None
+    goals: Optional[str] = None
+    resources: Optional[str] = None
+    attitude_to_protagonist: str = "neutral"
+    reason_to_store: Optional[str] = None
+
+
+class FactionAssetUpdate(BaseModel):
+    faction_id: Optional[str] = None
+    faction_name: Optional[str] = None
+    alignment: Optional[str] = None
+    goals: Optional[str] = None
+    resources: Optional[str] = None
+    attitude_to_protagonist: Optional[str] = None
+    event_note: Optional[str] = None
+
+
+class AssetUpdates(BaseModel):
+    new_items: List[NewItemAsset] = Field(default_factory=list)
+    item_updates: List[ItemAssetUpdate] = Field(default_factory=list)
+    new_skills: List[NewSkillAsset] = Field(default_factory=list)
+    skill_updates: List[SkillAssetUpdate] = Field(default_factory=list)
+    new_factions: List[NewFactionAsset] = Field(default_factory=list)
+    faction_updates: List[FactionAssetUpdate] = Field(default_factory=list)
+
 class ChapterIndexPayload(BaseModel):
     story_day: Optional[str] = None
     core_events: List[dict | str] = []
@@ -1191,8 +1446,305 @@ class ChapterDebriefRequest(BaseModel):
     character_updates: List[CharacterUpdate] = []
     storyline_updates: List[StoryLineUpdate] = []
     memory_updates: List[MemoryUpdate] = []
+    asset_updates: AssetUpdates = Field(default_factory=AssetUpdates)
     chapter_index: Optional[ChapterIndexPayload] = None
     notes: Optional[str] = None           # 作者备注，存到 chapter
+
+
+def _safe_uuid(raw: Optional[str]):
+    if not raw:
+        return None
+    try:
+        return UUID(str(raw))
+    except Exception:
+        return None
+
+
+def _find_character(
+    db: Session,
+    project_id: str,
+    character_id: Optional[str] = None,
+    character_name: Optional[str] = None,
+) -> Optional[Character]:
+    character_uuid = _safe_uuid(character_id)
+    if character_uuid:
+        found = db.query(Character).filter(
+            Character.id == character_uuid,
+            Character.project_id == project_id,
+        ).first()
+        if found:
+            return found
+    if character_name:
+        return db.query(Character).filter(
+            Character.name == character_name,
+            Character.project_id == project_id,
+        ).first()
+    return None
+
+
+def _find_asset_by_id_or_name(
+    db: Session,
+    model,
+    project_id: str,
+    asset_id: Optional[str],
+    asset_name: Optional[str],
+):
+    asset_uuid = _safe_uuid(asset_id)
+    if asset_uuid:
+        found = db.query(model).filter(
+            model.id == asset_uuid,
+            model.project_id == project_id,
+        ).first()
+        if found:
+            return found
+    if asset_name:
+        return db.query(model).filter(
+            model.project_id == project_id,
+            model.name == asset_name,
+        ).first()
+    return None
+
+
+def _merge_extra(existing: Optional[dict], **updates) -> dict:
+    base = dict(existing or {})
+    for key, value in updates.items():
+        if value not in (None, "", []):
+            base[key] = value
+    return base
+
+
+def _link_item_to_character(character: Optional[Character], item: Item, chapter_number: int) -> None:
+    if not character:
+        return
+    items = list(character.owned_items or [])
+    item_id = str(item.id)
+    if not any(
+        isinstance(entry, dict)
+        and (str(entry.get("item_id")) == item_id or entry.get("item_name") == item.name)
+        for entry in items
+    ):
+        items.append({
+            "item_id": item_id,
+            "item_name": item.name,
+            "acquired_chapter": chapter_number,
+        })
+    character.owned_items = items
+
+
+def _link_skill_to_character(
+    character: Optional[Character],
+    skill: Skill,
+    mastery: Optional[str],
+) -> None:
+    if not character:
+        return
+    skills = list(character.known_skills or [])
+    skill_id = str(skill.id)
+    existing_ids = {
+        str(entry.get("skill_id"))
+        for entry in skills
+        if isinstance(entry, dict) and entry.get("skill_id")
+    }
+    if skill_id in existing_ids:
+        character.known_skills = [
+            {
+                **entry,
+                "mastery": mastery or entry.get("mastery"),
+            }
+            if isinstance(entry, dict) and str(entry.get("skill_id")) == skill_id
+            else entry
+            for entry in skills
+        ]
+        return
+    skills.append({
+        "skill_id": skill_id,
+        "skill_name": skill.name,
+        "mastery": mastery or "初学",
+    })
+    character.known_skills = skills
+
+
+def _append_unique_uuid(values: Optional[list], value) -> list:
+    result = [str(v) for v in (values or []) if v]
+    text = str(value)
+    if text not in result:
+        result.append(text)
+    return result
+
+
+def _apply_asset_updates(
+    db: Session,
+    project_id: str,
+    chapter: Chapter,
+    asset_updates: AssetUpdates,
+) -> dict:
+    """Persist durable A/B assets; C-tier assets stay as prose/memory only."""
+    chapter_number = chapter.sort_order + 1
+    stats = {
+        "created_items": 0,
+        "updated_items": 0,
+        "created_skills": 0,
+        "updated_skills": 0,
+        "created_factions": 0,
+        "updated_factions": 0,
+    }
+
+    for data in asset_updates.new_items:
+        name = (data.name or "").strip()
+        if not name or data.tier == "C":
+            continue
+        owner = _find_character(db, project_id, data.current_owner_id, data.current_owner_name)
+        item = _find_asset_by_id_or_name(db, Item, project_id, None, name)
+        if item:
+            stats["updated_items"] += 1
+        else:
+            item = Item(id=uuid4(), project_id=project_id, name=name)
+            db.add(item)
+            stats["created_items"] += 1
+        item.item_type = data.item_type or item.item_type
+        item.rarity = data.rarity or item.rarity
+        item.description = data.description or item.description
+        item.origin = data.origin or item.origin
+        item.effects = data.effects or item.effects
+        item.limitations = data.limitations or item.limitations
+        item.current_owner_id = owner.id if owner else item.current_owner_id
+        item.story_significance = data.story_significance or item.story_significance
+        item.first_appearance_chapter = item.first_appearance_chapter or chapter_number
+        item.status = data.status or item.status
+        item.extra = _merge_extra(
+            item.extra,
+            asset_tier=data.tier,
+            reason_to_store=data.reason_to_store,
+            first_recorded_chapter=chapter_number,
+        )
+        if owner:
+            history = list(item.ownership_history or [])
+            history.append({
+                "owner_name": owner.name,
+                "chapter": chapter_number,
+                "event_description": data.reason_to_store or f"第{chapter_number}章首次纳入资产库",
+            })
+            item.ownership_history = history
+            _link_item_to_character(owner, item, chapter_number)
+
+    for data in asset_updates.item_updates:
+        item = _find_asset_by_id_or_name(db, Item, project_id, data.item_id, data.item_name)
+        if not item:
+            continue
+        owner = _find_character(db, project_id, data.current_owner_id, data.current_owner_name)
+        item.status = data.status or item.status
+        item.effects = data.effects or item.effects
+        item.limitations = data.limitations or item.limitations
+        item.story_significance = data.story_significance or item.story_significance
+        if owner:
+            item.current_owner_id = owner.id
+            history = list(item.ownership_history or [])
+            history.append({
+                "owner_name": owner.name,
+                "chapter": chapter_number,
+                "event_description": data.event_note or f"第{chapter_number}章持有者更新",
+            })
+            item.ownership_history = history
+            _link_item_to_character(owner, item, chapter_number)
+        item.extra = _merge_extra(item.extra, last_update_note=data.event_note, last_update_chapter=chapter_number)
+        stats["updated_items"] += 1
+
+    for data in asset_updates.new_skills:
+        name = (data.name or "").strip()
+        if not name or data.tier == "C":
+            continue
+        skill = _find_asset_by_id_or_name(db, Skill, project_id, None, name)
+        if skill:
+            stats["updated_skills"] += 1
+        else:
+            skill = Skill(id=uuid4(), project_id=project_id, name=name)
+            db.add(skill)
+            stats["created_skills"] += 1
+        skill.skill_type = data.skill_type or skill.skill_type
+        skill.grade = data.grade or skill.grade
+        skill.source = data.source or skill.source
+        skill.level_required = data.level_required or skill.level_required
+        skill.prerequisites = data.prerequisites or skill.prerequisites
+        skill.description = data.description or skill.description
+        skill.effects = data.effects or skill.effects
+        skill.limitations = data.limitations or skill.limitations
+        skill.first_appearance_chapter = skill.first_appearance_chapter or chapter_number
+        skill.extra = _merge_extra(
+            skill.extra,
+            asset_tier=data.tier,
+            reason_to_store=data.reason_to_store,
+            first_recorded_chapter=chapter_number,
+        )
+        mastered_ids = list(skill.mastered_by_character_ids or [])
+        for char_id in data.mastered_by_character_ids:
+            character = _find_character(db, project_id, char_id, None)
+            if character:
+                mastered_ids = _append_unique_uuid(mastered_ids, character.id)
+                _link_skill_to_character(character, skill, None)
+        for char_name in data.mastered_by_character_names:
+            character = _find_character(db, project_id, None, char_name)
+            if character:
+                mastered_ids = _append_unique_uuid(mastered_ids, character.id)
+                _link_skill_to_character(character, skill, None)
+        skill.mastered_by_character_ids = mastered_ids
+
+    for data in asset_updates.skill_updates:
+        skill = _find_asset_by_id_or_name(db, Skill, project_id, data.skill_id, data.skill_name)
+        if not skill:
+            continue
+        skill.effects = data.effects or skill.effects
+        skill.limitations = data.limitations or skill.limitations
+        character = _find_character(
+            db,
+            project_id,
+            data.add_mastered_by_character_id,
+            data.add_mastered_by_character_name,
+        )
+        if character:
+            skill.mastered_by_character_ids = _append_unique_uuid(skill.mastered_by_character_ids, character.id)
+            _link_skill_to_character(character, skill, data.mastery)
+        skill.extra = _merge_extra(skill.extra, last_update_note=data.event_note, last_update_chapter=chapter_number)
+        stats["updated_skills"] += 1
+
+    for data in asset_updates.new_factions:
+        name = (data.name or "").strip()
+        if not name or data.tier == "C":
+            continue
+        faction = _find_asset_by_id_or_name(db, Faction, project_id, None, name)
+        if faction:
+            stats["updated_factions"] += 1
+        else:
+            faction = Faction(id=uuid4(), project_id=project_id, name=name)
+            db.add(faction)
+            stats["created_factions"] += 1
+        faction.faction_type = data.faction_type or faction.faction_type
+        faction.alignment = data.alignment or faction.alignment
+        faction.description = data.description or faction.description
+        faction.territory = data.territory or faction.territory
+        faction.strength_level = data.strength_level or faction.strength_level
+        faction.goals = data.goals or faction.goals
+        faction.resources = data.resources or faction.resources
+        faction.attitude_to_protagonist = data.attitude_to_protagonist or faction.attitude_to_protagonist
+        faction.extra = _merge_extra(
+            faction.extra,
+            asset_tier=data.tier,
+            reason_to_store=data.reason_to_store,
+            first_recorded_chapter=chapter_number,
+        )
+
+    for data in asset_updates.faction_updates:
+        faction = _find_asset_by_id_or_name(db, Faction, project_id, data.faction_id, data.faction_name)
+        if not faction:
+            continue
+        faction.alignment = data.alignment or faction.alignment
+        faction.goals = data.goals or faction.goals
+        faction.resources = data.resources or faction.resources
+        faction.attitude_to_protagonist = data.attitude_to_protagonist or faction.attitude_to_protagonist
+        faction.extra = _merge_extra(faction.extra, last_update_note=data.event_note, last_update_chapter=chapter_number)
+        stats["updated_factions"] += 1
+
+    return stats
+
 
 @router.post("/chapter-debrief")
 def chapter_debrief(
@@ -1216,6 +1768,14 @@ def chapter_debrief(
     chapter_index_saved = False
     chapter_index_error: Optional[str] = None
     synced_foreshadows = {"created": 0, "updated": 0, "resolved": 0}
+    asset_stats = {
+        "created_items": 0,
+        "updated_items": 0,
+        "created_skills": 0,
+        "updated_skills": 0,
+        "created_factions": 0,
+        "updated_factions": 0,
+    }
 
     # ── 更新人物状态 ──────────────────────────────────
     for cu in req.character_updates:
@@ -1338,6 +1898,15 @@ def chapter_debrief(
         db.add(memory)
         added_memories.append(memory.title or memory.memory_type)
 
+    # ── 写入/更新结构化资产（实体状态），与 memory_updates 的事件证据互补 ──
+    if req.asset_updates:
+        asset_stats = _apply_asset_updates(
+            db=db,
+            project_id=project_id,
+            chapter=chapter,
+            asset_updates=req.asset_updates,
+        )
+
     # ── 写入/更新章节速查索引 ─────────────────────────
     if req.chapter_index:
         try:
@@ -1398,11 +1967,14 @@ def chapter_debrief(
         "chapter_index_saved": chapter_index_saved,
         "chapter_index_error": chapter_index_error,
         "synced_foreshadows": synced_foreshadows,
+        "asset_updates": asset_stats,
         "message": (
             f"已更新 {len(updated_chars)} 个人物状态、{len(updated_storylines)} 条故事线、"
             f"{len(added_memories)} 条记忆、章节索引={'已写入' if chapter_index_saved else '未更新'}、"
             f"伏笔管理新增{synced_foreshadows['created']}条/更新{synced_foreshadows['updated']}条/"
-            f"回收{synced_foreshadows['resolved']}条"
+            f"回收{synced_foreshadows['resolved']}条、资产新增"
+            f"{asset_stats['created_items'] + asset_stats['created_skills'] + asset_stats['created_factions']}条/"
+            f"更新{asset_stats['updated_items'] + asset_stats['updated_skills'] + asset_stats['updated_factions']}条"
         ),
     }
 

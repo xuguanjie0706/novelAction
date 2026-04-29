@@ -563,6 +563,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         # 生成前从数据库整理出的事实账本，约束跨章连续性
         continuity_context: str = "",
         chapter_index_context: str = "",
+        writing_brief_context: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
@@ -628,6 +629,11 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             if chapter_index_context
             else ""
         )
+        writing_brief_part = (
+            f"\n{self._clip_context(writing_brief_context, 1200, 20000)}\n"
+            if writing_brief_context
+            else ""
+        )
 
         # 故事线与本章特殊目标
         storyline_part = (
@@ -673,6 +679,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 【故事背景】
 世界观：{world_part}
 本章出场人物（含境界/位置/技能）：{char_part}{mem_part}{storyline_part}
+{writing_brief_part}
 
 【上章结尾】
 {prev_part}
@@ -727,7 +734,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         ]
         sl_text = "\n".join(sl_lines) or "（无故事线数据）"
 
-        system = "你是网络小说助手，从章节内容中提取人物状态、故事线、伏笔和信息来源，只返回JSON，不要任何解释。"
+        system = "你是网络小说助手，从章节内容中提取人物状态、故事线、伏笔、信息来源和结构化资产变化，只返回JSON，不要任何解释。"
 
         prompt = f"""章节{chapter_number}《{chapter_title}》正文（前2500字）：
 {chapter_content[:2500]}
@@ -744,10 +751,14 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 3. 哪些故事线有了推进（节拍）
 4. 哪些信息来源需要记录，避免后文凭空知道信息
 5. 哪些伏笔被埋下或回收，避免后文突然出现无前因的设定
-6. 生成章节索引：故事日、核心事件、首次出场、实际伏笔、章末钩子强度、连续性风险
+6. 哪些新道具/法宝、功法/技能、势力需要收入系统，或已有资产状态发生变化
+7. 生成章节索引：故事日、核心事件、首次出场、实际伏笔、章末钩子强度、连续性风险
 
 只提取文中明确发生的变化，不要推断或猜测。
 如果某字段没有变化，不要包含它。
+资产表只记录 A/B 级耐久实体：会再次出现、影响人物能力/势力关系/主线伏笔/后续冲突的道具、技能、势力。
+C级临时资产（一次性丹药、普通符箓、无名小队、普通招式）不要放进 asset_updates，只可在正文或 memory_updates 中作为事件细节出现。
+记忆库记录“第几章发生了什么、信息来源是什么、为何获得/使用/暴露该资产”；资产表记录“这个实体现在是什么、谁持有/掌握、能力/限制/状态是什么”。两者不要互相替代。
 `character_updates.current_status` 只能填写以下枚举之一：
 - alive
 - dead
@@ -785,6 +796,93 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
       "tags": ["人物名", "关键词"]
     }}
   ],
+  "asset_updates": {{
+    "new_items": [
+      {{
+        "tier": "A/B，C级不要输出",
+        "name": "新道具/法宝/材料名",
+        "item_type": "weapon/armor/pill/artifact/material/scroll/beast/other",
+        "rarity": "common/uncommon/rare/epic/legendary/mythic/unique",
+        "description": "外观与性质",
+        "origin": "来历（如正文明确）",
+        "effects": "能力效果",
+        "limitations": "限制/代价",
+        "current_owner_id": "持有人物id（如能对应）",
+        "current_owner_name": "持有人名（如正文明确）",
+        "story_significance": "为什么值得入库",
+        "status": "intact/damaged/destroyed/lost/unknown",
+        "reason_to_store": "入库原因，必须说明它会如何影响后文"
+      }}
+    ],
+    "item_updates": [
+      {{
+        "item_id": "已有道具id（如知道）",
+        "item_name": "已有道具名",
+        "status": "新状态（如有）",
+        "current_owner_id": "新持有人id（如有）",
+        "current_owner_name": "新持有人名（如有）",
+        "effects": "新增/暴露的效果（如正文明确）",
+        "limitations": "新增/暴露的限制（如正文明确）",
+        "story_significance": "意义变化（如有）",
+        "event_note": "本章发生的资产事件"
+      }}
+    ],
+    "new_skills": [
+      {{
+        "tier": "A/B，C级不要输出",
+        "name": "新功法/技能名",
+        "skill_type": "combat/defense/movement/support/bloodline/special",
+        "grade": "mortal/earth/sky/profound/saint/divine/supreme",
+        "source": "来源",
+        "level_required": "境界要求",
+        "prerequisites": "前置条件",
+        "description": "技能描述",
+        "effects": "效果",
+        "limitations": "限制/代价",
+        "mastered_by_character_ids": ["掌握者id"],
+        "mastered_by_character_names": ["掌握者姓名"],
+        "reason_to_store": "入库原因，必须说明它会如何影响后文"
+      }}
+    ],
+    "skill_updates": [
+      {{
+        "skill_id": "已有技能id（如知道）",
+        "skill_name": "已有技能名",
+        "effects": "新增/暴露的效果（如正文明确）",
+        "limitations": "新增/暴露的限制（如正文明确）",
+        "add_mastered_by_character_id": "新掌握者id（如有）",
+        "add_mastered_by_character_name": "新掌握者姓名（如有）",
+        "mastery": "掌握程度",
+        "event_note": "本章发生的技能事件"
+      }}
+    ],
+    "new_factions": [
+      {{
+        "tier": "A/B，C级不要输出",
+        "name": "新势力名",
+        "faction_type": "sect/kingdom/family/guild/evil/race/other",
+        "alignment": "protagonist/neutral/antagonist/unknown",
+        "description": "势力描述",
+        "territory": "活动范围",
+        "strength_level": "实力层级",
+        "goals": "目标",
+        "resources": "资源",
+        "attitude_to_protagonist": "friendly/hostile/neutral/subordinate/superior",
+        "reason_to_store": "入库原因，必须说明它会如何影响后文"
+      }}
+    ],
+    "faction_updates": [
+      {{
+        "faction_id": "已有势力id（如知道）",
+        "faction_name": "已有势力名",
+        "alignment": "新阵营（如有）",
+        "goals": "目标变化（如有）",
+        "resources": "资源变化（如有）",
+        "attitude_to_protagonist": "对主角态度变化（如有）",
+        "event_note": "本章发生的势力事件"
+      }}
+    ]
+  }},
   "chapter_index": {{
     "story_day": "故事内时间，如 Day 8；未知则为空字符串",
     "core_events": ["本章实际发生的核心事件1", "核心事件2"],
@@ -842,6 +940,31 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
                     "content": content,
                     "tags": [str(t) for t in tags[:8] if str(t).strip()],
                 })
+            raw_assets = data.get("asset_updates") if isinstance(data.get("asset_updates"), dict) else {}
+
+            def _clean_asset_items(key: str, limit: int = 8) -> list:
+                return [
+                    item for item in (raw_assets.get(key) or [])[:limit]
+                    if isinstance(item, dict) and (item.get("name") or item.get("item_name") or item.get("skill_name") or item.get("faction_name"))
+                ]
+
+            asset_updates = {
+                "new_items": [
+                    item for item in _clean_asset_items("new_items")
+                    if item.get("tier", "B") in ("A", "B") and item.get("name")
+                ],
+                "item_updates": _clean_asset_items("item_updates"),
+                "new_skills": [
+                    item for item in _clean_asset_items("new_skills")
+                    if item.get("tier", "B") in ("A", "B") and item.get("name")
+                ],
+                "skill_updates": _clean_asset_items("skill_updates"),
+                "new_factions": [
+                    item for item in _clean_asset_items("new_factions")
+                    if item.get("tier", "B") in ("A", "B") and item.get("name")
+                ],
+                "faction_updates": _clean_asset_items("faction_updates"),
+            }
             chapter_index = data.get("chapter_index") if isinstance(data.get("chapter_index"), dict) else {}
             hook_strength = chapter_index.get("hook_strength", 1)
             try:
@@ -877,6 +1000,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
                 "character_updates": char_updates,
                 "storyline_updates": sl_updates,
                 "memory_updates": memory_updates,
+                "asset_updates": asset_updates,
                 "chapter_index": cleaned_index,
                 "summary": data.get("summary", ""),
             }
@@ -885,6 +1009,14 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
                 "character_updates": [],
                 "storyline_updates": [],
                 "memory_updates": [],
+                "asset_updates": {
+                    "new_items": [],
+                    "item_updates": [],
+                    "new_skills": [],
+                    "skill_updates": [],
+                    "new_factions": [],
+                    "faction_updates": [],
+                },
                 "chapter_index": {},
                 "summary": "",
                 "error": f"解析失败: {e}",

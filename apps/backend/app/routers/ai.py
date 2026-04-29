@@ -45,6 +45,79 @@ def _truncate(text: str | None, limit: int) -> str:
     return clean[:limit]
 
 
+_SETTING_CORE_LABELS = [
+    ("core_concept", "一句话核心"),
+    ("genre_position", "类型定位"),
+    ("protagonist_drive", "主角驱动力"),
+    ("core_conflict", "核心矛盾"),
+    ("reader_hook", "追读钩子"),
+    ("emotional_tone", "情感基调"),
+    ("boundaries", "禁忌边界"),
+    ("ending_direction", "结局倾向"),
+]
+
+_SETTING_FOCUS_LABELS = [
+    ("summary", "核心摘要"),
+    ("story_function", "故事作用"),
+    ("conflict_seed", "冲突种子"),
+    ("cost_or_risk", "代价/风险"),
+    ("affected_people", "影响对象"),
+    ("exception_or_loophole", "例外/漏洞"),
+    ("visual_anchor", "画面锚点"),
+]
+
+
+def _read_setting_section(extra: dict, key: str) -> dict:
+    section = extra.get(key)
+    return section if isinstance(section, dict) else {}
+
+
+def _format_world_setting_context(setting: WorldSetting, content_limit: int = 1200) -> str:
+    extra = setting.extra if isinstance(setting.extra, dict) else {}
+    category = extra.get("category") or (setting.category.name if setting.category else "setting")
+    importance = extra.get("importance")
+    stage = extra.get("stage")
+    markers = [str(category)]
+    if importance:
+        markers.append(str(importance))
+    if stage:
+        markers.append(str(stage))
+
+    lines = [f"[{'/'.join(markers)}] {setting.title}"]
+    core = _read_setting_section(extra, "core")
+    focus = _read_setting_section(extra, "focus")
+    for key, label in _SETTING_CORE_LABELS:
+        value = core.get(key)
+        if isinstance(value, str) and value.strip():
+            lines.append(f"{label}：{value.strip()}")
+    for key, label in _SETTING_FOCUS_LABELS:
+        value = focus.get(key)
+        if isinstance(value, str) and value.strip():
+            lines.append(f"{label}：{value.strip()}")
+
+    links = extra.get("links")
+    if isinstance(links, dict):
+        link_parts = []
+        for key, label in [
+            ("faction_names", "关联势力"),
+            ("character_names", "关联人物"),
+            ("storyline_names", "关联故事线"),
+            ("power_system_names", "关联力量体系"),
+        ]:
+            values = links.get(key)
+            if isinstance(values, list):
+                names = "、".join(str(v) for v in values if v)
+                if names:
+                    link_parts.append(f"{label}={names}")
+        if link_parts:
+            lines.append("关联：" + "；".join(link_parts))
+
+    content = _truncate(setting.content, content_limit)
+    if content:
+        lines.append(f"详细设定：{content}")
+    return "\n".join(lines)
+
+
 def _normalize_character_status(raw: Optional[str]) -> Optional[str]:
     if raw is None:
         return None
@@ -785,7 +858,10 @@ async def quality_check(
         chapter_content=chapter.content,
         chapter_title=chapter.title,
         memories=[m.content for m in memories],
-        settings_summary=[f"{s.title}: {s.content or ''}" for s in settings],
+        settings_summary=[
+            _format_world_setting_context(s, content_limit=2400 if large_context else 260)
+            for s in settings
+        ],
         check_types=req.check_types,
         character_states=character_states,
         storylines_context=storylines_context,
@@ -841,7 +917,7 @@ async def chapter_coherence_check(
         setting_len = 1200 if large_context else 160
         project_context_parts.append(
             "世界观设定：\n" + "\n".join(
-                f"- {s.title}: {_truncate(s.content, setting_len)}"
+                f"- {_format_world_setting_context(s, content_limit=setting_len)}"
                 for s in settings[:setting_limit]
             )
         )
@@ -1110,12 +1186,13 @@ async def draft_assist_stream(
     ).all()
     if large_context:
         world_summary = "\n".join(
-            f"- [{s.category.name if s.category else 'setting'}] {s.title}: {_truncate(s.content, 2400)}"
+            f"- {_format_world_setting_context(s, content_limit=2400)}"
             for s in settings
         )
     else:
         world_summary = " | ".join(
-            f"{s.title}: {(s.content or '')[:70]}" for s in settings[:5]
+            _format_world_setting_context(s, content_limit=120).replace("\n", "；")
+            for s in settings[:8]
         )
 
     # ── 人物（含新增状态字段）────────────────────────────

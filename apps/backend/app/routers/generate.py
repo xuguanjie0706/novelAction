@@ -14,8 +14,8 @@ router = APIRouter(prefix="/bootstrap", tags=["bootstrap"])
 class BootstrapRequest(BaseModel):
     logline: str
     premise: Optional[str] = None
-    mode: Literal["sequential", "single_shot"] = "sequential"
-    model_profile: Literal["local", "gemini"] = "local"
+    mode: Literal["sequential", "single_shot"] = "single_shot"
+    model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
 
 
@@ -27,8 +27,8 @@ async def bootstrap_stream(
     """
     一句话创意 → 全量初始化小说（SSE 流式推送进度）
 
-    mode="sequential"  适合 qwen3:8b 等小模型（默认）
-    mode="single_shot" 适合 Gemini / GPT-4o 等大 context 模型
+    mode="single_shot" 适合 Gemini / GPT-4o 等大 context 模型（默认）
+    mode="sequential"  适合 qwen3:8b 等小模型（兼容回退）
     """
     svc = GenerationService(
         db=db,

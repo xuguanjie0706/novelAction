@@ -55,7 +55,7 @@ export default function GenerateWizard({ onClose }: Props) {
   const setAiBackendRoute = useAppStore(s => s.setAiBackendRoute)
   const [phase, setPhase] = useState<'input' | 'generating' | 'done'>('input')
   const [logline, setLogline] = useState('')
-  const [mode, setMode] = useState<Mode>('sequential')
+  const [mode, setMode] = useState<Mode>('single_shot')
   const [steps, setSteps] = useState<StepState[]>(
     STEP_DEFS.map(s => ({ ...s, status: 'pending' }))
   )
@@ -87,9 +87,22 @@ export default function GenerateWizard({ onClose }: Props) {
 
   useEffect(() => {
     if (!llmOverview?.remote_providers?.length) return
-    if (aiBackendRoute !== 'remote') return
-    const def = llmOverview.remote_providers.find(p => p.is_default) ?? llmOverview.remote_providers[0]
-    setAiBackendRoute(`remote:${def.id}`)
+    const pick = () =>
+      llmOverview.remote_providers.find(p => p.is_default) ?? llmOverview.remote_providers[0]
+
+    if (aiBackendRoute === 'remote') {
+      const def = pick()
+      setAiBackendRoute(`remote:${def.id}`)
+      return
+    }
+    if (aiBackendRoute.startsWith('remote:')) {
+      const id = aiBackendRoute.slice('remote:'.length)
+      const ok = llmOverview.remote_providers.some(p => p.id === id)
+      if (!ok) {
+        const def = pick()
+        setAiBackendRoute(`remote:${def.id}`)
+      }
+    }
   }, [llmOverview, aiBackendRoute, setAiBackendRoute])
 
   const modelHint = useMemo(() => {
@@ -109,13 +122,14 @@ export default function GenerateWizard({ onClose }: Props) {
     setErrorMsg('')
 
     // single_shot 模式用两个虚拟步骤
+    // 首步立刻标为 running：SSE 常被代理/缓冲，首个 step_start 可能在整段 AI 结束后才到，否则长时间只有空心圆、无转圈
     if (mode === 'single_shot') {
       setSteps([
-        { key: 'all',    label: 'AI 全量生成（单次调用）', status: 'pending' },
+        { key: 'all',    label: 'AI 全量生成（单次调用）', status: 'running' },
         { key: 'saving', label: '写入数据库',               status: 'pending' },
       ])
     } else {
-      setSteps(STEP_DEFS.map(s => ({ ...s, status: 'pending' })))
+      setSteps(STEP_DEFS.map((s, i) => ({ ...s, status: i === 0 ? 'running' : 'pending' })))
     }
 
     const abort = new AbortController()
@@ -134,7 +148,15 @@ export default function GenerateWizard({ onClose }: Props) {
         signal: abort.signal,
       })
 
-      const reader = res.body!.getReader()
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        throw new Error(text || `请求失败 (${res.status})`)
+      }
+      if (!res.body) {
+        throw new Error('响应无流式正文')
+      }
+
+      const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buf = ''
 
@@ -276,13 +298,10 @@ export default function GenerateWizard({ onClose }: Props) {
                 >
                   <div className="text-sm font-semibold text-gray-800 mb-1">
                     方案 A · 串行步进
-                    {mode === 'sequential' && (
-                      <span className="ml-2 text-xs bg-amber-400 text-white px-1.5 py-0.5 rounded-full">推荐</span>
-                    )}
                   </div>
                   <div className="text-xs text-gray-500 leading-relaxed">
                     6步分别调用，逐步可见进度<br />
-                    适合 <b>qwen3:8b</b> 等本地小模型
+                    仅作为兼容回退，不作为默认路径
                   </div>
                 </button>
                 <button
@@ -294,10 +313,15 @@ export default function GenerateWizard({ onClose }: Props) {
                       : 'border-gray-100 hover:border-gray-200'
                   )}
                 >
-                  <div className="text-sm font-semibold text-gray-800 mb-1">方案 B · 单次全量</div>
+                  <div className="text-sm font-semibold text-gray-800 mb-1">
+                    方案 B · Gemini 全量
+                    {mode === 'single_shot' && (
+                      <span className="ml-2 text-xs bg-blue-400 text-white px-1.5 py-0.5 rounded-full">推荐</span>
+                    )}
+                  </div>
                   <div className="text-xs text-gray-500 leading-relaxed">
-                    1次调用生成全部，速度最快<br />
-                    适合 <b>Gemini / GPT-4o</b> 大模型
+                    1次生成完整世界蓝图<br />
+                    适合 <b>Gemini</b> 长上下文
                   </div>
                 </button>
               </div>

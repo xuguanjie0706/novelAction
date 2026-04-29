@@ -303,7 +303,7 @@ export interface GenTask {
   errorMsg?: string
   /** full_generate: { scale_hint, model_profile, clear_existing }
    *  batch_expand:  { nodes: [{id,title}], chapterCount, modelProfile }
-   *  continue_chapters: { chapterIds: string[], userPrompt, modelProfile, llm_provider_id }
+   *  continue_chapters: { chapterIds: string[], userPrompt, modelProfile, llm_provider_id }（单章时 chapterIds 可为 1 个）
    *  rewrite_chapter: { chapterId, userPrompt, modelProfile, llm_provider_id } */
   params: Record<string, any>
   createdAt: number

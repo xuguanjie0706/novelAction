@@ -23,7 +23,7 @@ function readStoredAiBackendRoute(): string {
     if (draftLegacy === 'gemini') return 'remote'
     if (draftLegacy === 'local') return 'local'
   } catch { /* ignore */ }
-  return 'local'
+  return 'remote'
 }
 
 export function modelProfileFromRoute(route: string): 'local' | 'gemini' {

@@ -127,7 +127,7 @@ Project
 
 ## 一句话生成（Bootstrap）双方案
 
-### 方案 A：串行步进（Sequential）— 默认，适合小模型
+### 方案 A：串行步进（Sequential）— 默认，适合
 
 ```
 logline → [Step1 项目] → [Step2 设定] → [Step3 人物] → [Step4 大纲] → [Step5 记忆] → [Step6 关系]

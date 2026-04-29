@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app.schemas.project import ProjectCreate, ProjectOut
@@ -8,6 +10,10 @@ from app.models.foreshadow import Foreshadow
 from app.models.item import Item
 from app.models.outline import OutlineNode
 from app.models.skill import Skill
+from app.models.world_setting import WorldSetting
+from app.services import generation_service as generation_module
+from app.services.generation_service import GenerationService
+from app.routers import ai as ai_router
 from app.routers.foreshadows import _repair_duplicate_codes
 from app.routers.ai import (
     AssetUpdates,
@@ -46,6 +52,190 @@ def test_project_schema_carries_premise():
     )
 
     assert out.premise == premise
+
+
+def test_gemini_setting_blueprints_cover_world_bible_categories():
+    blueprints = getattr(generation_module, "GEMINI_SETTING_BLUEPRINTS", None)
+
+    assert blueprints is not None
+    assert len(blueprints) >= 20
+    assert {bp["category"] for bp in blueprints} >= {
+        "世界背景",
+        "地理场景",
+        "历史传说",
+        "文化风俗",
+        "规则法则",
+        "其他",
+    }
+    assert blueprints[0]["title"] == "作品立意"
+
+
+def test_single_shot_prompt_uses_shared_targets_without_short_array_examples():
+    prompt_builder = getattr(generation_module, "_single_shot_prompt", None)
+    assert prompt_builder is not None
+
+    prompt = prompt_builder("废柴少年重建丹田", "")
+
+    assert f"settings 必须生成 {len(generation_module.GEMINI_SETTING_BLUEPRINTS)} 张" in prompt
+    assert f"characters 必须生成 {generation_module.CHARACTER_TARGET} 个" in prompt
+    assert "下面是字段结构说明，不代表数组数量" in prompt
+    assert '"characters": [' not in prompt
+    assert '"settings": [' not in prompt
+
+
+@pytest.mark.asyncio
+async def test_single_shot_completion_fills_missing_settings_and_characters():
+    svc = GenerationService(db=None, model_profile="gemini")
+    calls = []
+
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+        calls.append({"system": system, "prompt": prompt, "max_tokens": max_tokens})
+        if "补齐缺失的世界设定卡" in prompt:
+            missing_titles = [
+                bp["title"]
+                for bp in generation_module.GEMINI_SETTING_BLUEPRINTS
+                if bp["title"] != "作品立意"
+            ]
+            return str([
+                {
+                    "title": title,
+                    "content": f"{title}的补充设定，包含名词、制度、代价与冲突。",
+                    "tags": ["补全"],
+                    "extra": {
+                        "focus": {
+                            "summary": f"{title}摘要",
+                            "story_function": "服务主线推进",
+                            "conflict_seed": "制造冲突",
+                            "cost_or_risk": "需要付出代价",
+                            "affected_people": "主角与相关势力",
+                            "exception_or_loophole": "存在例外",
+                            "visual_anchor": "可写入正文的画面",
+                        }
+                    },
+                }
+                for title in missing_titles
+            ]).replace("'", '"')
+        if "补齐缺失的人物档案" in prompt:
+            return str([
+                {
+                    "name": f"补全人物{i}",
+                    "role": "supporting",
+                    "gender": "未知",
+                    "age": "未知",
+                    "faction": "待定",
+                    "personality": "谨慎克制",
+                    "background": "与主线有因果牵连",
+                    "motivation": "追查旧案",
+                    "arc": "从旁观到入局",
+                    "current_realm": "未知",
+                    "speech_style": "简短直接",
+                    "values": "守信",
+                    "fear": "失去同伴",
+                    "secrets": "隐藏身份",
+                    "strengths": ["洞察"],
+                    "weaknesses": ["迟疑"],
+                    "special_traits": ["旧案线索"],
+                }
+                for i in range(1, generation_module.CHARACTER_TARGET)
+            ]).replace("'", '"')
+        raise AssertionError("unexpected completion prompt")
+
+    svc.ai._call_ai = fake_call
+    data = {
+        "project": {"title": "苍穹丹祖", "premise": "", "world_overview": ""},
+        "settings": [
+            {
+                "title": "作品立意",
+                "content": "核心承诺",
+                "tags": ["立意"],
+                "extra": {"core": {"core_concept": "废柴逆转"}},
+            }
+        ],
+        "characters": [{"name": "林炎", "role": "protagonist"}],
+    }
+
+    completed = await svc._complete_single_shot_data(data, "废柴少年重建丹田", "")
+
+    assert len(completed["settings"]) == len(generation_module.GEMINI_SETTING_BLUEPRINTS)
+    assert len(completed["characters"]) == generation_module.CHARACTER_TARGET
+    assert any(call["max_tokens"] >= 16000 for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_single_shot_uses_expanded_gemini_token_budget():
+    svc = GenerationService(db=None, model_profile="gemini")
+    captured = {}
+
+    complete_settings = [
+        {
+            "title": bp["title"],
+            "content": f"{bp['title']}完整设定。",
+            "tags": bp["tags"],
+            "extra": {"category": bp["category"]},
+        }
+        for bp in generation_module.GEMINI_SETTING_BLUEPRINTS
+    ]
+    complete_characters = [
+        {"name": f"人物{i}", "role": "supporting"}
+        for i in range(generation_module.CHARACTER_TARGET)
+    ]
+
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+        captured["max_tokens"] = max_tokens
+        return json.dumps({
+            "project": {"title": "苍穹丹祖", "premise": "", "world_overview": ""},
+            "settings": complete_settings,
+            "characters": complete_characters,
+        }, ensure_ascii=False)
+
+    async def fake_save_all(data, logline, premise):
+        captured["saved_settings"] = len(data["settings"])
+        captured["saved_characters"] = len(data["characters"])
+        return type("ProjectStub", (), {"id": "00000000-0000-0000-0000-000000000001"})()
+
+    svc.ai._call_ai = fake_call
+    svc._save_all = fake_save_all
+
+    chunks = []
+    async for chunk in svc._single_shot("废柴少年重建丹田", ""):
+        chunks.append(chunk)
+
+    assert captured["max_tokens"] == generation_module.GEMINI_SINGLE_SHOT_MAX_TOKENS
+    assert captured["saved_settings"] == len(generation_module.GEMINI_SETTING_BLUEPRINTS)
+    assert captured["saved_characters"] == generation_module.CHARACTER_TARGET
+    assert any('"event": "complete"' in chunk for chunk in chunks)
+
+
+def test_world_setting_context_includes_structured_focus_fields():
+    formatter = getattr(ai_router, "_format_world_setting_context", None)
+    assert formatter is not None
+    setting = WorldSetting(
+        title="大陆地图与地缘格局",
+        content="越靠近圆心温度越高，资源越丰，形成环状阶级剥削。",
+        tags=["地图", "地理"],
+        extra={
+            "category": "地理场景",
+            "importance": "core",
+            "stage": "full",
+            "focus": {
+                "summary": "圆心资源最丰，边缘最冷也最贫瘠。",
+                "story_function": "规定主角由边缘杀向核心的升级路线。",
+                "conflict_seed": "核心宗门垄断暖脉与矿脉。",
+                "cost_or_risk": "穿越寒带会冻伤经脉。",
+                "affected_people": "边缘城民、矿奴、核心宗门。",
+                "exception_or_loophole": "废弃热井可短暂绕过关卡。",
+                "visual_anchor": "冰原尽头升起赤色灵雾。",
+            },
+        },
+    )
+
+    text = formatter(setting, content_limit=500)
+
+    assert "[地理场景/core/full] 大陆地图与地缘格局" in text
+    assert "核心摘要：圆心资源最丰" in text
+    assert "故事作用：规定主角由边缘杀向核心" in text
+    assert "冲突种子：核心宗门垄断暖脉与矿脉" in text
+    assert "详细设定：越靠近圆心温度越高" in text
 
 
 def test_chapter_debrief_content_hash_is_stable_for_same_content():

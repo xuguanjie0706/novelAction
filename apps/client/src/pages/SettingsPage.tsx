@@ -33,6 +33,14 @@ const CATEGORIES: { key: CategoryKey; label: string; icon: React.ElementType; co
 ]
 
 const CATEGORY_KEYS = CATEGORIES.map(c => c.key).filter(k => k !== 'all') as Exclude<CategoryKey, 'all'>[]
+const CATEGORY_TARGETS: Record<Exclude<CategoryKey, 'all'>, number> = {
+  '世界背景': 4,
+  '地理场景': 5,
+  '历史传说': 4,
+  '文化风俗': 4,
+  '规则法则': 4,
+  '其他': 3,
+}
 
 const GEO_LOCATION_TYPES = ['城市/城镇', '宗门/门派', '王宫/皇城', '远古遗迹', '秘境/异空间', '山脉/荒野', '大陆/地区', '其他']
 const GEO_ALIGNMENT_OPTIONS = ['无明确势力', '主角阵营', '反派阵营', '中立势力']
@@ -495,6 +503,11 @@ export default function SettingsPage() {
   const filtered = activeCat === 'all' ? orderedSettings : orderedSettings.filter(s => getCategory(s) === activeCat)
   const countByCategory = (k: CategoryKey) =>
     k === 'all' ? settings.length : settings.filter(s => getCategory(s) === k).length
+  const categoryCountLabel = (k: CategoryKey) => {
+    const count = countByCategory(k)
+    if (k === 'all') return String(count)
+    return `${count}/${CATEGORY_TARGETS[k]}`
+  }
 
   useEffect(() => {
     if (filtered.length === 0) {
@@ -522,7 +535,7 @@ export default function SettingsPage() {
                 <Icon size={14} className={activeCat === key ? 'text-amber-500' : color} />
                 <span className="font-medium">{label}</span>
               </div>
-              <span className="text-xs text-gray-400 tabular-nums">{countByCategory(key)}</span>
+              <span className="text-xs text-gray-400 tabular-nums">{categoryCountLabel(key)}</span>
             </button>
           ))}
         </div>

@@ -48,24 +48,6 @@ type AutoDebriefResponse = {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
-function escapeHtml(s: string) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-
-function plainTextDraftToHtml(s: string) {
-  const blocks = s.split(/\n{2,}/).map(b => b.trim()).filter(Boolean)
-  if (blocks.length === 0) return '<p></p>'
-  return blocks.map(b => `<p>${escapeHtml(b).replace(/\n/g, '<br>')}</p>`).join('')
-}
-
-function parseSseDataLine(line: string): { text?: string; error?: string; done?: boolean } | null {
-  const t = line.trim()
-  if (!t.startsWith('data:')) return null
-  const raw = t.slice(5).trimStart()
-  if (raw === '[DONE]') return { done: true }
-  try { return JSON.parse(raw) } catch { return null }
-}
-
 function isUuidLike(s?: string): boolean {
   if (!s) return false
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s)
@@ -139,6 +121,7 @@ export default function ChapterEditor({
     upsertChapter, removeChapter, setActiveChapterId,
     chapters, characters, storyLines, setStoryLines, setMemories, addGenTask,
   } = useAppStore()
+  const genQueue = useAppStore(s => s.genQueue)
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
   const storylineAutoSyncingRef = useRef(false)
   const memoryAutoSyncingRef = useRef(false)
@@ -152,8 +135,7 @@ export default function ChapterEditor({
   const [statusOpen, setStatusOpen]     = useState(false)
   const statusRef = useRef<HTMLDivElement>(null)
 
-  // ── 原有 AI 草稿功能 ───────────────────────────────────────────────
-  const [aiDrafting, setAiDrafting]                     = useState(false)
+  // ── 原有 AI 草稿功能（正文生成走全局队列，见 chapterGenBusy）────────────
   const [aiExtraPrompt, setAiExtraPrompt]               = useState('')
   const [continueChapterCount, setContinueChapterCount] = useState(1)
   const [selectionText, setSelectionText]               = useState('')
@@ -246,7 +228,6 @@ export default function ChapterEditor({
     sessionStartTime.current  = Date.now()
     setSessionDelta(0)
     setSessionElapsed(0)
-    setAiDrafting(false)
     setSelectionText('')
     setShowSelectionBar(false)
     setCharUpdates({})
@@ -410,95 +391,8 @@ export default function ChapterEditor({
   }
 
   // ─────────────────────────────────────────────────────────────────
-  // AI 草稿生成（保留原逻辑，额外支持传入 prompt）
+  // AI 草稿生成：首发生成 / 选区扩写改写 → 全局队列（与多章续写同一套流水线）
   // ─────────────────────────────────────────────────────────────────
-
-  const insertDraftToEditorAndSave = useCallback(async (text: string, replace: boolean) => {
-    if (!editor || !text.trim()) return
-    const html = plainTextDraftToHtml(text.trim())
-    if (replace) editor.commands.setContent(html)
-    else editor.chain().focus().insertContentAt(editor.state.doc.content.size, html).run()
-    try {
-      const res = await chaptersApi.update(projectId, chapter.id, { content: editor.getHTML() })
-      upsertChapter(res.data)
-      toast.success(replace ? '已替换全文并保存' : '已插入文末并保存')
-    } catch { toast.error('保存失败，请点顶部「保存」重试') }
-  }, [editor, projectId, chapter.id, upsertChapter])
-
-  /** 核心生成逻辑，可接受临时 prompt（选中快捷动作用） */
-  const triggerGenerate = async (overridePrompt?: string, opts?: { replaceExisting?: boolean }) => {
-    setAiDrafting(true)
-    let accumulated = ''
-    const promptToSend = overridePrompt ?? (aiExtraPrompt.trim() || null)
-    try {
-      const route = useAppStore.getState().aiBackendRoute
-      const res = await fetch(`/api/v1/projects/${projectId}/ai/draft-assist/stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chapter_id: chapter.id,
-          model_profile: modelProfileFromRoute(route),
-          ...routeLlmProviderPayload(route),
-          user_prompt: promptToSend,
-          replace_existing: !!opts?.replaceExisting,
-        }),
-      })
-      if (!res.ok) throw new Error((await res.text().catch(() => '')).slice(0, 240) || `HTTP ${res.status}`)
-      if (!res.body) throw new Error('响应无流式内容')
-
-      const reader = res.body.getReader()
-      const dec = new TextDecoder()
-      let buf = ''
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += dec.decode(value, { stream: true })
-        const lines = buf.split('\n'); buf = lines.pop() ?? ''
-        for (const line of lines) {
-          const p = parseSseDataLine(line)
-          if (!p) continue
-          if (p.done) break
-          if (p.error) throw new Error(p.error)
-          if (p.text) { accumulated += p.text }
-        }
-      }
-      for (const line of buf.split('\n')) {
-        const p = parseSseDataLine(line)
-        if (p?.error) throw new Error(p.error)
-        if (p?.text) { accumulated += p.text }
-      }
-      if (!accumulated.trim()) { toast.error('未收到内容，请检查模型或稍后重试'); return }
-      await insertDraftToEditorAndSave(accumulated, !!opts?.replaceExisting)
-      try {
-        setAutoDebriefing(true)
-        const applied = await autoCommitGeneratedChapterDebrief(
-          projectId,
-          chapter.id,
-          modelProfileFromRoute(route),
-          llmProviderIdFromRoute(route),
-        )
-        if (
-          applied.characterCount > 0
-          || applied.storylineCount > 0
-          || applied.memoryCount > 0
-          || applied.assetCreatedCount > 0
-          || applied.assetUpdatedCount > 0
-        ) {
-          toast.success(
-            `已自动复盘 ${applied.characterCount} 个人物/${applied.storylineCount} 条故事线/${applied.memoryCount} 条记忆，资产新增${applied.assetCreatedCount}/更新${applied.assetUpdatedCount}`,
-          )
-        }
-      } catch (e: unknown) {
-        toast.error(e instanceof Error ? `自动复盘失败：${e.message}` : '自动复盘失败')
-      } finally {
-        setAutoDebriefing(false)
-      }
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : 'AI 生成失败')
-    } finally {
-      setAiDrafting(false)
-    }
-  }
 
   const generateDraft = (opts?: { replaceExisting?: boolean; overridePrompt?: string }) => {
     if (!previousChapterGenerated) {
@@ -522,7 +416,35 @@ export default function ChapterEditor({
       toast.success('已加入 AI 队列：开始重写本章')
       return
     }
-    void triggerGenerate(opts?.overridePrompt, opts)
+    void (async () => {
+      if (editor) {
+        try {
+          const currentContent = editor.getHTML()
+          if (currentContent !== chapter.content) {
+            const res = await chaptersApi.update(projectId, chapter.id, { content: currentContent })
+            upsertChapter(res.data)
+          }
+        } catch {
+          toast.error('当前章节保存失败，请稍后重试')
+          return
+        }
+      }
+      const route = useAppStore.getState().aiBackendRoute
+      const userPrompt =
+        opts?.overridePrompt !== undefined ? String(opts.overridePrompt) : aiExtraPrompt.trim()
+      addGenTask({
+        type: 'continue_chapters',
+        projectId,
+        label: `生成《${chapter.title}》正文`,
+        params: {
+          chapterIds: [chapter.id],
+          userPrompt,
+          modelProfile: modelProfileFromRoute(route),
+          ...routeLlmProviderPayload(route),
+        },
+      })
+      toast.success('已加入 AI 队列：生成本章正文')
+    })()
   }
 
   const runPromptAction = (action: 'rewrite' | 'expand') => {
@@ -533,7 +455,33 @@ export default function ChapterEditor({
     const actionConfig = INLINE_ACTIONS.find(item => item.key === action)
     if (!actionConfig) return
     const actionPrompt = actionConfig.buildPrompt(selectionText.slice(0, 400))
-    void triggerGenerate(actionPrompt, { replaceExisting: false })
+    void (async () => {
+      if (editor) {
+        try {
+          const currentContent = editor.getHTML()
+          if (currentContent !== chapter.content) {
+            const res = await chaptersApi.update(projectId, chapter.id, { content: currentContent })
+            upsertChapter(res.data)
+          }
+        } catch {
+          toast.error('当前章节保存失败，请稍后重试')
+          return
+        }
+      }
+      const route = useAppStore.getState().aiBackendRoute
+      addGenTask({
+        type: 'continue_chapters',
+        projectId,
+        label: `生成《${chapter.title}》正文（选区）`,
+        params: {
+          chapterIds: [chapter.id],
+          userPrompt: actionPrompt,
+          modelProfile: modelProfileFromRoute(route),
+          ...routeLlmProviderPayload(route),
+        },
+      })
+      toast.success('已加入 AI 队列')
+    })()
     setShowSelectionBar(false)
   }
 
@@ -551,10 +499,6 @@ export default function ChapterEditor({
     const remaining = Math.max(1, ordered.length - startIndex)
     const count = Math.min(Math.max(1, continueChapterCount || 1), remaining)
     const targetChapters = ordered.slice(startIndex, startIndex + count)
-    if (targetChapters.length <= 1) {
-      generateDraft()
-      return
-    }
 
     if (editor) {
       try {
@@ -791,7 +735,22 @@ export default function ChapterEditor({
   const generateBlockedReason = previousChapterGenerated
     ? null
     : `请先生成上一章《${previousChapter?.title ?? '未命名章节'}》`
-  const generateDisabled = aiDrafting || !previousChapterGenerated
+  const chapterGenBusy = useMemo(
+    () =>
+      genQueue.some(
+        t =>
+          t.projectId === projectId
+          && (t.status === 'pending' || t.status === 'running')
+          && (
+            (t.type === 'continue_chapters'
+              && Array.isArray(t.params?.chapterIds)
+              && t.params.chapterIds.includes(chapter.id))
+            || (t.type === 'rewrite_chapter' && t.params?.chapterId === chapter.id)
+          ),
+      ),
+    [genQueue, projectId, chapter.id],
+  )
+  const generateDisabled = chapterGenBusy || !previousChapterGenerated
   const remainingChapterCount = currentChapterIndex >= 0
     ? Math.max(1, orderedChapters.length - currentChapterIndex)
     : 1
@@ -967,13 +926,13 @@ export default function ChapterEditor({
                   已选 {selectionText.length} 字
                 </span>
                 <button type="button"
-                  disabled={aiDrafting}
+                  disabled={chapterGenBusy}
                   onClick={() => runPromptAction('rewrite')}
                   className="flex items-center gap-1 text-[11px] px-2.5 py-1 bg-white border border-violet-200 text-violet-700 rounded-novel hover:bg-violet-100 transition-novel disabled:opacity-50">
                   <RefreshCw size={11} />改写
                 </button>
                 <button type="button"
-                  disabled={aiDrafting}
+                  disabled={chapterGenBusy}
                   onClick={() => runPromptAction('expand')}
                   className="flex items-center gap-1 text-[11px] px-2.5 py-1 bg-white border border-violet-200 text-violet-700 rounded-novel hover:bg-violet-100 transition-novel disabled:opacity-50">
                   <Feather size={11} />扩写
@@ -997,7 +956,7 @@ export default function ChapterEditor({
                       type="text"
                       value={aiExtraPrompt}
                       onChange={e => setAiExtraPrompt(e.target.value)}
-                      disabled={aiDrafting}
+                      disabled={chapterGenBusy}
                       placeholder="输入风格、情节走向或禁忌；留空则按大纲和上下文续写"
                       className="h-10 w-full rounded-lg border border-gray-200 px-3 text-sm font-medium text-gray-800 outline-none transition placeholder:text-gray-400 focus:border-amber-400 focus:ring-2 focus:ring-amber-100 disabled:opacity-60"
                     />
@@ -1011,7 +970,7 @@ export default function ChapterEditor({
                         min={1}
                         max={remainingChapterCount}
                         value={normalizedContinueCount}
-                        disabled={aiDrafting}
+                        disabled={chapterGenBusy}
                         onChange={e => {
                           const next = Number(e.target.value)
                           setContinueChapterCount(Number.isFinite(next) ? next : 1)
@@ -1031,12 +990,12 @@ export default function ChapterEditor({
                           className="flex h-10 items-center gap-2 rounded-lg bg-amber-500 px-4 text-sm font-semibold text-white transition-colors hover:bg-amber-600 disabled:opacity-60">
                           {normalizedContinueCount > 1
                             ? <ListPlus size={15} />
-                            : <Sparkles size={15} className={aiDrafting ? 'animate-pulse' : ''} />}
-                          {normalizedContinueCount > 1 ? '加入队列' : aiDrafting ? '生成中…' : '生成'}
+                            : <Sparkles size={15} className={chapterGenBusy ? 'animate-pulse' : ''} />}
+                          {normalizedContinueCount > 1 ? '加入队列' : chapterGenBusy ? '队列中…' : '生成'}
                         </button>
 
                         {wordCount > 0 && (
-                          <button type="button" onClick={() => generateDraft({ replaceExisting: true })} disabled={aiDrafting}
+                          <button type="button" onClick={() => generateDraft({ replaceExisting: true })} disabled={chapterGenBusy}
                             className="flex h-10 items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 text-sm font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:opacity-60">
                             <RefreshCw size={14} />重写本章
                           </button>

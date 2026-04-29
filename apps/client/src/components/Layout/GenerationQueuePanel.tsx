@@ -4,7 +4,7 @@
  * 特性：
  *  - 固定在右下角，始终可见（有任务时）
  *  - 点击展开/收起任务列表
- *  - 自动执行 pending 任务（full_generate / batch_expand）
+ *  - 自动执行 pending 任务（full_generate / batch_expand / continue_chapters / rewrite_chapter）
  *  - 实时 SSE 进度更新
  *  - 任务完成后触发大纲树刷新
  */

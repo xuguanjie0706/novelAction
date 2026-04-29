@@ -25,6 +25,28 @@ interface Props {
   onFocusModeChange?: (v: boolean) => void
 }
 
+type AutoDebriefResponse = {
+  character_updates: Array<{
+    character_id: string
+    character_name?: string
+    current_realm?: string
+    current_location?: string
+    current_status?: string
+    add_skill_name?: string
+    add_skill_mastery?: string
+  }>
+  storyline_updates: Array<{
+    storyline_id: string
+    storyline_name?: string
+    status?: string
+    beat?: string
+  }>
+  asset_updates?: Record<string, unknown>
+  summary?: string
+  error?: string
+  cached?: boolean
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -55,6 +77,14 @@ function htmlTail(html: string, maxChars = 200): string {
   div.innerHTML = html
   const text = (div.innerText || div.textContent || '').replace(/\s+/g, ' ').trim()
   return text.length <= maxChars ? text : '…' + text.slice(-maxChars)
+}
+
+function hasHtmlTextContent(html?: string): boolean {
+  if (!html) return false
+  const div = document.createElement('div')
+  div.innerHTML = html
+  const text = (div.innerText || div.textContent || '').replace(/\s+/g, ' ').trim()
+  return text.length > 0
 }
 
 // ─── 章节状态选项 ─────────────────────────────────────────────────────────────
@@ -113,6 +143,7 @@ export default function ChapterEditor({
   const storylineAutoSyncingRef = useRef(false)
   const memoryAutoSyncingRef = useRef(false)
   const lastMemoryAutoExtractAtRef = useRef(0)
+  const debriefAutoLoadedChapterRef = useRef<string | null>(null)
 
   // ── 面板 UI 状态 ───────────────────────────────────────────────────
   const [contextOpen, setContextOpen]   = useState(!!outlineNode)
@@ -218,7 +249,14 @@ export default function ChapterEditor({
     setAiDrafting(false)
     setSelectionText('')
     setShowSelectionBar(false)
+    setCharUpdates({})
+    setStorylineBeats({})
+    setDebriefNotes('')
+    setAiDebriefSummary('')
+    setAiSuggestedCharIds(new Set())
+    setAiSuggestedSlIds(new Set())
     setAiSuggestedAssetUpdates(null)
+    debriefAutoLoadedChapterRef.current = null
   }, [chapter.id])
 
   /** 同步大纲节点变化时自动展开 */
@@ -463,6 +501,10 @@ export default function ChapterEditor({
   }
 
   const generateDraft = (opts?: { replaceExisting?: boolean; overridePrompt?: string }) => {
+    if (!previousChapterGenerated) {
+      toast.error(generateBlockedReason ?? '请先生成上一章')
+      return
+    }
     if (opts?.replaceExisting) {
       if (!window.confirm('「重新生成本章」将按大纲重写当前正文。建议先手动保存快照。确定继续？')) return
       const route = useAppStore.getState().aiBackendRoute
@@ -496,6 +538,10 @@ export default function ChapterEditor({
   }
 
   const enqueueContinueChapters = async () => {
+    if (!previousChapterGenerated) {
+      toast.error(generateBlockedReason ?? '请先生成上一章')
+      return
+    }
     const ordered = [...chapters].sort((a, b) => a.sort_order - b.sort_order)
     const startIndex = ordered.findIndex(c => c.id === chapter.id)
     if (startIndex < 0) {
@@ -538,8 +584,68 @@ export default function ChapterEditor({
     toast.success(`已加入 AI 队列：连续续写 ${targetChapters.length} 章`)
   }
 
+  const applyAutoDebriefData = useCallback((data: AutoDebriefResponse, source: 'cache' | 'llm') => {
+    // 预填人物更新
+    const newCharUpdates: typeof charUpdates = {}
+    const suggestedCharIds = new Set<string>()
+    for (const cu of data.character_updates || []) {
+      const { character_id, character_name: _n, ...fields } = cu
+      if (character_id && Object.keys(fields).some(k => (fields as any)[k])) {
+        newCharUpdates[character_id] = fields
+        suggestedCharIds.add(character_id)
+      }
+    }
+
+    // 预填故事线更新
+    const newSlBeats: typeof storylineBeats = {}
+    const suggestedSlIds = new Set<string>()
+    for (const su of data.storyline_updates || []) {
+      const { storyline_id, storyline_name, ...fields } = su
+      if (!Object.keys(fields).some(k => (fields as any)[k])) continue
+
+      let resolvedId = storyline_id
+      if (!isUuidLike(resolvedId)) {
+        const byName = storyline_name
+          ? storyLines.find(sl => sl.name === storyline_name)
+          : undefined
+        if (byName?.id && isUuidLike(byName.id)) resolvedId = byName.id
+      }
+
+      if (resolvedId && isUuidLike(resolvedId)) {
+        newSlBeats[resolvedId] = fields
+        suggestedSlIds.add(resolvedId)
+      }
+    }
+
+    setCharUpdates(prev => ({ ...prev, ...newCharUpdates }))
+    setStorylineBeats(prev => ({ ...prev, ...newSlBeats }))
+    setAiSuggestedCharIds(suggestedCharIds)
+    setAiSuggestedSlIds(suggestedSlIds)
+    setAiSuggestedAssetUpdates(data.asset_updates || null)
+    setAiDebriefSummary(data.summary || '')
+
+    const total = suggestedCharIds.size + suggestedSlIds.size
+    const assetCount = data.asset_updates
+      ? Object.values(data.asset_updates).reduce<number>(
+        (sum, value) => sum + (Array.isArray(value) ? value.length : 0),
+        0,
+      )
+      : 0
+    if (total > 0 || assetCount > 0) {
+      if (source === 'cache') {
+        toast('已复用本章复盘结果', { icon: 'ℹ️' })
+      } else {
+        toast.success(`AI 自动提取了 ${suggestedCharIds.size} 个人物变化、${suggestedSlIds.size} 条故事线更新、${assetCount} 条资产变化，请确认后提交`)
+      }
+      setContextOpen(true)
+      setContextTab('debrief')
+    } else if (source === 'llm') {
+      toast('AI 未检测到明确的状态变化', { icon: 'ℹ️' })
+    }
+  }, [storyLines])
+
   /** 调用 AI 自动分析章节，预填复盘面板 */
-  const runAutoDebrief = async () => {
+  const runAutoDebrief = async (forceRefresh = false) => {
     setAutoDebriefing(true)
     try {
       const route = useAppStore.getState().aiBackendRoute
@@ -547,81 +653,16 @@ export default function ChapterEditor({
         chapter_id: chapter.id,
         model_profile: modelProfileFromRoute(route),
         ...routeLlmProviderPayload(route),
+        force_refresh: forceRefresh,
       })
-      const data = res.data as {
-        character_updates: Array<{
-          character_id: string; character_name?: string
-          current_realm?: string; current_location?: string
-          current_status?: string; add_skill_name?: string; add_skill_mastery?: string
-        }>
-        storyline_updates: Array<{
-          storyline_id: string; storyline_name?: string
-          status?: string; beat?: string
-        }>
-        asset_updates?: Record<string, unknown>
-        summary?: string
-        error?: string
-      }
+      const data = res.data as AutoDebriefResponse
 
       if (data.error) {
         toast.error(`AI 自动复盘解析失败：${data.error}`)
         return
       }
 
-      // 预填人物更新
-      const newCharUpdates: typeof charUpdates = {}
-      const suggestedCharIds = new Set<string>()
-      for (const cu of data.character_updates || []) {
-        const { character_id, character_name: _n, ...fields } = cu
-        if (character_id && Object.keys(fields).some(k => (fields as any)[k])) {
-          newCharUpdates[character_id] = fields
-          suggestedCharIds.add(character_id)
-        }
-      }
-
-      // 预填故事线更新
-      const newSlBeats: typeof storylineBeats = {}
-      const suggestedSlIds = new Set<string>()
-      for (const su of data.storyline_updates || []) {
-        const { storyline_id, storyline_name, ...fields } = su
-        if (!Object.keys(fields).some(k => (fields as any)[k])) continue
-
-        let resolvedId = storyline_id
-        if (!isUuidLike(resolvedId)) {
-          const byName = storyline_name
-            ? storyLines.find(sl => sl.name === storyline_name)
-            : undefined
-          if (byName?.id && isUuidLike(byName.id)) resolvedId = byName.id
-        }
-
-        if (resolvedId && isUuidLike(resolvedId)) {
-          newSlBeats[resolvedId] = fields
-          suggestedSlIds.add(resolvedId)
-        }
-      }
-
-      setCharUpdates(prev => ({ ...prev, ...newCharUpdates }))
-      setStorylineBeats(prev => ({ ...prev, ...newSlBeats }))
-      setAiSuggestedCharIds(suggestedCharIds)
-      setAiSuggestedSlIds(suggestedSlIds)
-      setAiSuggestedAssetUpdates(data.asset_updates || null)
-      if (data.summary) setAiDebriefSummary(data.summary)
-
-      const total = suggestedCharIds.size + suggestedSlIds.size
-      const assetCount = data.asset_updates
-        ? Object.values(data.asset_updates).reduce<number>(
-          (sum, value) => sum + (Array.isArray(value) ? value.length : 0),
-          0,
-        )
-        : 0
-      if (total > 0 || assetCount > 0) {
-        toast.success(`AI 自动提取了 ${suggestedCharIds.size} 个人物变化、${suggestedSlIds.size} 条故事线更新、${assetCount} 条资产变化，请确认后提交`)
-        // 自动打开复盘面板
-        setContextOpen(true)
-        setContextTab('debrief')
-      } else {
-        toast('AI 未检测到明确的状态变化', { icon: 'ℹ️' })
-      }
+      applyAutoDebriefData(data, data.cached ? 'cache' : 'llm')
     } catch {
       toast.error('AI 自动复盘失败，请手动填写')
     } finally {
@@ -629,7 +670,16 @@ export default function ChapterEditor({
     }
   }
 
-  const submitDebrief = async () => {
+  useEffect(() => {
+    if (!contextOpen || contextTab !== 'debrief') return
+    if (!hasHtmlTextContent(chapter.content)) return
+    if (debriefAutoLoadedChapterRef.current === chapter.id) return
+    if (autoDebriefing || debriefSubmitting) return
+    debriefAutoLoadedChapterRef.current = chapter.id
+    void runAutoDebrief(false)
+  }, [contextOpen, contextTab, chapter.id, chapter.content, autoDebriefing, debriefSubmitting, runAutoDebrief])
+
+  const submitDebrief = async (selectedAssetUpdates?: Record<string, unknown>) => {
     const characterUpdates = Object.entries(charUpdates)
       .map(([character_id, upd]) => {
         const entry: Record<string, any> = { character_id }
@@ -656,9 +706,10 @@ export default function ChapterEditor({
       })
       .filter((e): e is Record<string, any> => !!e && Object.keys(e).length > 1)
 
+    const effectiveAssetUpdates = selectedAssetUpdates ?? aiSuggestedAssetUpdates ?? null
     const hasAssetUpdates = Boolean(
-      aiSuggestedAssetUpdates
-      && Object.values(aiSuggestedAssetUpdates).some(value => Array.isArray(value) && value.length > 0),
+      effectiveAssetUpdates
+      && Object.values(effectiveAssetUpdates).some(value => Array.isArray(value) && value.length > 0),
     )
 
     if (characterUpdates.length === 0 && storylineUpdates.length === 0 && !debriefNotes && !hasAssetUpdates) {
@@ -672,7 +723,7 @@ export default function ChapterEditor({
         chapter_id: chapter.id,
         character_updates: characterUpdates as any,
         storyline_updates: storylineUpdates as any,
-        asset_updates: hasAssetUpdates ? aiSuggestedAssetUpdates || undefined : undefined,
+        asset_updates: hasAssetUpdates ? effectiveAssetUpdates || undefined : undefined,
         notes: debriefNotes || undefined,
       })
       toast.success(res.data.message)
@@ -735,6 +786,12 @@ export default function ChapterEditor({
     [chapters],
   )
   const currentChapterIndex = orderedChapters.findIndex(c => c.id === chapter.id)
+  const previousChapter = currentChapterIndex > 0 ? orderedChapters[currentChapterIndex - 1] : null
+  const previousChapterGenerated = !previousChapter || hasHtmlTextContent(previousChapter.content)
+  const generateBlockedReason = previousChapterGenerated
+    ? null
+    : `请先生成上一章《${previousChapter?.title ?? '未命名章节'}》`
+  const generateDisabled = aiDrafting || !previousChapterGenerated
   const remainingChapterCount = currentChapterIndex >= 0
     ? Math.max(1, orderedChapters.length - currentChapterIndex)
     : 1
@@ -966,7 +1023,11 @@ export default function ChapterEditor({
                     <div className="flex flex-col gap-1.5">
                       <span className="block text-[11px] font-semibold text-transparent select-none">操作</span>
                       <div className="flex flex-wrap items-center gap-2">
-                        <button type="button" onClick={enqueueContinueChapters} disabled={aiDrafting}
+                        <button
+                          type="button"
+                          onClick={enqueueContinueChapters}
+                          disabled={generateDisabled}
+                          title={generateBlockedReason ?? undefined}
                           className="flex h-10 items-center gap-2 rounded-lg bg-amber-500 px-4 text-sm font-semibold text-white transition-colors hover:bg-amber-600 disabled:opacity-60">
                           {normalizedContinueCount > 1
                             ? <ListPlus size={15} />
@@ -1279,6 +1340,7 @@ export default function ChapterEditor({
                   autoDebriefing={autoDebriefing}
                   aiSuggestedCharIds={aiSuggestedCharIds}
                   aiSuggestedSlIds={aiSuggestedSlIds}
+                  aiSuggestedAssetUpdates={aiSuggestedAssetUpdates}
                   aiSummary={aiDebriefSummary}
                   onAutoDebrief={runAutoDebrief}
                   onSubmit={submitDebrief}
@@ -1407,9 +1469,10 @@ interface DebriefPanelProps {
   autoDebriefing?: boolean
   aiSuggestedCharIds?: Set<string>
   aiSuggestedSlIds?: Set<string>
+  aiSuggestedAssetUpdates?: Record<string, unknown> | null
   aiSummary?: string
-  onAutoDebrief?: () => void
-  onSubmit: () => void
+  onAutoDebrief?: (forceRefresh?: boolean) => void
+  onSubmit: (selectedAssetUpdates?: Record<string, unknown>) => void
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -1417,6 +1480,14 @@ const STATUS_LABEL: Record<string, string> = {
 }
 const STORYLINE_STATUS_LABEL: Record<string, string> = {
   planned: '规划中', active: '进行中', climax: '高潮', resolved: '已结局', dropped: '已废弃',
+}
+const ASSET_UPDATE_LABELS: Record<string, string> = {
+  new_items: '新增道具/法宝',
+  item_updates: '更新道具/法宝',
+  new_skills: '新增功法/技能',
+  skill_updates: '更新功法/技能',
+  new_factions: '新增势力',
+  faction_updates: '更新势力',
 }
 
 function DebriefPanel({
@@ -1427,6 +1498,7 @@ function DebriefPanel({
   submitting, autoDebriefing,
   aiSuggestedCharIds = new Set(),
   aiSuggestedSlIds = new Set(),
+  aiSuggestedAssetUpdates = null,
   aiSummary,
   onAutoDebrief,
   onSubmit,
@@ -1456,7 +1528,45 @@ function DebriefPanel({
     }))
   }
 
-  const hasAiSuggestions = aiSuggestedCharIds.size > 0 || aiSuggestedSlIds.size > 0
+  const assetSections = useMemo(() => {
+    const source = aiSuggestedAssetUpdates || {}
+    return Object.entries(ASSET_UPDATE_LABELS)
+      .map(([key, label]) => {
+        const list = source[key]
+        return {
+          key,
+          label,
+          items: Array.isArray(list) ? list.filter(item => typeof item === 'object' && item !== null) : [],
+        }
+      })
+      .filter(section => section.items.length > 0)
+  }, [aiSuggestedAssetUpdates])
+  const [assetSelections, setAssetSelections] = useState<Record<string, boolean[]>>({})
+
+  useEffect(() => {
+    const nextSelections: Record<string, boolean[]> = {}
+    for (const section of assetSections) {
+      nextSelections[section.key] = section.items.map(() => true)
+    }
+    setAssetSelections(nextSelections)
+  }, [assetSections])
+
+  const totalAssetCount = assetSections.reduce((sum, section) => sum + section.items.length, 0)
+  const selectedAssetCount = assetSections.reduce((sum, section) => {
+    const flags = assetSelections[section.key] || []
+    return sum + flags.filter(Boolean).length
+  }, 0)
+  const hasAiSuggestions = aiSuggestedCharIds.size > 0 || aiSuggestedSlIds.size > 0 || totalAssetCount > 0
+
+  const buildSelectedAssetUpdates = (): Record<string, unknown> | undefined => {
+    const picked: Record<string, unknown> = {}
+    for (const section of assetSections) {
+      const flags = assetSelections[section.key] || []
+      const selectedItems = section.items.filter((_, idx) => flags[idx])
+      if (selectedItems.length > 0) picked[section.key] = selectedItems
+    }
+    return Object.keys(picked).length > 0 ? picked : undefined
+  }
 
   return (
     <div className="p-4 space-y-4">
@@ -1470,7 +1580,7 @@ function DebriefPanel({
           </div>
           <p className="text-[11px] text-amber-800 leading-relaxed">{aiSummary}</p>
           <p className="text-[10px] text-amber-500 mt-1">
-            已预填 {aiSuggestedCharIds.size} 个人物、{aiSuggestedSlIds.size} 条故事线，请检查后提交
+            已预填 {aiSuggestedCharIds.size} 个人物、{aiSuggestedSlIds.size} 条故事线、{totalAssetCount} 条资产变化，请检查后提交
           </p>
         </div>
       ) : (
@@ -1481,7 +1591,7 @@ function DebriefPanel({
           {onAutoDebrief && (
             <button
               type="button"
-              onClick={onAutoDebrief}
+              onClick={() => onAutoDebrief(hasAiSuggestions)}
               disabled={autoDebriefing || !chapter.content?.trim()}
               className="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-novel border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 transition-novel shrink-0"
             >
@@ -1664,6 +1774,89 @@ function DebriefPanel({
         </section>
       )}
 
+      {/* 资产变化（AI 建议，可勾选） */}
+      {assetSections.length > 0 && (
+        <section>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-1.5">
+              <Flag size={11} className="text-novel-ink-muted" />
+              <span className="text-[10px] font-semibold text-novel-ink-muted uppercase tracking-wider">
+                资产变化（可勾选提交）
+              </span>
+              <span className="text-[10px] text-novel-ink-faint">
+                {selectedAssetCount}/{totalAssetCount}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const allSelected = selectedAssetCount === totalAssetCount && totalAssetCount > 0
+                setAssetSelections(prev => {
+                  const next = { ...prev }
+                  for (const section of assetSections) {
+                    next[section.key] = section.items.map(() => !allSelected)
+                  }
+                  return next
+                })
+              }}
+              className="text-[10px] px-2 py-1 rounded border border-novel-border bg-white text-novel-ink-muted hover:bg-novel-panel transition-novel"
+            >
+              {selectedAssetCount === totalAssetCount && totalAssetCount > 0 ? '全部取消' : '全部勾选'}
+            </button>
+          </div>
+
+          <div className="space-y-2.5">
+            {assetSections.map(section => (
+              <div key={section.key} className="rounded-novel border border-novel-border bg-novel-card px-3 py-2.5">
+                <div className="text-[10px] font-semibold text-novel-ink-muted mb-1.5">{section.label}</div>
+                <div className="space-y-1">
+                  {section.items.map((item, idx) => {
+                    const row = item as Record<string, unknown>
+                    const name = String(
+                      row.name
+                      || row.item_name
+                      || row.skill_name
+                      || row.faction_name
+                      || `${section.label}#${idx + 1}`,
+                    )
+                    const note = String(
+                      row.reason_to_store
+                      || row.event_note
+                      || row.story_significance
+                      || row.effects
+                      || row.goals
+                      || '',
+                    )
+                    const checked = assetSelections[section.key]?.[idx] ?? false
+                    return (
+                      <label key={`${section.key}-${idx}`} className="flex items-start gap-2 text-[11px] text-novel-ink">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={e => {
+                            const { checked: nextChecked } = e.target
+                            setAssetSelections(prev => {
+                              const sectionFlags = [...(prev[section.key] || section.items.map(() => true))]
+                              sectionFlags[idx] = nextChecked
+                              return { ...prev, [section.key]: sectionFlags }
+                            })
+                          }}
+                          className="mt-0.5"
+                        />
+                        <span className="leading-relaxed">
+                          <span className="font-medium">{name}</span>
+                          {note && <span className="text-novel-ink-faint"> · {note}</span>}
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* 作者备注 */}
       <section>
         <label className="text-[10px] font-semibold text-novel-ink-muted block mb-1.5">作者备注（可选）</label>
@@ -1689,7 +1882,7 @@ function DebriefPanel({
         {onAutoDebrief && (
           <button
             type="button"
-            onClick={onAutoDebrief}
+            onClick={() => onAutoDebrief(hasAiSuggestions)}
             disabled={autoDebriefing || submitting || !chapter.content?.trim()}
             className="flex items-center justify-center gap-1.5 text-xs py-2 px-3 border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-novel font-medium disabled:opacity-50 transition-novel shrink-0"
           >
@@ -1699,7 +1892,7 @@ function DebriefPanel({
         )}
         <button
           type="button"
-          onClick={onSubmit}
+          onClick={() => onSubmit(buildSelectedAssetUpdates())}
           disabled={submitting || autoDebriefing}
           className="flex-1 flex items-center justify-center gap-2 text-sm py-2.5 bg-novel-accent hover:bg-novel-accent-hover text-white rounded-novel font-medium disabled:opacity-60 transition-novel"
         >

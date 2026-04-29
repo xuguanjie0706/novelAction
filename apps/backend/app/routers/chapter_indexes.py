@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from app.database import get_db
 from app.models import Chapter, ChapterIndex
@@ -16,14 +16,12 @@ def list_chapter_indexes(project_id: str, db: Session = Depends(get_db)):
     ).order_by(ChapterIndex.chapter_number).all()
 
 
-@router.get("/chapter/{chapter_id}", response_model=ChapterIndexOut)
+@router.get("/chapter/{chapter_id}", response_model=Optional[ChapterIndexOut])
 def get_chapter_index(project_id: str, chapter_id: str, db: Session = Depends(get_db)):
     index = db.query(ChapterIndex).filter(
         ChapterIndex.project_id == project_id,
         ChapterIndex.chapter_id == chapter_id,
     ).first()
-    if not index:
-        raise HTTPException(404, "Chapter index not found")
     return index
 
 

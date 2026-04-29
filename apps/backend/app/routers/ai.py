@@ -7,6 +7,7 @@ from typing import Optional, List, Literal
 from uuid import UUID, uuid4
 import json
 import re
+import hashlib
 
 from app.database import get_db
 from app.models import (
@@ -24,6 +25,7 @@ from app.models import (
     Faction,
     Item,
     Skill,
+    ChapterDebriefCache,
 )
 from app.schemas import MemoryChunkCreate, MemoryChunkOut
 from app.services.ai_service import AIService
@@ -1953,6 +1955,11 @@ def chapter_debrief(
         db.add(memory)
         added_memories.append(memory.title)
 
+    db.query(ChapterDebriefCache).filter(
+        ChapterDebriefCache.project_id == project_id,
+        ChapterDebriefCache.chapter_id == chapter.id,
+    ).delete(synchronize_session=False)
+
     try:
         db.commit()
     except SQLAlchemyError as exc:
@@ -1984,6 +1991,11 @@ class AutoDebriefRequest(BaseModel):
     chapter_id: str
     model_profile: Literal["local", "gemini"] = "local"
     llm_provider_id: Optional[UUID] = None
+    force_refresh: bool = False
+
+
+def _chapter_debrief_content_hash(content: str) -> str:
+    return hashlib.sha256((content or "").encode("utf-8")).hexdigest()
 
 @router.post("/auto-debrief")
 async def auto_debrief(
@@ -2049,6 +2061,24 @@ async def auto_debrief(
     # strip HTML
     import re as _re
     plain_content = _re.sub(r"<[^>]+>", "", chapter.content or "")
+    content_hash = _chapter_debrief_content_hash(plain_content)
+    current_llm_provider = str(req.llm_provider_id) if req.llm_provider_id else None
+
+    cached = db.query(ChapterDebriefCache).filter(
+        ChapterDebriefCache.project_id == project_id,
+        ChapterDebriefCache.chapter_id == chapter.id,
+    ).first()
+    if (
+        cached
+        and not req.force_refresh
+        and cached.content_hash == content_hash
+        and cached.model_profile == req.model_profile
+        and (cached.llm_provider_id or None) == current_llm_provider
+        and isinstance(cached.payload, dict)
+    ):
+        payload = dict(cached.payload)
+        payload["cached"] = True
+        return payload
 
     result = await svc.auto_extract_debrief(
         chapter_content=plain_content,
@@ -2057,6 +2087,22 @@ async def auto_debrief(
         character_states=character_states,
         storylines=storylines_data,
     )
+    if isinstance(result, dict) and not result.get("error"):
+        if not cached:
+            cached = ChapterDebriefCache(
+                project_id=project_id,
+                chapter_id=chapter.id,
+            )
+            db.add(cached)
+        cached.content_hash = content_hash
+        cached.model_profile = req.model_profile
+        cached.llm_provider_id = current_llm_provider
+        cached.payload = result
+        try:
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+    result["cached"] = False
     return result
 
 

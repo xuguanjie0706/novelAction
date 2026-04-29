@@ -5,6 +5,8 @@ export interface ReviewProject {
 
 export interface ReviewChapter {
   id: string
+  project_id?: string
+  outline_node_id?: string | null
   title: string
   content: string
   sort_order: number
@@ -13,6 +15,41 @@ export interface ReviewChapter {
   updated_at?: string | null
   last_quality_score?: number | null
   last_quality_report?: QualityReport | null
+}
+
+export interface ReviewMemoryChunk {
+  id: string
+  chapter_id?: string | null
+  memory_type: 'event' | 'character_state' | 'foreshadow' | 'setting' | 'conflict' | string
+  title?: string
+  content: string
+  tags?: string[]
+  created_at?: string
+}
+
+export interface ReviewChapterIndex {
+  id: string
+  chapter_id: string
+  chapter_number: number
+  story_day?: string
+  core_events: Array<Record<string, unknown> | string>
+  first_appearances: Array<Record<string, unknown>>
+  actual_foreshadows_laid: Array<Record<string, unknown>>
+  actual_foreshadows_resolved: Array<Record<string, unknown>>
+  ending_hook?: string
+  hook_strength?: number
+  continuity_notes: Array<Record<string, unknown> | string>
+  updated_at?: string
+}
+
+export interface ReviewForeshadow {
+  id: string
+  title: string
+  description?: string
+  status: 'open' | 'resolved' | 'dropped' | string
+  laid_chapter_id?: string | null
+  resolved_chapter_id?: string | null
+  priority?: number
 }
 
 export type ModelProfile = 'local' | 'gemini'

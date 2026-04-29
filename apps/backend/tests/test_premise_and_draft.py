@@ -14,6 +14,7 @@ from app.routers.ai import (
     ChapterDebriefRequest,
     ChapterIndexPayload,
     NewItemAsset,
+    _chapter_debrief_content_hash,
     _apply_asset_updates,
     _build_writing_brief_context,
     _foreshadow_payload_from_index_item,
@@ -45,6 +46,16 @@ def test_project_schema_carries_premise():
     )
 
     assert out.premise == premise
+
+
+def test_chapter_debrief_content_hash_is_stable_for_same_content():
+    content = "萧炎突破六段斗之气"
+
+    h1 = _chapter_debrief_content_hash(content)
+    h2 = _chapter_debrief_content_hash(content)
+
+    assert h1 == h2
+    assert len(h1) == 64
 
 
 def test_chapter_debrief_accepts_storyline_name_without_uuid():

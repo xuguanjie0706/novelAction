@@ -15,6 +15,7 @@ from app.models.faction import Faction
 from app.models.chapter_coherence_report import ChapterCoherenceReport
 from app.models.foreshadow import Foreshadow
 from app.models.llm_call_log import LlmCallLog
+from app.models.chapter_debrief_cache import ChapterDebriefCache
 
 __all__ = [
     "Project",
@@ -33,4 +34,5 @@ __all__ = [
     "ChapterCoherenceReport",
     "Foreshadow",
     "LlmCallLog",
+    "ChapterDebriefCache",
 ]

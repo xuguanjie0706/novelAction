@@ -14,6 +14,7 @@ from app.models import (
     Project,
     WorldSetting,
     Character,
+    ChapterIndex,
     OutlineNode,
     StoryLine,
     PowerSystem,
@@ -23,6 +24,191 @@ from app.schemas import MemoryChunkCreate, MemoryChunkOut
 from app.services.ai_service import AIService
 
 router = APIRouter(prefix="/projects/{project_id}/ai", tags=["ai"])
+
+
+def _plain_text(html: str | None) -> str:
+    return re.sub(r"<[^>]+>", "", html or "").strip()
+
+
+def _truncate(text: str | None, limit: int) -> str:
+    clean = (text or "").strip()
+    return clean[:limit]
+
+
+def _build_continuity_context(
+    db: Session,
+    project_id: str,
+    chapter: Chapter,
+    outline_node: Optional[OutlineNode],
+) -> str:
+    """生成前的跨章事实账本：状态、伏笔、承接点、禁止事项。"""
+    current_chapter_number = chapter.sort_order + 1
+    previous_chapter_number = max(chapter.sort_order, 0)
+
+    characters = db.query(Character).filter(
+        Character.project_id == project_id
+    ).order_by(Character.role, Character.name).all()
+    char_lines = []
+    for c in characters[:10]:
+        parts = [f"{c.name}"]
+        if c.role:
+            parts.append(f"身份={c.role}")
+        if c.current_realm:
+            parts.append(f"当前境界={c.current_realm}")
+        if c.realm_rank is not None:
+            parts.append(f"境界序号={c.realm_rank}")
+        if c.current_location:
+            parts.append(f"当前位置={c.current_location}")
+        if c.current_status and c.current_status != "alive":
+            parts.append(f"状态={c.current_status}")
+        char_lines.append("、".join(parts))
+
+    power_systems = db.query(PowerSystem).filter(
+        PowerSystem.project_id == project_id
+    ).order_by(PowerSystem.sort_order).all()
+    power_lines = []
+    for ps in power_systems[:3]:
+        level_names = []
+        for level in (ps.levels or [])[:8]:
+            if isinstance(level, dict) and level.get("name"):
+                rank = level.get("rank")
+                level_names.append(f"{rank}.{level.get('name')}" if rank else level.get("name"))
+        rule = _truncate(ps.special_rules or ps.breakthrough_condition or ps.description, 80)
+        line = f"{ps.name}"
+        if level_names:
+            line += f"等级顺序={' > '.join(level_names)}"
+        if ps.protagonist_current_rank:
+            line += f"；主角当前rank={ps.protagonist_current_rank}"
+        if rule:
+            line += f"；规则={rule}"
+        power_lines.append(line)
+
+    recent_chapters = db.query(Chapter).filter(
+        Chapter.project_id == project_id,
+        Chapter.sort_order < chapter.sort_order,
+    ).order_by(Chapter.sort_order.desc()).limit(3).all()
+    recent_lines = []
+    for c in reversed(recent_chapters):
+        source = getattr(c, "summary", None) or _plain_text(c.content)[-180:]
+        if source:
+            recent_lines.append(f"第{c.sort_order + 1}章《{c.title}》：{_truncate(source, 160)}")
+
+    foreshadow_memories = db.query(MemoryChunk).filter(
+        MemoryChunk.project_id == project_id,
+        MemoryChunk.memory_type.in_(["foreshadow", "event", "character_state"]),
+    ).order_by(MemoryChunk.chapter_number.desc()).limit(8).all()
+    memory_lines = [
+        f"第{m.chapter_number or '?'}章 {m.title or m.memory_type}：{_truncate(m.content, 100)}"
+        for m in foreshadow_memories
+        if (m.content or "").strip()
+    ]
+
+    storylines = db.query(StoryLine).filter(
+        StoryLine.project_id == project_id,
+        StoryLine.status.in_(["planned", "active", "climax"]),
+    ).order_by(StoryLine.sort_order).limit(5).all()
+    storyline_lines = []
+    for s in storylines:
+        beats = list(s.key_beats or [])
+        last_beat = ""
+        if beats:
+            beat = beats[-1]
+            if isinstance(beat, dict):
+                last_beat = beat.get("beat") or beat.get("milestone") or ""
+            else:
+                last_beat = str(beat)
+        desc = _truncate(last_beat or s.core_conflict or s.description, 90)
+        storyline_lines.append(f"{s.name}（{s.status}）：{desc}")
+
+    bridge_lines = []
+    if previous_chapter_number > 0:
+        bridge_lines.append(
+            f"本章必须承接第{previous_chapter_number}章结尾，不得跳过报信、反应、转场等因果链。"
+        )
+    if outline_node and outline_node.power_milestone:
+        bridge_lines.append(f"本章实力目标：{outline_node.power_milestone}")
+    if outline_node and (outline_node.foreshadows_resolved or outline_node.foreshadows_laid):
+        bridge_lines.append("伏笔必须有前因后果；不得凭空写角色已经知道未在前文出现的信息。")
+
+    ban_lines = [
+        "人物境界、位置、状态不得倒退或跳变，除非本章明确写出代价、原因和过渡。",
+        "不得让角色掌握前文未获得的情报；新情报必须通过看见、听见、推理或前文伏笔获得。",
+        "不得无提示跳过上一章钩子的直接反应。"
+    ]
+
+    sections = [
+        f"截至第{previous_chapter_number}章事实表（用于生成第{current_chapter_number}章）：",
+        "人物状态：" + ("；".join(char_lines) if char_lines else "无"),
+        "力量体系：" + ("；".join(power_lines) if power_lines else "无"),
+        "最近章节：" + ("；".join(recent_lines) if recent_lines else "无"),
+        "记忆/伏笔：" + ("；".join(memory_lines) if memory_lines else "无"),
+        "故事线进度：" + ("；".join(storyline_lines) if storyline_lines else "无"),
+        "未解决承接点：" + ("；".join(bridge_lines) if bridge_lines else "无"),
+        "禁止事项：" + "；".join(ban_lines),
+    ]
+    return "\n".join(sections)
+
+
+def _fmt_index_item(item) -> str:
+    if isinstance(item, dict):
+        return (
+            item.get("description")
+            or item.get("event")
+            or item.get("name")
+            or item.get("note")
+            or json.dumps(item, ensure_ascii=False)
+        )
+    return str(item)
+
+
+def _build_chapter_index_context(db: Session, project_id: str, chapter: Chapter) -> str:
+    """最近章节索引 + 未回收伏笔，作为连续生成的主干导航。"""
+    recent_indexes = db.query(ChapterIndex).filter(
+        ChapterIndex.project_id == project_id,
+        ChapterIndex.chapter_number < chapter.sort_order + 1,
+    ).order_by(ChapterIndex.chapter_number.desc()).limit(5).all()
+
+    recent_lines = []
+    for idx in reversed(recent_indexes):
+        events = "；".join(_fmt_index_item(e) for e in (idx.core_events or [])[:3])
+        hook = idx.ending_hook or ""
+        notes = "；".join(_fmt_index_item(n) for n in (idx.continuity_notes or [])[:3])
+        parts = [f"第{idx.chapter_number}章"]
+        if idx.story_day:
+            parts.append(f"故事日={idx.story_day}")
+        if events:
+            parts.append(f"核心事件={events}")
+        if hook:
+            parts.append(f"章末钩子={hook}")
+        if notes:
+            parts.append(f"连续性风险={notes}")
+        recent_lines.append("；".join(parts))
+
+    all_indexes = db.query(ChapterIndex).filter(
+        ChapterIndex.project_id == project_id,
+        ChapterIndex.chapter_number < chapter.sort_order + 1,
+    ).order_by(ChapterIndex.chapter_number).all()
+    resolved_descriptions = {
+        _fmt_index_item(item)
+        for idx in all_indexes
+        for item in (idx.actual_foreshadows_resolved or [])
+        if _fmt_index_item(item)
+    }
+    open_foreshadows = []
+    for idx in all_indexes:
+        for item in (idx.actual_foreshadows_laid or []):
+            desc = _fmt_index_item(item)
+            status = item.get("status") if isinstance(item, dict) else ""
+            if not desc or desc in resolved_descriptions or status == "resolved":
+                continue
+            open_foreshadows.append(f"第{idx.chapter_number}章：{desc}")
+
+    sections = []
+    if recent_lines:
+        sections.append("最近章节索引：\n" + "\n".join(recent_lines))
+    if open_foreshadows:
+        sections.append("全量未回收伏笔：\n" + "\n".join(open_foreshadows[-12:]))
+    return "\n\n".join(sections)
 
 
 class QualityCheckRequest(BaseModel):
@@ -471,11 +657,22 @@ async def draft_assist_stream(
 
     prev_tail = ""
     if prev_chapter and prev_chapter.content:
-        clean = re.sub(r"<[^>]+>", "", prev_chapter.content or "")
+        clean = _plain_text(prev_chapter.content)
         prev_tail = clean[-400:] if len(clean) > 400 else clean
 
     # ── 当前章节正文（strip HTML）────────────────────
-    existing_content = re.sub(r"<[^>]+>", "", chapter.content or "")
+    existing_content = _plain_text(chapter.content)
+    continuity_context = _build_continuity_context(
+        db=db,
+        project_id=project_id,
+        chapter=chapter,
+        outline_node=outline_node,
+    )
+    chapter_index_context = _build_chapter_index_context(
+        db=db,
+        project_id=project_id,
+        chapter=chapter,
+    )
 
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
@@ -536,6 +733,8 @@ async def draft_assist_stream(
                 premise=project.premise or "",
                 user_prompt=req.user_prompt or "",
                 replace_existing=req.replace_existing,
+                continuity_context=continuity_context,
+                chapter_index_context=chapter_index_context,
             ):
                 yield f"data: {json.dumps({'text': chunk})}\n\n"
         except Exception as e:
@@ -566,10 +765,28 @@ class StoryLineUpdate(BaseModel):
     status: Optional[str] = None          # planned/active/climax/resolved/dropped
     append_beat: Optional[str] = None     # 追加到 key_beats 的新节点描述
 
+class MemoryUpdate(BaseModel):
+    memory_type: Literal["event", "character_state", "foreshadow", "setting", "conflict"] = "event"
+    title: Optional[str] = None
+    content: str
+    tags: List[str] = []
+
+class ChapterIndexPayload(BaseModel):
+    story_day: Optional[str] = None
+    core_events: List[dict | str] = []
+    first_appearances: List[dict] = []
+    actual_foreshadows_laid: List[dict] = []
+    actual_foreshadows_resolved: List[dict] = []
+    ending_hook: Optional[str] = None
+    hook_strength: int = 1
+    continuity_notes: List[dict | str] = []
+
 class ChapterDebriefRequest(BaseModel):
     chapter_id: str
     character_updates: List[CharacterUpdate] = []
     storyline_updates: List[StoryLineUpdate] = []
+    memory_updates: List[MemoryUpdate] = []
+    chapter_index: Optional[ChapterIndexPayload] = None
     notes: Optional[str] = None           # 作者备注，存到 chapter
 
 @router.post("/chapter-debrief")
@@ -590,6 +807,8 @@ def chapter_debrief(
 
     updated_chars: List[str] = []
     updated_storylines: List[str] = []
+    added_memories: List[str] = []
+    chapter_index_saved = False
 
     # ── 更新人物状态 ──────────────────────────────────
     for cu in req.character_updates:
@@ -690,6 +909,45 @@ def chapter_debrief(
 
         updated_storylines.append(sl.name)
 
+    # ── 写入章节记忆/伏笔/信息来源 ─────────────────────
+    for mu in req.memory_updates:
+        content = (mu.content or "").strip()
+        if not content:
+            continue
+        memory = MemoryChunk(
+            project_id=project_id,
+            chapter_id=req.chapter_id,
+            chapter_number=chapter.sort_order + 1,
+            memory_type=mu.memory_type,
+            title=(mu.title or mu.memory_type).strip()[:200],
+            content=content,
+            tags=mu.tags[:8],
+        )
+        db.add(memory)
+        added_memories.append(memory.title or memory.memory_type)
+
+    # ── 写入/更新章节速查索引 ─────────────────────────
+    if req.chapter_index:
+        hook_strength = max(1, min(5, req.chapter_index.hook_strength or 1))
+        index = db.query(ChapterIndex).filter(
+            ChapterIndex.project_id == project_id,
+            ChapterIndex.chapter_id == req.chapter_id,
+        ).first()
+        data = req.chapter_index.model_dump()
+        data["hook_strength"] = hook_strength
+        data["chapter_number"] = chapter.sort_order + 1
+        if index:
+            for field, value in data.items():
+                setattr(index, field, value)
+        else:
+            index = ChapterIndex(
+                project_id=project_id,
+                chapter_id=req.chapter_id,
+                **data,
+            )
+            db.add(index)
+        chapter_index_saved = True
+
     # ── 保存作者备注到章节 ────────────────────────────
     if req.notes:
         chapter.summary = (chapter.summary or "") + f"\n[复盘备注] {req.notes}"
@@ -700,7 +958,9 @@ def chapter_debrief(
         "ok": True,
         "updated_characters": updated_chars,
         "updated_storylines": updated_storylines,
-        "message": f"已更新 {len(updated_chars)} 个人物状态、{len(updated_storylines)} 条故事线",
+        "added_memories": added_memories,
+        "chapter_index_saved": chapter_index_saved,
+        "message": f"已更新 {len(updated_chars)} 个人物状态、{len(updated_storylines)} 条故事线、{len(added_memories)} 条记忆、章节索引={'已写入' if chapter_index_saved else '未更新'}",
     }
 
 

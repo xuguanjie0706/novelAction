@@ -22,6 +22,7 @@ import {
   fetchOutlineExpandResult,
   commitOutlineExpand,
 } from '../../utils/outlineAiExpand'
+import { autoCommitGeneratedChapterDebrief } from '../../utils/generatedChapterDebrief'
 
 function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -261,7 +262,16 @@ async function runContinueChapters(
       const nextContent = `${chapter.content || ''}${chapter.content ? '\n' : ''}${appendedHtml}`
       const updateRes = await chaptersApi.update(projectId, chapterId, { content: nextContent })
       upsertChapter(updateRes.data)
-      pushProgress({ step: i + 1, label: `✓ ${stepLabel} 已续写并保存`, done: true, error: false })
+      let debriefSuffix = ''
+      try {
+        const applied = await autoCommitGeneratedChapterDebrief(projectId, chapterId, modelProfile, llmProviderId)
+        if (applied.characterCount > 0 || applied.storylineCount > 0 || applied.memoryCount > 0) {
+          debriefSuffix = `，已复盘 ${applied.characterCount} 个人物/${applied.storylineCount} 条故事线/${applied.memoryCount} 条记忆`
+        }
+      } catch (e: any) {
+        debriefSuffix = `，自动复盘失败：${e?.message || '未知错误'}`
+      }
+      pushProgress({ step: i + 1, label: `✓ ${stepLabel} 已续写并保存${debriefSuffix}`, done: true, error: false })
       successCount++
     } catch (e: any) {
       if (signal.aborted || e?.name === 'AbortError') {

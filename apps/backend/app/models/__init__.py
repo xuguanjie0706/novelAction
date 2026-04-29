@@ -3,6 +3,7 @@ from app.models.world_setting import WorldSetting, SettingCategory
 from app.models.character import Character, CharacterRelationship
 from app.models.outline import OutlineNode
 from app.models.chapter import Chapter, ChapterVersion
+from app.models.chapter_index import ChapterIndex
 from app.models.memory import MemoryChunk
 from app.models.llm_provider import LlmProvider
 # 新增模块（导入顺序需在 Character/Project 之后，因有外键依赖）
@@ -19,6 +20,7 @@ __all__ = [
     "Character", "CharacterRelationship",
     "OutlineNode",
     "Chapter", "ChapterVersion",
+    "ChapterIndex",
     "MemoryChunk",
     "LlmProvider",
     "StoryLine",

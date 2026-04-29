@@ -475,6 +475,9 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         # 第二道锁：本章故事日 + 人物清单约束
         story_day: str = "",
         chapter_manifest: list = None,
+        # 生成前从数据库整理出的事实账本，约束跨章连续性
+        continuity_context: str = "",
+        chapter_index_context: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
@@ -513,6 +516,16 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         char_part = character_summary[:300] if character_summary else "（未设定）"
         mem_part = f"\n近期关键事件：{memory_summary[:150]}" if memory_summary else ""
         prev_part = prev_chapter_tail[-300:] if prev_chapter_tail else "（这是第一章，无前情）"
+        continuity_part = (
+            f"\n【连续性账本 / 不得违背】\n{continuity_context[:1200]}\n"
+            if continuity_context
+            else ""
+        )
+        chapter_index_part = (
+            f"\n【章节速查索引】\n{chapter_index_context[:1600]}\n"
+            if chapter_index_context
+            else ""
+        )
 
         # 故事线与本章特殊目标
         storyline_part = f"\n当前活跃故事线：{storyline_summary[:200]}" if storyline_summary else ""
@@ -546,6 +559,8 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 
 【上章结尾】
 {prev_part}
+{continuity_part}
+{chapter_index_part}
 
 【本章大纲计划】
 标题：{chapter_title}{day_part}
@@ -593,7 +608,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         ]
         sl_text = "\n".join(sl_lines) or "（无故事线数据）"
 
-        system = "你是网络小说助手，从章节内容中提取人物状态变化和故事线推进，只返回JSON，不要任何解释。"
+        system = "你是网络小说助手，从章节内容中提取人物状态、故事线、伏笔和信息来源，只返回JSON，不要任何解释。"
 
         prompt = f"""章节{chapter_number}《{chapter_title}》正文（前2500字）：
 {chapter_content[:2500]}
@@ -608,6 +623,9 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 1. 哪些人物的境界/位置/状态发生了变化
 2. 哪些人物习得了新技能
 3. 哪些故事线有了推进（节拍）
+4. 哪些信息来源需要记录，避免后文凭空知道信息
+5. 哪些伏笔被埋下或回收，避免后文突然出现无前因的设定
+6. 生成章节索引：故事日、核心事件、首次出场、实际伏笔、章末钩子强度、连续性风险
 
 只提取文中明确发生的变化，不要推断或猜测。
 如果某字段没有变化，不要包含它。
@@ -633,6 +651,24 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
       "beat": "本章该故事线发生了什么（一句话）"
     }}
   ],
+  "memory_updates": [
+    {{
+      "memory_type": "event / character_state / foreshadow / setting / conflict 之一",
+      "title": "短标题",
+      "content": "可供后续生成使用的事实，必须写清信息来源、伏笔前因或状态变化",
+      "tags": ["人物名", "关键词"]
+    }}
+  ],
+  "chapter_index": {{
+    "story_day": "故事内时间，如 Day 8；未知则为空字符串",
+    "core_events": ["本章实际发生的核心事件1", "核心事件2"],
+    "first_appearances": [{{"character_id": "可为空", "name": "首次出场人物名"}}],
+    "actual_foreshadows_laid": [{{"description": "实际写进正文的新伏笔", "status": "open"}}],
+    "actual_foreshadows_resolved": [{{"description": "本章实际回收/解释的伏笔"}}],
+    "ending_hook": "章末钩子描述",
+    "hook_strength": 1,
+    "continuity_notes": [{{"severity": "low/medium/high", "note": "生成或正文中发现的连续性风险"}}]
+  }},
   "summary": "本章整体复盘总结（一句话）"
 }}"""
 
@@ -662,15 +698,68 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
                 if len(cleaned) > 1:
                     cleaned["storyline_name"] = su.get("storyline_name", "")
                     sl_updates.append(cleaned)
+            memory_updates = []
+            valid_memory_types = {"event", "character_state", "foreshadow", "setting", "conflict"}
+            for mu in data.get("memory_updates", []):
+                if not isinstance(mu, dict):
+                    continue
+                memory_type = mu.get("memory_type") or "event"
+                if memory_type not in valid_memory_types:
+                    memory_type = "event"
+                content = (mu.get("content") or "").strip()
+                if not content:
+                    continue
+                tags = mu.get("tags") if isinstance(mu.get("tags"), list) else []
+                memory_updates.append({
+                    "memory_type": memory_type,
+                    "title": (mu.get("title") or memory_type).strip()[:120],
+                    "content": content,
+                    "tags": [str(t) for t in tags[:8] if str(t).strip()],
+                })
+            chapter_index = data.get("chapter_index") if isinstance(data.get("chapter_index"), dict) else {}
+            hook_strength = chapter_index.get("hook_strength", 1)
+            try:
+                hook_strength = max(1, min(5, int(hook_strength)))
+            except Exception:
+                hook_strength = 1
+            cleaned_index = {
+                "story_day": (chapter_index.get("story_day") or "").strip(),
+                "core_events": [
+                    item for item in (chapter_index.get("core_events") or [])[:5]
+                    if isinstance(item, (str, dict)) and item
+                ],
+                "first_appearances": [
+                    item for item in (chapter_index.get("first_appearances") or [])[:8]
+                    if isinstance(item, dict) and (item.get("name") or item.get("character_id"))
+                ],
+                "actual_foreshadows_laid": [
+                    item for item in (chapter_index.get("actual_foreshadows_laid") or [])[:10]
+                    if isinstance(item, dict) and item.get("description")
+                ],
+                "actual_foreshadows_resolved": [
+                    item for item in (chapter_index.get("actual_foreshadows_resolved") or [])[:10]
+                    if isinstance(item, dict) and item.get("description")
+                ],
+                "ending_hook": (chapter_index.get("ending_hook") or "").strip(),
+                "hook_strength": hook_strength,
+                "continuity_notes": [
+                    item for item in (chapter_index.get("continuity_notes") or [])[:10]
+                    if isinstance(item, (str, dict)) and item
+                ],
+            }
             return {
                 "character_updates": char_updates,
                 "storyline_updates": sl_updates,
+                "memory_updates": memory_updates,
+                "chapter_index": cleaned_index,
                 "summary": data.get("summary", ""),
             }
         except Exception as e:
             return {
                 "character_updates": [],
                 "storyline_updates": [],
+                "memory_updates": [],
+                "chapter_index": {},
                 "summary": "",
                 "error": f"解析失败: {e}",
                 "raw": response[:300],

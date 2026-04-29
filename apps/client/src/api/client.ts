@@ -158,9 +158,26 @@ export const aiApi = {
     }>
     storyline_updates?: Array<{
       storyline_id: string
+      storyline_name?: string
       status?: string
       append_beat?: string
     }>
+    memory_updates?: Array<{
+      memory_type?: 'event' | 'character_state' | 'foreshadow' | 'setting' | 'conflict'
+      title?: string
+      content: string
+      tags?: string[]
+    }>
+    chapter_index?: {
+      story_day?: string
+      core_events?: Array<Record<string, unknown> | string>
+      first_appearances?: Array<Record<string, unknown>>
+      actual_foreshadows_laid?: Array<Record<string, unknown>>
+      actual_foreshadows_resolved?: Array<Record<string, unknown>>
+      ending_hook?: string
+      hook_strength?: number
+      continuity_notes?: Array<Record<string, unknown> | string>
+    }
     notes?: string
   }) => api.post(`/projects/${pid}/ai/chapter-debrief`, data),
 

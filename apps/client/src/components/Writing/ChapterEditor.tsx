@@ -14,6 +14,7 @@ import {
   CheckSquare, TrendingUp, MapPin, Swords, Bot,
 } from 'lucide-react'
 import clsx from 'clsx'
+import { autoCommitGeneratedChapterDebrief } from '../../utils/generatedChapterDebrief'
 
 // ─── props ──────────────────────────────────────────────────────────────────
 interface Props {
@@ -351,8 +352,6 @@ export default function ChapterEditor({
     try {
       const res = await chaptersApi.update(projectId, chapter.id, { content: editor.getHTML() })
       upsertChapter(res.data)
-      await autoExtractMemoryAfterChapter(false)
-      lastMemoryAutoExtractAtRef.current = Date.now()
       toast.success(replace ? '已替换全文并保存' : '已插入文末并保存')
     } catch { toast.error('保存失败，请点顶部「保存」重试') }
   }, [editor, projectId, chapter.id, upsertChapter])
@@ -401,8 +400,22 @@ export default function ChapterEditor({
       }
       if (!accumulated.trim()) { toast.error('未收到内容，请检查模型或稍后重试'); return }
       await insertDraftToEditorAndSave(accumulated, !!opts?.replaceExisting)
-      // 生成完成后自动触发 AI 复盘分析（后台静默运行，完成后弹提示）
-      void runAutoDebrief()
+      try {
+        setAutoDebriefing(true)
+        const applied = await autoCommitGeneratedChapterDebrief(
+          projectId,
+          chapter.id,
+          modelProfileFromRoute(route),
+          llmProviderIdFromRoute(route),
+        )
+        if (applied.characterCount > 0 || applied.storylineCount > 0 || applied.memoryCount > 0) {
+          toast.success(`已自动复盘 ${applied.characterCount} 个人物/${applied.storylineCount} 条故事线/${applied.memoryCount} 条记忆`)
+        }
+      } catch (e: unknown) {
+        toast.error(e instanceof Error ? `自动复盘失败：${e.message}` : '自动复盘失败')
+      } finally {
+        setAutoDebriefing(false)
+      }
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'AI 生成失败')
     } finally {

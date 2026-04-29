@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from app.config import settings
 from app.database import engine, Base
-from app.routers import projects, world_settings, characters, outline, chapters, ai, generate, admin_llm, llm_public
+from app.routers import projects, world_settings, characters, outline, chapters, chapter_indexes, ai, generate, admin_llm, llm_public
 from app.routers import storylines, power_systems, skills, items, factions
 from app.services.llm_config import seed_llm_from_env_if_empty
 
@@ -129,6 +129,7 @@ app.include_router(world_settings.router, prefix="/api/v1")
 app.include_router(characters.router, prefix="/api/v1")
 app.include_router(outline.router, prefix="/api/v1")
 app.include_router(chapters.router, prefix="/api/v1")
+app.include_router(chapter_indexes.router, prefix="/api/v1")
 app.include_router(ai.router, prefix="/api/v1")
 app.include_router(generate.router, prefix="/api/v1")
 app.include_router(admin_llm.router, prefix="/api/v1")

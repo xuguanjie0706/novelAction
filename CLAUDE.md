@@ -7,8 +7,10 @@
 
 ## 项目概述
 
-**目标**：一个面向网络小说作者的 AI 辅助创作系统。  
-**核心特性**：输入一句话创意，AI 自动生成小说名称、世界观设定、人物、大纲、记忆库；后续写作时提供质检、建议、长篇记忆管理。
+**目标**：一个以 AI 生成为核心的网络小说创作系统。人工不负责填写设定，所有世界观、势力、境界、人物、大纲均由 AI 从一句话创意全量生成。  
+**核心特性**：输入一句话创意，AI 全量生成结构化设定（境界体系、势力档案、故事线、人物、技能、道具）并存入对应数据表；后续章节写作、质检、记忆管理也全部由 AI 驱动，人工只做审阅和微调。
+
+> ⚠️ **设计原则**：系统是 AI 生成系统，不是辅助填写工具。所有新功能的出发点是"AI 能生成/校验/推进什么"，而非"给用户提供什么表单"。
 
 **技术栈**：
 - 后端：FastAPI + SQLAlchemy + PostgreSQL（含 pgvector）
@@ -163,10 +165,29 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 ---
 
+## 设定生成架构原则
+
+**本系统核心是 AI 生成，不是人工填写。** 所有设定在 Bootstrap 时由 AI 生成结构化数据，直接写入对应表：
+
+| 设定类型 | 存储位置 | Bootstrap 步骤 |
+|---|---|---|
+| 境界体系 | `PowerSystem` + `levels[]` | Step 2 `_gen_power_systems` |
+| 势力组织 | `Faction`（含 `extra.active_period`） | Step 3 `_gen_factions` |
+| 故事线 | `StoryLine` | Step 4 `_gen_storylines` |
+| 人物 | `Character` | Step 5 `_gen_characters` |
+| 核心技能/功法 | `Skill` | Step 6 `_gen_key_skills` |
+| 关键道具/法宝 | `Item` | Step 7 `_gen_key_items` |
+| 纯叙事设定 | `WorldSetting`（分类存 `extra.category`） | Step 8 `_gen_settings` |
+| 卷级大纲 | `OutlineNode`（volume） | Step 9 `_gen_volumes` |
+| 记忆种子 | `MemoryChunk` | Step 10 `_gen_memory` |
+| 人物关系 | `CharacterRelationship` | Step 11 `_gen_relations` |
+
+`WorldSetting` 只存**无专属结构化表的纯叙事内容**：作品立意、世界底层规则、历史谜团、地理格局、文化风俗。不再用文字卡存境界体系或势力描述（这些有专属表）。
+
 ## 已完成功能
 
 - [x] 项目 CRUD
-- [x] 世界观设定 CRUD
+- [x] 世界观设定 CRUD（分类体系：世界背景/地理场景/历史传说/文化风俗/规则法则）
 - [x] 人物 + 关系 CRUD
 - [x] 大纲树（层级编辑）
 - [x] 章节写作（TipTap + 自动保存 + 版本快照）
@@ -174,18 +195,18 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 - [x] AI 流式建议（SSE）
 - [x] 记忆提取
 - [x] 一句话生成（方案A串行 + 方案B单次）
+- [x] 故事线/境界体系/技能/道具/势力前端 UI（WorldBuildingPage 五标签页）
+- [x] Bootstrap 生成时结构化生成势力（Faction）、核心技能（Skill）、关键道具（Item）
 
 ## 待完成功能
 
 - [ ] 人物关系图可视化（ReactFlow）
-- [ ] 世界观设定卡完整 UI（分类卡片布局）
 - [ ] 前十章追读分析表
 - [ ] pgvector 语义记忆检索（`MemoryChunk.embedding` 字段已预留）
 - [ ] 导出 TXT / EPUB
 - [ ] 登录鉴权（目前无 auth）
-- [ ] 故事线/境界体系/技能/道具/势力的前端 UI
-- [ ] Bootstrap 生成时同步生成故事线、境界体系、核心技能与道具
 - [ ] AI 质检时结合故事线进度与境界体系做一致性检查
+- [ ] Bootstrap 生成的技能/道具 mastered_by 字段关联真实 character UUID（目前只存名字）
 
 ---
 

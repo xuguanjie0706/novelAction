@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.services.ai_service import AIService
 from app.models import (
     Project, WorldSetting, Character, CharacterRelationship,
-    OutlineNode, MemoryChunk
+    OutlineNode, MemoryChunk, PowerSystem, StoryLine
 )
 
 
@@ -50,27 +50,6 @@ def _sse(event: str, **kwargs) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def _normalize_outline(data: list) -> list:
-    """
-    容错归并，统一强制 卷 → 章 两层结构：
-    1. AI 若返回旧篇节点，提取其章节并直接挂回卷下
-    2. 卷下散落章节保留，和旧篇内章节合并排序
-    3. 修正每级子节点的 sort_order，保证从 0 连续递增
-    """
-    for vol in data:
-        if vol.get("node_type") != "volume":
-            continue
-        children = vol.get("children", [])
-        chapters = [c for c in children if c.get("node_type") == "chapter_plan"]
-        for arc in [c for c in children if c.get("node_type") == "arc"]:
-            chapters.extend(arc.get("children", []))
-
-        for i, chapter in enumerate(chapters):
-            chapter["node_type"] = "chapter_plan"
-            chapter["sort_order"] = i
-        vol["children"] = chapters
-
-    return data
 
 
 # ─────────────────────────────────────────────────────────────
@@ -124,16 +103,28 @@ class GenerationService:
             settings = await self._gen_settings(project, ctx)
             yield _sse("step_done", step="settings", count=len(settings))
 
-            # Step 3 — 人物
+            # Step 3 — 境界体系（先于人物，供角色 current_realm 引用真实境界名）
+            yield _sse("step_start", step="power_systems", label="生成境界体系...")
+            power_systems = await self._gen_power_systems(project, ctx)
+            yield _sse("step_done", step="power_systems", count=len(power_systems),
+                       preview=power_systems[0].name if power_systems else "")
+
+            # Step 4 — 故事线（先于人物和大纲，供 storyline_ids 引用真实 UUID）
+            yield _sse("step_start", step="storylines", label="生成故事线...")
+            storylines = await self._gen_storylines(project, ctx)
+            yield _sse("step_done", step="storylines", count=len(storylines))
+
+            # Step 5 — 人物
             yield _sse("step_start", step="characters", label="生成人物库...")
             chars = await self._gen_characters(project, ctx)
             yield _sse("step_done", step="characters", count=len(chars),
                        preview="、".join(c.name for c in chars[:3]))
 
-            # Step 4 — 大纲
-            yield _sse("step_start", step="outline", label="生成大纲树（卷数与章节动态规划）...")
-            nodes = await self._gen_outline(project, ctx)
-            yield _sse("step_done", step="outline", count=len(nodes))
+            # Step 6 — 卷级骨架（章节大纲由作者按卷触发生成）
+            yield _sse("step_start", step="volumes", label="规划卷级结构...")
+            nodes = await self._gen_volumes(project, ctx)
+            yield _sse("step_done", step="volumes", count=len(nodes),
+                       preview=f"共{len(nodes)}卷")
 
             # Step 5 — 记忆库种子
             yield _sse("step_start", step="memory", label="生成记忆库种子...")
@@ -182,10 +173,27 @@ class GenerationService:
   }},
   "settings": [
     {{"title": "作品立意", "content": "作品定位、主题命题、核心矛盾、情感基调、禁忌边界", "tags": ["立意", "主题"]}},
-    {{"title": "修炼体系", "content": "详细描述", "tags": ["境界", "突破"]}},
     {{"title": "主要势力", "content": "详细描述", "tags": ["宗门"]}},
     {{"title": "世界规则", "content": "详细描述", "tags": ["法则"]}},
     {{"title": "特殊道具/资源", "content": "详细描述", "tags": ["道具"]}}
+  ],
+  "power_systems": [
+    {{
+      "name": "体系名称", "system_type": "cultivation",
+      "description": "体系简介（50字）",
+      "cultivation_method": "修炼方式",
+      "breakthrough_condition": "突破通用条件",
+      "special_rules": "特殊规则",
+      "protagonist_start_rank": 1, "protagonist_end_rank": 9,
+      "levels": [
+        {{"rank": 1, "name": "境界名", "description": "简述", "abilities": ["能力"]}},
+        {{"rank": 2, "name": "境界名", "description": "简述", "abilities": ["能力"]}}
+      ]
+    }}
+  ],
+  "storylines": [
+    {{"name": "主线：线名", "line_type": "main", "description": "简述", "core_conflict": "核心矛盾", "resolution_direction": "收束方向", "status": "active", "start_chapter": 1}},
+    {{"name": "支线：线名", "line_type": "sub", "description": "简述", "core_conflict": "核心矛盾", "resolution_direction": "收束方向", "status": "planned", "start_chapter": 10}}
   ],
   "characters": [
     {{
@@ -199,12 +207,11 @@ class GenerationService:
   ],
   "outline": [
     {{
-      "node_type": "volume", "title": "第一卷：标题", "sort_order": 0,
-      "summary": "本卷概述",
-      "children": [
-        {{"node_type": "chapter_plan", "title": "第1章：标题", "sort_order": 0,
-          "hook": "钩子", "highlight": "燃点", "conflict": "冲突", "summary": "章节摘要"}}
-      ]
+      "title": "第一卷：卷标题（有画面感，带悬念）", "sort_order": 0,
+      "summary": "本卷核心剧情概述，60字内",
+      "hook": "本卷核心悬念：读者最想知道的问题",
+      "conflict": "本卷主要矛盾冲突",
+      "planned_chapters": 60
     }}
   ],
   "memory": [
@@ -291,7 +298,7 @@ class GenerationService:
 立意与类型：{ctx.get('premise', '')[:1000] or '（未填写）'}
 世界观：{ctx['world_overview'][:300]}
 
-生成8张设定卡，返回JSON数组（第一张必须是“作品立意”）：
+生成8张设定卡，返回JSON数组（第一张必须是"作品立意"）：
 [
   {{"title": "作品立意", "content": "提炼作品定位、主题命题、核心矛盾、情感基调与禁忌边界", "tags": ["立意", "主题"]}},
   {{"title": "修炼体系", "content": "详细说明境界、突破条件、上限", "tags": ["境界", "修炼"]}},
@@ -303,9 +310,9 @@ class GenerationService:
   {{"title": "历史谜团与禁忌", "content": "驱动长线追读的历史真相与禁忌边界", "tags": ["谜团", "禁忌"]}}
 ]
 要求：
-1) 第一张卡标题固定为“作品立意”
+1) 第一张卡标题固定为"作品立意"
 2) 若用户未提供立意，由你根据创意自动提炼
-3) “作品立意”聚焦作品基本面，不写世界规则细节
+3) "作品立意"聚焦作品基本面，不写世界规则细节
 4) 其余卡片聚焦可执行设定，避免空话
 5) 每张卡 content 至少120字，且要有可落地细节（名词、规则、代价、限制）
 只返回JSON，不要解释。"""
@@ -327,19 +334,157 @@ class GenerationService:
             results.append(s)
 
         self.db.commit()
-        ctx["settings_summary"] = " | ".join(s.title for s in results)
+        # 包含内容摘要（截取前80字），让后续步骤能真正用到设定细节
+        ctx["settings_summary"] = " | ".join(
+            f"{s.title}：{(s.content or '')[:80]}" for s in results
+        )
         return results
 
     # ══════════════════════════════════════════════════════════
-    #  Step 3 — 人物库
+    #  Step 3 — 境界体系
+    # ══════════════════════════════════════════════════════════
+
+    async def _gen_power_systems(self, project: Project, ctx: dict):
+        system = "你是网络小说世界构建专家。只返回JSON数组。"
+        prompt = f"""小说：《{ctx['project_title']}》({ctx['genre']})
+创意：{ctx['logline']}
+世界观：{ctx['world_overview'][:300]}
+
+生成本小说的力量/境界体系，返回JSON数组（通常1~2套）：
+[
+  {{
+    "name": "体系名称，如「修炼境界」",
+    "system_type": "cultivation",
+    "description": "体系在世界观中的地位与简介（50字内）",
+    "cultivation_method": "修炼方式（如：吸纳天地灵气，淬炼丹田）",
+    "breakthrough_condition": "突破通用条件（如：灵气积累满溢+感悟）",
+    "special_rules": "特殊规则（如：天才/废柴判定，天花板原因）",
+    "protagonist_start_rank": 1,
+    "protagonist_end_rank": 9,
+    "levels": [
+      {{"rank": 1, "name": "境界名", "description": "简述", "abilities": ["能力1"]}},
+      {{"rank": 2, "name": "境界名", "description": "简述", "abilities": ["能力1"]}}
+    ]
+  }}
+]
+system_type 只能是: cultivation / magic / ability / tech / hybrid
+levels 至少包含 6 个境界，按强弱从低到高排列。
+只返回JSON数组，不要说明文字。"""
+
+        raw = await self._call_with_retry(system, prompt)
+        data = _parse_json(raw)
+        if not isinstance(data, list):
+            data = data.get("power_systems", [])
+
+        results = []
+        for i, item in enumerate(data):
+            ps = PowerSystem(
+                project_id=project.id,
+                name=item.get("name", "修炼体系"),
+                system_type=item.get("system_type", "cultivation"),
+                description=item.get("description"),
+                cultivation_method=item.get("cultivation_method"),
+                breakthrough_condition=item.get("breakthrough_condition"),
+                special_rules=item.get("special_rules"),
+                levels=item.get("levels", []),
+                protagonist_current_rank=item.get("protagonist_start_rank", 1),
+                protagonist_end_rank=item.get("protagonist_end_rank"),
+                sort_order=i,
+            )
+            self.db.add(ps)
+            results.append(ps)
+
+        self.db.commit()
+
+        # 把境界名列表压入 ctx，供人物 current_realm 和大纲 power_milestone 引用
+        if results:
+            main_ps = results[0]
+            level_names = [lv.get("name", "") for lv in (main_ps.levels or []) if lv.get("name")]
+            ctx["power_level_names"] = level_names
+            ctx["power_system_name"] = main_ps.name
+            ctx["power_summary"] = (
+                f"{main_ps.name}：" + " → ".join(level_names[:8])
+            )
+        else:
+            ctx["power_level_names"] = []
+            ctx["power_system_name"] = ""
+            ctx["power_summary"] = ""
+
+        return results
+
+    # ══════════════════════════════════════════════════════════
+    #  Step 4 — 故事线
+    # ══════════════════════════════════════════════════════════
+
+    async def _gen_storylines(self, project: Project, ctx: dict):
+        system = "你是网络小说叙事结构专家。只返回JSON数组。"
+        prompt = f"""小说：《{ctx['project_title']}》({ctx['genre']})
+创意：{ctx['logline']}
+故事核：{ctx['story_core'].get('conflict', '')} | 主题：{ctx['story_core'].get('theme', '')}
+境界体系：{ctx.get('power_summary', '（未设定）')}
+
+生成3~5条主要故事线，返回JSON数组：
+[
+  {{
+    "name": "主线：（简短有力的线名）",
+    "line_type": "main",
+    "description": "故事线简述（40字内）",
+    "core_conflict": "这条线的核心矛盾是什么",
+    "resolution_direction": "预计如何收束",
+    "status": "active",
+    "start_chapter": 1
+  }}
+]
+line_type 只能是: main / sub / romance / growth / mystery / faction / antagonist
+status 只能是: planned / active
+必须有且只有1条 main，其余为其他类型。
+只返回JSON数组，不要说明文字。"""
+
+        raw = await self._call_with_retry(system, prompt)
+        data = _parse_json(raw)
+        if not isinstance(data, list):
+            data = data.get("storylines", [])
+
+        results = []
+        for i, item in enumerate(data):
+            sl = StoryLine(
+                project_id=project.id,
+                name=item.get("name", f"故事线{i+1}"),
+                line_type=item.get("line_type", "sub"),
+                description=item.get("description"),
+                core_conflict=item.get("core_conflict"),
+                resolution_direction=item.get("resolution_direction"),
+                status=item.get("status", "planned"),
+                start_chapter=item.get("start_chapter"),
+                sort_order=i,
+            )
+            self.db.add(sl)
+            results.append(sl)
+
+        self.db.commit()
+
+        # 压入 ctx，供大纲生成时引用
+        ctx["storyline_summary"] = " | ".join(
+            f"{sl.name}（{sl.line_type}）" for sl in results
+        )
+        ctx["storyline_ids"] = {sl.name: str(sl.id) for sl in results}
+
+        return results
+
+    # ══════════════════════════════════════════════════════════
+    #  Step 5 — 人物库
     # ══════════════════════════════════════════════════════════
 
     async def _gen_characters(self, project: Project, ctx: dict):
         system = "你是网络小说人物设计专家。只返回JSON数组。"
+        power_hint = (
+            f"\n境界体系（current_realm 必须从此列表选择）：{ctx.get('power_summary', '')}"
+            if ctx.get('power_level_names') else ""
+        )
         prompt = f"""小说：《{ctx['project_title']}》({ctx['genre']})
 创意：{ctx['logline']}
-立意与类型：{ctx.get('premise', '')[:1000] or '（未填写）'}
-故事核：冲突={ctx['story_core'].get('conflict','')}，主题={ctx['story_core'].get('theme','')}
+立意与类型：{ctx.get('premise', '')[:800] or '（未填写）'}
+故事核：冲突={ctx['story_core'].get('conflict','')}，主题={ctx['story_core'].get('theme','')}{power_hint}
 
 生成8个人物（至少：1主角+3核心配角+2反派+2师长/势力角色），返回JSON数组：
 [
@@ -395,93 +540,106 @@ role 只能是: protagonist / supporting / antagonist"""
         self.db.commit()
         ctx["char_names"] = [c.name for c in results]
         ctx["protagonist"] = next((c.name for c in results if c.role == "protagonist"), "主角")
+        # 供 memory 生成用：角色名→当前境界快照
+        ctx["char_realms"] = {
+            c.name: (c.current_realm or "未知") for c in results
+        }
         return results
 
     # ══════════════════════════════════════════════════════════
     #  Step 4 — 大纲树
     # ══════════════════════════════════════════════════════════
 
-    async def _gen_outline(self, project: Project, ctx: dict):
+    async def _gen_volumes(self, project: Project, ctx: dict):
+        """
+        Bootstrap 阶段只生成卷级骨架（volume skeleton），不生成 chapter_plan。
+
+        章节级大纲由作者确认设定后按卷触发 expand_outline 生成，
+        那时 power_milestone / involved_characters 才有准确上下文。
+        """
         system = "你是网络小说结构策划专家。只返回JSON数组。"
+        storyline_hint = (
+            f"\n故事线（每卷 summary 应说明推进了哪条线）：{ctx.get('storyline_summary', '')}"
+            if ctx.get('storyline_summary') else ""
+        )
         prompt = f"""小说：《{ctx['project_title']}》主角：{ctx['protagonist']}
 创意：{ctx['logline']}
-立意与类型：{ctx.get('premise', '')[:1200] or '（未填写）'}
-设定：{ctx['settings_summary']}
+立意与类型：{ctx.get('premise', '')[:700] or '（未填写）'}
+设定摘要：{ctx['settings_summary']}{storyline_hint}
 
-生成大纲树，返回JSON数组。结构严格为：卷→章（两层），不要使用“篇”或 arc 节点。
-卷数和章节数必须按故事规模动态规划，禁止写死“3卷”或“前10章”。
-要求：
-1) 卷数量建议 4~8 卷（最少 3 卷）
-2) 首批至少产出 20~40 个章节计划，按剧情自然分布到前几卷
-3) 后续卷也应给出基础章节骨架，不要只有空壳 children
+根据故事规模规划卷级结构，返回JSON数组。
+卷数建议4~8卷（最少3卷），每卷约60章（过渡卷可30章）。
 
 [
   {{
-    "node_type": "volume", "title": "第一卷：起点（示例）", "sort_order": 0,
-    "summary": "本卷核心事件概述",
-    "children": [
-      {{
-        "node_type": "chapter_plan", "title": "第1章：章节标题", "sort_order": 0,
-        "summary": "本章发生什么",
-        "hook": "开头的悬念/钩子",
-        "highlight": "本章最高燃点",
-        "conflict": "核心冲突"
-      }}
-    ]
+    "title": "第一卷：卷标题（有画面感，带悬念）",
+    "sort_order": 0,
+    "summary": "本卷核心剧情概述，60字内",
+    "hook": "本卷核心悬念：读者最想知道的问题",
+    "conflict": "本卷主要矛盾冲突",
+    "planned_chapters": 60
   }}
 ]
-注意：只返回JSON数组，不要任何说明文字。"""
+planned_chapters 只能填 30 或 60，不要其他数字。
+只返回JSON数组，不要任何说明文字。"""
 
         raw = await self._call_with_retry(system, prompt)
         data = _parse_json(raw)
         if not isinstance(data, list):
-            data = data.get("outline", [])
-
-        # 归并 AI 可能生成的旧篇节点，并修正 sort_order
-        data = _normalize_outline(data)
+            data = data.get("outline", data.get("volumes", []))
 
         results = []
-
-        def save_node(item, parent_id=None):
+        for i, vol in enumerate(data):
+            planned = vol.get("planned_chapters", 60)
+            if planned not in (30, 60):
+                planned = 60
             node = OutlineNode(
                 project_id=project.id,
-                parent_id=parent_id,
-                node_type=item.get("node_type", "volume" if parent_id is None else "chapter_plan"),
-                title=item.get("title", "未命名"),
-                summary=item.get("summary"),
-                hook=item.get("hook"),
-                highlight=item.get("highlight"),
-                conflict=item.get("conflict"),
-                sort_order=item.get("sort_order", 0),
+                parent_id=None,
+                node_type="volume",
+                title=vol.get("title", f"第{i+1}卷"),
+                summary=vol.get("summary"),
+                hook=vol.get("hook"),
+                conflict=vol.get("conflict"),
+                sort_order=vol.get("sort_order", i),
+                extra={"planned_chapters": planned},
             )
             self.db.add(node)
-            self.db.flush()  # 获取 id，供子节点用
             results.append(node)
-            for child in item.get("children", []):
-                save_node(child, parent_id=node.id)
-
-        for vol in data:
-            save_node(vol)
 
         self.db.commit()
+        # 供 memory 生成用：卷级摘要
+        ctx["volumes_summary"] = " | ".join(
+            f"{n.title}：{(n.summary or '')[:40]}" for n in results
+        )
         return results
 
     # ══════════════════════════════════════════════════════════
-    #  Step 5 — 记忆库种子
+    #  Step 7 — 记忆库种子
     # ══════════════════════════════════════════════════════════
 
     async def _gen_memory(self, project: Project, ctx: dict):
         system = "你是小说设定记忆管理专家。只返回JSON数组。"
+        # 汇总所有已生成的结构化上下文，让记忆种子真正锚定设定细节
+        char_snapshot = "、".join(
+            f"{n}（{ctx.get('char_realms', {}).get(n, '未知境界')}）"
+            for n in ctx.get("char_names", [])[:6]
+        )
         prompt = f"""小说：《{ctx['project_title']}》主角：{ctx['protagonist']}
-设定：{ctx['settings_summary']}
+境界体系：{ctx.get('power_summary', '（未设定）')}
+故事线：{ctx.get('storyline_summary', '（未设定）')}
+主要人物：{char_snapshot or ctx.get('char_names', [])}
+卷级结构：{ctx.get('volumes_summary', '（未设定）')}
+设定摘要：{ctx['settings_summary'][:400]}
 
-生成8条初始记忆库种子（作为后续写作的设定锚点，防止前后矛盾），返回JSON数组：
+生成10条初始记忆库种子，覆盖「境界锚点、人物初始状态、故事线起点、关键设定规则、核心伏笔」五类，
+作为后续写作的防矛盾基线，返回JSON数组：
 [
   {{
     "memory_type": "setting",
-    "title": "修炼体系最低境界",
-    "content": "具体内容，清晰可查阅",
-    "tags": ["修炼体系", "锚点"]
+    "title": "简短标题（10字内，精准可查）",
+    "content": "具体内容，可直接作为写作参考（不少于30字）",
+    "tags": ["分类标签"]
   }}
 ]
 memory_type 只能是: event / character_state / foreshadow / setting / conflict"""
@@ -585,6 +743,34 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
                 tags=s.get("tags", []),
             ))
 
+        for ps in data.get("power_systems", []):
+            self.db.add(PowerSystem(
+                project_id=project.id,
+                name=ps.get("name", "修炼体系"),
+                system_type=ps.get("system_type", "cultivation"),
+                description=ps.get("description"),
+                cultivation_method=ps.get("cultivation_method"),
+                breakthrough_condition=ps.get("breakthrough_condition"),
+                special_rules=ps.get("special_rules"),
+                levels=ps.get("levels", []),
+                protagonist_current_rank=ps.get("protagonist_start_rank", 1),
+                protagonist_end_rank=ps.get("protagonist_end_rank"),
+                sort_order=ps.get("sort_order", 0),
+            ))
+
+        for i, sl in enumerate(data.get("storylines", [])):
+            self.db.add(StoryLine(
+                project_id=project.id,
+                name=sl.get("name", f"故事线{i+1}"),
+                line_type=sl.get("line_type", "sub"),
+                description=sl.get("description"),
+                core_conflict=sl.get("core_conflict"),
+                resolution_direction=sl.get("resolution_direction"),
+                status=sl.get("status", "planned"),
+                start_chapter=sl.get("start_chapter"),
+                sort_order=i,
+            ))
+
         char_map = {}
         for c in data.get("characters", []):
             char = Character(
@@ -598,6 +784,11 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
                 background=c.get("background"),
                 motivation=c.get("motivation"),
                 arc=c.get("arc"),
+                current_realm=c.get("current_realm"),
+                speech_style=c.get("speech_style"),
+                values=c.get("values"),
+                fear=c.get("fear"),
+                secrets=c.get("secrets"),
                 strengths=c.get("strengths", []),
                 weaknesses=c.get("weaknesses", []),
                 special_traits=c.get("special_traits", []),
@@ -606,26 +797,28 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
             self.db.flush()
             char_map[char.name] = char
 
-        def save_node(item, parent_id=None):
+        def save_node(item, idx=0):
+            # bootstrap 阶段只保存卷级节点，忽略 children
+            planned = item.get("planned_chapters", 60)
+            if planned not in (30, 60):
+                planned = 60
             node = OutlineNode(
                 project_id=project.id,
-                parent_id=parent_id,
-                node_type=item.get("node_type", "volume" if parent_id is None else "chapter_plan"),
-                title=item.get("title", ""),
+                parent_id=None,
+                node_type="volume",
+                title=item.get("title", f"第{idx+1}卷"),
                 summary=item.get("summary"),
                 hook=item.get("hook"),
-                highlight=item.get("highlight"),
                 conflict=item.get("conflict"),
-                sort_order=item.get("sort_order", 0),
+                sort_order=item.get("sort_order", idx),
+                extra={"planned_chapters": planned},
             )
             self.db.add(node)
             self.db.flush()
-            for child in item.get("children", []):
-                save_node(child, parent_id=node.id)
 
-        outline_data = _normalize_outline(data.get("outline", []))
-        for vol in outline_data:
-            save_node(vol)
+        outline_data = data.get("outline", data.get("volumes", []))
+        for idx, vol in enumerate(outline_data):
+            save_node(vol, idx=idx)
 
         for m in data.get("memory", []):
             self.db.add(MemoryChunk(

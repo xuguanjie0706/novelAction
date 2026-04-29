@@ -416,13 +416,15 @@ async def draft_assist_stream(
         ]
         return "、".join(n for n in names if n)
 
-    # 优先出场人物，不够则补全到 6 人
+    # 严格限定模式：大纲有人物清单时，只传清单内人物（第二道锁）
+    # 旧数据无 involved_ids 时退回兼容模式（最多 6 人）
+    chapter_manifest_names: list[str] = []
     if involved_ids:
         priority = [c for c in characters if str(c.id) in involved_ids]
-        others = [c for c in characters if str(c.id) not in involved_ids]
-        display_chars = (priority + others)[:6]
+        display_chars = priority          # 不补全非清单人物
+        chapter_manifest_names = [c.name for c in priority]
     else:
-        display_chars = characters[:6]
+        display_chars = characters[:6]    # 兼容旧大纲，无清单约束
 
     char_lines = []
     for c in display_chars:
@@ -483,15 +485,48 @@ async def draft_assist_stream(
 
     async def event_stream():
         try:
+            # ── 伏笔：优先读结构化字段，兼容旧 extra.foreshadow ──
+            def _fmt_foreshadows(node) -> str:
+                if not node:
+                    return ""
+                laid = node.foreshadows_laid or []
+                resolved = node.foreshadows_resolved or []
+                parts = []
+                if laid:
+                    descs = [
+                        (f.get("description", "") if isinstance(f, dict) else str(f))
+                        for f in laid[:3]
+                    ]
+                    parts.append("埋[" + "；".join(d for d in descs if d) + "]")
+                if resolved:
+                    descs = [
+                        (f.get("description", "") if isinstance(f, dict) else str(f))
+                        for f in resolved[:3]
+                    ]
+                    parts.append("收[" + "；".join(d for d in descs if d) + "]")
+                # 兼容旧数据：extra.foreshadow 文本
+                if not parts:
+                    legacy = (node.extra or {}).get("foreshadow", "")
+                    if legacy:
+                        return legacy
+                return "  ".join(parts)
+
+            # ── story_day（新字段，存于 extra）───────────────────
+            story_day = ""
+            if outline_node:
+                story_day = (outline_node.extra or {}).get("story_day", "")
+
             async for chunk in svc.draft_assist_stream(
                 chapter_title=chapter.title,
                 outline_hook=outline_node.hook or "" if outline_node else "",
                 outline_summary=outline_node.summary or "" if outline_node else "",
                 outline_conflict=outline_node.conflict or "" if outline_node else "",
                 outline_highlight=outline_node.highlight or "" if outline_node else "",
-                outline_foreshadow=(outline_node.extra or {}).get("foreshadow", "") if outline_node else "",
+                outline_foreshadow=_fmt_foreshadows(outline_node),
                 outline_power_milestone=outline_node.power_milestone or "" if outline_node else "",
                 outline_emotional_tone=outline_node.emotional_tone or "" if outline_node else "",
+                story_day=story_day,
+                chapter_manifest=chapter_manifest_names,
                 prev_chapter_tail=prev_tail,
                 world_summary=world_summary,
                 character_summary=char_summary,

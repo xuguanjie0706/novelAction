@@ -9,7 +9,7 @@ import type { Chapter, Character, OutlineNode, StoryLine } from '../../types'
 import toast from 'react-hot-toast'
 import {
   BookOpen, Sparkles, X, Zap, Target, Users, Flag, GitBranch, RefreshCw,
-  Maximize2, Minimize2, Clock, StickyNote, ChevronDown,
+  Maximize2, Minimize2, Clock, ChevronDown,
   Feather, PenLine, ListPlus,
   CheckSquare, TrendingUp, MapPin, Swords, Bot,
 } from 'lucide-react'
@@ -56,9 +56,6 @@ function htmlTail(html: string, maxChars = 200): string {
   return text.length <= maxChars ? text : '…' + text.slice(-maxChars)
 }
 
-/** 便笺本 localStorage key */
-const scratchKey = (cid: string) => `novel:scratch:${cid}`
-
 // ─── 章节状态选项 ─────────────────────────────────────────────────────────────
 const STATUS_OPTIONS: { value: Chapter['status']; label: string; dotCls: string; textCls: string }[] = [
   { value: 'draft',    label: '初稿',  dotCls: 'bg-gray-300',   textCls: 'text-gray-500' },
@@ -104,15 +101,10 @@ export default function ChapterEditor({
 
   // ── 面板 UI 状态 ───────────────────────────────────────────────────
   const [contextOpen, setContextOpen]   = useState(!!outlineNode)
-  const [contextTab, setContextTab]     = useState<'plan' | 'scene' | 'notes' | 'debrief'>('plan')
+  const [contextTab, setContextTab]     = useState<'plan' | 'scene' | 'debrief'>('plan')
   const [focusMode, setFocusMode]       = useState(false)
   const [statusOpen, setStatusOpen]     = useState(false)
   const statusRef = useRef<HTMLDivElement>(null)
-
-  // ── 便笺本（按章节 ID 存 localStorage）────────────────────────────
-  const [notepad, setNotepad] = useState(() => {
-    try { return localStorage.getItem(scratchKey(chapter.id)) ?? '' } catch { return '' }
-  })
 
   // ── 原有 AI 草稿功能 ───────────────────────────────────────────────
   const [aiDrafting, setAiDrafting]                     = useState(false)
@@ -195,7 +187,6 @@ export default function ChapterEditor({
     setAiDrafting(false)
     setSelectionText('')
     setShowSelectionBar(false)
-    setNotepad(() => { try { return localStorage.getItem(scratchKey(chapter.id)) ?? '' } catch { return '' } })
   }, [chapter.id])
 
   /** 同步大纲节点变化时自动展开 */
@@ -346,11 +337,6 @@ export default function ChapterEditor({
       }
       toast.success(`状态 → 「${STATUS_OPTIONS.find(o => o.value === status)?.label}」`)
     } catch { toast.error('状态更新失败') }
-  }
-
-  const handleNotepadChange = (val: string) => {
-    setNotepad(val)
-    try { localStorage.setItem(scratchKey(chapter.id), val) } catch { /* ignore */ }
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -756,19 +742,6 @@ export default function ChapterEditor({
             </button>
           )}
 
-          {/* 便笺本 */}
-          {!focusMode && (
-            <button type="button"
-              onClick={() => { setContextOpen(v => !(v && contextTab === 'notes')); setContextTab('notes') }}
-              title="便笺本（本地保存，不进入正文）"
-              className={clsx('flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-novel border transition-novel',
-                contextOpen && contextTab === 'notes'
-                  ? 'bg-novel-panel border-novel-border text-novel-accent'
-                  : 'border-novel-border text-novel-ink-muted hover:bg-novel-panel')}>
-              <StickyNote size={12} />便笺
-            </button>
-          )}
-
           {/* 专注模式切换 */}
           <button type="button" onClick={() => setFocusMode(v => !v)}
             title={focusMode ? '退出专注模式' : '专注写作模式（隐藏工具栏）'}
@@ -928,7 +901,6 @@ export default function ChapterEditor({
                   { key: 'plan',    label: '计划',  icon: <BookOpen size={11} /> },
                   { key: 'scene',   label: '场景',  icon: <Users size={11} /> },
                   { key: 'debrief', label: '复盘',  icon: <CheckSquare size={11} /> },
-                  { key: 'notes',   label: '便笺',  icon: <StickyNote size={11} /> },
                 ] as const
               ).map(tab => (
                 <button key={tab.key} type="button"
@@ -1091,27 +1063,6 @@ export default function ChapterEditor({
                   onAutoDebrief={runAutoDebrief}
                   onSubmit={submitDebrief}
                 />
-              )}
-
-              {/* ── 便笺本 Tab ── */}
-              {contextTab === 'notes' && (
-                <div className="p-4 flex flex-col" style={{ minHeight: '320px' }}>
-                  <p className="text-[10px] text-novel-ink-faint mb-2 leading-relaxed">
-                    本章私人便笺，不进入正文，自动本地保存
-                  </p>
-                  <textarea
-                    value={notepad}
-                    onChange={e => handleNotepadChange(e.target.value)}
-                    placeholder="随手记：场景线索、待填坑、灵感片段……"
-                    className="flex-1 text-xs border border-novel-border rounded-novel px-3 py-2.5 bg-novel-card text-novel-ink placeholder:text-novel-ink-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-novel-accent resize-none leading-relaxed"
-                    style={{ minHeight: '280px' }}
-                  />
-                  {notepad && (
-                    <p className="text-[10px] text-novel-ink-faint mt-1.5 text-right">
-                      {notepad.length} 字符 · 已自动保存
-                    </p>
-                  )}
-                </div>
               )}
 
             </div>

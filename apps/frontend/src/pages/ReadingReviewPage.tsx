@@ -19,6 +19,7 @@ import {
   Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import { useNavigate } from 'react-router-dom'
 import { http } from '../api/http'
 import type { LlmOverview } from '../types/llm'
 import type {
@@ -55,6 +56,7 @@ function scoreTag(score: number | undefined) {
 }
 
 export default function ReadingReviewPage() {
+  const navigate = useNavigate()
   const { message } = App.useApp()
   const [loading, setLoading] = useState(false)
   const [projects, setProjects] = useState<ReviewProject[]>([])
@@ -278,7 +280,6 @@ export default function ReadingReviewPage() {
   const compareRows = historyRows.filter((row) => compareIds.includes(row.id))
   const compareA = compareRows[0]
   const compareB = compareRows[1]
-
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
@@ -376,6 +377,17 @@ export default function ReadingReviewPage() {
                   />
                   <Button type="primary" loading={qualityLoading} onClick={() => void runQualityCheck()}>
                     开始评测
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      if (!projectId || !selectedChapterId) {
+                        message.warning('请先选择项目与章节')
+                        return
+                      }
+                      navigate(`/novels?projectId=${projectId}&chapterId=${selectedChapterId}`)
+                    }}
+                  >
+                    查看正文
                   </Button>
                 </Space>
                 {!qualityReport ? (

@@ -1,5 +1,5 @@
 import { Layout, Menu, theme } from 'antd'
-import { ExperimentOutlined, ReadOutlined } from '@ant-design/icons'
+import { BookOutlined, ExperimentOutlined, ReadOutlined } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useMemo } from 'react'
 
@@ -13,9 +13,10 @@ export default function AdminLayout() {
   } = theme.useToken()
 
   const selected = useMemo(() => {
+    if (loc.pathname.startsWith('/novels')) return ['/novels']
     if (loc.pathname.startsWith('/reading-review')) return ['/reading-review']
     if (loc.pathname.startsWith('/llm')) return ['/llm']
-    return ['/llm']
+    return ['/novels']
   }, [loc.pathname])
 
   return (
@@ -41,6 +42,12 @@ export default function AdminLayout() {
           selectedKeys={selected}
           items={[
             {
+              key: '/novels',
+              icon: <BookOutlined />,
+              label: '小说管理',
+              onClick: () => navigate('/novels'),
+            },
+            {
               key: '/llm',
               icon: <ExperimentOutlined />,
               label: '大模型',
@@ -55,17 +62,18 @@ export default function AdminLayout() {
           ]}
         />
       </Sider>
-      <Layout>
+      <Layout style={{ minHeight: '100vh', overflow: 'hidden' }}>
         <Header style={{ padding: '0 24px', background: colorBgContainer, lineHeight: '56px' }}>
           <span style={{ fontWeight: 600 }}>管理后台</span>
         </Header>
-        <Content style={{ margin: 24 }}>
+        <Content style={{ flex: 1, minHeight: 0, padding: 24, overflow: 'hidden' }}>
           <div
             style={{
               padding: 24,
-              minHeight: 360,
+              height: '100%',
               background: colorBgContainer,
               borderRadius: borderRadiusLG,
+              overflow: 'hidden',
             }}
           >
             <Outlet />

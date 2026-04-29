@@ -6,7 +6,11 @@ export interface ReviewProject {
 export interface ReviewChapter {
   id: string
   title: string
+  content: string
   sort_order: number
+  word_count?: number
+  status?: string
+  updated_at?: string | null
   last_quality_score?: number | null
   last_quality_report?: QualityReport | null
 }

@@ -468,10 +468,13 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         premise: str = "",
         user_prompt: str = "",
         replace_existing: bool = False,
-        # 新增：故事线、实力里程碑、情感基调
+        # 故事线、实力里程碑、情感基调
         storyline_summary: str = "",
         outline_power_milestone: str = "",
         outline_emotional_tone: str = "",
+        # 第二道锁：本章故事日 + 人物清单约束
+        story_day: str = "",
+        chapter_manifest: list = None,
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
@@ -515,6 +518,20 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         storyline_part = f"\n当前活跃故事线：{storyline_summary[:200]}" if storyline_summary else ""
         milestone_part = f"\n本章实力里程碑：{outline_power_milestone}" if outline_power_milestone else ""
         tone_part = f"\n情感基调：{outline_emotional_tone}" if outline_emotional_tone else ""
+        day_part = f"\n故事日：{story_day}" if story_day else ""
+
+        # 第二道锁：人物清单硬约束
+        # chapter_manifest 有值 = 新大纲数据，启用严格模式
+        # 为空 = 旧大纲/无清单，退回兼容模式（不加约束）
+        manifest_constraint = ""
+        if chapter_manifest:
+            manifest_str = "、".join(chapter_manifest)
+            manifest_constraint = (
+                f"\n\n⚠️【本章人物清单（严格限定）】\n"
+                f"本章允许出场的命名角色：{manifest_str}\n"
+                f"不得引入清单之外的任何命名角色。"
+                f"若剧情需要路人/次要角色，用「一名弟子」「路人」等无名方式处理。"
+            )
 
         extra = ""
         if user_prompt and user_prompt.strip():
@@ -525,18 +542,18 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 
 【故事背景】
 世界观：{world_part}
-主要人物（含境界/位置/技能）：{char_part}{mem_part}{storyline_part}
+本章出场人物（含境界/位置/技能）：{char_part}{mem_part}{storyline_part}
 
 【上章结尾】
 {prev_part}
 
 【本章大纲计划】
-标题：{chapter_title}
+标题：{chapter_title}{day_part}
 开篇钩子：{outline_hook or "（未填写）"}
 核心事件：{outline_summary or "（未填写）"}
 人物变化：{outline_conflict or "（未填写）"}
 章末方向：{outline_highlight or "（未填写）"}{milestone_part}{tone_part}
-{f"伏笔管理：{outline_foreshadow}" if outline_foreshadow else ""}
+{f"伏笔管理：{outline_foreshadow}" if outline_foreshadow else ""}{manifest_constraint}
 
 {task_line}{extra}"""
 

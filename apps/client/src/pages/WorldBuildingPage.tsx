@@ -5,7 +5,7 @@ import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { storylinesApi, powerSystemsApi, skillsApi, itemsApi, factionsApi } from '../api/client'
 import { useAppStore } from '../store'
-import type { StoryLine, PowerSystem, Skill, Item, Faction } from '../types'
+import type { StoryLine, PowerLevel, PowerSystem, Skill, Item, Faction } from '../types'
 
 // ─────────────────────────────────────────────────────────
 //  Sub-tab 配置
@@ -283,7 +283,15 @@ function PowerSystemTab({ projectId }: { projectId: string }) {
   const addLevel = () => {
     const name = levelInput.trim()
     if (!name) return
-    const levels = [...(form.levels ?? []), { rank: (form.levels?.length ?? 0) + 1, name, description: '', requirements: '', abilities: [] }]
+    const levels = [...(form.levels ?? []), {
+      rank: (form.levels?.length ?? 0) + 1,
+      name,
+      description: '',
+      requirements: '',
+      abilities: [],
+      sub_level_count: 9,
+      approximate_chapter: '',
+    }]
     setForm(p => ({ ...p, levels }))
     setLevelInput('')
   }
@@ -291,11 +299,45 @@ function PowerSystemTab({ projectId }: { projectId: string }) {
   const removeLevel = (idx: number) => {
     const levels = (form.levels ?? []).filter((_, i) => i !== idx).map((l, i) => ({ ...l, rank: i + 1 }))
     setForm(p => ({ ...p, levels }))
+    setAbilityInputs(prev => {
+      const next: Record<number, string> = {}
+      Object.entries(prev).forEach(([key, value]) => {
+        const numericKey = Number(key)
+        if (numericKey < idx) next[numericKey] = value
+        if (numericKey > idx) next[numericKey - 1] = value
+      })
+      return next
+    })
   }
 
-  const updateLevel = (idx: number, key: string, val: string) => {
+  const updateLevel = (idx: number, key: keyof PowerLevel, val: PowerLevel[keyof PowerLevel]) => {
     const levels = (form.levels ?? []).map((l, i) => i === idx ? { ...l, [key]: val } : l)
     setForm(p => ({ ...p, levels }))
+  }
+
+  // 境界特性 chip 管理
+  const [abilityInputs, setAbilityInputs] = useState<Record<number, string>>({})
+  const addAbility = (idx: number) => {
+    const val = (abilityInputs[idx] ?? '').trim()
+    if (!val) return
+    const lv = (form.levels ?? [])[idx]
+    const abilities = [...(lv?.abilities ?? []), val]
+    updateLevel(idx, 'abilities', abilities)
+    setAbilityInputs(p => ({ ...p, [idx]: '' }))
+  }
+  const removeAbility = (idx: number, aIdx: number) => {
+    const lv = (form.levels ?? [])[idx]
+    const abilities = (lv?.abilities ?? []).filter((_: string, i: number) => i !== aIdx)
+    updateLevel(idx, 'abilities', abilities)
+  }
+  const updateSubLevelCount = (idx: number, raw: string) => {
+    if (!raw.trim()) {
+      updateLevel(idx, 'sub_level_count', 9)
+      return
+    }
+    const next = Number(raw)
+    if (!Number.isFinite(next)) return
+    updateLevel(idx, 'sub_level_count', Math.min(99, Math.max(1, Math.round(next))))
   }
 
   const f = (key: keyof PowerSystem) => (v: string) => setForm(prev => ({ ...prev, [key]: v }))
@@ -347,38 +389,81 @@ function PowerSystemTab({ projectId }: { projectId: string }) {
 
             {/* 境界列表 */}
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
-              <div className="text-sm font-semibold text-gray-700 mb-4">境界层级（从低到高）</div>
+              <div className="flex items-center justify-between mb-4">
+                <div className="text-sm font-semibold text-gray-700">境界层级（从低到高）</div>
+                <span className="text-xs text-amber-600 font-medium">{(form.levels ?? []).length} 个境界</span>
+              </div>
               <div className="space-y-3 mb-4">
                 {(form.levels ?? []).map((lv, idx) => (
-                  <div key={idx} className="flex gap-3 p-3 bg-amber-50 rounded-lg border border-amber-100">
-                    <div className="flex flex-col items-center justify-start pt-1">
-                      <span className="w-6 h-6 rounded-full bg-amber-500 text-white text-xs flex items-center justify-center font-bold shrink-0">{lv.rank}</span>
-                      {idx < (form.levels?.length ?? 0) - 1 && <div className="w-0.5 h-full bg-amber-200 mt-1" />}
+                  <div key={idx} className="flex gap-3 p-4 bg-amber-50 rounded-xl border border-amber-100">
+                    {/* 左侧：rank + 竖线 */}
+                    <div className="flex flex-col items-center shrink-0">
+                      <span className="w-7 h-7 rounded-full bg-amber-500 text-white text-xs flex items-center justify-center font-bold">{lv.rank}</span>
+                      {idx < (form.levels?.length ?? 0) - 1 && <div className="w-0.5 flex-1 bg-amber-200 mt-1.5 mb-0.5" />}
                     </div>
-                    <div className="flex-1 space-y-1.5 min-w-0">
-                      <input value={lv.name} onChange={e => updateLevel(idx, 'name', e.target.value)}
-                        className="w-full font-medium text-sm border-0 bg-transparent focus:outline-none text-gray-800 p-0"
-                        placeholder="境界名称" />
+                    {/* 右侧：字段 */}
+                    <div className="flex-1 space-y-2 min-w-0">
+                      {/* 境界名 + 细分星级 + 章节 */}
+                      <div className="flex items-center gap-2">
+                        <input value={lv.name} onChange={e => updateLevel(idx, 'name', e.target.value)}
+                          className="flex-1 font-semibold text-sm border-0 bg-transparent focus:outline-none text-gray-900 p-0 min-w-0"
+                          placeholder="境界名称（如：斗者）" />
+                        <div className="flex items-center gap-1 shrink-0">
+                          <input type="number" min={1} max={99}
+                            value={lv.sub_level_count ?? 9}
+                            onChange={e => updateSubLevelCount(idx, e.target.value)}
+                            className="w-10 text-xs text-amber-700 border-0 bg-amber-100 rounded px-1.5 py-0.5 text-center focus:outline-none focus:ring-1 focus:ring-amber-400" />
+                          <span className="text-xs text-amber-600">星</span>
+                        </div>
+                        <button onClick={() => removeLevel(idx)} className="text-gray-300 hover:text-red-400 shrink-0 ml-1"><Trash2 size={13} /></button>
+                      </div>
+                      {/* 描述 */}
                       <textarea value={lv.description ?? ''} onChange={e => updateLevel(idx, 'description', e.target.value)}
-                        rows={1} placeholder="该境界的描述（可选）"
-                        className="w-full text-xs text-gray-500 border-0 bg-transparent focus:outline-none resize-none p-0" />
+                        rows={1} placeholder="境界描述（身体变化、修炼特征）"
+                        className="w-full text-xs text-gray-500 border-0 bg-transparent focus:outline-none resize-none p-0 leading-relaxed" />
+                      {/* 突破条件 */}
                       <input value={lv.requirements ?? ''} onChange={e => updateLevel(idx, 'requirements', e.target.value)}
                         className="w-full text-xs text-gray-500 border-0 bg-transparent focus:outline-none p-0"
-                        placeholder="突破到此境界的条件" />
+                        placeholder="⬆ 突破至此境界的条件（如：气旋凝聚、能量液化）" />
+                      {/* 章节区间 */}
+                      <input value={lv.approximate_chapter ?? ''} onChange={e => updateLevel(idx, 'approximate_chapter', e.target.value)}
+                        className="w-full text-xs text-gray-400 border-0 bg-transparent focus:outline-none p-0"
+                        placeholder="📖 对应故事章节区间（如：第1-50章）" />
+                      {/* 解锁能力 chips */}
+                      <div className="pt-1">
+                        <div className="flex flex-wrap gap-1 mb-1.5">
+                          {(lv.abilities ?? []).map((ab: string, aIdx: number) => (
+                            <span key={aIdx} className="flex items-center gap-1 text-xs px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full border border-amber-200">
+                              {ab}
+                              <button onClick={() => removeAbility(idx, aIdx)} className="text-amber-400 hover:text-amber-700 text-xs leading-none">×</button>
+                            </span>
+                          ))}
+                          {(lv.abilities ?? []).length === 0 && (
+                            <span className="text-xs text-amber-400 italic">暂无特殊能力解锁</span>
+                          )}
+                        </div>
+                        <div className="flex gap-1">
+                          <input value={abilityInputs[idx] ?? ''} onChange={e => setAbilityInputs(p => ({ ...p, [idx]: e.target.value }))}
+                            onKeyDown={e => e.key === 'Enter' && addAbility(idx)}
+                            placeholder="+ 添加解锁能力（如：斗气化翼）"
+                            className="flex-1 text-xs border border-amber-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-amber-400" />
+                          <button onClick={() => addAbility(idx)}
+                            className="text-xs px-2 py-1 bg-amber-200 text-amber-700 rounded-lg hover:bg-amber-300 transition-colors">添加</button>
+                        </div>
+                      </div>
                     </div>
-                    <button onClick={() => removeLevel(idx)} className="text-gray-300 hover:text-red-400 shrink-0 self-start"><Trash2 size={14} /></button>
                   </div>
                 ))}
                 {(form.levels ?? []).length === 0 && (
-                  <p className="text-xs text-gray-400 text-center py-4">暂无境界，在下方输入新增</p>
+                  <p className="text-xs text-gray-400 text-center py-6">暂无境界，在下方输入名称添加</p>
                 )}
               </div>
               <div className="flex gap-2">
                 <input value={levelInput} onChange={e => setLevelInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && addLevel()}
-                  placeholder="输入境界名称后回车添加（如：淬体境）"
+                  placeholder="输入境界名称后回车（如：斗者、斗师、大斗师…）"
                   className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-amber-400" />
-                <button onClick={addLevel} className="px-3 py-2 bg-amber-100 text-amber-600 rounded-lg text-sm hover:bg-amber-200 transition-colors">添加</button>
+                <button onClick={addLevel} className="px-4 py-2 bg-amber-100 text-amber-600 rounded-lg text-sm hover:bg-amber-200 transition-colors font-medium">添加</button>
               </div>
             </div>
 
@@ -726,6 +811,15 @@ const ALIGNMENT_META: Record<string, { label: string; color: string }> = {
   unknown:     { label: '立场不明', color: 'bg-yellow-100 text-yellow-700 border-yellow-200' },
 }
 
+// 势力在故事中的活跃阶段（存 extra.active_period）
+const ACTIVE_PERIOD_META: Record<string, { label: string; color: string }> = {
+  '':     { label: '未设置',  color: 'text-gray-300' },
+  early:  { label: '前期',    color: 'text-emerald-600' },
+  mid:    { label: '中期',    color: 'text-blue-600' },
+  late:   { label: '后期',    color: 'text-purple-600' },
+  full:   { label: '贯穿全书', color: 'text-amber-600' },
+}
+
 function FactionsTab({ projectId }: { projectId: string }) {
   const { factions, setFactions, upsertFaction, removeFaction } = useAppStore()
   const [selected, setSelected] = useState<Faction | null>(null)
@@ -777,14 +871,19 @@ function FactionsTab({ projectId }: { projectId: string }) {
           {factions.map(s => {
             const tm = FACTION_TYPE_META[s.faction_type]
             const am = ALIGNMENT_META[s.alignment]
+            const activePeriod = s.extra?.active_period as string ?? ''
+            const pm = ACTIVE_PERIOD_META[activePeriod] ?? ACTIVE_PERIOD_META['']
             return (
               <button key={s.id} onClick={() => selectItem(s)}
                 className={clsx('w-full flex items-start gap-3 px-4 py-2.5 text-left transition-colors border-l-2',
                   selected?.id === s.id ? 'bg-amber-50 border-l-amber-400' : 'border-l-transparent hover:bg-gray-50')}>
                 <span className="text-xl leading-none mt-0.5 shrink-0">{tm?.icon}</span>
-                <div className="min-w-0">
+                <div className="min-w-0 w-full">
                   <div className="text-sm font-medium text-gray-800 truncate">{s.name}</div>
-                  <span className={clsx('text-xs px-1.5 py-0.5 rounded border', am?.color)}>{am?.label}</span>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className={clsx('text-xs px-1.5 py-0.5 rounded border', am?.color)}>{am?.label}</span>
+                    {activePeriod && <span className={clsx('text-xs font-medium', pm.color)}>{pm.label}</span>}
+                  </div>
                 </div>
               </button>
             )
@@ -802,7 +901,7 @@ function FactionsTab({ projectId }: { projectId: string }) {
             </div>
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm space-y-4">
               <Field label="名称"><TextInput value={form.name ?? ''} onChange={f('name')} /></Field>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-3">
                 <Field label="类型">
                   <Select value={form.faction_type ?? 'sect'} onChange={f('faction_type')}
                     options={Object.entries(FACTION_TYPE_META).map(([k, v]) => ({ value: k, label: `${v.icon} ${v.label}` }))} />
@@ -810,6 +909,12 @@ function FactionsTab({ projectId }: { projectId: string }) {
                 <Field label="阵营">
                   <Select value={form.alignment ?? 'neutral'} onChange={f('alignment')}
                     options={Object.entries(ALIGNMENT_META).map(([k, v]) => ({ value: k, label: v.label }))} />
+                </Field>
+                <Field label="活跃阶段">
+                  <Select
+                    value={(form.extra?.active_period as string) ?? ''}
+                    onChange={v => setForm(p => ({ ...p, extra: { ...(p.extra ?? {}), active_period: v } }))}
+                    options={Object.entries(ACTIVE_PERIOD_META).filter(([k]) => k !== '').map(([k, v]) => ({ value: k, label: v.label }))} />
                 </Field>
               </div>
               <Field label="势力描述"><TextArea value={form.description ?? ''} onChange={f('description')} rows={3} /></Field>

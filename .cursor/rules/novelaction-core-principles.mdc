@@ -1,0 +1,41 @@
+---
+description: novelAction 核心研发约束（基于 CLAUDE.md）
+alwaysApply: true
+---
+
+# novelAction Core Principles
+
+## 产品定位
+
+- 这是 AI 全量生成系统，不是人工表单填写系统。
+- 所有需求优先回答：AI 能生成/校验/推进什么。
+- 避免把结构化设定退化为自由文本卡片。
+
+## Monorepo 与目录约定
+
+- 仅使用 `apps/backend`、`apps/client`、`apps/frontend` 三个子项目路径。
+- 不使用根级旧路径 `backend/` 或 `frontend/` 进行新实现。
+- 改创作端在 `apps/client`；改管理后台在 `apps/frontend`。
+
+## AI 与服务层约束
+
+- 模型接入统一走 OpenAI 兼容协议配置，不在业务代码硬编码厂商 SDK。
+- 路由层不直接调用模型客户端；AI 调用集中在 service 层。
+- Prompt 文案集中放 service 层，便于统一维护。
+- 需要 JSON 输出时，提示词明确要求“只返回 JSON”。
+
+## 数据与接口约束
+
+- 新增结构化领域能力优先落到专属数据表与 schema，不塞进 `WorldSetting` 文本。
+- 涉及项目数据时保持 `project_id` 贯穿，避免孤立数据。
+- 优先复用现有 API 前缀约定（`/api/v1/projects/{pid}/...`）。
+
+## 前端状态约束
+
+- 创作端列表数据走 Zustand store，局部 UI 状态再用组件内 state。
+- API 成功后优先 `upsert` 到 store，避免全量重复拉取。
+
+## 模型切换与上下文
+
+- 小模型（如 qwen3:8b）控制 prompt 长度并加强 JSON 容错解析。
+- 大上下文模型可启用 `single_shot`，但保持接口参数兼容。

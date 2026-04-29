@@ -118,6 +118,7 @@ export interface PowerLevel {
   requirements?: string
   abilities?: string[]
   approximate_chapter?: string
+  sub_level_count?: number   // 细分星级数，默认 9
 }
 
 export interface PowerSystem {

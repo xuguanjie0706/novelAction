@@ -31,6 +31,24 @@ const STEP_DEFS: { key: StepKey; label: string }[] = [
 
 type Mode = 'sequential' | 'single_shot'
 
+const STEP_KEY_ALIAS: Record<string, StepKey> = {
+  // 世界观相关结构化子步骤归并到“世界观设定卡”
+  power_systems: 'settings',
+  factions: 'settings',
+  storylines: 'settings',
+  skills: 'settings',
+  items: 'settings',
+  settings: 'settings',
+  // 其它后端步骤对齐旧版前端卡片
+  volumes: 'outline',
+}
+
+function toDisplayStepKey(step: unknown): StepKey | null {
+  if (typeof step !== 'string') return null
+  if (STEP_DEFS.some(s => s.key === step)) return step as StepKey
+  return STEP_KEY_ALIAS[step] ?? null
+}
+
 export default function GenerateWizard({ onClose }: Props) {
   const navigate = useNavigate()
   const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
@@ -149,24 +167,28 @@ export default function GenerateWizard({ onClose }: Props) {
 
   const handleEvent = (evt: Record<string, any>) => {
     const { event, step, label, count, preview, message, project_id } = evt
+    const displayStep = toDisplayStepKey(step)
 
     if (event === 'step_start') {
+      if (!displayStep) return
       setSteps(prev => prev.map(s =>
-        s.key === step ? { ...s, status: 'running', label: label ?? s.label } : s
+        s.key === displayStep ? { ...s, status: 'running', label: label ?? s.label } : s
       ))
     } else if (event === 'step_done') {
+      if (!displayStep) return
       const detail = [
         count != null ? `${count} 条` : '',
         preview ?? '',
       ].filter(Boolean).join(' · ')
       setSteps(prev => prev.map(s =>
-        s.key === step ? { ...s, status: 'done', detail } : s
+        s.key === displayStep ? { ...s, status: 'done', detail } : s
       ))
     } else if (event === 'error') {
+      if (!displayStep) return
       setSteps(prev => prev.map(s =>
-        s.key === step ? { ...s, status: 'error', detail: message } : s
+        s.key === displayStep ? { ...s, status: 'error', detail: message } : s
       ))
-      setErrorMsg(`[${step}] ${message}`)
+      setErrorMsg(`[${displayStep}] ${message}`)
     } else if (event === 'complete') {
       setProjectId(project_id)
       setPhase('done')

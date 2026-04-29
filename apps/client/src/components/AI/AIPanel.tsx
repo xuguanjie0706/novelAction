@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'
+import React, { useEffect, useMemo, useState, useRef } from 'react'
 import { X, Zap, BookMarked, MessageSquare } from 'lucide-react'
 import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload, llmProviderIdFromRoute } from '../../store'
 import { aiApi } from '../../api/client'
@@ -17,6 +17,18 @@ export default function AIPanel({ projectId }: Props) {
   const [report, setReport] = useState<QualityReport | null>(null)
   const [suggestText, setSuggestText] = useState('')
   const [streamOutput, setStreamOutput] = useState('')
+
+  useEffect(() => {
+    if (!projectId || !activeChapterId) return
+    aiApi.listMemory(projectId).then(res => setMemories(res.data)).catch(() => {})
+  }, [projectId, activeChapterId, setMemories])
+
+  const currentChapterMemories = useMemo(
+    () => activeChapterId
+      ? memories.filter(m => m.chapter_id === activeChapterId)
+      : [],
+    [activeChapterId, memories],
+  )
 
   // ── 质检 ──────────────────────────────────────────────
   const runQualityCheck = async () => {
@@ -87,7 +99,8 @@ export default function AIPanel({ projectId }: Props) {
         modelProfileFromRoute(route),
         llmProviderIdFromRoute(route),
       )
-      setMemories([...memories, ...res.data])
+      const allMemories = await aiApi.listMemory(projectId)
+      setMemories(allMemories.data)
       toast.success(`提取了 ${res.data.length} 条记忆`)
     } finally {
       setLoading(false)
@@ -136,11 +149,6 @@ export default function AIPanel({ projectId }: Props) {
           </button>
         ))}
       </div>
-
-      <p className="px-4 py-2 text-[11px] text-gray-400 border-b border-gray-100 bg-gray-50/50">
-        模型在顶部栏统一选择
-      </p>
-
       {/* 内容 */}
       <div className="flex-1 overflow-auto p-4">
 
@@ -229,10 +237,10 @@ export default function AIPanel({ projectId }: Props) {
               {loading ? '提取中...' : '从当前章节提取记忆'}
             </button>
             <div className="space-y-2">
-              {memories.length === 0 && (
+              {currentChapterMemories.length === 0 && (
                 <p className="text-xs text-gray-400 text-center py-4">暂无记忆条目</p>
               )}
-              {memories.map(m => (
+              {currentChapterMemories.map(m => (
                 <div key={m.id} className="p-3 bg-gray-50 rounded-lg">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-xs px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">

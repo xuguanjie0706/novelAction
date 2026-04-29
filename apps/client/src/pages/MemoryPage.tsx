@@ -25,14 +25,14 @@ function typeLabel(t: string) {
 
 export default function MemoryPage() {
   const { projectId } = useParams<{ projectId: string }>()
-  const { memories, setMemories } = useAppStore()
+  const { activeChapterId, memories, setMemories } = useAppStore()
   const [filter, setFilter] = useState<'all' | MemoryChunk['memory_type']>('all')
   const [search, setSearch] = useState('')
 
   useEffect(() => {
     if (!projectId) return
     aiApi.listMemory(projectId).then(res => setMemories(res.data))
-  }, [projectId])
+  }, [projectId, activeChapterId, setMemories])
 
   const filtered = memories.filter(m => {
     if (filter !== 'all' && m.memory_type !== filter) return false

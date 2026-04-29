@@ -280,7 +280,7 @@ export interface MemoryChunk {
 
 // ── Generation Queue ──────────────────────────────────
 export type GenTaskStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled'
-export type GenTaskType = 'full_generate' | 'batch_expand' | 'continue_chapters'
+export type GenTaskType = 'full_generate' | 'batch_expand' | 'continue_chapters' | 'rewrite_chapter'
 
 export interface GenProgressItem {
   step: number | string
@@ -300,7 +300,8 @@ export interface GenTask {
   errorMsg?: string
   /** full_generate: { scale_hint, model_profile, clear_existing }
    *  batch_expand:  { nodes: [{id,title}], chapterCount, modelProfile }
-   *  continue_chapters: { chapterIds: string[], userPrompt, modelProfile, llm_provider_id } */
+   *  continue_chapters: { chapterIds: string[], userPrompt, modelProfile, llm_provider_id }
+   *  rewrite_chapter: { chapterId, userPrompt, modelProfile, llm_provider_id } */
   params: Record<string, any>
   createdAt: number
 }

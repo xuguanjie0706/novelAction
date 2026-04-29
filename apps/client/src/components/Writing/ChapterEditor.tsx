@@ -11,7 +11,7 @@ import {
   BookOpen, Sparkles, X, Zap, Target, Users, Flag, GitBranch, RefreshCw,
   Maximize2, Minimize2, Clock, ChevronDown,
   Feather, PenLine, ListPlus,
-  CheckSquare, TrendingUp, MapPin, Swords, Bot,
+  CheckSquare, TrendingUp, MapPin, Swords, Bot, Save, Trash2,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { autoCommitGeneratedChapterDebrief } from '../../utils/generatedChapterDebrief'
@@ -90,11 +90,25 @@ const INLINE_ACTIONS = [
   },
 ] as const
 
+const TOP_TOOL_BUTTON_BASE =
+  'inline-flex h-8 items-center justify-center gap-1.5 rounded-novel border px-3 text-sm font-medium leading-none transition-novel focus:outline-none focus-visible:ring-2 focus-visible:ring-novel-accent focus-visible:ring-offset-2'
+const TOP_TOOL_BUTTON_IDLE =
+  'border-novel-border bg-novel-card text-novel-ink-muted hover:bg-novel-panel hover:text-novel-ink'
+const TOP_TOOL_BUTTON_ACTIVE =
+  'border-novel-accent/35 bg-novel-panel text-novel-accent'
+const TOP_TOOL_ICON_BUTTON =
+  'inline-flex h-8 w-8 items-center justify-center rounded-novel border border-red-100 bg-novel-card text-red-400 transition-novel hover:bg-red-50 hover:text-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
+const TOP_TOOL_PRIMARY_BUTTON =
+  'inline-flex h-8 min-w-[72px] items-center justify-center gap-1.5 rounded-novel border border-novel-accent bg-novel-accent px-3 text-sm font-medium leading-none text-white transition-novel hover:bg-novel-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-novel-accent focus-visible:ring-offset-2'
+
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ChapterEditor({
   projectId, chapter, outlineNode, prevChapter, onFocusModeChange,
 }: Props) {
-  const { upsertChapter, chapters, characters, storyLines, setStoryLines, setMemories, addGenTask } = useAppStore()
+  const {
+    upsertChapter, removeChapter, setActiveChapterId,
+    chapters, characters, storyLines, setStoryLines, setMemories, addGenTask,
+  } = useAppStore()
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
   const storylineAutoSyncingRef = useRef(false)
   const memoryAutoSyncingRef = useRef(false)
@@ -117,6 +131,7 @@ export default function ChapterEditor({
   // ── 章节复盘（写完后提交状态更新）────────────────────────────────
   const [debriefSubmitting, setDebriefSubmitting] = useState(false)
   const [autoDebriefing, setAutoDebriefing]       = useState(false)
+  const [cleaningChapter, setCleaningChapter]     = useState(false)
   // charUpdates: map of characterId → partial update
   const [charUpdates, setCharUpdates] = useState<Record<string, {
     current_realm?: string
@@ -426,6 +441,20 @@ export default function ChapterEditor({
   const generateDraft = (opts?: { replaceExisting?: boolean; overridePrompt?: string }) => {
     if (opts?.replaceExisting) {
       if (!window.confirm('「重新生成本章」将按大纲重写当前正文。建议先手动保存快照。确定继续？')) return
+      const route = useAppStore.getState().aiBackendRoute
+      addGenTask({
+        type: 'rewrite_chapter',
+        projectId,
+        label: `重写《${chapter.title}》`,
+        params: {
+          chapterId: chapter.id,
+          userPrompt: opts.overridePrompt ?? aiExtraPrompt.trim(),
+          modelProfile: modelProfileFromRoute(route),
+          ...routeLlmProviderPayload(route),
+        },
+      })
+      toast.success('已加入 AI 队列：开始重写本章')
+      return
     }
     void triggerGenerate(opts?.overridePrompt, opts)
   }
@@ -609,6 +638,12 @@ export default function ChapterEditor({
         notes: debriefNotes || undefined,
       })
       toast.success(res.data.message)
+      const [refreshedStorylines, refreshedMemories] = await Promise.all([
+        storylinesApi.list(projectId),
+        aiApi.listMemory(projectId),
+      ])
+      setStoryLines(refreshedStorylines.data)
+      setMemories(refreshedMemories.data)
       // 清空表单
       setCharUpdates({})
       setStorylineBeats({})
@@ -617,6 +652,34 @@ export default function ChapterEditor({
       toast.error('复盘提交失败')
     } finally {
       setDebriefSubmitting(false)
+    }
+  }
+
+  const cleanupChapter = async () => {
+    const ok = window.confirm(
+      `确认清理《${chapter.title}》？\n\n这会删除本章正文、版本历史、对应记忆数据和 ChapterIndex。大纲中的章节计划会保留，可稍后重新创建。`,
+    )
+    if (!ok) return
+
+    setCleaningChapter(true)
+    try {
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      await chaptersApi.delete(projectId, chapter.id)
+
+      const sorted = [...chapters].sort((a, b) => a.sort_order - b.sort_order)
+      const currentIndex = sorted.findIndex(c => c.id === chapter.id)
+      const nextChapter = sorted[currentIndex + 1] || sorted[currentIndex - 1]
+
+      removeChapter(chapter.id)
+      setActiveChapterId(nextChapter?.id ?? null)
+
+      const memoriesRes = await aiApi.listMemory(projectId)
+      setMemories(memoriesRes.data)
+      toast.success('章节已清理')
+    } catch {
+      toast.error('清理章节失败')
+    } finally {
+      setCleaningChapter(false)
     }
   }
 
@@ -695,7 +758,7 @@ export default function ChapterEditor({
         </div>
 
         {/* 右侧：统计 + 工具按钮 */}
-        <div className="flex items-center gap-2.5 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           {/* 本次写作统计 */}
           {sessionDelta !== 0 && !focusMode && (
             <div className="hidden sm:flex items-center gap-2 text-[11px]">
@@ -721,11 +784,11 @@ export default function ChapterEditor({
             <button type="button"
               onClick={() => { setContextOpen(v => !(v && contextTab === 'scene')); setContextTab('scene') }}
               title="场景助手（上章结尾 + 人物卡）"
-              className={clsx('flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-novel border transition-novel',
+              className={clsx(TOP_TOOL_BUTTON_BASE,
                 contextOpen && contextTab === 'scene'
-                  ? 'bg-novel-panel border-novel-border text-novel-accent'
-                  : 'border-novel-border text-novel-ink-muted hover:bg-novel-panel')}>
-              <Users size={12} />场景
+                  ? TOP_TOOL_BUTTON_ACTIVE
+                  : TOP_TOOL_BUTTON_IDLE)}>
+              <Users size={14} />场景
             </button>
           )}
 
@@ -734,11 +797,11 @@ export default function ChapterEditor({
             <button type="button"
               onClick={() => { setContextOpen(v => !(v && contextTab === 'plan')); setContextTab('plan') }}
               title="章节计划"
-              className={clsx('flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-novel border transition-novel',
+              className={clsx(TOP_TOOL_BUTTON_BASE,
                 contextOpen && contextTab === 'plan'
-                  ? 'bg-novel-panel border-novel-border text-novel-accent'
-                  : 'border-novel-border text-novel-ink-muted hover:bg-novel-panel')}>
-              <BookOpen size={12} />计划
+                  ? TOP_TOOL_BUTTON_ACTIVE
+                  : TOP_TOOL_BUTTON_IDLE)}>
+              <BookOpen size={14} />计划
             </button>
           )}
 
@@ -747,11 +810,19 @@ export default function ChapterEditor({
             <button type="button"
               onClick={() => { setContextOpen(v => !(v && contextTab === 'debrief')); setContextTab('debrief') }}
               title="章节复盘（更新人物状态/故事线）"
-              className={clsx('flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-novel border transition-novel',
+              className={clsx(TOP_TOOL_BUTTON_BASE,
                 contextOpen && contextTab === 'debrief'
-                  ? 'bg-novel-panel border-novel-border text-novel-accent'
-                  : 'border-novel-border text-novel-ink-muted hover:bg-novel-panel')}>
-              <CheckSquare size={12} />复盘
+                  ? TOP_TOOL_BUTTON_ACTIVE
+                  : TOP_TOOL_BUTTON_IDLE)}>
+              <CheckSquare size={14} />复盘
+            </button>
+          )}
+
+          {!focusMode && (
+            <button type="button" onClick={cleanupChapter} disabled={cleaningChapter}
+              title="清理章节"
+              className={TOP_TOOL_ICON_BUTTON}>
+              {cleaningChapter ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
             </button>
           )}
 
@@ -759,18 +830,17 @@ export default function ChapterEditor({
           <button type="button" onClick={() => setFocusMode(v => !v)}
             title={focusMode ? '退出专注模式' : '专注写作模式（隐藏工具栏）'}
             className={clsx(
-              'flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-novel border transition-novel',
-              focusMode
-                ? 'border-novel-accent text-novel-accent bg-novel-panel'
-                : 'border-novel-border text-novel-ink-muted hover:bg-novel-panel',
+              TOP_TOOL_BUTTON_BASE,
+              focusMode ? TOP_TOOL_BUTTON_ACTIVE : TOP_TOOL_BUTTON_IDLE,
             )}>
-            {focusMode ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+            {focusMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
             {focusMode ? '退出专注' : '专注'}
           </button>
 
           {/* 保存 */}
           <button type="button" onClick={manualSave}
-            className="text-sm px-3 py-1.5 bg-novel-accent hover:bg-novel-accent-hover text-white rounded-novel transition-novel focus:outline-none focus-visible:ring-2 focus-visible:ring-novel-accent focus-visible:ring-offset-2">
+            className={TOP_TOOL_PRIMARY_BUTTON}>
+            <Save size={14} />
             保存
           </button>
         </div>

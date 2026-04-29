@@ -42,6 +42,8 @@ export interface GeneratedChapterDebriefStats {
   characterCount: number
   storylineCount: number
   memoryCount: number
+  chapterIndexSaved: boolean
+  chapterIndexError?: string
 }
 
 export async function autoCommitGeneratedChapterDebrief(
@@ -102,10 +104,10 @@ export async function autoCommitGeneratedChapterDebrief(
   const hasChapterIndex = Boolean(data.chapter_index && Object.keys(data.chapter_index).length > 0)
 
   if (characterUpdates.length === 0 && storylineUpdates.length === 0 && memoryUpdates.length === 0 && !hasChapterIndex && !data.summary) {
-    return { characterCount: 0, storylineCount: 0, memoryCount: 0 }
+    return { characterCount: 0, storylineCount: 0, memoryCount: 0, chapterIndexSaved: false }
   }
 
-  await aiApi.chapterDebrief(projectId, {
+  const commitRes = await aiApi.chapterDebrief(projectId, {
     chapter_id: chapterId,
     character_updates: characterUpdates as any,
     storyline_updates: storylineUpdates as any,
@@ -118,5 +120,7 @@ export async function autoCommitGeneratedChapterDebrief(
     characterCount: characterUpdates.length,
     storylineCount: storylineUpdates.length,
     memoryCount: memoryUpdates.length,
+    chapterIndexSaved: !!commitRes.data?.chapter_index_saved,
+    chapterIndexError: commitRes.data?.chapter_index_error,
   }
 }

@@ -16,8 +16,8 @@ import {
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useAppStore } from '../../store'
-import type { Chapter, GenTask, GenProgressItem } from '../../types'
-import { chaptersApi } from '../../api/client'
+import type { Chapter, GenTask, GenProgressItem, MemoryChunk } from '../../types'
+import { aiApi, chaptersApi } from '../../api/client'
 import {
   fetchOutlineExpandResult,
   commitOutlineExpand,
@@ -188,6 +188,7 @@ async function runContinueChapters(
   onError: (msg: string) => void,
   signal: AbortSignal,
   upsertChapter: (chapter: Chapter) => void,
+  setMemories: (memories: MemoryChunk[]) => void,
 ) {
   const { projectId, params } = task
   const chapterIds: string[] = Array.isArray(params.chapterIds) ? params.chapterIds : []
@@ -214,7 +215,8 @@ async function runContinueChapters(
     }
 
     const stepLabel = `${chapter.title}（${i + 1}/${chapterIds.length}）`
-    pushProgress({ step: i + 1, label: `正在续写 ${stepLabel}…`, done: false, error: false })
+    const phaseStep = (phase: string) => `${i + 1}-${phase}`
+    pushProgress({ step: phaseStep('draft'), label: `正在生成正文 ${stepLabel}…`, done: false, error: false })
 
     let accumulated = ''
     try {
@@ -258,20 +260,74 @@ async function runContinueChapters(
 
       if (!accumulated.trim()) throw new Error('未收到正文内容')
 
+      pushProgress({ step: phaseStep('draft'), label: `✓ 正文生成完成 ${stepLabel}`, done: true, error: false })
+      pushProgress({ step: phaseStep('save'), label: `正在保存 ${stepLabel}…`, done: false, error: false })
+
       const appendedHtml = plainTextDraftToHtml(accumulated.trim())
       const nextContent = `${chapter.content || ''}${chapter.content ? '\n' : ''}${appendedHtml}`
       const updateRes = await chaptersApi.update(projectId, chapterId, { content: nextContent })
       upsertChapter(updateRes.data)
-      let debriefSuffix = ''
+      pushProgress({ step: phaseStep('save'), label: `✓ ${stepLabel} 已保存`, done: true, error: false })
+
+      pushProgress({ step: phaseStep('quality'), label: `正在质检 ${stepLabel}…`, done: false, error: false })
+      try {
+        const qualityRes = await aiApi.qualityCheck(projectId, {
+          chapter_id: chapterId,
+          model_profile: modelProfile,
+          ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
+        })
+        const score = Number(qualityRes.data?.overall_score)
+        pushProgress({
+          step: phaseStep('quality'),
+          label: Number.isFinite(score) ? `✓ 质检完成：${score.toFixed(1)}/10` : '✓ 质检完成',
+          done: true,
+          error: false,
+        })
+        const refreshedChapter = await chaptersApi.get(projectId, chapterId)
+        upsertChapter(refreshedChapter.data)
+      } catch (e: any) {
+        pushProgress({
+          step: phaseStep('quality'),
+          label: `质检失败，可稍后手动检查：${e?.message || '未知错误'}`,
+          done: true,
+          error: true,
+        })
+      }
+
+      pushProgress({ step: phaseStep('debrief'), label: `正在复盘并写入 ChapterIndex ${stepLabel}…`, done: false, error: false })
       try {
         const applied = await autoCommitGeneratedChapterDebrief(projectId, chapterId, modelProfile, llmProviderId)
-        if (applied.characterCount > 0 || applied.storylineCount > 0 || applied.memoryCount > 0) {
-          debriefSuffix = `，已复盘 ${applied.characterCount} 个人物/${applied.storylineCount} 条故事线/${applied.memoryCount} 条记忆`
-        }
+        const indexLabel = applied.chapterIndexSaved ? 'ChapterIndex 已写入' : 'ChapterIndex 未更新'
+        pushProgress({
+          step: phaseStep('debrief'),
+          label: `✓ 复盘完成：${applied.characterCount} 个人物/${applied.storylineCount} 条故事线/${applied.memoryCount} 条记忆，${indexLabel}`,
+          done: true,
+          error: false,
+        })
       } catch (e: any) {
-        debriefSuffix = `，自动复盘失败：${e?.message || '未知错误'}`
+        pushProgress({
+          step: phaseStep('debrief'),
+          label: `自动复盘失败，可稍后手动提交：${e?.message || '未知错误'}`,
+          done: true,
+          error: true,
+        })
       }
-      pushProgress({ step: i + 1, label: `✓ ${stepLabel} 已续写并保存${debriefSuffix}`, done: true, error: false })
+
+      pushProgress({ step: phaseStep('memory'), label: '正在刷新记忆库…', done: false, error: false })
+      try {
+        const memoriesRes = await aiApi.listMemory(projectId)
+        setMemories(memoriesRes.data)
+        pushProgress({ step: phaseStep('memory'), label: `✓ 记忆库已刷新：${memoriesRes.data.length} 条`, done: true, error: false })
+      } catch (e: any) {
+        pushProgress({
+          step: phaseStep('memory'),
+          label: `记忆库刷新失败：${e?.message || '未知错误'}`,
+          done: true,
+          error: true,
+        })
+      }
+
+      pushProgress({ step: phaseStep('done'), label: `✓ ${stepLabel} 流程完成`, done: true, error: false })
       successCount++
     } catch (e: any) {
       if (signal.aborted || e?.name === 'AbortError') {
@@ -285,6 +341,154 @@ async function runContinueChapters(
   }
 
   onComplete(`多章续写完成：${successCount}/${chapterIds.length} 章已保存`)
+}
+
+/** 执行 rewrite_chapter 任务：重写单章、替换正文、保存，并尝试自动复盘 */
+async function runRewriteChapter(
+  task: GenTask,
+  pushProgress: (item: GenProgressItem) => void,
+  onComplete: (msg: string) => void,
+  onError: (msg: string) => void,
+  signal: AbortSignal,
+  upsertChapter: (chapter: Chapter) => void,
+  setMemories: (memories: MemoryChunk[]) => void,
+) {
+  const { projectId, params } = task
+  const chapterId: string | undefined = typeof params.chapterId === 'string' ? params.chapterId : undefined
+  const userPrompt: string = typeof params.userPrompt === 'string' ? params.userPrompt : ''
+  const modelProfile: 'local' | 'gemini' = params.modelProfile ?? 'local'
+  const llmProviderId: string | undefined = params.llm_provider_id
+
+  if (!chapterId) {
+    onError('缺少章节 ID')
+    return
+  }
+
+  pushProgress({ step: 'start', label: '重写任务已开始，正在读取章节…', done: false, error: false })
+
+  let chapter: Chapter
+  try {
+    const chapterRes = await chaptersApi.get(projectId, chapterId)
+    chapter = chapterRes.data
+  } catch (e: any) {
+    onError(`读取章节失败：${e?.message || '未知错误'}`)
+    return
+  }
+
+  let accumulated = ''
+  try {
+    pushProgress({ step: 'draft', label: `正在重写《${chapter.title}》…`, done: false, error: false })
+    const res = await fetch(`/api/v1/projects/${projectId}/ai/draft-assist/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chapter_id: chapterId,
+        model_profile: modelProfile,
+        ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
+        user_prompt: userPrompt.trim() || null,
+        replace_existing: true,
+      }),
+      signal,
+    })
+
+    if (!res.ok) throw new Error((await res.text().catch(() => '')).slice(0, 240) || `HTTP ${res.status}`)
+    if (!res.body) throw new Error('响应无流式内容')
+
+    const reader = res.body.getReader()
+    const dec = new TextDecoder()
+    let buf = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += dec.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) {
+        const parsed = parseSseDataLine(line)
+        if (!parsed) continue
+        if (parsed.error) throw new Error(parsed.error)
+        if (parsed.text) accumulated += parsed.text
+      }
+    }
+    for (const line of buf.split('\n')) {
+      const parsed = parseSseDataLine(line)
+      if (parsed?.error) throw new Error(parsed.error)
+      if (parsed?.text) accumulated += parsed.text
+    }
+
+    if (!accumulated.trim()) throw new Error('未收到正文内容')
+
+    pushProgress({ step: 'draft', label: `✓ 《${chapter.title}》重写完成，正在保存…`, done: true, error: false })
+    const updateRes = await chaptersApi.update(projectId, chapterId, { content: plainTextDraftToHtml(accumulated.trim()) })
+    upsertChapter(updateRes.data)
+    pushProgress({ step: 'save', label: '✓ 新正文已替换并保存', done: true, error: false })
+
+    pushProgress({ step: 'quality', label: '正在质检重写后的章节…', done: false, error: false })
+    try {
+      const qualityRes = await aiApi.qualityCheck(projectId, {
+        chapter_id: chapterId,
+        model_profile: modelProfile,
+        ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
+      })
+      const score = Number(qualityRes.data?.overall_score)
+      pushProgress({
+        step: 'quality',
+        label: Number.isFinite(score) ? `✓ 质检完成：${score.toFixed(1)}/10` : '✓ 质检完成',
+        done: true,
+        error: false,
+      })
+      const refreshedChapter = await chaptersApi.get(projectId, chapterId)
+      upsertChapter(refreshedChapter.data)
+    } catch (e: any) {
+      pushProgress({
+        step: 'quality',
+        label: `质检失败，可稍后手动检查：${e?.message || '未知错误'}`,
+        done: true,
+        error: true,
+      })
+    }
+
+    pushProgress({ step: 'debrief', label: '正在自动复盘人物、故事线、记忆和 ChapterIndex…', done: false, error: false })
+    try {
+      const applied = await autoCommitGeneratedChapterDebrief(projectId, chapterId, modelProfile, llmProviderId)
+      pushProgress({
+        step: 'debrief',
+        label: `✓ 自动复盘完成：${applied.characterCount} 个人物/${applied.storylineCount} 条故事线/${applied.memoryCount} 条记忆，${applied.chapterIndexSaved ? 'ChapterIndex 已写入' : 'ChapterIndex 未更新'}`,
+        done: true,
+        error: false,
+      })
+    } catch (e: any) {
+      pushProgress({
+        step: 'debrief',
+        label: `自动复盘失败，可稍后在复盘面板手动提交：${e?.message || '未知错误'}`,
+        done: true,
+        error: true,
+      })
+    }
+
+    pushProgress({ step: 'memory', label: '正在刷新记忆库…', done: false, error: false })
+    try {
+      const memoriesRes = await aiApi.listMemory(projectId)
+      setMemories(memoriesRes.data)
+      pushProgress({ step: 'memory', label: `✓ 记忆库已刷新：${memoriesRes.data.length} 条`, done: true, error: false })
+    } catch (e: any) {
+      pushProgress({
+        step: 'memory',
+        label: `记忆库刷新失败：${e?.message || '未知错误'}`,
+        done: true,
+        error: true,
+      })
+    }
+
+    onComplete(`《${chapter.title}》已重写并保存`)
+  } catch (e: any) {
+    if (signal.aborted || e?.name === 'AbortError') {
+      onComplete('已取消')
+      return
+    }
+    pushProgress({ step: 'error', label: `重写失败：${e?.message || '未知错误'}`, done: true, error: true })
+    onError(`重写失败：${e?.message || '未知错误'}`)
+  }
 }
 
 // ── 单任务卡片 ─────────────────────────────────────────────
@@ -398,6 +602,7 @@ export default function GenerationQueuePanel() {
   const removeGenTask = useAppStore(s => s.removeGenTask)
   const setOutlineNeedsReload = useAppStore(s => s.setOutlineNeedsReload)
   const upsertChapter = useAppStore(s => s.upsertChapter)
+  const setMemories = useAppStore(s => s.setMemories)
 
   // 避免并发执行：记录正在运行的任务 id
   const runningIdRef = useRef<string | null>(null)
@@ -433,7 +638,9 @@ export default function GenerationQueuePanel() {
     } else if (task.type === 'batch_expand') {
       await runBatchExpand(task, pushProgress, onComplete, onError, abort.signal)
     } else if (task.type === 'continue_chapters') {
-      await runContinueChapters(task, pushProgress, onComplete, onError, abort.signal, upsertChapter)
+      await runContinueChapters(task, pushProgress, onComplete, onError, abort.signal, upsertChapter, setMemories)
+    } else if (task.type === 'rewrite_chapter') {
+      await runRewriteChapter(task, pushProgress, onComplete, onError, abort.signal, upsertChapter, setMemories)
     } else {
       onError('未知任务类型')
     }
@@ -443,7 +650,7 @@ export default function GenerationQueuePanel() {
       updateGenTask(task.id, { status: 'error', errorMsg: '任务异常结束（未收到明确完成或失败信号）' })
       runningIdRef.current = null
     }
-  }, [updateGenTask, pushGenProgress, setOutlineNeedsReload, upsertChapter])
+  }, [updateGenTask, pushGenProgress, setOutlineNeedsReload, upsertChapter, setMemories])
 
   const cancelTask = useCallback((task: GenTask) => {
     if (task.status === 'pending') {

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
-from app.models import Chapter, ChapterVersion
+from app.models import Chapter, ChapterIndex, ChapterVersion, MemoryChunk
 from app.schemas import ChapterCreate, ChapterUpdate, ChapterOut, ChapterVersionOut
 
 router = APIRouter(prefix="/projects/{project_id}/chapters", tags=["chapters"])
@@ -16,6 +16,18 @@ def count_words(text: str) -> int:
     chinese = len(re.findall(r"[一-鿿]", clean))
     english = len(re.findall(r"[a-zA-Z]+", clean))
     return chinese + english
+
+
+def delete_chapter_artifacts(db: Session, project_id: str, chapter_id: str) -> None:
+    """删除章节派生数据，避免重写/重建章节时读到旧记忆和旧索引。"""
+    db.query(MemoryChunk).filter(
+        MemoryChunk.project_id == project_id,
+        MemoryChunk.chapter_id == chapter_id,
+    ).delete(synchronize_session=False)
+    db.query(ChapterIndex).filter(
+        ChapterIndex.project_id == project_id,
+        ChapterIndex.chapter_id == chapter_id,
+    ).delete(synchronize_session=False)
 
 
 @router.get("/", response_model=List[ChapterOut])
@@ -72,6 +84,7 @@ def delete_chapter(project_id: str, chapter_id: str, db: Session = Depends(get_d
     ).first()
     if not chapter:
         raise HTTPException(404, "Chapter not found")
+    delete_chapter_artifacts(db, project_id, chapter_id)
     db.delete(chapter)
     db.commit()
 

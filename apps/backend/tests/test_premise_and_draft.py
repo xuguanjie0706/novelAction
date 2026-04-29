@@ -1,6 +1,7 @@
 import pytest
 
 from app.schemas.project import ProjectCreate, ProjectOut
+from app.routers.ai import ChapterDebriefRequest
 from app.services.ai_service import AIService
 
 
@@ -27,6 +28,21 @@ def test_project_schema_carries_premise():
     )
 
     assert out.premise == premise
+
+
+def test_chapter_debrief_accepts_storyline_name_without_uuid():
+    req = ChapterDebriefRequest(
+        chapter_id="00000000-0000-0000-0000-000000000001",
+        storyline_updates=[
+            {
+                "storyline_name": "主线：黑雾来处",
+                "append_beat": "丹虚子说明昨夜黑雾与魂殿有关。",
+            }
+        ],
+    )
+
+    assert req.storyline_updates[0].storyline_id is None
+    assert req.storyline_updates[0].storyline_name == "主线：黑雾来处"
 
 
 @pytest.mark.asyncio

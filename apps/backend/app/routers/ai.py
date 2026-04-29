@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel
 from typing import Optional, List, Literal
 from uuid import UUID
@@ -760,7 +761,7 @@ class CharacterUpdate(BaseModel):
     remove_item_id: Optional[str] = None  # 失去道具时传 item_id
 
 class StoryLineUpdate(BaseModel):
-    storyline_id: str
+    storyline_id: Optional[str] = None
     storyline_name: Optional[str] = None
     status: Optional[str] = None          # planned/active/climax/resolved/dropped
     append_beat: Optional[str] = None     # 追加到 key_beats 的新节点描述
@@ -809,6 +810,7 @@ def chapter_debrief(
     updated_storylines: List[str] = []
     added_memories: List[str] = []
     chapter_index_saved = False
+    chapter_index_error: Optional[str] = None
 
     # ── 更新人物状态 ──────────────────────────────────
     for cu in req.character_updates:
@@ -874,10 +876,11 @@ def chapter_debrief(
     # ── 更新故事线 ────────────────────────────────────
     for su in req.storyline_updates:
         storyline_uuid = None
-        try:
-            storyline_uuid = UUID(str(su.storyline_id))
-        except Exception:
-            storyline_uuid = None
+        if su.storyline_id:
+            try:
+                storyline_uuid = UUID(str(su.storyline_id))
+            except Exception:
+                storyline_uuid = None
 
         if storyline_uuid:
             sl = db.query(StoryLine).filter(
@@ -928,29 +931,43 @@ def chapter_debrief(
 
     # ── 写入/更新章节速查索引 ─────────────────────────
     if req.chapter_index:
-        hook_strength = max(1, min(5, req.chapter_index.hook_strength or 1))
-        index = db.query(ChapterIndex).filter(
-            ChapterIndex.project_id == project_id,
-            ChapterIndex.chapter_id == req.chapter_id,
-        ).first()
-        data = req.chapter_index.model_dump()
-        data["hook_strength"] = hook_strength
-        data["chapter_number"] = chapter.sort_order + 1
-        if index:
-            for field, value in data.items():
-                setattr(index, field, value)
-        else:
-            index = ChapterIndex(
-                project_id=project_id,
-                chapter_id=req.chapter_id,
-                **data,
-            )
-            db.add(index)
-        chapter_index_saved = True
+        try:
+            with db.begin_nested():
+                hook_strength = max(1, min(5, req.chapter_index.hook_strength or 1))
+                index = db.query(ChapterIndex).filter(
+                    ChapterIndex.project_id == project_id,
+                    ChapterIndex.chapter_id == req.chapter_id,
+                ).first()
+                data = req.chapter_index.model_dump()
+                data["hook_strength"] = hook_strength
+                data["chapter_number"] = chapter.sort_order + 1
+                if index:
+                    for field, value in data.items():
+                        setattr(index, field, value)
+                else:
+                    index = ChapterIndex(
+                        project_id=project_id,
+                        chapter_id=req.chapter_id,
+                        **data,
+                    )
+                    db.add(index)
+                chapter_index_saved = True
+        except SQLAlchemyError as exc:
+            chapter_index_error = exc.__class__.__name__
 
     # ── 保存作者备注到章节 ────────────────────────────
     if req.notes:
-        chapter.summary = (chapter.summary or "") + f"\n[复盘备注] {req.notes}"
+        memory = MemoryChunk(
+            project_id=project_id,
+            chapter_id=req.chapter_id,
+            chapter_number=chapter.sort_order + 1,
+            memory_type="event",
+            title="章节复盘备注",
+            content=req.notes.strip(),
+            tags=["复盘备注"],
+        )
+        db.add(memory)
+        added_memories.append(memory.title)
 
     db.commit()
 
@@ -960,6 +977,7 @@ def chapter_debrief(
         "updated_storylines": updated_storylines,
         "added_memories": added_memories,
         "chapter_index_saved": chapter_index_saved,
+        "chapter_index_error": chapter_index_error,
         "message": f"已更新 {len(updated_chars)} 个人物状态、{len(updated_storylines)} 条故事线、{len(added_memories)} 条记忆、章节索引={'已写入' if chapter_index_saved else '未更新'}",
     }
 

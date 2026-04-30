@@ -14,6 +14,193 @@ import toast from 'react-hot-toast'
 import OutlineAIPanel from '../components/Outline/OutlineAIPanel'
 import { collectExpandableNodes } from '../utils/outlineAiExpand'
 
+type RevisionSnapshotNode = {
+  id: string
+  parent_id?: string | null
+  node_type?: string
+  title?: string
+  summary?: string
+  hook?: string
+  highlight?: string
+  conflict?: string
+  sort_order?: number
+  expected_words?: number
+  reader_hook_score?: number
+  storyline_ids?: string[]
+  involved_character_ids?: string[]
+  key_item_ids?: string[]
+  key_skill_ids?: string[]
+  emotional_tone?: string
+  pacing?: string
+  power_milestone?: string
+  foreshadows_laid?: Array<{ id?: string; description?: string }>
+  foreshadows_resolved?: Array<{ id?: string; description?: string }>
+}
+
+type OutlineDiffField = {
+  field: string
+  before: string
+  after: string
+}
+
+type OutlineDiffItem = {
+  changeType: 'added' | 'removed' | 'updated'
+  severity: 'high' | 'medium' | 'low'
+  nodeId: string
+  nodeType: string
+  title: string
+  path: string
+  fields?: OutlineDiffField[]
+}
+
+type OutlineDiffResult = {
+  summary: {
+    added: number
+    removed: number
+    updated: number
+    high: number
+  }
+  changes: OutlineDiffItem[]
+}
+
+const DIFF_FIELDS: Array<keyof RevisionSnapshotNode> = [
+  'title',
+  'summary',
+  'hook',
+  'highlight',
+  'conflict',
+  'sort_order',
+  'expected_words',
+  'reader_hook_score',
+  'storyline_ids',
+  'involved_character_ids',
+  'key_item_ids',
+  'key_skill_ids',
+  'emotional_tone',
+  'pacing',
+  'power_milestone',
+  'foreshadows_laid',
+  'foreshadows_resolved',
+]
+
+const FIELD_LABEL: Record<string, string> = {
+  title: '标题',
+  summary: '核心事件',
+  hook: '开篇钩子',
+  highlight: '高光',
+  conflict: '人物变化/冲突',
+  sort_order: '排序',
+  expected_words: '预期字数',
+  reader_hook_score: '钩子分',
+  storyline_ids: '故事线',
+  involved_character_ids: '出场人物',
+  key_item_ids: '关键道具',
+  key_skill_ids: '关键技能',
+  emotional_tone: '情感基调',
+  pacing: '节奏',
+  power_milestone: '实力里程碑',
+  foreshadows_laid: '铺设伏笔',
+  foreshadows_resolved: '回收伏笔',
+}
+
+const toDisplayText = (value: unknown) => {
+  if (value === null || value === undefined) return '（空）'
+  if (typeof value === 'string') return value.trim() || '（空）'
+  if (Array.isArray(value)) return value.length ? JSON.stringify(value) : '（空）'
+  return String(value)
+}
+
+const buildPath = (node: RevisionSnapshotNode, nodeMap: Map<string, RevisionSnapshotNode>) => {
+  const parts: string[] = []
+  let cur: RevisionSnapshotNode | undefined = node
+  let safeGuard = 0
+  while (cur && safeGuard < 12) {
+    parts.unshift(cur.title || '未命名节点')
+    const pid: string | undefined = cur.parent_id || undefined
+    cur = pid ? nodeMap.get(pid) : undefined
+    safeGuard += 1
+  }
+  return parts.join(' > ')
+}
+
+const calcSeverity = (changeType: OutlineDiffItem['changeType'], fields?: OutlineDiffField[]) => {
+  if (changeType === 'added' || changeType === 'removed') return 'high' as const
+  const f = new Set((fields || []).map(item => item.field))
+  if (f.has('hook') || f.has('conflict') || f.has('sort_order') || f.has('foreshadows_resolved')) return 'high' as const
+  if (f.has('summary') || f.has('title') || f.has('involved_character_ids') || f.has('power_milestone')) return 'medium' as const
+  return 'low' as const
+}
+
+const compareSnapshots = (baseNodes: RevisionSnapshotNode[], targetNodes: RevisionSnapshotNode[]): OutlineDiffResult => {
+  const baseMap = new Map(baseNodes.map(node => [node.id, node]))
+  const targetMap = new Map(targetNodes.map(node => [node.id, node]))
+  const changes: OutlineDiffItem[] = []
+
+  baseNodes.forEach(baseNode => {
+    const targetNode = targetMap.get(baseNode.id)
+    if (!targetNode) {
+      const severity = calcSeverity('removed')
+      changes.push({
+        changeType: 'removed',
+        severity,
+        nodeId: baseNode.id,
+        nodeType: baseNode.node_type || 'unknown',
+        title: baseNode.title || '未命名节点',
+        path: buildPath(baseNode, baseMap),
+      })
+      return
+    }
+    const fields: OutlineDiffField[] = []
+    DIFF_FIELDS.forEach(field => {
+      const before = toDisplayText(baseNode[field])
+      const after = toDisplayText(targetNode[field])
+      if (before !== after) {
+        fields.push({ field: String(field), before, after })
+      }
+    })
+    if (fields.length) {
+      const severity = calcSeverity('updated', fields)
+      changes.push({
+        changeType: 'updated',
+        severity,
+        nodeId: baseNode.id,
+        nodeType: targetNode.node_type || 'unknown',
+        title: targetNode.title || '未命名节点',
+        path: buildPath(targetNode, targetMap),
+        fields,
+      })
+    }
+  })
+
+  targetNodes.forEach(targetNode => {
+    if (baseMap.has(targetNode.id)) return
+    const severity = calcSeverity('added')
+    changes.push({
+      changeType: 'added',
+      severity,
+      nodeId: targetNode.id,
+      nodeType: targetNode.node_type || 'unknown',
+      title: targetNode.title || '未命名节点',
+      path: buildPath(targetNode, targetMap),
+    })
+  })
+
+  const summary = {
+    added: changes.filter(item => item.changeType === 'added').length,
+    removed: changes.filter(item => item.changeType === 'removed').length,
+    updated: changes.filter(item => item.changeType === 'updated').length,
+    high: changes.filter(item => item.severity === 'high').length,
+  }
+  return {
+    summary,
+    changes: changes.sort((a, b) => {
+      const rank = { high: 0, medium: 1, low: 2 }
+      if (rank[a.severity] !== rank[b.severity]) return rank[a.severity] - rank[b.severity]
+      return a.path.localeCompare(b.path)
+    }),
+  }
+}
+
 // ── 全量生成配置弹窗（只收集参数，执行交给队列）──────────────
 
 function FullGenConfigModal({
@@ -259,6 +446,16 @@ export default function OutlinePage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [showFullGenModal, setShowFullGenModal] = useState(false)
   const [showBatchModal, setShowBatchModal] = useState(false)
+  const [contentTab, setContentTab] = useState<'node' | 'bookQuality' | 'volumeQuality' | 'revisions'>('node')
+  const [outlineRevisions, setOutlineRevisions] = useState<any[]>([])
+  const [compareBaseRevisionId, setCompareBaseRevisionId] = useState<string | null>(null)
+  const [compareTargetRevisionId, setCompareTargetRevisionId] = useState<string | null>(null)
+  const [isCompareDrawerOpen, setIsCompareDrawerOpen] = useState(false)
+  const [isComparing, setIsComparing] = useState(false)
+  const [compareResult, setCompareResult] = useState<OutlineDiffResult | null>(null)
+  const [compareFilter, setCompareFilter] = useState<'all' | 'high' | 'structure' | 'content'>('high')
+  const [selectedBookQualityRevisionId, setSelectedBookQualityRevisionId] = useState<string | null>(null)
+  const [selectedVolumeQualityRevisionId, setSelectedVolumeQualityRevisionId] = useState<string | null>(null)
 
   const reload = () => {
     if (!projectId) return
@@ -269,7 +466,12 @@ export default function OutlinePage() {
     })
   }
 
-  useEffect(() => { reload() }, [projectId])
+  const reloadRevisions = () => {
+    if (!projectId) return
+    outlineApi.listRevisions(projectId).then(res => setOutlineRevisions(res.data)).catch(() => {})
+  }
+
+  useEffect(() => { reload(); reloadRevisions() }, [projectId])
 
   useEffect(() => {
     if (!projectId) return
@@ -280,6 +482,7 @@ export default function OutlinePage() {
   useEffect(() => {
     if (outlineNeedsReload) {
       reload()
+      reloadRevisions()
       if (projectId) projectsApi.get(projectId).then(res => setCurrentProject(res.data)).catch(() => {})
       setOutlineNeedsReload(false)
     }
@@ -412,6 +615,145 @@ export default function OutlinePage() {
     toast.success('已加入生成队列，右下角可查看进度')
   }
 
+  const handleDispatchOutlineQuality = (scope: 'all' | 'volume' | 'book', volumeNode?: OutlineNode) => {
+    if (!projectId) return
+    if (scope === 'volume' && !volumeNode) {
+      toast.error('请先选择要质检的卷')
+      return
+    }
+    const route = useAppStore.getState().aiBackendRoute
+    const modelProfile = toOutlineApiModelProfile(route)
+    addGenTask({
+      type: 'outline_quality',
+      projectId,
+      label: scope === 'volume'
+        ? `单卷大纲质检：${volumeNode?.title ?? ''}`
+        : scope === 'book'
+          ? '全书大纲质检'
+          : '大纲质检：单卷 + 全书',
+      params: {
+        scope,
+        ...(volumeNode ? { volume_node_id: volumeNode.id } : {}),
+        model_profile: modelProfile,
+        ...routeLlmProviderPayload(route),
+      },
+    })
+    if (scope === 'book') setContentTab('bookQuality')
+    if (scope === 'volume') setContentTab('volumeQuality')
+    toast.success('已加入质检队列，右下角可查看进度')
+  }
+
+  const handleDispatchOutlineRepair = (scope: 'all' | 'volume' | 'book', volumeNode?: OutlineNode) => {
+    if (!projectId) return
+    if (scope === 'volume' && !volumeNode) {
+      toast.error('请先选择要修复的卷')
+      return
+    }
+    const ok = window.confirm(
+      scope === 'volume'
+        ? `将对「${volumeNode?.title ?? ''}」执行 Graph 修复，并自动保存修复前/后快照。继续？`
+        : '将执行全书 Graph 修复，并自动保存修复前/后快照。继续？',
+    )
+    if (!ok) return
+    const route = useAppStore.getState().aiBackendRoute
+    const modelProfile = toOutlineApiModelProfile(route)
+    addGenTask({
+      type: 'outline_repair',
+      projectId,
+      label: scope === 'volume'
+        ? `单卷大纲修复：${volumeNode?.title ?? ''}`
+        : scope === 'book'
+          ? '全书大纲修复'
+          : '大纲修复：单卷 + 全书',
+      params: {
+        scope,
+        ...(volumeNode ? { volume_node_id: volumeNode.id } : {}),
+        model_profile: modelProfile,
+        ...routeLlmProviderPayload(route),
+      },
+    })
+    toast.success('已加入修复队列，右下角可查看进度')
+  }
+
+  const handleCreateManualSnapshot = async () => {
+    if (!projectId) return
+    try {
+      await outlineApi.createRevision(projectId, {
+        label: '手动大纲快照',
+        source: 'manual',
+        scope: 'book',
+      })
+      toast.success('已保存当前大纲快照')
+      reloadRevisions()
+    } catch {
+      toast.error('保存快照失败')
+    }
+  }
+
+  const handleSelectCompareBase = (revisionId: string) => {
+    setCompareBaseRevisionId(revisionId)
+    toast.success('已设置基线版本 A')
+  }
+
+  const handleCompareWithBase = async (targetRevisionId: string) => {
+    if (!projectId) return
+    if (!compareBaseRevisionId) {
+      toast.error('请先设定一个基线版本 A')
+      return
+    }
+    if (compareBaseRevisionId === targetRevisionId) {
+      toast.error('A 与 B 不能是同一版本')
+      return
+    }
+    setIsComparing(true)
+    try {
+      const [baseRes, targetRes] = await Promise.all([
+        outlineApi.getRevision(projectId, compareBaseRevisionId),
+        outlineApi.getRevision(projectId, targetRevisionId),
+      ])
+      const baseNodes = (baseRes.data?.snapshot?.nodes || []) as RevisionSnapshotNode[]
+      const targetNodes = (targetRes.data?.snapshot?.nodes || []) as RevisionSnapshotNode[]
+      const diff = compareSnapshots(baseNodes, targetNodes)
+      setCompareResult(diff)
+      setCompareTargetRevisionId(targetRevisionId)
+      setCompareFilter('high')
+      setIsCompareDrawerOpen(true)
+    } catch {
+      toast.error('快照对比失败')
+    } finally {
+      setIsComparing(false)
+    }
+  }
+
+  const handleCompareLatestTwo = async () => {
+    if (visibleRevisions.length < 2) {
+      toast.error('至少需要 2 个快照才可对比')
+      return
+    }
+    const latest = visibleRevisions[0]
+    const previous = visibleRevisions[1]
+    setCompareBaseRevisionId(previous.id)
+    setIsComparing(true)
+    try {
+      const [baseRes, targetRes] = await Promise.all([
+        outlineApi.getRevision(projectId!, previous.id),
+        outlineApi.getRevision(projectId!, latest.id),
+      ])
+      const diff = compareSnapshots(
+        (baseRes.data?.snapshot?.nodes || []) as RevisionSnapshotNode[],
+        (targetRes.data?.snapshot?.nodes || []) as RevisionSnapshotNode[],
+      )
+      setCompareResult(diff)
+      setCompareTargetRevisionId(latest.id)
+      setCompareFilter('high')
+      setIsCompareDrawerOpen(true)
+    } catch {
+      toast.error('快照对比失败')
+    } finally {
+      setIsComparing(false)
+    }
+  }
+
   const expandableCount = collectExpandableNodes(outlineTree).length
 
   const renderNode = (node: OutlineNode, depth = 0) => {
@@ -470,6 +812,83 @@ export default function OutlinePage() {
       </div>
     )
   }
+
+  const filteredCompareChanges = (compareResult?.changes || []).filter(change => {
+    if (compareFilter === 'all') return true
+    if (compareFilter === 'high') return change.severity === 'high'
+    if (compareFilter === 'structure') return change.changeType === 'added' || change.changeType === 'removed'
+    return change.changeType === 'updated'
+  })
+
+  const buildParentMap = (nodes: OutlineNode[]) => {
+    const parentMap = new Map<string, string | undefined>()
+    const walk = (node: OutlineNode, parentId?: string) => {
+      parentMap.set(node.id, parentId)
+      node.children?.forEach(child => walk(child, node.id))
+    }
+    nodes.forEach(root => walk(root, undefined))
+    return parentMap
+  }
+
+  const findSelectedVolumeId = () => {
+    if (!selected) return null
+    if (selected.node_type === 'volume') return selected.id
+    const nodeMap = new Map<string, OutlineNode>()
+    const walk = (node: OutlineNode) => {
+      nodeMap.set(node.id, node)
+      node.children?.forEach(walk)
+    }
+    outlineTree.forEach(walk)
+    const parentMap = buildParentMap(outlineTree)
+    let curId: string | undefined = selected.id
+    let safeGuard = 0
+    while (curId && safeGuard < 20) {
+      const node = nodeMap.get(curId)
+      if (node?.node_type === 'volume') return node.id
+      curId = parentMap.get(curId)
+      safeGuard += 1
+    }
+    return null
+  }
+
+  const selectedVolumeId = findSelectedVolumeId()
+  const outlineNodeMap = new Map<string, OutlineNode>()
+  const walkOutlineNode = (node: OutlineNode) => {
+    outlineNodeMap.set(node.id, node)
+    node.children?.forEach(walkOutlineNode)
+  }
+  outlineTree.forEach(walkOutlineNode)
+  const selectedVolumeNode = selectedVolumeId ? outlineNodeMap.get(selectedVolumeId) : null
+  const selectedVolumeQuality = selectedVolumeNode?.extra?.outline_quality as OutlinePlanQualityReport | undefined
+  const getQualityReportFromRevision = (rev: any): OutlinePlanQualityReport | undefined => {
+    const report = rev?.meta?.quality_report
+    return report && typeof report === 'object' ? report as OutlinePlanQualityReport : undefined
+  }
+  const qualityRevisions = outlineRevisions.filter(rev => rev.source === 'quality')
+  const bookQualityRevisions = qualityRevisions.filter(rev => rev.scope === 'book')
+  const volumeQualityRevisions = selectedVolumeId
+    ? qualityRevisions.filter(rev => rev.scope === 'volume' && rev.volume_node_id === selectedVolumeId)
+    : []
+  const selectedBookQualityRevision = selectedBookQualityRevisionId
+    ? bookQualityRevisions.find(rev => rev.id === selectedBookQualityRevisionId)
+    : null
+  const selectedVolumeQualityRevision = selectedVolumeQualityRevisionId
+    ? volumeQualityRevisions.find(rev => rev.id === selectedVolumeQualityRevisionId)
+    : null
+  const displayedBookQuality = getQualityReportFromRevision(selectedBookQualityRevision) || bookOutlineQuality
+  const displayedVolumeQuality = getQualityReportFromRevision(selectedVolumeQualityRevision) || selectedVolumeQuality
+  useEffect(() => {
+    setSelectedVolumeQualityRevisionId(null)
+  }, [selectedVolumeId])
+  const snapshotRevisions = outlineRevisions.filter(rev =>
+    ['manual', 'pre_repair', 'post_repair'].includes(rev.source),
+  )
+  const visibleRevisions = selectedVolumeId
+    ? snapshotRevisions.filter(rev => rev.scope === 'volume' && rev.volume_node_id === selectedVolumeId)
+    : snapshotRevisions
+
+  const compareBaseRevision = outlineRevisions.find(r => r.id === compareBaseRevisionId)
+  const compareTargetRevision = outlineRevisions.find(r => r.id === compareTargetRevisionId)
 
   return (
     <div className="flex h-full">
@@ -552,13 +971,320 @@ export default function OutlinePage() {
 
       {/* 右侧详情 + AI 面板 */}
       <div className="flex-1 overflow-auto flex flex-col">
-        {bookOutlineQuality && typeof bookOutlineQuality === 'object' && (
-          <div className="shrink-0 border-b border-amber-100 bg-gradient-to-r from-amber-50/90 to-white px-6 py-4">
-            <h4 className="text-xs font-semibold text-amber-900 uppercase tracking-wide mb-2">全书大纲质检</h4>
-            <OutlinePlanQualityView report={bookOutlineQuality} onChapterClick={jumpToChapterPlan} />
+        <div className="shrink-0 border-b border-gray-100 bg-white px-6 pt-4">
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setContentTab('node')}
+              className={clsx(
+                'px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors',
+                contentTab === 'node'
+                  ? 'border-amber-500 text-amber-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-200',
+              )}
+            >
+              当前节点
+            </button>
+            <button
+              type="button"
+              onClick={() => setContentTab('bookQuality')}
+              className={clsx(
+                'px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors',
+                contentTab === 'bookQuality'
+                  ? 'border-indigo-500 text-indigo-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-200',
+              )}
+            >
+              全书质检
+            </button>
+            <button
+              type="button"
+              onClick={() => setContentTab('volumeQuality')}
+              className={clsx(
+                'px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors',
+                contentTab === 'volumeQuality'
+                  ? 'border-cyan-500 text-cyan-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-200',
+              )}
+            >
+              单卷质检
+            </button>
+            <button
+              type="button"
+              onClick={() => setContentTab('revisions')}
+              className={clsx(
+                'px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors',
+                contentTab === 'revisions'
+                  ? 'border-slate-500 text-slate-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-200',
+              )}
+            >
+              大纲快照
+            </button>
           </div>
-        )}
-        {selected ? (
+        </div>
+
+        {contentTab === 'bookQuality' ? (
+          <div className="p-6 w-full">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">全书大纲质检</h3>
+                <p className="text-xs text-gray-400 mt-1">跨卷承接、全书镜像重复、主题兑现和世界观冲突</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleDispatchOutlineQuality('book')}
+                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200"
+              >
+                <Check size={12} />
+                重新全书质检
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDispatchOutlineRepair('book')}
+                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200"
+              >
+                <Sparkles size={12} />
+                Graph 修复全书
+              </button>
+            </div>
+            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
+              <div className="min-w-0">
+                {displayedBookQuality && typeof displayedBookQuality === 'object' ? (
+                  <OutlinePlanQualityView report={displayedBookQuality} onChapterClick={jumpToChapterPlan} />
+                ) : (
+                  <div className="border border-dashed border-indigo-200 bg-indigo-50/40 rounded-lg px-4 py-8 text-sm text-indigo-700">
+                    当前还没有全书大纲质检报告。
+                  </div>
+                )}
+              </div>
+              <div className="xl:sticky xl:top-4">
+                <div className="rounded-lg border border-gray-100 bg-white">
+                  <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-gray-100">
+                    <h4 className="text-xs font-semibold text-gray-700">全书质检时间线</h4>
+                    <span className="text-[11px] text-gray-400">共 {bookQualityRevisions.length} 条</span>
+                  </div>
+                  {bookQualityRevisions.length > 0 ? (
+                    <div className="max-h-[70vh] overflow-auto divide-y divide-gray-100">
+                      {bookQualityRevisions.slice(0, 24).map(rev => (
+                        <button
+                          key={rev.id}
+                          type="button"
+                          onClick={() => setSelectedBookQualityRevisionId(rev.id)}
+                          className={clsx(
+                            'w-full text-left px-3 py-2 hover:bg-gray-50',
+                            selectedBookQualityRevisionId === rev.id && 'bg-indigo-50',
+                          )}
+                        >
+                          <div className="flex items-center justify-between gap-3 text-xs">
+                            <div className="min-w-0">
+                              <div className="font-medium text-gray-800 truncate">{rev.label}</div>
+                              <div className="text-gray-400 mt-0.5">
+                                score {rev.meta?.quality_score ?? '-'} · {rev.meta?.quality_status ?? '-'} · {rev.created_at ? new Date(rev.created_at).toLocaleString() : ''}
+                              </div>
+                            </div>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">
+                              {String(rev.id).slice(0, 8)}
+                            </span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="px-3 py-4 text-xs text-gray-400">
+                      还没有全书质检历史记录。
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : contentTab === 'volumeQuality' ? (
+          <div className="p-6 w-full">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">单卷大纲质检</h3>
+                <p className="text-xs text-gray-400 mt-1">
+                  {selectedVolumeNode
+                    ? `当前卷：${selectedVolumeNode.title}`
+                    : '请先在左侧选择一个卷（或该卷下的篇/章）'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!selectedVolumeNode) {
+                      toast.error('请先选择一个卷')
+                      return
+                    }
+                    handleDispatchOutlineRepair('volume', selectedVolumeNode)
+                  }}
+                  disabled={!selectedVolumeNode}
+                  className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Sparkles size={12} />
+                  修复本卷
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!selectedVolumeNode) {
+                      toast.error('请先选择一个卷')
+                      return
+                    }
+                    handleDispatchOutlineQuality('volume', selectedVolumeNode)
+                  }}
+                  disabled={!selectedVolumeNode}
+                  className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg text-cyan-700 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Check size={12} />
+                  重新单卷质检
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
+              <div className="min-w-0">
+                {selectedVolumeNode ? (
+                  displayedVolumeQuality && typeof displayedVolumeQuality === 'object' ? (
+                    <OutlinePlanQualityView report={displayedVolumeQuality} onChapterClick={jumpToChapterPlan} />
+                  ) : (
+                    <div className="border border-dashed border-cyan-200 bg-cyan-50/40 rounded-lg px-4 py-8 text-sm text-cyan-700">
+                      当前卷还没有质检报告。可点击右上角重新质检。
+                    </div>
+                  )
+                ) : (
+                  <div className="border border-dashed border-gray-200 rounded-lg px-4 py-8 text-sm text-gray-500">
+                    未选中卷：请先在左侧点击一个卷，或点击某卷下的篇/章后再查看本页。
+                  </div>
+                )}
+              </div>
+              <div className="xl:sticky xl:top-4">
+                <div className="rounded-lg border border-gray-100 bg-white">
+                  <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-gray-100">
+                    <h4 className="text-xs font-semibold text-gray-700">单卷质检时间线</h4>
+                    <span className="text-[11px] text-gray-400">共 {volumeQualityRevisions.length} 条</span>
+                  </div>
+                  {selectedVolumeNode ? (
+                    volumeQualityRevisions.length > 0 ? (
+                      <div className="max-h-[70vh] overflow-auto divide-y divide-gray-100">
+                        {volumeQualityRevisions.slice(0, 24).map(rev => (
+                          <button
+                            key={rev.id}
+                            type="button"
+                            onClick={() => setSelectedVolumeQualityRevisionId(rev.id)}
+                            className={clsx(
+                              'w-full text-left px-3 py-2 hover:bg-gray-50',
+                              selectedVolumeQualityRevisionId === rev.id && 'bg-cyan-50',
+                            )}
+                          >
+                            <div className="flex items-center justify-between gap-3 text-xs">
+                              <div className="min-w-0">
+                                <div className="font-medium text-gray-800 truncate">{rev.label}</div>
+                                <div className="text-gray-400 mt-0.5">
+                                  score {rev.meta?.quality_score ?? '-'} · {rev.meta?.quality_status ?? '-'} · {rev.created_at ? new Date(rev.created_at).toLocaleString() : ''}
+                                </div>
+                              </div>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">
+                                {String(rev.id).slice(0, 8)}
+                              </span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="px-3 py-4 text-xs text-gray-400">
+                        当前卷还没有质检历史记录。
+                      </div>
+                    )
+                  ) : (
+                    <div className="px-3 py-4 text-xs text-gray-400">
+                      选中卷后显示对应时间线。
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : contentTab === 'revisions' ? (
+          <div className="p-6 max-w-5xl">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">大纲历史快照</h3>
+                <p className="text-xs text-gray-400 mt-1">保存版本、设置 A/B 基线并快速对比结构化变化</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCompareLatestTwo}
+                  disabled={visibleRevisions.length < 2 || isComparing}
+                  className="text-[11px] px-2 py-1 rounded border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  最近两版对比
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCreateManualSnapshot}
+                  className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg text-gray-600 bg-gray-50 hover:bg-gray-100 border border-gray-200"
+                >
+                  <BookOpen size={12} />
+                  保存快照
+                </button>
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <h4 className="text-xs font-semibold text-gray-700">大纲历史快照</h4>
+                <span className="text-[11px] text-gray-400">
+                  {selectedVolumeId ? '当前卷' : '全书'} · 共 {visibleRevisions.length} 条
+                </span>
+              </div>
+              {visibleRevisions.length > 0 ? (
+                <div className="border border-gray-100 rounded-lg divide-y divide-gray-100 overflow-hidden">
+                  {visibleRevisions.slice(0, 12).map(rev => (
+                    <div key={rev.id} className="px-3 py-2 flex items-center justify-between gap-3 text-xs">
+                      <div className="min-w-0">
+                        <div className="font-medium text-gray-800 truncate">{rev.label}</div>
+                        <div className="text-gray-400 mt-0.5">
+                          {rev.source} · {rev.scope} · {rev.node_count ?? 0} 节点 · {rev.created_at ? new Date(rev.created_at).toLocaleString() : ''}
+                        </div>
+                      </div>
+                      <div className="shrink-0 flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectCompareBase(rev.id)}
+                          className={clsx(
+                            'text-[10px] px-1.5 py-0.5 rounded border',
+                            compareBaseRevisionId === rev.id
+                              ? 'bg-indigo-100 text-indigo-700 border-indigo-200'
+                              : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50',
+                          )}
+                        >
+                          设 A
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleCompareWithBase(rev.id)}
+                          disabled={!compareBaseRevisionId || compareBaseRevisionId === rev.id || isComparing}
+                          className="text-[10px] px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          与 A 对比
+                        </button>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">
+                          {String(rev.id).slice(0, 8)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="border border-dashed border-gray-200 rounded-lg px-4 py-5 text-xs text-gray-400">
+                  暂无快照。Graph 修复会自动保存修复前/后快照。
+                </div>
+              )}
+            </div>
+          </div>
+        ) : selected ? (
           <NodeDetailPanel
             key={selected.id}
             node={selected}
@@ -570,6 +1296,7 @@ export default function OutlinePage() {
               setExpanded(prev => new Set([...prev, selected.id]))
             }}
             onJumpToChapterPlan={jumpToChapterPlan}
+            onQualityCheck={() => handleDispatchOutlineQuality('volume', selected)}
           />
         ) : (
           <div className="flex flex-col items-center justify-center flex-1 text-gray-400 gap-2 min-h-[200px]">
@@ -604,6 +1331,131 @@ export default function OutlinePage() {
           onDispatch={handleDispatchBatchExpand}
         />
       )}
+
+      {isCompareDrawerOpen && compareResult && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/20 z-40"
+            onClick={() => setIsCompareDrawerOpen(false)}
+          />
+          <div className="fixed top-0 right-0 h-full w-full max-w-xl bg-white border-l border-gray-200 shadow-2xl z-50 flex flex-col">
+            <div className="px-4 py-3 border-b border-gray-100 flex items-start justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900">快照快速比对</h4>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  A：{compareBaseRevision?.label || String(compareBaseRevisionId).slice(0, 8)} · B：{compareTargetRevision?.label || String(compareTargetRevisionId).slice(0, 8)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCompareDrawerOpen(false)}
+                className="p-1 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="px-4 py-3 border-b border-gray-100 grid grid-cols-4 gap-2 text-xs">
+              <div className="rounded border border-green-100 bg-green-50 px-2 py-1.5">
+                <div className="text-green-700 font-semibold">{compareResult.summary.added}</div>
+                <div className="text-green-600/90">新增</div>
+              </div>
+              <div className="rounded border border-red-100 bg-red-50 px-2 py-1.5">
+                <div className="text-red-700 font-semibold">{compareResult.summary.removed}</div>
+                <div className="text-red-600/90">删除</div>
+              </div>
+              <div className="rounded border border-amber-100 bg-amber-50 px-2 py-1.5">
+                <div className="text-amber-700 font-semibold">{compareResult.summary.updated}</div>
+                <div className="text-amber-600/90">修改</div>
+              </div>
+              <div className="rounded border border-indigo-100 bg-indigo-50 px-2 py-1.5">
+                <div className="text-indigo-700 font-semibold">{compareResult.summary.high}</div>
+                <div className="text-indigo-600/90">高风险</div>
+              </div>
+            </div>
+
+            <div className="px-4 py-2 border-b border-gray-100 flex items-center gap-1 text-xs">
+              {([
+                ['high', '仅高风险'],
+                ['structure', '结构变更'],
+                ['content', '内容修改'],
+                ['all', '全部'],
+              ] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setCompareFilter(key)}
+                  className={clsx(
+                    'px-2 py-1 rounded border',
+                    compareFilter === key
+                      ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                      : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex-1 overflow-auto px-4 py-3 space-y-2">
+              {filteredCompareChanges.length === 0 ? (
+                <div className="text-xs text-gray-400 border border-dashed border-gray-200 rounded-lg p-4 text-center">
+                  当前筛选下没有变化。
+                </div>
+              ) : (
+                filteredCompareChanges.map(change => (
+                  <div key={`${change.changeType}-${change.nodeId}`} className="border border-gray-100 rounded-lg p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium text-gray-800 truncate">{change.title}</div>
+                        <div className="text-[11px] text-gray-400 truncate mt-0.5">{change.path}</div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <span className={clsx(
+                          'text-[10px] px-1.5 py-0.5 rounded',
+                          change.changeType === 'added'
+                            ? 'bg-green-100 text-green-700'
+                            : change.changeType === 'removed'
+                              ? 'bg-red-100 text-red-700'
+                              : 'bg-amber-100 text-amber-700',
+                        )}>
+                          {change.changeType === 'added' ? '新增' : change.changeType === 'removed' ? '删除' : '修改'}
+                        </span>
+                        <span className={clsx(
+                          'text-[10px] px-1.5 py-0.5 rounded',
+                          change.severity === 'high'
+                            ? 'bg-rose-100 text-rose-700'
+                            : change.severity === 'medium'
+                              ? 'bg-orange-100 text-orange-700'
+                              : 'bg-gray-100 text-gray-600',
+                        )}>
+                          {change.severity}
+                        </span>
+                      </div>
+                    </div>
+                    {change.fields && change.fields.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {change.fields.slice(0, 4).map(field => (
+                          <div key={field.field} className="text-[11px] rounded bg-gray-50 border border-gray-100 p-2">
+                            <div className="text-gray-500">{FIELD_LABEL[field.field] || field.field}</div>
+                            <div className="text-red-500 mt-0.5 line-clamp-2">- {field.before}</div>
+                            <div className="text-green-600 mt-0.5 line-clamp-2">+ {field.after}</div>
+                          </div>
+                        ))}
+                        {change.fields.length > 4 && (
+                          <div className="text-[10px] text-gray-400">
+                            还有 {change.fields.length - 4} 项字段变化...
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -611,7 +1463,7 @@ export default function OutlinePage() {
 // ── NodeDetailPanel ────────────────────────────────────────
 
 function NodeDetailPanel({
-  node, projectId, onOpenChapter, onSaved, onAICommitDone, onJumpToChapterPlan,
+  node, projectId, onOpenChapter, onSaved, onAICommitDone, onJumpToChapterPlan, onQualityCheck,
 }: {
   node: OutlineNode
   projectId: string
@@ -619,10 +1471,12 @@ function NodeDetailPanel({
   onSaved: (updated: OutlineNode) => void
   onAICommitDone: () => void
   onJumpToChapterPlan: (chapterNumber: number) => void
+  onQualityCheck: () => void
 }) {
   const { characters, storyLines } = useAppStore()
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [activeTab, setActiveTab] = useState<'overview' | 'chapter' | 'quality' | 'ai'>('overview')
   const [form, setForm] = useState({
     title: node.title ?? '',
     summary: node.summary ?? '',
@@ -635,6 +1489,10 @@ function NodeDetailPanel({
     involved_character_ids: (node.involved_character_ids ?? []).map(String),
     storyline_ids: (node.storyline_ids ?? []).map(String),
   })
+
+  useEffect(() => {
+    setActiveTab('overview')
+  }, [node.id])
 
   const handleSave = async () => {
     setSaving(true)
@@ -670,6 +1528,13 @@ function NodeDetailPanel({
     ? (node.extra?.outline_quality as OutlinePlanQualityReport | undefined)
     : undefined
 
+  const tabs = [
+    { key: 'overview' as const, label: '基础' },
+    ...(node.node_type === 'chapter_plan' ? [{ key: 'chapter' as const, label: '章节要素' }] : []),
+    ...(isExpandable ? [{ key: 'quality' as const, label: '单卷质检' }] : []),
+    ...(isExpandable ? [{ key: 'ai' as const, label: 'AI 展开' }] : []),
+  ]
+
   const toggleCharacter = (id: string) => {
     setForm(f => ({
       ...f,
@@ -689,7 +1554,7 @@ function NodeDetailPanel({
   }
 
   return (
-    <div className="p-6 max-w-2xl">
+    <div className="p-6 max-w-3xl">
       <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-2">
           <span className={clsx(
@@ -705,6 +1570,11 @@ function NodeDetailPanel({
           </h3>
         </div>
         <div className="flex items-center gap-2">
+          {!editing && isExpandable && (
+            <button onClick={onQualityCheck} className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg text-indigo-600 hover:bg-indigo-50 border border-indigo-100">
+              <Check size={12} />单卷质检
+            </button>
+          )}
           {editing ? (
             <>
               <button onClick={() => setEditing(false)} className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg text-gray-500 hover:bg-gray-100 border border-gray-200">
@@ -722,24 +1592,37 @@ function NodeDetailPanel({
         </div>
       </div>
 
-      {volumeOutlineQuality && typeof volumeOutlineQuality === 'object' && (
-        <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-3 mb-4">
-          <h4 className="text-xs font-semibold text-indigo-900 mb-2">本卷 / 本篇大纲质检</h4>
-          <OutlinePlanQualityView report={volumeOutlineQuality} onChapterClick={onJumpToChapterPlan} />
-        </div>
-      )}
+      <div className="flex items-center gap-1 border-b border-gray-100 mb-5 overflow-x-auto">
+        {tabs.map(tab => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setActiveTab(tab.key)}
+            className={clsx(
+              'px-3 py-2 text-xs font-medium border-b-2 -mb-px whitespace-nowrap transition-colors',
+              activeTab === tab.key
+                ? 'border-amber-500 text-amber-700'
+                : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-200',
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
+      {activeTab === 'overview' && (
       <div className="space-y-4">
         <Field label="标题" value={form.title} editing={editing} onChange={v => setForm(f => ({ ...f, title: v }))} singleLine />
         <Field label="情节摘要" sublabel="删掉会损失什么" value={form.summary} editing={editing} onChange={v => setForm(f => ({ ...f, summary: v }))} />
         <Field label="钩子 / 悬念" sublabel="读者最想知道答案的核心问题" value={form.hook} editing={editing} onChange={v => setForm(f => ({ ...f, hook: v }))} />
         <Field label="燃点 / 高潮" sublabel="情绪最高点" value={form.highlight} editing={editing} onChange={v => setForm(f => ({ ...f, highlight: v }))} />
         <Field label="核心冲突" sublabel="不可调和的矛盾" value={form.conflict} editing={editing} onChange={v => setForm(f => ({ ...f, conflict: v }))} />
+      </div>
+      )}
 
-        {/* 章节专属字段 */}
-        {node.node_type === 'chapter_plan' && (
-          <>
-            {/* 实力里程碑 */}
+      {activeTab === 'chapter' && node.node_type === 'chapter_plan' && (
+        <div className="space-y-4">
+          {/* 实力里程碑 */}
             <div>
               <div className="flex items-baseline gap-2 mb-1">
                 <TrendingUp size={12} className="text-indigo-400 shrink-0 mt-0.5" />
@@ -760,7 +1643,7 @@ function NodeDetailPanel({
               )}
             </div>
 
-            {/* 情感基调 */}
+          {/* 情感基调 */}
             <div>
               <div className="flex items-baseline gap-2 mb-1">
                 <label className="text-xs font-medium text-gray-600">情感基调</label>
@@ -780,7 +1663,7 @@ function NodeDetailPanel({
               )}
             </div>
 
-            {/* 出场人物 */}
+          {/* 出场人物 */}
             <div>
               <div className="flex items-center gap-1.5 mb-2">
                 <Users size={12} className="text-blue-400 shrink-0" />
@@ -832,7 +1715,7 @@ function NodeDetailPanel({
               )}
             </div>
 
-            {/* 关联故事线 */}
+          {/* 关联故事线 */}
             <div>
               <div className="flex items-center gap-1.5 mb-2">
                 <GitBranch size={12} className="text-green-500 shrink-0" />
@@ -884,18 +1767,35 @@ function NodeDetailPanel({
                 </div>
               )}
             </div>
-          </>
-        )}
-      </div>
+        </div>
+      )}
 
-      {node.node_type === 'chapter_plan' && (
+      {activeTab === 'quality' && isExpandable && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-semibold text-indigo-900">本卷 / 本篇大纲质检</h4>
+            <button onClick={onQualityCheck} className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg text-indigo-600 hover:bg-indigo-50 border border-indigo-100">
+              <Check size={12} />重新质检
+            </button>
+          </div>
+          {volumeOutlineQuality && typeof volumeOutlineQuality === 'object' ? (
+            <OutlinePlanQualityView report={volumeOutlineQuality} onChapterClick={onJumpToChapterPlan} />
+          ) : (
+            <div className="border border-dashed border-indigo-200 bg-indigo-50/40 rounded-lg px-4 py-6 text-sm text-indigo-700">
+              当前节点还没有单卷质检报告。
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'ai' && isExpandable && (
+        <OutlineAIPanel node={node} projectId={projectId} onCommitDone={onAICommitDone} />
+      )}
+
+      {activeTab === 'overview' && node.node_type === 'chapter_plan' && (
         <button onClick={onOpenChapter} className="mt-5 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-sm rounded-lg">
           打开并切换到该章节
         </button>
-      )}
-
-      {isExpandable && (
-        <OutlineAIPanel node={node} projectId={projectId} onCommitDone={onAICommitDone} />
       )}
     </div>
   )

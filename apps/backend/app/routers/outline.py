@@ -1,19 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, WebSocket
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Any, Awaitable, Callable, List, Literal, Optional
 from uuid import UUID
 import json
 import re
 
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.models import (
     Character,
     Faction,
     Foreshadow,
     Item,
     OutlineNode,
+    OutlineRevision,
     PowerSystem,
     Project,
     Skill,
@@ -28,6 +29,7 @@ from app.services.outline_planning import (
     TARGET_WORDS_PER_CHAPTER,
     normalize_volume_plan,
 )
+from app.services.workflow_graph import WorkflowGraph, WorkflowNode, workflow_runs
 from app.utils.chapter_numbering import display_chapter_number
 
 router = APIRouter(prefix="/projects/{project_id}/outline", tags=["outline"])
@@ -115,6 +117,18 @@ def _format_rolling_continuity_state(chapters: list[dict]) -> str:
     if recent_events:
         lines.append(f"不得重复已发生的核心事件：{'；'.join(recent_events)}")
     return "\n".join(lines)
+
+
+def _format_book_quality_continuity_state(chapters: list[dict]) -> str:
+    """
+    Book-level outline QA receives all target chapter plans as the object under review.
+    It must not recycle those same plans into the "already happened" rolling ledger.
+    """
+    chapter_count = len(chapters)
+    return (
+        f"全书质检不使用滚动连续性账本：当前 {chapter_count} 个章节计划全部属于待检对象，"
+        "不得把待检章节自身当作已发生事实来判定重复。"
+    )
 
 
 def _format_outline_batch_goal(
@@ -479,6 +493,204 @@ def _load_existing_chapter_context(
     return chapters[-limit:]
 
 
+def _outline_snapshot_payload(nodes: list[OutlineNode]) -> dict:
+    ordered = sorted(
+        nodes,
+        key=lambda node: (
+            0 if node.parent_id is None else 1,
+            node.sort_order or 0,
+            str(node.id),
+        ),
+    )
+    return {
+        "schema_version": 1,
+        "nodes": [
+            {
+                "id": str(node.id),
+                "parent_id": str(node.parent_id) if node.parent_id else None,
+                "node_type": node.node_type,
+                "title": node.title,
+                "summary": node.summary,
+                "hook": node.hook,
+                "highlight": node.highlight,
+                "conflict": node.conflict,
+                "sort_order": node.sort_order,
+                "expected_words": node.expected_words,
+                "reader_hook_score": node.reader_hook_score,
+                "storyline_ids": node.storyline_ids or [],
+                "involved_character_ids": node.involved_character_ids or [],
+                "key_item_ids": node.key_item_ids or [],
+                "key_skill_ids": node.key_skill_ids or [],
+                "emotional_tone": node.emotional_tone,
+                "pacing": node.pacing,
+                "power_milestone": node.power_milestone,
+                "foreshadows_laid": node.foreshadows_laid or [],
+                "foreshadows_resolved": node.foreshadows_resolved or [],
+                "extra": node.extra if isinstance(node.extra, dict) else {},
+            }
+            for node in ordered
+        ],
+    }
+
+
+def _create_outline_revision(
+    db: Session,
+    *,
+    project_id: str,
+    label: str,
+    source: str,
+    scope: str = "book",
+    volume_node_id: UUID | None = None,
+    note: str | None = None,
+    meta: dict[str, Any] | None = None,
+) -> OutlineRevision:
+    q = db.query(OutlineNode).filter(OutlineNode.project_id == project_id)
+    if scope == "volume" and volume_node_id:
+        direct_children = db.query(OutlineNode.id).filter(
+            OutlineNode.project_id == project_id,
+            OutlineNode.parent_id == volume_node_id,
+        ).all()
+        child_ids = [row[0] for row in direct_children]
+        q = q.filter(
+            (OutlineNode.id == volume_node_id)
+            | (OutlineNode.parent_id == volume_node_id)
+            | (OutlineNode.parent_id.in_(child_ids))
+        )
+    nodes = q.order_by(OutlineNode.sort_order, OutlineNode.created_at).all()
+    snapshot = _outline_snapshot_payload(nodes)
+    revision = OutlineRevision(
+        project_id=project_id,
+        label=label,
+        source=source,
+        scope=scope,
+        volume_node_id=volume_node_id,
+        note=note,
+        snapshot=snapshot,
+        meta=meta or {},
+        node_count=len(snapshot["nodes"]),
+    )
+    db.add(revision)
+    db.commit()
+    db.refresh(revision)
+    return revision
+
+
+def _load_volume_chapter_context(
+    db: Session,
+    project_id: str,
+    volume_node: OutlineNode,
+) -> list[dict]:
+    """
+    Load chapter plans under a volume, including the legacy volume -> arc -> chapter_plan shape.
+    """
+    children = db.query(OutlineNode).filter(
+        OutlineNode.project_id == project_id,
+        OutlineNode.parent_id == volume_node.id,
+    ).all()
+    parent_ids = [volume_node.id, *[child.id for child in children if child.node_type == "arc"]]
+    nodes = db.query(OutlineNode).filter(
+        OutlineNode.project_id == project_id,
+        OutlineNode.node_type == "chapter_plan",
+        OutlineNode.parent_id.in_(parent_ids),
+    ).all()
+    chapters = [_outline_node_to_chapter_context(node) for node in nodes]
+    chapters.sort(key=lambda chapter: chapter.get("number") or 0)
+    return chapters
+
+
+def _chapter_number_value(chapter: dict) -> int:
+    number = chapter.get("number")
+    return number if isinstance(number, int) else 0
+
+
+def _with_outline_quality(report_owner: OutlineNode, report: dict) -> dict:
+    current_extra = report_owner.extra if isinstance(report_owner.extra, dict) else {}
+    return {
+        **current_extra,
+        "outline_quality": report,
+    }
+
+
+def _create_quality_revision(
+    db: Session,
+    *,
+    project_id: str,
+    scope: str,
+    report: dict[str, Any],
+    volume_node: OutlineNode | None = None,
+) -> OutlineRevision:
+    if scope == "volume" and volume_node is not None:
+        label = f"质检报告：{volume_node.title}"
+        note = "单卷大纲质检自动留档"
+        volume_node_id = volume_node.id
+    else:
+        label = "质检报告：全书大纲"
+        note = "全书大纲质检自动留档"
+        volume_node_id = None
+    return _create_outline_revision(
+        db,
+        project_id=project_id,
+        label=label,
+        source="quality",
+        scope="volume" if scope == "volume" else "book",
+        volume_node_id=volume_node_id,
+        note=note,
+        meta={
+            "quality_scope": scope,
+            "quality_status": report.get("status"),
+            "quality_score": report.get("overall_score"),
+            "quality_report": report,
+        },
+    )
+
+
+def _outline_node_plan_fields(node: OutlineNode) -> dict:
+    extra = node.extra if isinstance(node.extra, dict) else {}
+    return {
+        "opening_hook": node.hook or "",
+        "core_event": node.summary or "",
+        "character_change": node.conflict or "",
+        "foreshadow": extra.get("foreshadow", ""),
+        "end_hook": extra.get("end_hook") or node.highlight or "",
+    }
+
+
+def _apply_outline_patch_to_node(node: OutlineNode, patch: dict) -> dict:
+    before = _outline_node_plan_fields(node)
+    fields = patch.get("fields") if isinstance(patch.get("fields"), dict) else patch
+    extra = node.extra if isinstance(node.extra, dict) else {}
+    next_extra = {**extra}
+
+    opening_hook = fields.get("opening_hook")
+    core_event = fields.get("core_event")
+    character_change = fields.get("character_change")
+    foreshadow = fields.get("foreshadow")
+    end_hook = fields.get("end_hook")
+
+    if isinstance(opening_hook, str) and opening_hook.strip():
+        node.hook = opening_hook.strip()
+    if isinstance(core_event, str) and core_event.strip():
+        node.summary = core_event.strip()
+    if isinstance(character_change, str) and character_change.strip():
+        node.conflict = character_change.strip()
+    if isinstance(foreshadow, str):
+        next_extra["foreshadow"] = foreshadow.strip()
+    if isinstance(end_hook, str) and end_hook.strip():
+        node.highlight = end_hook.strip()
+        next_extra["end_hook"] = end_hook.strip()
+
+    node.extra = next_extra
+    after = _outline_node_plan_fields(node)
+    return {
+        "chapter_number": patch.get("chapter_number"),
+        "node_id": str(node.id) if node.id else None,
+        "title": node.title,
+        "before": before,
+        "after": after,
+        "reason": patch.get("reason", ""),
+    }
+
+
 @router.get("/", response_model=List[OutlineNodeOut])
 def get_outline_tree(project_id: str, db: Session = Depends(get_db)):
     nodes = db.query(OutlineNode).filter(
@@ -595,12 +807,26 @@ async def ai_expand_outline(
     ).count()
 
     world_summary = " | ".join(f"{s.title}: {(s.content or '')[:80]}" for s in settings[:4])
-    char_summary = " | ".join(
-        f"{c.name}（{c.role}，{c.faction or ''}）{(c.personality or '')[:40]}"
-        for c in characters[:5]
-    )
+
+    def _build_char_summary(char_list: list) -> str:
+        """构建角色摘要，区分主线核心与配角层级，并声明「非全量」。"""
+        core = [c for c in char_list if (c.character_tier or "core") == "core"]
+        supporting = [c for c in char_list if (c.character_tier or "core") != "core"]
+        parts = ["以下为主线核心卡司（非全书全部人物，配角可按剧情需要引入）："]
+        for c in core[:8]:
+            parts.append(
+                f"[核心]{c.name}（{c.role}，{c.faction or '无阵营'}）{(c.personality or '')[:40]}"
+            )
+        for c in supporting[:4]:
+            parts.append(
+                f"[配角]{c.name}（{c.role}，{c.faction or '无阵营'}）{(c.motivation or '')[:40]}"
+            )
+        return " | ".join(parts)
+
+    char_summary = _build_char_summary(characters)
 
     svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
+    genre = (project.genre or "玄幻") if project else "玄幻"
 
     async def stream():
         yield f"data: {json.dumps({'event': 'start'}, ensure_ascii=False)}\n\n"
@@ -610,7 +836,7 @@ async def ai_expand_outline(
                 node_type=node.node_type,
                 node_summary=node.summary or "",
                 project_title=project.title if project else "未命名",
-                genre=project.genre or "玄幻" if project else "玄幻",
+                genre=genre,
                 world_summary=world_summary,
                 character_summary=char_summary,
                 existing_chapters=existing_count,
@@ -650,6 +876,564 @@ class OutlineQualityCheckRequest(BaseModel):
     theme_statement: Optional[str] = None
     model_profile: str = "gemini"
     llm_provider_id: Optional[UUID] = None
+    scope: Literal["all", "volume", "book"] = "all"
+    volume_node_id: Optional[UUID] = None
+
+
+class OutlineQualityWorkflowStartResponse(BaseModel):
+    run_id: str
+
+
+class OutlineRepairRequest(BaseModel):
+    theme_statement: Optional[str] = None
+    model_profile: str = "gemini"
+    llm_provider_id: Optional[UUID] = None
+    scope: Literal["all", "volume", "book"] = "all"
+    volume_node_id: Optional[UUID] = None
+
+
+class OutlineSnapshotRequest(BaseModel):
+    label: str = "手动快照"
+    note: Optional[str] = None
+    scope: Literal["book", "volume"] = "book"
+    volume_node_id: Optional[UUID] = None
+
+
+OutlineProgressPublisher = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+async def _noop_outline_progress(_: dict[str, Any]) -> None:
+    return None
+
+
+async def _prepare_outline_quality_context(ctx: dict[str, Any]) -> dict[str, Any]:
+    db: Session = ctx["db"]
+    project_id: str = ctx["project_id"]
+    req: OutlineQualityCheckRequest = ctx["req"]
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    chapters = _load_existing_chapter_context(db, project_id, limit=1000)
+    if not chapters:
+        raise HTTPException(400, "当前项目还没有可质检的章节计划")
+
+    story_core = project.story_core if isinstance(project.story_core, dict) else {}
+    theme_statement = (req.theme_statement or story_core.get("theme") or "").strip()
+
+    volume_nodes = db.query(OutlineNode).filter(
+        OutlineNode.project_id == project_id,
+        OutlineNode.parent_id.is_(None),
+        OutlineNode.node_type == "volume",
+    ).order_by(OutlineNode.sort_order).all()
+    global_outline_context = _format_global_outline_context([
+        (
+            node,
+            (node.extra or {}).get("target_chapters", TARGET_CHAPTERS_PER_VOLUME)
+            if isinstance(node.extra, dict)
+            else TARGET_CHAPTERS_PER_VOLUME,
+        )
+        for node in volume_nodes
+    ])
+
+    settings = db.query(WorldSetting).filter(
+        WorldSetting.project_id == project_id,
+    ).order_by(WorldSetting.created_at).all()
+    characters = db.query(Character).filter(
+        Character.project_id == project_id,
+    ).order_by(Character.role, Character.created_at).all()
+    storylines = db.query(StoryLine).filter(
+        StoryLine.project_id == project_id,
+    ).order_by(StoryLine.sort_order, StoryLine.created_at).all()
+    power_systems = db.query(PowerSystem).filter(
+        PowerSystem.project_id == project_id,
+    ).order_by(PowerSystem.sort_order, PowerSystem.created_at).all()
+    factions = db.query(Faction).filter(
+        Faction.project_id == project_id,
+    ).order_by(Faction.sort_order, Faction.created_at).all()
+    items = db.query(Item).filter(
+        Item.project_id == project_id,
+    ).order_by(Item.sort_order, Item.created_at).all()
+    skills = db.query(Skill).filter(
+        Skill.project_id == project_id,
+    ).order_by(Skill.sort_order, Skill.created_at).all()
+    foreshadows = db.query(Foreshadow).filter(
+        Foreshadow.project_id == project_id,
+    ).order_by(Foreshadow.priority.desc(), Foreshadow.created_at).all()
+
+    story_bible_context = _format_outline_quality_story_bible(
+        project=project,
+        settings=settings,
+        characters=characters,
+        storylines=storylines,
+        power_systems=power_systems,
+        factions=factions,
+        items=items,
+        skills=skills,
+        foreshadows=foreshadows,
+    )
+
+    return {
+        **ctx,
+        "project": project,
+        "chapters": chapters,
+        "theme_statement": theme_statement,
+        "volume_nodes": volume_nodes,
+        "global_outline_context": global_outline_context,
+        "story_bible_context": story_bible_context,
+        "volume_reports": [],
+    }
+
+
+async def _quality_check_outline_volumes(ctx: dict[str, Any]) -> dict[str, Any]:
+    db: Session = ctx["db"]
+    project_id: str = ctx["project_id"]
+    req: OutlineQualityCheckRequest = ctx["req"]
+    project: Project = ctx["project"]
+    chapters: list[dict] = ctx["chapters"]
+    publish: OutlineProgressPublisher = ctx.get("publish") or _noop_outline_progress
+    volume_nodes: list[OutlineNode] = ctx["volume_nodes"]
+    if req.volume_node_id:
+        volume_nodes = [node for node in volume_nodes if str(node.id) == str(req.volume_node_id)]
+        if not volume_nodes:
+            raise HTTPException(404, "Volume node not found")
+    volume_reports: list[dict] = []
+
+    if not volume_nodes:
+        await publish({
+            "event": "progress",
+            "step": 1,
+            "total": 3,
+            "label": "未发现卷节点，跳过单卷大纲质检。",
+            "done": True,
+            "outline_quality_scope": "volume",
+        })
+        return {**ctx, "volume_reports": []}
+
+    for index, volume in enumerate(volume_nodes, start=1):
+        volume_chapters = _load_volume_chapter_context(db, project_id, volume)
+        if not volume_chapters:
+            await publish({
+                "event": "progress",
+                "step": index,
+                "total": len(volume_nodes),
+                "label": f"《{volume.title}》没有章节计划，跳过卷内质检。",
+                "done": True,
+                "outline_quality_scope": "volume",
+                "progress_key": f"outline-quality-volume-{volume.id}",
+            })
+            continue
+
+        first_number = _chapter_number_value(volume_chapters[0])
+        previous_chapters = [
+            chapter for chapter in chapters
+            if _chapter_number_value(chapter) < first_number
+        ]
+        await publish({
+            "event": "progress",
+            "step": index,
+            "total": len(volume_nodes),
+            "label": f"正在质检《{volume.title}》卷内大纲…",
+            "done": False,
+            "outline_quality_scope": "volume",
+            "progress_key": f"outline-quality-volume-{volume.id}",
+        })
+
+        hard_rule_report = _detect_outline_hard_rule_issues(volume_chapters)
+        svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
+        report = await svc.outline_quality_check(
+            project_title=project.title,
+            genre=project.genre or "玄幻",
+            scope="volume",
+            node_title=volume.title,
+            node_summary=volume.summary or "",
+            theme_statement=ctx["theme_statement"],
+            story_bible_context=ctx["story_bible_context"],
+            global_outline_context=ctx["global_outline_context"],
+            previous_chapters_context=_format_previous_chapters_context(
+                previous_chapters,
+                max_items=24 if req.model_profile == "gemini" else 8,
+            ),
+            continuity_state=_format_rolling_continuity_state([
+                *previous_chapters[-8:],
+                *volume_chapters,
+            ]),
+            chapters=volume_chapters,
+        )
+        report = _merge_outline_quality_reports(report, hard_rule_report)
+        volume.extra = _with_outline_quality(volume, report)
+        db.add(volume)
+        db.commit()
+        _create_quality_revision(
+            db,
+            project_id=project_id,
+            scope="volume",
+            report=report,
+            volume_node=volume,
+        )
+
+        volume_report = {
+            "node_id": str(volume.id),
+            "title": volume.title,
+            "report": report,
+        }
+        volume_reports.append(volume_report)
+        await publish({
+            "event": "progress",
+            "step": index,
+            "total": len(volume_nodes),
+            "label": _format_outline_quality_label(volume.title, report, "volume"),
+            "done": True,
+            "error": bool(report.get("error")),
+            "outline_quality_scope": "volume",
+            "outline_quality_report": report,
+            "progress_key": f"outline-quality-volume-{volume.id}",
+        })
+
+    return {**ctx, "volume_reports": volume_reports}
+
+
+async def _quality_check_outline_book(ctx: dict[str, Any]) -> dict[str, Any]:
+    db: Session = ctx["db"]
+    project_id: str = ctx["project_id"]
+    project: Project = ctx["project"]
+    chapters: list[dict] = ctx["chapters"]
+    req: OutlineQualityCheckRequest = ctx["req"]
+    publish: OutlineProgressPublisher = ctx.get("publish") or _noop_outline_progress
+
+    await publish({
+        "event": "progress",
+        "step": "book",
+        "total": "book",
+        "label": "正在质检全书大纲…",
+        "done": False,
+        "outline_quality_scope": "book",
+        "progress_key": "outline-quality-book",
+    })
+    hard_rule_report = _detect_outline_hard_rule_issues(chapters)
+    svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
+    report = await svc.outline_quality_check(
+        project_title=project.title,
+        genre=project.genre or "玄幻",
+        scope="book",
+        node_title="全书大纲",
+        node_summary=project.logline or "",
+        theme_statement=ctx["theme_statement"],
+        story_bible_context=ctx["story_bible_context"],
+        global_outline_context=ctx["global_outline_context"],
+        previous_chapters_context="",
+        continuity_state=_format_book_quality_continuity_state(chapters),
+        chapters=chapters,
+    )
+    report = _merge_outline_quality_reports(report, hard_rule_report)
+
+    current_core = project.story_core if isinstance(project.story_core, dict) else {}
+    project.story_core = {
+        **current_core,
+        "outline_quality": report,
+    }
+    db.add(project)
+    db.commit()
+    _create_quality_revision(
+        db,
+        project_id=project_id,
+        scope="book",
+        report=report,
+    )
+
+    result = {
+        **report,
+        "volume_reports": ctx.get("volume_reports", []),
+    }
+    await publish({
+        "event": "progress",
+        "step": "book",
+        "total": "book",
+        "label": _format_outline_quality_label("全书大纲", report, "book"),
+        "done": True,
+        "error": bool(report.get("error")),
+        "outline_quality_scope": "book",
+        "outline_quality_report": report,
+        "progress_key": "outline-quality-book",
+    })
+    return {
+        **ctx,
+        "book_report": report,
+        "result": result,
+    }
+
+
+def _relevant_repair_chapters(chapters: list[dict], quality_report: dict) -> list[dict]:
+    issue_numbers: set[int] = set()
+    for issue in quality_report.get("issues", []) if isinstance(quality_report, dict) else []:
+        for number in issue.get("chapter_numbers", []) if isinstance(issue, dict) else []:
+            if isinstance(number, int):
+                issue_numbers.add(number)
+    for number in quality_report.get("must_fix_chapter_numbers", []) if isinstance(quality_report, dict) else []:
+        if isinstance(number, int):
+            issue_numbers.add(number)
+    if not issue_numbers:
+        return chapters
+    return [chapter for chapter in chapters if _chapter_number_value(chapter) in issue_numbers]
+
+
+async def _snapshot_outline_before_repair(ctx: dict[str, Any]) -> dict[str, Any]:
+    db: Session = ctx["db"]
+    project_id: str = ctx["project_id"]
+    req: OutlineRepairRequest = ctx["repair_req"]
+    publish: OutlineProgressPublisher = ctx.get("publish") or _noop_outline_progress
+    revision = _create_outline_revision(
+        db,
+        project_id=project_id,
+        label="修复前大纲快照",
+        source="pre_repair",
+        scope="volume" if req.scope == "volume" else "book",
+        volume_node_id=req.volume_node_id if req.scope == "volume" else None,
+        note="AI 大纲修复工作流自动保存",
+        meta={"repair_scope": req.scope},
+    )
+    await publish({
+        "event": "progress",
+        "step": "snapshot_before",
+        "label": f"已保存修复前快照：{revision.label}",
+        "done": True,
+        "revision_id": str(revision.id),
+    })
+    return {**ctx, "pre_revision_id": str(revision.id)}
+
+
+async def _build_outline_repair_plan(ctx: dict[str, Any]) -> dict[str, Any]:
+    db: Session = ctx["db"]
+    project_id: str = ctx["project_id"]
+    req: OutlineRepairRequest = ctx["repair_req"]
+    project: Project = ctx["project"]
+    chapters: list[dict] = ctx["chapters"]
+    publish: OutlineProgressPublisher = ctx.get("publish") or _noop_outline_progress
+
+    quality_report = ctx.get("book_report") or ctx.get("result") or {}
+    if req.scope == "volume":
+        reports = ctx.get("volume_reports", [])
+        quality_report = reports[0]["report"] if reports else ctx.get("result", {})
+        if req.volume_node_id:
+            volume = db.query(OutlineNode).filter(
+                OutlineNode.id == req.volume_node_id,
+                OutlineNode.project_id == project_id,
+            ).first()
+            if volume:
+                chapters = _load_volume_chapter_context(db, project_id, volume)
+                if not quality_report:
+                    volume_extra = volume.extra if isinstance(volume.extra, dict) else {}
+                    quality_report = volume_extra.get("outline_quality") or {}
+    elif req.scope == "book":
+        if not quality_report:
+            project_core = project.story_core if isinstance(project.story_core, dict) else {}
+            quality_report = project_core.get("outline_quality") or {}
+
+    relevant_chapters = _relevant_repair_chapters(chapters, quality_report)
+    await publish({
+        "event": "progress",
+        "step": "repair_plan",
+        "label": f"正在生成修复补丁（{len(relevant_chapters)} 个相关章节）…",
+        "done": False,
+    })
+    svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
+    repair_plan = await svc.outline_repair_plan(
+        project_title=project.title,
+        genre=project.genre or "玄幻",
+        scope=req.scope,
+        quality_report=quality_report,
+        chapters=relevant_chapters,
+        story_bible_context=ctx["story_bible_context"],
+        global_outline_context=ctx["global_outline_context"],
+    )
+    await publish({
+        "event": "progress",
+        "step": "repair_plan",
+        "label": repair_plan.get("summary") or f"修复补丁生成完成：{len(repair_plan.get('patches', []))} 条",
+        "done": True,
+        "error": bool(repair_plan.get("error")),
+        "repair_plan": repair_plan,
+    })
+    return {**ctx, "repair_plan": repair_plan, "repair_quality_report": quality_report}
+
+
+async def _apply_outline_repair_plan(ctx: dict[str, Any]) -> dict[str, Any]:
+    db: Session = ctx["db"]
+    project_id: str = ctx["project_id"]
+    repair_plan = ctx.get("repair_plan") or {}
+    patches = repair_plan.get("patches") if isinstance(repair_plan, dict) else []
+    publish: OutlineProgressPublisher = ctx.get("publish") or _noop_outline_progress
+    nodes = db.query(OutlineNode).filter(
+        OutlineNode.project_id == project_id,
+        OutlineNode.node_type == "chapter_plan",
+    ).all()
+    by_number = {
+        _outline_node_to_chapter_context(node).get("number"): node
+        for node in nodes
+    }
+    records = []
+    for patch in patches if isinstance(patches, list) else []:
+        if not isinstance(patch, dict):
+            continue
+        node = by_number.get(patch.get("chapter_number"))
+        if not node:
+            continue
+        records.append(_apply_outline_patch_to_node(node, patch))
+        db.add(node)
+    db.commit()
+    await publish({
+        "event": "progress",
+        "step": "apply_patches",
+        "label": f"已应用 {len(records)} 条大纲修复补丁",
+        "done": True,
+        "applied_patches": records,
+    })
+    return {**ctx, "applied_patches": records}
+
+
+async def _snapshot_outline_after_repair(ctx: dict[str, Any]) -> dict[str, Any]:
+    db: Session = ctx["db"]
+    project_id: str = ctx["project_id"]
+    req: OutlineRepairRequest = ctx["repair_req"]
+    publish: OutlineProgressPublisher = ctx.get("publish") or _noop_outline_progress
+    revision = _create_outline_revision(
+        db,
+        project_id=project_id,
+        label="修复后大纲快照",
+        source="post_repair",
+        scope="volume" if req.scope == "volume" else "book",
+        volume_node_id=req.volume_node_id if req.scope == "volume" else None,
+        note="AI 大纲修复工作流自动保存",
+        meta={
+            "repair_scope": req.scope,
+            "pre_revision_id": ctx.get("pre_revision_id"),
+            "applied_patches": ctx.get("applied_patches", []),
+            "repair_plan": ctx.get("repair_plan", {}),
+        },
+    )
+    result = {
+        "scope": req.scope,
+        "status": "done",
+        "summary": f"已应用 {len(ctx.get('applied_patches', []))} 条大纲修复补丁",
+        "pre_revision_id": ctx.get("pre_revision_id"),
+        "post_revision_id": str(revision.id),
+        "applied_patches": ctx.get("applied_patches", []),
+        "repair_plan": ctx.get("repair_plan", {}),
+    }
+    await publish({
+        "event": "progress",
+        "step": "snapshot_after",
+        "label": f"已保存修复后快照：{revision.label}",
+        "done": True,
+        "revision_id": str(revision.id),
+    })
+    return {**ctx, "post_revision_id": str(revision.id), "result": result}
+
+
+def _outline_quality_nodes_for_scope(scope: str) -> list[WorkflowNode]:
+    nodes = [
+        WorkflowNode("prepare_outline_context", "读取大纲与故事圣经账本", _prepare_outline_quality_context),
+    ]
+    if scope in {"all", "volume"}:
+        nodes.append(WorkflowNode("quality_check_volumes", "单卷大纲质检并写回卷节点", _quality_check_outline_volumes))
+    if scope in {"all", "book"}:
+        nodes.append(WorkflowNode("quality_check_book", "全书大纲质检并写回项目", _quality_check_outline_book))
+    return nodes
+
+
+async def _finalize_outline_quality_result(ctx: dict[str, Any]) -> dict[str, Any]:
+    req: OutlineQualityCheckRequest = ctx["req"]
+    if req.scope == "book":
+        return ctx
+    if req.scope == "volume":
+        reports = ctx.get("volume_reports", [])
+        if len(reports) == 1:
+            return {
+                **ctx,
+                "result": {
+                    **reports[0]["report"],
+                    "node_id": reports[0]["node_id"],
+                    "title": reports[0]["title"],
+                },
+            }
+        return {
+            **ctx,
+            "result": {
+                "scope": "volume",
+                "status": "pass" if reports else "warning",
+                "summary": f"完成 {len(reports)} 个卷节点质检。",
+                "volume_reports": reports,
+            },
+        }
+    return ctx
+
+
+async def _execute_outline_quality_graph(ctx: dict[str, Any]) -> dict[str, Any]:
+    req: OutlineQualityCheckRequest = ctx["req"]
+    graph = WorkflowGraph([
+        *_outline_quality_nodes_for_scope(req.scope),
+        WorkflowNode("finalize_outline_quality_result", "整理大纲质检结果", _finalize_outline_quality_result),
+    ])
+    current = dict(ctx)
+    for node in graph.nodes:
+        result = node.handler(current)
+        if hasattr(result, "__await__"):
+            result = await result  # type: ignore[assignment]
+        if isinstance(result, dict):
+            current = result
+    return current
+
+
+async def _run_outline_quality_workflow(run_id: str, project_id: str, req_payload: dict[str, Any]) -> None:
+    db = SessionLocal()
+    try:
+        req = OutlineQualityCheckRequest(**req_payload)
+
+        async def publish(event: dict[str, Any]) -> None:
+            await workflow_runs.publish(run_id, event)
+
+        graph = WorkflowGraph([
+            *_outline_quality_nodes_for_scope(req.scope),
+            WorkflowNode("finalize_outline_quality_result", "整理大纲质检结果", _finalize_outline_quality_result),
+        ])
+        await workflow_runs.run_graph(run_id, graph, {
+            "db": db,
+            "project_id": project_id,
+            "req": req,
+            "publish": publish,
+        })
+    finally:
+        db.close()
+
+
+async def _run_outline_repair_workflow(run_id: str, project_id: str, req_payload: dict[str, Any]) -> None:
+    db = SessionLocal()
+    try:
+        repair_req = OutlineRepairRequest(**req_payload)
+        quality_req = OutlineQualityCheckRequest(**req_payload)
+
+        async def publish(event: dict[str, Any]) -> None:
+            await workflow_runs.publish(run_id, event)
+
+        graph = WorkflowGraph([
+            WorkflowNode("snapshot_before_repair", "保存修复前大纲快照", _snapshot_outline_before_repair),
+            WorkflowNode("prepare_outline_context_for_repair", "读取大纲与故事圣经账本（供修复补丁）", _prepare_outline_quality_context),
+            WorkflowNode("build_outline_repair_plan", "生成大纲修复补丁", _build_outline_repair_plan),
+            WorkflowNode("apply_outline_repair_plan", "应用大纲修复补丁", _apply_outline_repair_plan),
+            WorkflowNode("snapshot_after_repair", "保存修复后大纲快照", _snapshot_outline_after_repair),
+            *_outline_quality_nodes_for_scope(repair_req.scope),
+            WorkflowNode("finalize_outline_quality_result", "整理修复后质检结果", _finalize_outline_quality_result),
+        ])
+        await workflow_runs.run_graph(run_id, graph, {
+            "db": db,
+            "project_id": project_id,
+            "req": quality_req,
+            "repair_req": repair_req,
+            "publish": publish,
+        })
+    finally:
+        db.close()
 
 
 @router.post("/ai-full-generate")
@@ -1022,96 +1806,148 @@ async def ai_quality_check_outline(
     db: Session = Depends(get_db),
 ):
     """
-    独立大纲质检接口：读取当前已入库的大纲章节计划，做一次全书级质检。
+    独立大纲质检接口：读取当前已入库的大纲章节计划，先逐卷质检并写回卷节点，
+    再做全书级质检并写回项目 story_core。
     与全量生成拆开，避免生成失败和质检失败互相污染。
     """
-    project = db.query(Project).filter(Project.id == project_id).first()
-    if not project:
-        raise HTTPException(404, "Project not found")
+    result_context = await _execute_outline_quality_graph({
+        "db": db,
+        "project_id": project_id,
+        "req": req,
+        "publish": _noop_outline_progress,
+    })
+    return result_context["result"]
 
-    chapters = _load_existing_chapter_context(db, project_id, limit=1000)
-    if not chapters:
-        raise HTTPException(400, "当前项目还没有可质检的章节计划")
 
-    story_core = project.story_core if isinstance(project.story_core, dict) else {}
-    theme_statement = (req.theme_statement or story_core.get("theme") or "").strip()
-
-    volume_nodes = db.query(OutlineNode).filter(
-        OutlineNode.project_id == project_id,
-        OutlineNode.parent_id.is_(None),
-        OutlineNode.node_type == "volume",
-    ).order_by(OutlineNode.sort_order).all()
-    global_outline_context = _format_global_outline_context([
-        (
-            node,
-            (node.extra or {}).get("target_chapters", TARGET_CHAPTERS_PER_VOLUME)
-            if isinstance(node.extra, dict)
-            else TARGET_CHAPTERS_PER_VOLUME,
-        )
-        for node in volume_nodes
-    ])
-
-    settings = db.query(WorldSetting).filter(
-        WorldSetting.project_id == project_id,
-    ).order_by(WorldSetting.created_at).all()
-    characters = db.query(Character).filter(
-        Character.project_id == project_id,
-    ).order_by(Character.role, Character.created_at).all()
-    storylines = db.query(StoryLine).filter(
-        StoryLine.project_id == project_id,
-    ).order_by(StoryLine.sort_order, StoryLine.created_at).all()
-    power_systems = db.query(PowerSystem).filter(
-        PowerSystem.project_id == project_id,
-    ).order_by(PowerSystem.sort_order, PowerSystem.created_at).all()
-    factions = db.query(Faction).filter(
-        Faction.project_id == project_id,
-    ).order_by(Faction.sort_order, Faction.created_at).all()
-    items = db.query(Item).filter(
-        Item.project_id == project_id,
-    ).order_by(Item.sort_order, Item.created_at).all()
-    skills = db.query(Skill).filter(
-        Skill.project_id == project_id,
-    ).order_by(Skill.sort_order, Skill.created_at).all()
-    foreshadows = db.query(Foreshadow).filter(
-        Foreshadow.project_id == project_id,
-    ).order_by(Foreshadow.priority.desc(), Foreshadow.created_at).all()
-    story_bible_context = _format_outline_quality_story_bible(
-        project=project,
-        settings=settings,
-        characters=characters,
-        storylines=storylines,
-        power_systems=power_systems,
-        factions=factions,
-        items=items,
-        skills=skills,
-        foreshadows=foreshadows,
+@router.post("/ai-quality-check/workflow", response_model=OutlineQualityWorkflowStartResponse)
+async def start_ai_quality_check_outline_workflow(
+    project_id: str,
+    req: OutlineQualityCheckRequest,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Start the graph-backed outline QA workflow.
+    Progress is delivered through:
+    /api/v1/projects/{project_id}/outline/workflows/{run_id}/ws
+    """
+    run_id = await workflow_runs.create_run(
+        "outline_quality_check",
+        {
+            "project_id": project_id,
+            "model_profile": req.model_profile,
+        },
     )
-
-    svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
-    hard_rule_report = _detect_outline_hard_rule_issues(chapters)
-    report = await svc.outline_quality_check(
-        project_title=project.title,
-        genre=project.genre or "玄幻",
-        scope="book",
-        node_title="全书大纲",
-        node_summary=project.logline or "",
-        theme_statement=theme_statement,
-        story_bible_context=story_bible_context,
-        global_outline_context=global_outline_context,
-        previous_chapters_context="",
-        continuity_state=_format_rolling_continuity_state(chapters),
-        chapters=chapters,
+    background_tasks.add_task(
+        _run_outline_quality_workflow,
+        run_id,
+        project_id,
+        req.model_dump(mode="json"),
     )
-    report = _merge_outline_quality_reports(report, hard_rule_report)
+    return OutlineQualityWorkflowStartResponse(run_id=run_id)
 
-    current_core = project.story_core if isinstance(project.story_core, dict) else {}
-    project.story_core = {
-        **current_core,
-        "outline_quality": report,
+
+@router.post("/ai-repair/workflow", response_model=OutlineQualityWorkflowStartResponse)
+async def start_ai_repair_outline_workflow(
+    project_id: str,
+    req: OutlineRepairRequest,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Start the graph-backed outline repair workflow.
+    It creates pre/post outline revisions and streams progress over the same
+    workflow WebSocket endpoint.
+    """
+    run_id = await workflow_runs.create_run(
+        "outline_repair",
+        {
+            "project_id": project_id,
+            "model_profile": req.model_profile,
+            "scope": req.scope,
+        },
+    )
+    background_tasks.add_task(
+        _run_outline_repair_workflow,
+        run_id,
+        project_id,
+        req.model_dump(mode="json"),
+    )
+    return OutlineQualityWorkflowStartResponse(run_id=run_id)
+
+
+@router.get("/revisions")
+def list_outline_revisions(project_id: str, db: Session = Depends(get_db)):
+    revisions = db.query(OutlineRevision).filter(
+        OutlineRevision.project_id == project_id,
+    ).order_by(OutlineRevision.created_at.desc()).limit(50).all()
+    return [
+        {
+            "id": str(rev.id),
+            "label": rev.label,
+            "source": rev.source,
+            "scope": rev.scope,
+            "volume_node_id": str(rev.volume_node_id) if rev.volume_node_id else None,
+            "note": rev.note,
+            "node_count": rev.node_count,
+            "meta": rev.meta or {},
+            "created_at": rev.created_at.isoformat() if rev.created_at else None,
+        }
+        for rev in revisions
+    ]
+
+
+@router.get("/revisions/{revision_id}")
+def get_outline_revision(project_id: str, revision_id: str, db: Session = Depends(get_db)):
+    revision = db.query(OutlineRevision).filter(
+        OutlineRevision.id == revision_id,
+        OutlineRevision.project_id == project_id,
+    ).first()
+    if not revision:
+        raise HTTPException(404, "Outline revision not found")
+    return {
+        "id": str(revision.id),
+        "label": revision.label,
+        "source": revision.source,
+        "scope": revision.scope,
+        "volume_node_id": str(revision.volume_node_id) if revision.volume_node_id else None,
+        "note": revision.note,
+        "node_count": revision.node_count,
+        "meta": revision.meta or {},
+        "snapshot": revision.snapshot,
+        "created_at": revision.created_at.isoformat() if revision.created_at else None,
     }
-    db.add(project)
-    db.commit()
-    return report
+
+
+@router.post("/revisions")
+def create_outline_revision(project_id: str, req: OutlineSnapshotRequest, db: Session = Depends(get_db)):
+    revision = _create_outline_revision(
+        db,
+        project_id=project_id,
+        label=req.label,
+        source="manual",
+        scope=req.scope,
+        volume_node_id=req.volume_node_id,
+        note=req.note,
+    )
+    return {
+        "id": str(revision.id),
+        "label": revision.label,
+        "source": revision.source,
+        "scope": revision.scope,
+        "volume_node_id": str(revision.volume_node_id) if revision.volume_node_id else None,
+        "note": revision.note,
+        "node_count": revision.node_count,
+        "meta": revision.meta or {},
+        "created_at": revision.created_at.isoformat() if revision.created_at else None,
+    }
+
+
+@router.websocket("/workflows/{run_id}/ws")
+async def outline_workflow_websocket(
+    project_id: str,
+    run_id: str,
+    websocket: WebSocket,
+):
+    await workflow_runs.stream_to_websocket(run_id, websocket)
 
 
 class CommitExpandRequest(BaseModel):

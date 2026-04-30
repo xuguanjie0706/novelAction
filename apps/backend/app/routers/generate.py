@@ -27,8 +27,10 @@ async def bootstrap_stream(
     """
     一句话创意 → 全量初始化小说（SSE 流式推送进度）
 
-    mode="single_shot" 适合 Gemini / GPT-4o 等大 context 模型（默认）
-    mode="sequential"  适合 qwen3:8b 等小模型（兼容回退）
+    model_profile / llm_provider_id 决定实际调用的线路；与 mode 无关。
+
+    mode="single_shot"（默认）单次大 JSON，适合远程大上下文。
+    mode="sequential" 多步串行，同样完全遵循请求中的线路选择（兼容回退）。
     """
     svc = GenerationService(
         db=db,

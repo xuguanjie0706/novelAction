@@ -65,6 +65,8 @@ export default function GenerateWizard({ onClose }: Props) {
   const [llmLoading, setLlmLoading] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const isSubmittingRef = useRef(false)   // 防止重复提交
+  const streamCompleteRef = useRef(false) // 是否收到 complete（用于检测半道断流）
+  const [waitSec, setWaitSec] = useState(0)
 
   useEffect(() => {
     let alive = true
@@ -84,6 +86,13 @@ export default function GenerateWizard({ onClose }: Props) {
       })
     return () => { alive = false }
   }, [])
+
+  useEffect(() => {
+    if (phase !== 'generating') return
+    setWaitSec(0)
+    const id = window.setInterval(() => setWaitSec(s => s + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [phase])
 
   useEffect(() => {
     if (!llmOverview?.remote_providers?.length) return
@@ -109,7 +118,9 @@ export default function GenerateWizard({ onClose }: Props) {
     const selectedProviderId = llmProviderIdFromRoute(aiBackendRoute)
     const selectedProvider = llmOverview?.remote_providers?.find(p => p.id === selectedProviderId)
     if (selectedProvider) return `当前：远程 · ${selectedProvider.name} (${selectedProvider.model_name})`
-    if (aiBackendRoute === 'local') return `当前：本地 · ${llmOverview?.local_model_name ?? '默认'}`
+    if (aiBackendRoute === 'local') {
+      return `当前：本地兼容端点 · ${llmOverview?.local_model_name ?? '见后端 LLM_BASE_URL / AI_MODEL'}`
+    }
     if (llmOverview?.remote_ready) return `当前：远程 · 环境变量 (${llmOverview.effective_remote_model ?? '默认'})`
     return '当前：远程（未配置）'
   }, [aiBackendRoute, llmOverview])
@@ -118,8 +129,10 @@ export default function GenerateWizard({ onClose }: Props) {
   const startGenerate = async () => {
     if (!logline.trim() || isSubmittingRef.current) return
     isSubmittingRef.current = true
+    streamCompleteRef.current = false
     setPhase('generating')
     setErrorMsg('')
+    setWaitSec(0)
 
     // single_shot 模式用两个虚拟步骤
     // 首步立刻标为 running：SSE 常被代理/缓冲，首个 step_start 可能在整段 AI 结束后才到，否则长时间只有空心圆、无转圈
@@ -178,6 +191,9 @@ export default function GenerateWizard({ onClose }: Props) {
           handleEvent(evt)
         }
       }
+      if (!streamCompleteRef.current && !abort.signal.aborted) {
+        setErrorMsg(prev => prev || '连接已结束但未完成生成（可能后端中断或代理超时），请查看后端日志后重试。')
+      }
     } catch (err: any) {
       if (err.name !== 'AbortError') {
         setErrorMsg(err.message || '网络错误')
@@ -206,12 +222,24 @@ export default function GenerateWizard({ onClose }: Props) {
         s.key === displayStep ? { ...s, status: 'done', detail } : s
       ))
     } else if (event === 'error') {
-      if (!displayStep) return
-      setSteps(prev => prev.map(s =>
-        s.key === displayStep ? { ...s, status: 'error', detail: message } : s
-      ))
-      setErrorMsg(`[${displayStep}] ${message}`)
+      const msg = typeof message === 'string' && message.trim() ? message : '生成失败'
+      if (displayStep) {
+        setSteps(prev => prev.map(s =>
+          s.key === displayStep ? { ...s, status: 'error', detail: msg } : s
+        ))
+        setErrorMsg(`[${displayStep}] ${msg}`)
+      } else {
+        setSteps(prev => {
+          const running = prev.findIndex(s => s.status === 'running')
+          if (running === -1) return prev
+          return prev.map((s, i) =>
+            i === running ? { ...s, status: 'error' as const, detail: msg } : s
+          )
+        })
+        setErrorMsg(msg)
+      }
     } else if (event === 'complete') {
+      streamCompleteRef.current = true
       setProjectId(project_id)
       setPhase('done')
     }
@@ -268,7 +296,7 @@ export default function GenerateWizard({ onClose }: Props) {
                 className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-amber-400"
                 disabled={llmLoading}
               >
-                <option value="local">本地 · {llmLoading ? '加载中…' : (llmOverview?.local_model_name ?? '默认')}</option>
+                <option value="local">本地兼容 · {llmLoading ? '加载中…' : (llmOverview?.local_model_name ?? 'OpenAI 兼容')}</option>
                 {!!llmOverview?.remote_providers?.length && llmOverview.remote_providers.map(p => (
                   <option key={p.id} value={`remote:${p.id}`}>
                     远程 · {p.name} ({p.model_name}){p.is_default ? ' ★' : ''}
@@ -300,8 +328,8 @@ export default function GenerateWizard({ onClose }: Props) {
                     方案 A · 串行步进
                   </div>
                   <div className="text-xs text-gray-500 leading-relaxed">
-                    6步分别调用，逐步可见进度<br />
-                    仅作为兼容回退，不作为默认路径
+                    多步分别调用，逐步可见进度；每步都走上方所选模型线路<br />
+                    仅作兼容回退，默认仍建议方案 B
                   </div>
                 </button>
                 <button
@@ -314,14 +342,14 @@ export default function GenerateWizard({ onClose }: Props) {
                   )}
                 >
                   <div className="text-sm font-semibold text-gray-800 mb-1">
-                    方案 B · Gemini 全量
+                    方案 B · 单次全量
                     {mode === 'single_shot' && (
                       <span className="ml-2 text-xs bg-blue-400 text-white px-1.5 py-0.5 rounded-full">推荐</span>
                     )}
                   </div>
                   <div className="text-xs text-gray-500 leading-relaxed">
-                    1次生成完整世界蓝图<br />
-                    适合 <b>Gemini</b> 长上下文
+                    1 次生成完整世界蓝图<br />
+                    适合已配置的远程大上下文模型
                   </div>
                 </button>
               </div>
@@ -384,6 +412,13 @@ export default function GenerateWizard({ onClose }: Props) {
                 </div>
               ))}
             </div>
+
+            {phase === 'generating' && waitSec >= 8 && !errorMsg && (
+              <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-4 leading-relaxed">
+                仍在等待模型返回…串行方案下每一步都会单独请求当前所选线路，耗时因模型与网络而异。
+                若长期无响应，请确认该线路接口可用；需要单次大 JSON 时更推荐「方案 B · 单次全量」。
+              </p>
+            )}
 
             {/* 错误信息 */}
             {errorMsg && (

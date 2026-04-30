@@ -29,6 +29,187 @@ from app.routers.ai import (
 from app.services.ai_service import AIService
 
 
+@pytest.mark.asyncio
+async def test_expand_outline_includes_batch_continuity_context():
+    captured = {}
+
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+        captured["prompt"] = prompt
+        return """
+        {
+          "volume_analysis": {
+            "emotional_arc": "压迫→反击",
+            "core_question": "主角能否查出黑雾源头",
+            "pacing_rhythm": "承接上一批钩子后升级冲突"
+          },
+          "chapters": []
+        }
+        """
+
+    svc = AIService()
+    svc._call_ai = fake_call
+
+    await svc.expand_outline(
+        node_title="黑雾初临",
+        node_type="volume",
+        node_summary="萧炎追查魂殿黑雾",
+        project_title="苍穹丹祖",
+        genre="玄幻",
+        world_summary="魂殿以黑雾侵蚀丹田。",
+        character_summary="萧炎：刚突破六段斗之气。",
+        theme_statement="弱者必须为自己的选择付出代价。",
+        existing_chapters=15,
+        chapter_count=15,
+        global_outline_context="全书卷线蓝图：卷一黑雾初临，卷二丹塔旧盟。",
+        previous_chapters_context="第15章：丹虚子确认黑雾来自魂殿，章末钩子是黑雾指向萧家旧案。",
+        continuity_state="上一批结束状态：萧炎在萧家，未回收伏笔：黑雾源头。",
+        batch_goal="本批生成第16-30章，必须回应该章末钩子。",
+    )
+
+    prompt = captured["prompt"]
+    assert "全书卷线蓝图：卷一黑雾初临，卷二丹塔旧盟。" in prompt
+    assert "第15章：丹虚子确认黑雾来自魂殿" in prompt
+    assert "未回收伏笔：黑雾源头" in prompt
+    assert "本批生成第16-30章" in prompt
+    assert "不得重复已发生的核心事件" in prompt
+
+
+@pytest.mark.asyncio
+async def test_gemini_expand_outline_uses_volume_sized_token_budget():
+    captured = {}
+
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+        captured["max_tokens"] = max_tokens
+        return '{"volume_analysis": {}, "chapters": []}'
+
+    svc = AIService(profile="gemini")
+    svc._call_ai = fake_call
+
+    await svc.expand_outline(
+        node_title="黑雾初临",
+        node_type="volume",
+        node_summary="萧炎追查魂殿黑雾",
+        project_title="苍穹丹祖",
+        genre="玄幻",
+        world_summary="魂殿以黑雾侵蚀丹田。",
+        character_summary="萧炎：刚突破六段斗之气。",
+        chapter_count=60,
+    )
+
+    assert captured["max_tokens"] >= 16000
+
+
+@pytest.mark.asyncio
+async def test_outline_quality_check_prompt_requires_patchable_findings():
+    captured = {}
+
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+        captured["prompt"] = prompt
+        captured["max_tokens"] = max_tokens
+        return """
+        {
+          "scope": "volume",
+          "overall_score": 82,
+          "status": "warning",
+          "summary": "卷内第16章承接不够明确。",
+          "issues": [
+            {
+              "severity": "medium",
+              "type": "hook_continuity",
+              "chapter_numbers": [16],
+              "description": "第16章没有回应第15章黑雾指向萧家旧案的章末钩子。",
+              "suggested_patch": {
+                "chapter_number": 16,
+                "field": "opening_hook",
+                "replacement": "以萧家旧案卷宗被黑雾灼穿开篇。"
+              }
+            }
+          ],
+          "must_fix_chapter_numbers": [16],
+          "strengths": ["卷末钩子清晰"]
+        }
+        """
+
+    svc = AIService(profile="gemini")
+    svc._call_ai = fake_call
+
+    result = await svc.outline_quality_check(
+        project_title="苍穹丹祖",
+        genre="玄幻",
+        scope="volume",
+        node_title="黑雾初临",
+        global_outline_context="卷一黑雾初临；卷二丹塔旧盟。",
+        previous_chapters_context="第15章：黑雾指向萧家旧案。",
+        continuity_state="下一批开篇必须承接：萧家旧案。",
+        chapters=[
+            {
+                "number": 16,
+                "title": "祠堂黑门",
+                "core_event": "萧炎返回萧家祠堂。",
+                "character_change": "萧炎决定查清旧案。",
+                "foreshadow": "埋[黑雾祭坛主人]",
+                "end_hook": "祭坛深处传来先祖声音。",
+            }
+        ],
+    )
+
+    prompt = captured["prompt"]
+    assert "卷内连续性" in prompt
+    assert "跨卷承接" in prompt
+    assert "伏笔" in prompt
+    assert "suggested_patch" in prompt
+    assert "第15章：黑雾指向萧家旧案。" in prompt
+    assert captured["max_tokens"] >= 4096
+    assert result["overall_score"] == 82
+    assert result["must_fix_chapter_numbers"] == [16]
+
+
+@pytest.mark.asyncio
+async def test_outline_quality_check_prompt_includes_story_bible_context():
+    captured = {}
+
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+        captured["prompt"] = prompt
+        return """
+        {
+          "scope": "book",
+          "overall_score": 42,
+          "status": "fail",
+          "summary": "三皇子死亡状态与后续登场冲突。",
+          "issues": [],
+          "must_fix_chapter_numbers": [125],
+          "strengths": []
+        }
+        """
+
+    svc = AIService(profile="gemini")
+    svc._call_ai = fake_call
+
+    await svc.outline_quality_check(
+        project_title="天门逆玺",
+        genre="玄幻",
+        scope="book",
+        node_title="全书大纲",
+        story_bible_context="三皇子（antagonist）状态=dead；林家九龙玺（unique/intact）：正统自强象征",
+        chapters=[
+            {
+                "number": 125,
+                "title": "帝旨招安",
+                "core_event": "三皇子代表天苍大帝招安林北辰。",
+                "character_change": "林北辰拒绝血统册封。",
+                "foreshadow": "",
+                "end_hook": "天门裂开。",
+            }
+        ],
+    )
+
+    prompt = captured["prompt"]
+    assert "【故事圣经账本】" in prompt
+    assert "三皇子（antagonist）状态=dead" in prompt
+    assert "林家九龙玺（unique/intact）" in prompt
+    assert "角色死亡/封印/失踪后再登场必须有明确机制" in prompt
+
+
 def test_project_schema_carries_premise():
     premise = "# 立意与类型\n每章都要服务于废柴逆袭的爽感与命题。"
 

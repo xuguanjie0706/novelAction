@@ -4,12 +4,14 @@ import { useSearchParams } from 'react-router-dom'
 import { http } from '../api/http'
 import type {
   QualityReport,
+  OutlinePlanQualityReport,
   ReviewChapter,
   ReviewChapterIndex,
   ReviewForeshadow,
   ReviewMemoryChunk,
   ReviewProject,
 } from '../types/review'
+import { OutlineQualityManagementSection } from '../components/OutlinePlanQualityPanel'
 
 function htmlToPlainText(input: string | undefined) {
   if (!input) return ''
@@ -43,6 +45,10 @@ export default function NovelManagementPage() {
   const [chapterIndex, setChapterIndex] = useState<ReviewChapterIndex | null>(null)
   const [chapterForeshadows, setChapterForeshadows] = useState<ReviewForeshadow[]>([])
   const [jsonModalOpen, setJsonModalOpen] = useState(false)
+
+  const [outlineQcLoading, setOutlineQcLoading] = useState(false)
+  const [bookOutlineQuality, setBookOutlineQuality] = useState<OutlinePlanQualityReport | null>(null)
+  const [volumeOutlineQuality, setVolumeOutlineQuality] = useState<Array<{ title: string; report: OutlinePlanQualityReport }>>([])
 
   const loadProjects = useCallback(async () => {
     setLoading(true)
@@ -81,6 +87,50 @@ export default function NovelManagementPage() {
     if (!projectId) return
     void loadChapters(projectId)
   }, [projectId, loadChapters])
+
+  useEffect(() => {
+    if (!projectId) {
+      setBookOutlineQuality(null)
+      setVolumeOutlineQuality([])
+      return
+    }
+    setOutlineQcLoading(true)
+    void Promise.all([
+      http.get<ReviewProject>(`/api/v1/projects/${projectId}`),
+      http.get<Array<{ id: string; title: string; node_type: string; extra?: Record<string, unknown>; children?: unknown[] }>>(
+        `/api/v1/projects/${projectId}/outline/`,
+      ),
+    ])
+      .then(([projRes, treeRes]) => {
+        const sc = projRes.data?.story_core
+        const oq = sc && typeof sc === 'object' ? (sc as Record<string, unknown>).outline_quality : null
+        setBookOutlineQuality(
+          oq && typeof oq === 'object' ? (oq as OutlinePlanQualityReport) : null,
+        )
+        const vols: Array<{ title: string; report: OutlinePlanQualityReport }> = []
+        const walk = (nodes: Array<{ title: string; node_type: string; extra?: Record<string, unknown>; children?: unknown[] }>) => {
+          for (const n of nodes || []) {
+            const ex = n.extra
+            if ((n.node_type === 'volume' || n.node_type === 'arc') && ex && typeof ex === 'object' && ex.outline_quality) {
+              vols.push({
+                title: n.title,
+                report: ex.outline_quality as OutlinePlanQualityReport,
+              })
+            }
+            if (n.children && Array.isArray(n.children) && n.children.length > 0) {
+              walk(n.children as typeof nodes)
+            }
+          }
+        }
+        walk(treeRes.data || [])
+        setVolumeOutlineQuality(vols)
+      })
+      .catch(() => {
+        setBookOutlineQuality(null)
+        setVolumeOutlineQuality([])
+      })
+      .finally(() => setOutlineQcLoading(false))
+  }, [projectId])
 
   useEffect(() => {
     if (!projectId) return
@@ -229,6 +279,16 @@ export default function NovelManagementPage() {
           </Space>
         </Space>
       </div>
+
+      <Row gutter={16} style={{ marginTop: 12 }}>
+        <Col span={24}>
+          <OutlineQualityManagementSection
+            loading={outlineQcLoading}
+            bookReport={bookOutlineQuality}
+            volumeReports={volumeOutlineQuality}
+          />
+        </Col>
+      </Row>
 
       <Row gutter={16} style={{ marginTop: 16, flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <Col span={7} style={{ height: '100%', minHeight: 0, overflow: 'hidden' }}>

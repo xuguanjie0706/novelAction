@@ -1,8 +1,8 @@
 """
 Generation Service — 一句话创意 → 全量小说初始化
 
-方案 A (sequential): 串行6步，每步独立 prompt，适合 qwen3:8b 等小模型
-方案 B (single_shot): 单次全量生成，适合 Gemini / GPT-4o 等大 context 模型
+方案 A (sequential): 多步串行，每步独立 prompt；线路由 AIService(model_profile, llm_provider_id) 决定
+方案 B (single_shot): 单次全量生成，默认推荐；线路同上
 
 SSE 事件格式:
   {"event": "step_start", "step": "project",  "label": "生成项目基础信息..."}
@@ -16,6 +16,7 @@ from typing import AsyncGenerator, Literal, Optional
 from uuid import UUID
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.services.ai_service import AIService
 from app.models import (
     Project, WorldSetting, Character, CharacterRelationship,
@@ -85,10 +86,6 @@ SKILL_MIN_TARGET = 5
 SKILL_MAX_TARGET = 8
 ITEM_MIN_TARGET = 5
 ITEM_MAX_TARGET = 8
-GEMINI_SINGLE_SHOT_MAX_TOKENS = 32768
-GEMINI_SETTING_COMPLETION_MAX_TOKENS = 16384
-
-
 def _setting_blueprints_for_prompt() -> str:
     return json.dumps(GEMINI_SETTING_BLUEPRINTS, ensure_ascii=False, indent=2)
 
@@ -298,7 +295,8 @@ class GenerationService:
             yield _sse("complete", project_id=str(project.id))
 
         except Exception as e:
-            yield _sse("error", step="unknown", message=str(e))
+            # 不传 step：前端对 unknown 等未映射 step 曾静默丢弃错误
+            yield _sse("error", message=str(e))
 
     # ══════════════════════════════════════════════════════════
     #  方案 B：单次全量（适合 Gemini）
@@ -315,7 +313,7 @@ class GenerationService:
             raw = await self.ai._call_ai(
                 system,
                 prompt,
-                max_tokens=GEMINI_SINGLE_SHOT_MAX_TOKENS,
+                max_tokens=settings.GEMINI_SINGLE_SHOT_MAX_TOKENS,
                 context={"operation": "bootstrap_single_shot"},
             )
             data = _parse_json(raw)
@@ -361,7 +359,7 @@ class GenerationService:
         raw = await self._call_with_retry(
             system,
             prompt,
-            max_tokens=GEMINI_SETTING_COMPLETION_MAX_TOKENS,
+            max_tokens=settings.GEMINI_SETTING_COMPLETION_MAX_TOKENS,
         )
         data = _parse_json(raw)
 
@@ -1366,7 +1364,7 @@ title, content, tags, extra。
         raw = await self.ai._call_ai(
             system,
             prompt,
-            max_tokens=GEMINI_SETTING_COMPLETION_MAX_TOKENS,
+            max_tokens=settings.GEMINI_SETTING_COMPLETION_MAX_TOKENS,
             context={"operation": "bootstrap_complete_settings"},
         )
         parsed = _parse_json(raw)
@@ -1409,7 +1407,7 @@ role 只能是 protagonist / supporting / antagonist。
         raw = await self.ai._call_ai(
             system,
             prompt,
-            max_tokens=6000,
+            max_tokens=settings.GEMINI_CHARACTER_COMPLETION_MAX_TOKENS,
             context={"operation": "bootstrap_complete_characters"},
         )
         parsed = _parse_json(raw)
@@ -1448,3 +1446,12 @@ role 只能是 protagonist / supporting / antagonist。
                 last_err = e
                 continue
         raise last_err
+
+
+def __getattr__(name: str):
+    """兼容旧代码对 GEMINI_*_MAX_TOKENS 的模块级访问（值来自 Settings / 环境变量）。"""
+    if name == "GEMINI_SINGLE_SHOT_MAX_TOKENS":
+        return settings.GEMINI_SINGLE_SHOT_MAX_TOKENS
+    if name == "GEMINI_SETTING_COMPLETION_MAX_TOKENS":
+        return settings.GEMINI_SETTING_COMPLETION_MAX_TOKENS
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

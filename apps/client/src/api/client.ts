@@ -152,11 +152,16 @@ export const outlineApi = {
   create: (pid: string, data: any) => api.post(`/projects/${pid}/outline/`, data),
   update: (pid: string, id: string, data: any) => api.patch(`/projects/${pid}/outline/${id}`, data),
   delete: (pid: string, id: string) => api.delete(`/projects/${pid}/outline/${id}`),
+  /** 删除全部章节计划节点（保留卷/篇）；写作章节仅解除绑定 */
+  clearChapterPlans: (pid: string) =>
+    api.delete<{ deleted: number }>(`/projects/${pid}/outline/chapter-plans`),
   // AI 展开大纲 — SSE，使用原生 fetch（见 OutlineAIPanel.tsx）
   aiExpandUrl: (pid: string) => `/api/v1/projects/${pid}/outline/ai-expand`,
   // 确认写入大纲树
   commitExpand: (pid: string, data: { parent_node_id: string; chapters: any[] }) =>
     api.post(`/projects/${pid}/outline/ai-expand/commit`, data),
+  qualityCheck: (pid: string, data: any) =>
+    api.post(`/projects/${pid}/outline/ai-quality-check`, data),
 }
 
 // ── Chapters ──────────────────────────────────────────

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
@@ -29,6 +30,7 @@ from app.models import (
 )
 from app.schemas import MemoryChunkCreate, MemoryChunkOut
 from app.services.ai_service import AIService
+from app.utils.chapter_numbering import display_chapter_number
 
 router = APIRouter(prefix="/projects/{project_id}/ai", tags=["ai"])
 
@@ -262,7 +264,7 @@ def _sync_chapter_index_foreshadows(
 ) -> dict:
     """Mirror actual chapter-index foreshadows into the global tracking table."""
     stats = {"created": 0, "updated": 0, "resolved": 0}
-    chapter_number = chapter.sort_order + 1
+    chapter_number = display_chapter_number(chapter.title, chapter.sort_order)
     reserved_codes: set[str] = set()
 
     def find_existing(payload: dict) -> Optional[Foreshadow]:
@@ -350,8 +352,16 @@ def _build_continuity_context(
     outline_node: Optional[OutlineNode],
 ) -> str:
     """生成前的跨章事实账本：状态、伏笔、承接点、禁止事项。"""
-    current_chapter_number = chapter.sort_order + 1
-    previous_chapter_number = max(chapter.sort_order, 0)
+    prev_chapter = db.query(Chapter).filter(
+        Chapter.project_id == project_id,
+        Chapter.sort_order < chapter.sort_order,
+    ).order_by(Chapter.sort_order.desc()).first()
+    current_chapter_number = display_chapter_number(chapter.title, chapter.sort_order)
+    previous_chapter_number = (
+        display_chapter_number(prev_chapter.title, prev_chapter.sort_order)
+        if prev_chapter
+        else 0
+    )
 
     characters = db.query(Character).filter(
         Character.project_id == project_id
@@ -399,17 +409,27 @@ def _build_continuity_context(
     for c in reversed(recent_chapters):
         source = getattr(c, "summary", None) or _plain_text(c.content)[-180:]
         if source:
-            recent_lines.append(f"第{c.sort_order + 1}章《{c.title}》：{_truncate(source, 160)}")
+            recent_lines.append(
+                f"第{display_chapter_number(c.title, c.sort_order)}章《{c.title}》：{_truncate(source, 160)}"
+            )
 
-    foreshadow_memories = db.query(MemoryChunk).filter(
-        MemoryChunk.project_id == project_id,
-        MemoryChunk.memory_type.in_(["foreshadow", "event", "character_state"]),
-    ).order_by(MemoryChunk.chapter_number.desc()).limit(8).all()
-    memory_lines = [
-        f"第{m.chapter_number or '?'}章 {m.title or m.memory_type}：{_truncate(m.content, 100)}"
-        for m in foreshadow_memories
-        if (m.content or "").strip()
-    ]
+    mem_rows_ctx = (
+        db.query(MemoryChunk, Chapter)
+        .outerjoin(Chapter, Chapter.id == MemoryChunk.chapter_id)
+        .filter(
+            MemoryChunk.project_id == project_id,
+            MemoryChunk.memory_type.in_(["foreshadow", "event", "character_state"]),
+        )
+        .order_by(func.coalesce(Chapter.sort_order, MemoryChunk.chapter_number, -1).desc())
+        .limit(8)
+        .all()
+    )
+    memory_lines = []
+    for m, ch in mem_rows_ctx:
+        if not (m.content or "").strip():
+            continue
+        num = display_chapter_number(ch.title, ch.sort_order) if ch is not None else (m.chapter_number or "?")
+        memory_lines.append(f"第{num}章 {m.title or m.memory_type}：{_truncate(m.content, 100)}")
 
     storylines = db.query(StoryLine).filter(
         StoryLine.project_id == project_id,
@@ -518,7 +538,7 @@ def _build_writing_brief_context(
     large_context: bool = False,
 ) -> str:
     """Activate only the assets this chapter may consume: factions, items, and skills."""
-    current_chapter_number = chapter.sort_order + 1
+    current_chapter_number = display_chapter_number(chapter.title, chapter.sort_order)
     involved_ids = _string_ids(outline_node.involved_character_ids if outline_node else [])
     key_item_ids = _string_ids(outline_node.key_item_ids if outline_node else [])
     key_skill_ids = _string_ids(outline_node.key_skill_ids if outline_node else [])
@@ -647,17 +667,26 @@ def _build_writing_brief_context(
 
 def _build_chapter_index_context(db: Session, project_id: str, chapter: Chapter) -> str:
     """最近章节索引 + 未回收伏笔，作为连续生成的主干导航。"""
-    recent_indexes = db.query(ChapterIndex).filter(
-        ChapterIndex.project_id == project_id,
-        ChapterIndex.chapter_number < chapter.sort_order + 1,
-    ).order_by(ChapterIndex.chapter_number.desc()).limit(5).all()
+    recent_rows = (
+        db.query(ChapterIndex, Chapter)
+        .join(Chapter, Chapter.id == ChapterIndex.chapter_id)
+        .filter(
+            ChapterIndex.project_id == project_id,
+            Chapter.project_id == project_id,
+            Chapter.sort_order < chapter.sort_order,
+        )
+        .order_by(Chapter.sort_order.desc())
+        .limit(5)
+        .all()
+    )
 
     recent_lines = []
-    for idx in reversed(recent_indexes):
+    for idx, ch in reversed(recent_rows):
         events = "；".join(_fmt_index_item(e) for e in (idx.core_events or [])[:3])
         hook = idx.ending_hook or ""
         notes = "；".join(_fmt_index_item(n) for n in (idx.continuity_notes or [])[:3])
-        parts = [f"第{idx.chapter_number}章"]
+        num = display_chapter_number(ch.title, ch.sort_order)
+        parts = [f"第{num}章"]
         if idx.story_day:
             parts.append(f"故事日={idx.story_day}")
         if events:
@@ -668,24 +697,32 @@ def _build_chapter_index_context(db: Session, project_id: str, chapter: Chapter)
             parts.append(f"连续性风险={notes}")
         recent_lines.append("；".join(parts))
 
-    all_indexes = db.query(ChapterIndex).filter(
-        ChapterIndex.project_id == project_id,
-        ChapterIndex.chapter_number < chapter.sort_order + 1,
-    ).order_by(ChapterIndex.chapter_number).all()
+    all_rows = (
+        db.query(ChapterIndex, Chapter)
+        .join(Chapter, Chapter.id == ChapterIndex.chapter_id)
+        .filter(
+            ChapterIndex.project_id == project_id,
+            Chapter.project_id == project_id,
+            Chapter.sort_order < chapter.sort_order,
+        )
+        .order_by(Chapter.sort_order)
+        .all()
+    )
     resolved_descriptions = {
         _fmt_index_item(item)
-        for idx in all_indexes
+        for idx, _ch in all_rows
         for item in (idx.actual_foreshadows_resolved or [])
         if _fmt_index_item(item)
     }
     open_foreshadows = []
-    for idx in all_indexes:
+    for idx, ch in all_rows:
+        num = display_chapter_number(ch.title, ch.sort_order)
         for item in (idx.actual_foreshadows_laid or []):
             desc = _fmt_index_item(item)
             status = item.get("status") if isinstance(item, dict) else ""
             if not desc or desc in resolved_descriptions or status == "resolved":
                 continue
-            open_foreshadows.append(f"第{idx.chapter_number}章：{desc}")
+            open_foreshadows.append(f"第{num}章：{desc}")
 
     sections = []
     if recent_lines:
@@ -740,9 +777,12 @@ async def quality_check(
         raise HTTPException(404, "Project not found")
     large_context = req.model_profile == "gemini"
 
-    memory_query = db.query(MemoryChunk).filter(
-        MemoryChunk.project_id == project_id
-    ).order_by(MemoryChunk.chapter_number)
+    memory_query = (
+        db.query(MemoryChunk)
+        .outerjoin(Chapter, Chapter.id == MemoryChunk.chapter_id)
+        .filter(MemoryChunk.project_id == project_id)
+        .order_by(func.coalesce(Chapter.sort_order, MemoryChunk.chapter_number, 0).asc())
+    )
     memories = memory_query.limit(200 if large_context else 50).all()
 
     settings = db.query(WorldSetting).filter(
@@ -903,9 +943,9 @@ async def chapter_coherence_check(
         raise HTTPException(400, "存在无效章节ID，或章节不属于当前小说")
 
     chapters = sorted(chapters, key=lambda c: c.sort_order)
-    selected_numbers = [c.sort_order + 1 for c in chapters]
-    min_selected = min(selected_numbers)
-    max_selected = max(selected_numbers)
+    sort_orders = [c.sort_order for c in chapters]
+    min_so = min(sort_orders)
+    max_so = max(sort_orders)
 
     project_context_parts = []
     if project.premise:
@@ -947,34 +987,49 @@ async def chapter_coherence_check(
             )
         )
 
-    indexes = db.query(ChapterIndex).filter(
-        ChapterIndex.project_id == project_id,
-        ChapterIndex.chapter_number <= max_selected,
-    ).order_by(ChapterIndex.chapter_number).all()
-    if indexes:
+    index_rows = (
+        db.query(ChapterIndex, Chapter)
+        .join(Chapter, Chapter.id == ChapterIndex.chapter_id)
+        .filter(
+            ChapterIndex.project_id == project_id,
+            Chapter.project_id == project_id,
+            Chapter.sort_order <= max_so,
+        )
+        .order_by(Chapter.sort_order)
+        .all()
+    )
+    if index_rows:
         index_window = [
-            idx for idx in indexes
-            if large_context or idx.chapter_number >= max(1, min_selected - 5)
+            (idx, ch) for idx, ch in index_rows
+            if large_context or ch.sort_order >= max(0, min_so - 5)
         ]
         project_context_parts.append(
             "章节索引与伏笔：\n" + "\n".join(
-                f"- 第{idx.chapter_number}章：核心事件={json.dumps(idx.core_events or [], ensure_ascii=False)[:700]}; "
+                f"- 第{display_chapter_number(ch.title, ch.sort_order)}章：核心事件={json.dumps(idx.core_events or [], ensure_ascii=False)[:700]}; "
                 f"章末钩子={idx.ending_hook or ''}; "
                 f"未回收/已回收伏笔={json.dumps(idx.actual_foreshadows_laid or [], ensure_ascii=False)[:700]} / "
                 f"{json.dumps(idx.actual_foreshadows_resolved or [], ensure_ascii=False)[:700]}"
-                for idx in index_window
+                for idx, ch in index_window
             )
         )
 
-    memories = db.query(MemoryChunk).filter(
-        MemoryChunk.project_id == project_id,
-        MemoryChunk.chapter_number <= max_selected,
-    ).order_by(MemoryChunk.chapter_number.desc()).limit(100 if large_context else 20).all()
-    if memories:
+    memory_rows = (
+        db.query(MemoryChunk, Chapter)
+        .join(Chapter, Chapter.id == MemoryChunk.chapter_id)
+        .filter(
+            MemoryChunk.project_id == project_id,
+            Chapter.project_id == project_id,
+            Chapter.sort_order <= max_so,
+        )
+        .order_by(Chapter.sort_order.desc())
+        .limit(100 if large_context else 20)
+        .all()
+    )
+    if memory_rows:
         project_context_parts.append(
             "记忆库：\n" + "\n".join(
-                f"- 第{m.chapter_number or '?'}章 {m.title or m.memory_type}: {_truncate(m.content, 700 if large_context else 120)}"
-                for m in memories
+                f"- 第{display_chapter_number(ch.title, ch.sort_order)}章 {m.title or m.memory_type}: {_truncate(m.content, 700 if large_context else 120)}"
+                for m, ch in memory_rows
             )
         )
 
@@ -1113,6 +1168,7 @@ async def extract_memory(
     if not chapter:
         raise HTTPException(404, "Chapter not found")
 
+    chapter_no = display_chapter_number(chapter.title, chapter.sort_order)
     svc = AIService(
         "gemini" if model_profile == "gemini" else "default",
         db=db,
@@ -1121,7 +1177,7 @@ async def extract_memory(
     extracted = await svc.extract_memory(
         chapter_content=chapter.content,
         chapter_title=chapter.title,
-        chapter_number=chapter.sort_order + 1,
+        chapter_number=chapter_no,
     )
 
     results = []
@@ -1129,7 +1185,7 @@ async def extract_memory(
         chunk = MemoryChunk(
             project_id=project_id,
             chapter_id=chapter_id,
-            chapter_number=chapter.sort_order + 1,
+            chapter_number=chapter_no,
             **item
         )
         db.add(chunk)
@@ -1278,17 +1334,23 @@ async def draft_assist_stream(
         )
 
     # ── 记忆库（最近事件）────────────────────────────
-    memories = db.query(MemoryChunk).filter(
-        MemoryChunk.project_id == project_id
-    ).order_by(MemoryChunk.chapter_number.desc()).limit(80 if large_context else 12).all()
+    mem_rows_draft = (
+        db.query(MemoryChunk, Chapter)
+        .outerjoin(Chapter, Chapter.id == MemoryChunk.chapter_id)
+        .filter(MemoryChunk.project_id == project_id)
+        .order_by(func.coalesce(Chapter.sort_order, MemoryChunk.chapter_number, -1).desc())
+        .limit(80 if large_context else 12)
+        .all()
+    )
     if large_context:
         memory_summary = "\n".join(
-            f"- 第{m.chapter_number or '?'}章 {m.title or m.memory_type}: {_truncate(m.content, 600)}"
-            for m in memories
+            f"- 第{display_chapter_number(ch.title, ch.sort_order) if ch is not None else (m.chapter_number or '?')}章 "
+            f"{m.title or m.memory_type}: {_truncate(m.content, 600)}"
+            for m, ch in mem_rows_draft
         )
     else:
         memory_summary = " | ".join(
-            f"{m.title or m.memory_type}: {m.content[:60]}" for m in memories
+            f"{m.title or m.memory_type}: {m.content[:60]}" for m, _ch in mem_rows_draft
         )
 
     # ── 上一章结尾（衔接用）──────────────────────────
@@ -1658,7 +1720,7 @@ def _apply_asset_updates(
     asset_updates: AssetUpdates,
 ) -> dict:
     """Persist durable A/B assets; C-tier assets stay as prose/memory only."""
-    chapter_number = chapter.sort_order + 1
+    chapter_number = display_chapter_number(chapter.title, chapter.sort_order)
     stats = {
         "created_items": 0,
         "updated_items": 0,
@@ -1952,7 +2014,7 @@ def chapter_debrief(
         if su.append_beat:
             beats = list(sl.key_beats or [])
             beats.append({
-                "chapter": chapter.sort_order + 1,
+                "chapter": display_chapter_number(chapter.title, chapter.sort_order),
                 "chapter_title": chapter.title,
                 "beat": su.append_beat,
             })
@@ -1968,7 +2030,7 @@ def chapter_debrief(
         memory = MemoryChunk(
             project_id=project_id,
             chapter_id=req.chapter_id,
-            chapter_number=chapter.sort_order + 1,
+            chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
             memory_type=mu.memory_type,
             title=(mu.title or mu.memory_type).strip()[:200],
             content=content,
@@ -1997,7 +2059,7 @@ def chapter_debrief(
                 ).first()
                 data = req.chapter_index.model_dump()
                 data["hook_strength"] = hook_strength
-                data["chapter_number"] = chapter.sort_order + 1
+                data["chapter_number"] = display_chapter_number(chapter.title, chapter.sort_order)
                 if index:
                     for field, value in data.items():
                         setattr(index, field, value)
@@ -2023,7 +2085,7 @@ def chapter_debrief(
         memory = MemoryChunk(
             project_id=project_id,
             chapter_id=req.chapter_id,
-            chapter_number=chapter.sort_order + 1,
+            chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
             memory_type="event",
             title="章节复盘备注",
             content=req.notes.strip(),
@@ -2160,7 +2222,7 @@ async def auto_debrief(
     result = await svc.auto_extract_debrief(
         chapter_content=plain_content,
         chapter_title=chapter.title,
-        chapter_number=chapter.sort_order + 1,
+        chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
         character_states=character_states,
         storylines=storylines_data,
     )
@@ -2190,7 +2252,14 @@ def list_memory(
     memory_type: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    q = db.query(MemoryChunk).filter(MemoryChunk.project_id == project_id)
+    q = (
+        db.query(MemoryChunk)
+        .outerjoin(Chapter, Chapter.id == MemoryChunk.chapter_id)
+        .filter(MemoryChunk.project_id == project_id)
+    )
     if memory_type:
         q = q.filter(MemoryChunk.memory_type == memory_type)
-    return q.order_by(MemoryChunk.chapter_number).all()
+    return q.order_by(
+        func.coalesce(Chapter.sort_order, MemoryChunk.chapter_number, 0).asc(),
+        MemoryChunk.created_at,
+    ).all()

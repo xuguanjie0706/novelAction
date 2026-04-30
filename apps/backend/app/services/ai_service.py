@@ -1,6 +1,6 @@
 """
 AI Service — 统一使用 OpenAI 兼容协议
-支持本地 Ollama (qwen3:8b) 及任意自定义 base_url + api_key 的端点
+支持任意 base_url + api_key（含本地 Ollama、自建网关、云厂商兼容端点等）
 """
 import json
 import re
@@ -12,6 +12,17 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.services.llm_config import normalize_openai_base_url, resolve_gemini_connection
+from app.services.llm_token_budgets import (
+    max_tokens_auto_debrief,
+    max_tokens_chapter_quality_check,
+    max_tokens_coherence_check,
+    max_tokens_draft_stream,
+    max_tokens_expand_outline,
+    max_tokens_extract_memory,
+    max_tokens_outline_quality_check,
+    max_tokens_plan_full_structure,
+    max_tokens_suggest_stream,
+)
 from app.services.llm_call_log import log_llm_call
 
 
@@ -61,9 +72,7 @@ class AIService:
 
     def _get_client(self):
         """
-        始终使用 AsyncOpenAI，通过 base_url + api_key 指向任意 OpenAI 兼容服务：
-          - 本地 Ollama:   base_url=http://localhost:11434/v1  api_key=ollama
-          - 远程代理/云服务: 在 .env 中填写真实 LLM_BASE_URL / LLM_API_KEY
+        始终使用 AsyncOpenAI，通过 base_url + api_key 指向任意 OpenAI 兼容服务（由 profile 与配置决定，无固定厂商）
         """
         if self._gemini_unconfigured:
             raise RuntimeError(
@@ -72,10 +81,19 @@ class AIService:
             )
         if self._client:
             return self._client
+        import httpx
         import openai
+
+        timeout = httpx.Timeout(
+            connect=settings.LLM_HTTP_CONNECT_TIMEOUT,
+            read=settings.LLM_HTTP_READ_TIMEOUT,
+            write=120.0,
+            pool=30.0,
+        )
         self._client = openai.AsyncOpenAI(
             base_url=self.base_url,
             api_key=self.api_key,
+            timeout=timeout,
         )
         return self._client
 
@@ -199,7 +217,7 @@ class AIService:
         response = await self._call_ai(
             system,
             prompt,
-            max_tokens=8192 if large_context else 2048,
+            max_tokens=max_tokens_chapter_quality_check(large_context),
             context={"operation": "quality_check", "chapter_title": chapter_title},
         )
         try:
@@ -296,7 +314,7 @@ class AIService:
         response = await self._call_ai(
             system,
             prompt,
-            max_tokens=8192 if large_context else 2200,
+            max_tokens=max_tokens_coherence_check(large_context),
             context={"operation": "chapter_coherence_check"},
         )
         try:
@@ -339,7 +357,12 @@ class AIService:
 
 请给出具体的修改建议和示例。"""
 
-        async for chunk in self._stream_ai(system, prompt, context={"operation": "suggest_stream"}):
+        async for chunk in self._stream_ai(
+            system,
+            prompt,
+            max_tokens=max_tokens_suggest_stream(self.profile),
+            context={"operation": "suggest_stream"},
+        ):
             yield chunk
 
     # ── 记忆提取 ──────────────────────────────────────
@@ -368,7 +391,12 @@ class AIService:
 
 memory_type 只能是: event / character_state / foreshadow / setting / conflict"""
 
-        response = await self._call_ai(system, prompt, context={"operation": "extract_memory", "chapter_title": chapter_title})
+        response = await self._call_ai(
+            system,
+            prompt,
+            max_tokens=max_tokens_extract_memory(self.profile),
+            context={"operation": "extract_memory", "chapter_title": chapter_title},
+        )
         try:
             text = response.strip()
             if "```" in text:
@@ -392,6 +420,10 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         theme_statement: str = "",
         existing_chapters: int = 0,  # 已有章节数，用于章节编号连续
         chapter_count: int = 10,     # 生成几章
+        global_outline_context: str = "",
+        previous_chapters_context: str = "",
+        continuity_state: str = "",
+        batch_goal: str = "",
     ) -> dict:
         """
         为选定的大纲节点（卷或旧篇）生成详细的子章节计划。
@@ -403,6 +435,22 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 严格返回 JSON，不要任何额外文字。"""
 
         start_num = existing_chapters + 1
+        global_context = (
+            f"\n【全书卷线蓝图】\n{global_outline_context[:2000]}\n"
+            if global_outline_context else ""
+        )
+        previous_context = (
+            f"\n【已生成章节上下文（含前卷/本卷最近章节）】\n{previous_chapters_context[:2600]}\n"
+            if previous_chapters_context else ""
+        )
+        continuity_context = (
+            f"\n【滚动连续性账本】\n{continuity_state[:1800]}\n"
+            if continuity_state else ""
+        )
+        batch_goal_context = (
+            f"\n【本批任务边界】\n{batch_goal[:800]}\n"
+            if batch_goal else ""
+        )
         prompt = f"""小说：《{project_title}》（{genre}）
 当前节点：{node_type == 'volume' and '卷' or '旧篇'}《{node_title}》
 节点概述：{node_summary or '（未填写）'}
@@ -410,6 +458,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 世界观摘要：{world_summary[:400]}
 主要人物：{character_summary[:300]}
 全书立意：{theme_statement[:300] or '（未填写；请从创意和人物中提炼一条贯穿全书的价值命题）'}
+{global_context}{previous_context}{continuity_context}{batch_goal_context}
 
 请为本{node_type == 'volume' and '卷' or '旧篇'}生成 {chapter_count} 个章节计划，章节编号从第{start_num}章开始。
 
@@ -440,10 +489,11 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 2. 每章字数预估控制在 2200-2400 字，默认 2300 字
 3. 每章核心事件必须同时服务于情节推进、人物变化和全书立意，不要只堆事件
 4. 前3章追读钩子要特别强
-5. 伏笔要有连续性，本卷内至少有2条贯穿始终的伏笔线"""
+5. 伏笔要有连续性，本卷内至少有2条贯穿始终的伏笔线
+6. 如果提供了已生成章节上下文或滚动连续性账本，必须承接上一批章末钩子、人物状态和未回收伏笔，不得重复已发生的核心事件
+7. 本批第一章要自然回应上一批最后一章留下的具体悬念；如果处于新卷开头，则先承接全书卷线蓝图再开启本卷核心问题"""
 
-        # gemini 有大 context，可以给更多 token；小模型控制在 4096 防止 OOM
-        max_tok = 8192 if self.profile == "gemini" else 4096
+        max_tok = max_tokens_expand_outline(self.profile)
         response = await self._call_ai(system, prompt, max_tokens=max_tok, context={"operation": "expand_outline", "node_title": node_title})
         try:
             import re
@@ -461,6 +511,109 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         except Exception as e:
             return {"error": str(e), "raw": response[:500]}
 
+    async def outline_quality_check(
+        self,
+        project_title: str,
+        genre: str,
+        scope: str,
+        node_title: str,
+        chapters: list[dict],
+        global_outline_context: str = "",
+        previous_chapters_context: str = "",
+        continuity_state: str = "",
+        node_summary: str = "",
+        theme_statement: str = "",
+        story_bible_context: str = "",
+    ) -> dict:
+        """
+        大纲质检：检查卷内/全书章节计划的连续性，并返回可定位、可修复的问题列表。
+        """
+        chapter_lines = []
+        for ch in chapters:
+            chapter_lines.append(
+                " | ".join([
+                    f"第{ch.get('number', '?')}章：{ch.get('title', '未命名')}",
+                    f"核心事件：{ch.get('core_event', '')}",
+                    f"人物变化：{ch.get('character_change', '')}",
+                    f"伏笔：{ch.get('foreshadow', '')}",
+                    f"章末钩子：{ch.get('end_hook', '')}",
+                ])
+            )
+
+        system = "你是资深长篇网文主编，专门做大纲质检和结构化修订建议。严格返回JSON，不要任何额外文字。"
+        prompt = f"""小说：《{project_title}》（{genre}）
+质检范围：{scope}
+当前节点：{node_title}
+节点概述：{node_summary or '（未填写）'}
+全书立意：{theme_statement or '（未填写）'}
+
+【故事圣经账本】
+{self._clip_context(story_bible_context, 1800, 12000) or '（未提供）'}
+
+【全书卷线蓝图】
+{global_outline_context[:3000] or '（未提供）'}
+
+【前文/已有章节上下文】
+{previous_chapters_context[:3000] or '（未提供）'}
+
+【滚动连续性账本】
+{continuity_state[:2200] or '（未提供）'}
+
+【待质检章节计划】
+{chr(10).join(chapter_lines)[:40000 if self.profile == "gemini" else 12000]}
+
+请检查：
+1. 卷内连续性：章节因果是否断裂、是否重复同类事件、人物状态是否跳变
+2. 跨卷承接：是否回应前卷/前批章末钩子，是否提前透支后续卷爆点
+3. 伏笔：新埋/回收是否清楚，是否出现只埋不管、无来源回收、重复伏笔
+4. 人物弧：人物选择、代价、关系变化是否逐步推进
+5. 节奏与追读：开篇钩子、章末钩子、高潮分布是否支撑追读
+6. 全书立意：核心事件是否服务主题，而不是单纯堆事件
+7. 故事圣经一致性：角色死亡/封印/失踪后再登场必须有明确机制；核心道具、力量体系、势力目标、世界规则和人物弧线不得被后续章节随意否定
+
+返回JSON：
+{{
+  "scope": "{scope}",
+  "overall_score": 0,
+  "status": "pass/warning/fail",
+  "summary": "一句话总结",
+  "issues": [
+    {{
+      "severity": "low/medium/high/critical",
+      "type": "continuity/duplicate_event/hook_continuity/foreshadow/character_arc/pacing/theme_alignment",
+      "chapter_numbers": [1],
+      "description": "问题说明，要具体到章节和原因",
+      "suggested_patch": {{
+        "chapter_number": 1,
+        "field": "opening_hook/core_event/character_change/foreshadow/end_hook",
+        "replacement": "建议替换文本；如不适合单字段修复，则写空字符串"
+      }}
+    }}
+  ],
+  "must_fix_chapter_numbers": [1],
+  "strengths": ["做得好的地方"]
+}}"""
+
+        response = await self._call_ai(
+            system,
+            prompt,
+            max_tokens=max_tokens_outline_quality_check(self.profile),
+            context={"operation": "outline_quality_check", "scope": scope, "node_title": node_title},
+        )
+        try:
+            text = response.strip()
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            if "```" in text:
+                fence = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
+                if fence:
+                    text = fence.group(1).strip()
+            start = text.find("{")
+            if start == -1:
+                raise ValueError("No JSON object found")
+            return json.loads(text[start:])
+        except Exception as e:
+            return {"error": str(e), "raw": response[:500]}
+
     # ── 全量大纲：第一步生成卷级结构 ──────────────────
     async def plan_full_structure(
         self,
@@ -470,17 +623,19 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         world_summary: str,
         character_summary: str,
         theme_statement: str = "",
-        scale_hint: str = "auto",   # auto / short / medium / long
+        scale_hint: str = "auto",   # micro / auto / short / medium / long / epic
     ) -> dict:
         """
         全量大纲规划：AI 规划卷结构，后端会按每卷约 60 章校准章节数。
         返回: { "volumes": [{ title, summary, hook, conflict, planned_chapters: int }] }
         """
         scale_desc = {
+            "micro":  "超短篇，约 180 章、约 41 万字，拆成约 3 个 60 章左右的卷",
             "auto":   "默认约 540 章、约 124 万字，拆成 9 个 60 章左右的卷",
             "short":  "短篇长篇化，约 360 章、约 80 万字，拆成 6 个 60 章左右的卷",
             "medium": "标准长篇，约 540 章、约 124 万字，拆成 9 个 60 章左右的卷",
-            "long":   "超长篇，约 660 章、约 152 万字，拆成 11 个 60 章左右的卷",
+            "long":   "长篇，约 660 章、约 152 万字，拆成 11 个 60 章左右的卷",
+            "epic":   "超长篇，约 870 章、约 200 万字，拆成约 15 个 60 章左右的卷",
         }.get(scale_hint, "根据故事自由决定")
 
         system = "你是资深网络小说策划，擅长根据故事特质规划最合适的卷章结构。严格返回JSON，不要任何额外文字。"
@@ -520,7 +675,12 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 6. 悬念递进，每卷末尾都要有足够的钩子让读者追下一卷
 7. 标题要有画面感，能让读者一眼感受到本卷的核心氛围"""
 
-        response = await self._call_ai(system, prompt, context={"operation": "plan_full_structure"})
+        response = await self._call_ai(
+            system,
+            prompt,
+            max_tokens=max_tokens_plan_full_structure(self.profile),
+            context={"operation": "plan_full_structure"},
+        )
         import re
         try:
             text = response.strip()
@@ -697,8 +857,8 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 {task_line}
 {index_template}{extra}"""
 
-        max_tokens = 8192 if large_context else 4096
-        async for chunk in self._stream_ai(system, prompt, max_tokens=max_tokens, context={"operation": "draft_assist_stream", "chapter_title": chapter_title}):
+        max_tok = max_tokens_draft_stream(large_context)
+        async for chunk in self._stream_ai(system, prompt, max_tokens=max_tok, context={"operation": "draft_assist_stream", "chapter_title": chapter_title}):
             yield chunk
 
     # ── 自动复盘提取 ──────────────────────────────────
@@ -896,7 +1056,12 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
   "summary": "本章整体复盘总结（一句话）"
 }}"""
 
-        response = await self._call_ai(system, prompt, max_tokens=1500, context={"operation": "auto_extract_debrief", "chapter_title": chapter_title})
+        response = await self._call_ai(
+            system,
+            prompt,
+            max_tokens=max_tokens_auto_debrief(),
+            context={"operation": "auto_extract_debrief", "chapter_title": chapter_title},
+        )
         try:
             import re as _re
             text = response.strip()

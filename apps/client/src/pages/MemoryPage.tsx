@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { Brain, Filter } from 'lucide-react'
 import { aiApi } from '../api/client'
 import { useAppStore } from '../store'
 import type { MemoryChunk } from '../types'
 import clsx from 'clsx'
+import { memoryDisplayChapter } from '../utils/chapterNumber'
 
 const MEMORY_TYPES: { key: MemoryChunk['memory_type'] | 'all'; label: string; color: string }[] = [
   { key: 'all',             label: '全部',   color: 'bg-gray-100 text-gray-600' },
@@ -25,7 +26,7 @@ function typeLabel(t: string) {
 
 export default function MemoryPage() {
   const { projectId } = useParams<{ projectId: string }>()
-  const { activeChapterId, memories, setMemories } = useAppStore()
+  const { activeChapterId, memories, setMemories, chapters } = useAppStore()
   const [filter, setFilter] = useState<'all' | MemoryChunk['memory_type']>('all')
   const [search, setSearch] = useState('')
 
@@ -34,15 +35,21 @@ export default function MemoryPage() {
     aiApi.listMemory(projectId).then(res => setMemories(res.data))
   }, [projectId, activeChapterId, setMemories])
 
+  const chapterById = useMemo(() => {
+    const m = new Map<string, { title: string; sort_order: number }>()
+    for (const c of chapters) m.set(c.id, { title: c.title, sort_order: c.sort_order })
+    return m
+  }, [chapters])
+
   const filtered = memories.filter(m => {
     if (filter !== 'all' && m.memory_type !== filter) return false
     if (search && !m.content.includes(search) && !(m.title?.includes(search))) return false
     return true
   })
 
-  // 按章节分组
+  // 按章节分组（与写作侧栏「第N章」口径一致）
   const byChapter = filtered.reduce<Record<number, MemoryChunk[]>>((acc, m) => {
-    const ch = m.chapter_number ?? 0
+    const ch = memoryDisplayChapter(m, chapterById)
     if (!acc[ch]) acc[ch] = []
     acc[ch].push(m)
     return acc
@@ -85,7 +92,7 @@ export default function MemoryPage() {
         <div className="border-t border-gray-100 p-3 space-y-1">
           <div className="text-xs text-gray-400">共 {memories.length} 条记忆</div>
           <div className="text-xs text-gray-400">
-            覆盖 {new Set(memories.map(m => m.chapter_number)).size} 章
+            覆盖 {new Set(memories.map(m => memoryDisplayChapter(m, chapterById))).size} 章
           </div>
         </div>
       </div>

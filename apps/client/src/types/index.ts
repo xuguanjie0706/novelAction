@@ -285,11 +285,39 @@ export interface MemoryChunk {
 export type GenTaskStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled'
 export type GenTaskType = 'full_generate' | 'batch_expand' | 'continue_chapters' | 'rewrite_chapter'
 
+/** 大纲 AI 质检（与章节正文质检 QualityReport 结构不同） */
+export interface OutlinePlanQualityIssue {
+  severity?: string
+  type?: string
+  chapter_numbers?: number[]
+  description?: string
+  suggested_patch?: {
+    chapter_number?: number
+    field?: string
+    replacement?: string
+  }
+}
+
+export interface OutlinePlanQualityReport {
+  scope?: string
+  overall_score?: number
+  status?: string
+  summary?: string
+  issues?: OutlinePlanQualityIssue[]
+  must_fix_chapter_numbers?: number[]
+  strengths?: string[]
+  error?: string
+}
+
 export interface GenProgressItem {
   step: number | string
   label: string
   done: boolean
   error: boolean
+  /** 与 step 组合区分同日进度行（如大纲质检 vs 展开进度） */
+  progressKey?: string
+  outlineQualityReport?: OutlinePlanQualityReport | null
+  outlineQualityScope?: 'volume' | 'book'
 }
 
 export interface GenTask {
@@ -301,7 +329,7 @@ export interface GenTask {
   progress: GenProgressItem[]
   completedMsg?: string
   errorMsg?: string
-  /** full_generate: { scale_hint, model_profile, clear_existing }
+  /** full_generate: { scale_hint: micro|auto|short|medium|long|epic, model_profile, clear_existing }
    *  batch_expand:  { nodes: [{id,title}], chapterCount, modelProfile }
    *  continue_chapters: { chapterIds: string[], userPrompt, modelProfile, llm_provider_id }（单章时 chapterIds 可为 1 个）
    *  rewrite_chapter: { chapterId, userPrompt, modelProfile, llm_provider_id } */

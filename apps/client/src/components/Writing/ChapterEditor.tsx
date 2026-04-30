@@ -69,6 +69,18 @@ function hasHtmlTextContent(html?: string): boolean {
   return text.length > 0
 }
 
+/**
+ * 是否全书第 1 章（按大纲/章标题）。用于 sort_order 前有未写正文的序章、占位章时，
+ * 不误拦「第一章」的正文生成。
+ */
+function isBookFirstChapterTitle(ch: Chapter, outlineNode?: OutlineNode): boolean {
+  const raw = (outlineNode?.title || ch.title || '').trim()
+  if (!raw) return false
+  if (/^第\s*0*1\s*章/.test(raw)) return true
+  if (/^第一章/.test(raw)) return true
+  return false
+}
+
 // ─── 章节状态选项 ─────────────────────────────────────────────────────────────
 const STATUS_OPTIONS: { value: Chapter['status']; label: string; dotCls: string; textCls: string }[] = [
   { value: 'draft',    label: '初稿',  dotCls: 'bg-gray-300',   textCls: 'text-gray-500' },
@@ -731,7 +743,14 @@ export default function ChapterEditor({
   )
   const currentChapterIndex = orderedChapters.findIndex(c => c.id === chapter.id)
   const previousChapter = currentChapterIndex > 0 ? orderedChapters[currentChapterIndex - 1] : null
-  const previousChapterGenerated = !previousChapter || hasHtmlTextContent(previousChapter.content)
+  const previousChapterGenerated =
+    !previousChapter
+    || hasHtmlTextContent(previousChapter.content)
+    || (
+      isBookFirstChapterTitle(chapter, outlineNode)
+      && !!previousChapter
+      && !hasHtmlTextContent(previousChapter.content)
+    )
   const generateBlockedReason = previousChapterGenerated
     ? null
     : `请先生成上一章《${previousChapter?.title ?? '未命名章节'}》`

@@ -9,11 +9,14 @@ TARGET_CHAPTERS_PER_VOLUME = 60
 TARGET_WORDS_PER_CHAPTER = 2300
 WORD_ESTIMATE_RANGE = (2200, 2400)
 
+# 总章数下限；字数按每章 TARGET_WORDS_PER_CHAPTER（2300）估算（与 ai_service 文案一致）
 SCALE_TARGET_TOTAL_CHAPTERS = {
+    "micro": 180,   # 约 41 万字 → 超短篇目标约 40 万字
     "auto": 540,
     "short": 360,
     "medium": 540,
     "long": 660,
+    "epic": 870,    # 约 200 万字
 }
 
 T = TypeVar("T")

@@ -9,15 +9,17 @@
  *  - 任务完成后触发大纲树刷新
  */
 
-import React, { useEffect, useRef, useCallback } from 'react'
+import React, { useEffect, useRef, useCallback, useState } from 'react'
 import {
   Loader2, CheckCircle2, AlertCircle, ChevronUp, ChevronDown,
   ListTodo, X, BookOpen,
 } from 'lucide-react'
 import clsx from 'clsx'
+import toast from 'react-hot-toast'
 import { useAppStore } from '../../store'
-import type { Chapter, GenTask, GenProgressItem, MemoryChunk } from '../../types'
-import { aiApi, chaptersApi } from '../../api/client'
+import type { Chapter, GenTask, GenProgressItem, MemoryChunk, OutlinePlanQualityReport } from '../../types'
+import { aiApi, chaptersApi, outlineApi, projectsApi } from '../../api/client'
+import OutlinePlanQualityView from '../Outline/OutlinePlanQualityView'
 import {
   fetchOutlineExpandResult,
   commitOutlineExpand,
@@ -44,14 +46,14 @@ function parseSseDataLine(line: string): { text?: string; error?: string; done?:
 
 // ── 任务执行器 ─────────────────────────────────────────────
 
-/** 执行 full_generate 任务，SSE 驱动进度更新 */
+/** 执行 full_generate 任务，SSE 驱动进度更新；返回生成是否完成 */
 async function runFullGenerate(
   task: GenTask,
   pushProgress: (item: GenProgressItem) => void,
   onComplete: (msg: string) => void,
   onError: (msg: string) => void,
   signal: AbortSignal,
-) {
+): Promise<boolean> {
   const { projectId, params } = task
   let res: Response
   try {
@@ -62,14 +64,14 @@ async function runFullGenerate(
       signal,
     })
   } catch (e: any) {
-    if (e?.name === 'AbortError') return
+    if (e?.name === 'AbortError') return false
     onError(e?.message || '网络请求失败')
-    return
+    return false
   }
 
   if (!res.ok) {
     onError(`HTTP ${res.status}`)
-    return
+    return false
   }
 
   const reader = res.body!.getReader()
@@ -99,34 +101,90 @@ async function runFullGenerate(
         if (!line.startsWith('data:')) continue
         const raw = line.slice(5).trim()
         if (!raw) continue
-        let evt: { event?: string; label?: string; step?: number; done?: boolean; error?: boolean; message?: string }
+        let evt: {
+          event?: string
+          label?: string
+          step?: number
+          done?: boolean
+          error?: boolean
+          message?: string
+          progress_key?: string
+          outline_quality_report?: unknown
+          outline_quality_scope?: 'volume' | 'book'
+        }
         try {
           evt = JSON.parse(raw)
         } catch {
           continue
         }
         if (evt.event === 'progress') {
+          const rep = evt.outline_quality_report as OutlinePlanQualityReport | undefined
           pushProgress({
             step: evt.step ?? 0,
+            progressKey: evt.progress_key,
             label: evt.label ?? '',
             done: !!evt.done,
             error: !!evt.error,
+            outlineQualityReport: rep as OutlinePlanQualityReport | undefined,
+            outlineQualityScope: evt.outline_quality_scope,
           })
         } else if (evt.event === 'complete') {
           wrapComplete(evt.message || '生成完成')
-          return
+          return true
         } else if (evt.event === 'error') {
           wrapError(evt.message || '生成失败')
-          return
+          return false
         }
       }
     }
     if (!settled && !signal.aborted) {
       wrapError('连接已结束，未收到生成完成事件（可能网络中断或后端异常）')
     }
+    return false
   } catch (e: any) {
-    if (e?.name === 'AbortError') return
+    if (e?.name === 'AbortError') return false
     wrapError(e?.message || '流读取异常')
+    return false
+  }
+}
+
+async function runOutlineQualityCheck(
+  task: GenTask,
+  pushProgress: (item: GenProgressItem) => void,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (signal.aborted) return false
+  const { projectId, params } = task
+  pushProgress({ step: 'outline-quality', label: '正在质检全书大纲…', done: false, error: false })
+  try {
+    const res = await outlineApi.qualityCheck(projectId, {
+      model_profile: params.model_profile ?? 'gemini',
+      llm_provider_id: params.llm_provider_id,
+      theme_statement: params.theme_statement,
+    })
+    const report = res.data as OutlinePlanQualityReport
+    const score = report?.overall_score
+    pushProgress({
+      step: 'outline-quality',
+      progressKey: 'outline-quality-book',
+      label: typeof score === 'number' ? `全书大纲质检完成：${score}分 / ${report.status || '-'}` : '全书大纲质检完成',
+      done: true,
+      error: !!report?.error,
+      outlineQualityReport: report,
+      outlineQualityScope: 'book',
+    })
+    return !report?.error
+  } catch (e: any) {
+    if (signal.aborted) return false
+    pushProgress({
+      step: 'outline-quality',
+      progressKey: 'outline-quality-book',
+      label: `全书大纲质检失败，可稍后重试：${e?.message || '未知错误'}`,
+      done: true,
+      error: true,
+      outlineQualityScope: 'book',
+    })
+    return false
   }
 }
 
@@ -493,7 +551,12 @@ async function runRewriteChapter(
 
 // ── 单任务卡片 ─────────────────────────────────────────────
 
+function progressRowKey(p: GenProgressItem, idx: number) {
+  return p.progressKey ?? `p-${String(p.step)}-${idx}`
+}
+
 function TaskCard({ task, onRemove, onCancel }: { task: GenTask; onRemove: () => void; onCancel: () => void }) {
+  const [expandedPk, setExpandedPk] = useState<string | null>(null)
   const isRunning = task.status === 'running'
   const isPending = task.status === 'pending'
   const isDone = task.status === 'done'
@@ -554,26 +617,51 @@ function TaskCard({ task, onRemove, onCancel }: { task: GenTask; onRemove: () =>
         )}
       </div>
 
-      {/* 进度条目 */}
+      {/* 进度条目（含大纲质检可展开详情） */}
       {task.progress.length > 0 && (
-        <div className="space-y-1 max-h-32 overflow-y-auto pr-0.5">
-          {task.progress.map((p, idx) => (
-            <div key={`${p.step}-${idx}`} className={clsx(
-              'flex items-start gap-1.5 rounded px-2 py-1',
-              p.error ? 'bg-red-100 text-red-700' :
-              p.done ? 'bg-green-100 text-green-700' :
-              'bg-white text-gray-600'
-            )}>
-              {p.error ? (
-                <AlertCircle size={10} className="shrink-0 mt-0.5" />
-              ) : p.done ? (
-                <CheckCircle2 size={10} className="shrink-0 mt-0.5" />
-              ) : (
-                <Loader2 size={10} className="shrink-0 mt-0.5 animate-spin" />
-              )}
-              <span className="text-[11px] leading-relaxed">{p.label}</span>
-            </div>
-          ))}
+        <div className={clsx(
+          'space-y-1 overflow-y-auto pr-0.5',
+          task.progress.some(x => x.outlineQualityReport) ? 'max-h-56' : 'max-h-32',
+        )}>
+          {task.progress.map((p, idx) => {
+            const pk = progressRowKey(p, idx)
+            const expandable = !!p.outlineQualityReport
+            const open = expandedPk === pk
+            return (
+              <div key={pk} className={clsx(
+                'rounded px-2 py-1',
+                p.error ? 'bg-red-100 text-red-700' :
+                p.done ? 'bg-green-100 text-green-700' :
+                'bg-white text-gray-600'
+              )}>
+                <div
+                  className={clsx('flex items-start gap-1.5', expandable && 'cursor-pointer select-none')}
+                  onClick={() => expandable && setExpandedPk(open ? null : pk)}
+                >
+                  {p.error ? (
+                    <AlertCircle size={10} className="shrink-0 mt-0.5" />
+                  ) : p.done ? (
+                    <CheckCircle2 size={10} className="shrink-0 mt-0.5" />
+                  ) : (
+                    <Loader2 size={10} className="shrink-0 mt-0.5 animate-spin" />
+                  )}
+                  <span className="text-[11px] leading-relaxed flex-1">
+                    {p.label}
+                    {expandable && (
+                      <span className="text-[10px] text-gray-500 ml-1">
+                        {open ? '（收起）' : '（展开）'}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                {open && p.outlineQualityReport && (
+                  <div className="mt-1.5 pl-4 border-l border-green-200">
+                    <OutlinePlanQualityView report={p.outlineQualityReport} variant="minimal" />
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -601,6 +689,7 @@ export default function GenerationQueuePanel() {
   const pushGenProgress = useAppStore(s => s.pushGenProgress)
   const removeGenTask = useAppStore(s => s.removeGenTask)
   const setOutlineNeedsReload = useAppStore(s => s.setOutlineNeedsReload)
+  const setCurrentProject = useAppStore(s => s.setCurrentProject)
   const upsertChapter = useAppStore(s => s.upsertChapter)
   const setMemories = useAppStore(s => s.setMemories)
 
@@ -634,7 +723,16 @@ export default function GenerationQueuePanel() {
     }
 
     if (task.type === 'full_generate') {
-      await runFullGenerate(task, pushProgress, onComplete, onError, abort.signal)
+      const generated = await runFullGenerate(task, pushProgress, onComplete, onError, abort.signal)
+      const shouldCheckOutline = generated && !abort.signal.aborted && (task.params.model_profile ?? 'gemini') === 'gemini'
+      const checked = shouldCheckOutline ? await runOutlineQualityCheck(task, pushProgress, abort.signal) : false
+      if (checked && !abort.signal.aborted) {
+        toast.success('大纲质检已写入。请在「大纲」页查看卷/全书报告与必修章节。', { duration: 5000 })
+        try {
+          const { data } = await projectsApi.get(task.projectId)
+          setCurrentProject(data)
+        } catch { /* ignore */ }
+      }
     } else if (task.type === 'batch_expand') {
       await runBatchExpand(task, pushProgress, onComplete, onError, abort.signal)
     } else if (task.type === 'continue_chapters') {

@@ -9,14 +9,41 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
 
-    # AI — 本地模型 / 自定义端点（OpenAI 兼容协议）
-    LLM_BASE_URL: str = "http://localhost:11434/v1"   # Ollama 默认地址
-    LLM_API_KEY: str = "ollama"                       # 本地模型随便填，远程服务填真实 key
+    # AI — 可选：本地 OpenAI 兼容端点（Ollama / vLLM 等）；未用 local 线路时可忽略，改用管理后台远程
+    LLM_BASE_URL: str = "http://localhost:11434/v1"
+    LLM_API_KEY: str = "ollama"
     AI_MODEL: str = "qwen3:8b"
+    # OpenAI 兼容客户端超时（秒）：连接失败快速报错；读超时避免模型无响应时无限挂起
+    LLM_HTTP_CONNECT_TIMEOUT: float = 30.0
+    LLM_HTTP_READ_TIMEOUT: float = 900.0
     # Gemini / 远程兼容网关（可选；亦可只在管理后台持久化配置）
     GEMINI_BASE_URL: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_MODEL: Optional[str] = None
+
+    # chat.completions max_tokens — 勿超过所用模型/网关的实际上限（见各云厂商文档）
+    GEMINI_SINGLE_SHOT_MAX_TOKENS: int = 32768
+    GEMINI_SETTING_COMPLETION_MAX_TOKENS: int = 16384
+    GEMINI_CHARACTER_COMPLETION_MAX_TOKENS: int = 6000
+    GEMINI_EXPAND_OUTLINE_MAX_TOKENS: int = 20000
+    GEMINI_OUTLINE_QUALITY_MAX_TOKENS: int = 8192
+    GEMINI_CHAPTER_QUALITY_MAX_TOKENS: int = 8192
+    GEMINI_COHERENCE_CHECK_MAX_TOKENS: int = 8192
+    GEMINI_DRAFT_STREAM_MAX_TOKENS: int = 8192
+    GEMINI_PLAN_STRUCTURE_MAX_TOKENS: int = 8192
+    GEMINI_SUGGEST_STREAM_MAX_TOKENS: int = 4096
+    GEMINI_EXTRACT_MEMORY_MAX_TOKENS: int = 4096
+
+    LOCAL_EXPAND_OUTLINE_MAX_TOKENS: int = 4096
+    LOCAL_OUTLINE_QUALITY_MAX_TOKENS: int = 4096
+    LOCAL_CHAPTER_QUALITY_MAX_TOKENS: int = 2048
+    LOCAL_COHERENCE_CHECK_MAX_TOKENS: int = 2200
+    LOCAL_DRAFT_STREAM_MAX_TOKENS: int = 4096
+    LOCAL_PLAN_STRUCTURE_MAX_TOKENS: int = 2048
+    LOCAL_SUGGEST_STREAM_MAX_TOKENS: int = 2048
+    LOCAL_EXTRACT_MEMORY_MAX_TOKENS: int = 2048
+
+    AUTO_DEBRIEF_MAX_TOKENS: int = 1500
 
     EMBEDDING_MODEL: str = "nomic-embed-text"         # Ollama 本地 embedding 模型
 

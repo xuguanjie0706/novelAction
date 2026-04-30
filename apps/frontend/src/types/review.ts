@@ -1,6 +1,32 @@
 export interface ReviewProject {
   id: string
   title: string
+  /** 含 outline_quality 等（GET /projects/:id） */
+  story_core?: Record<string, unknown> | null
+}
+
+/** 大纲 AI 质检（与章节正文 QualityReport 不同） */
+export interface OutlinePlanQualityIssue {
+  severity?: string
+  type?: string
+  chapter_numbers?: number[]
+  description?: string
+  suggested_patch?: {
+    chapter_number?: number
+    field?: string
+    replacement?: string
+  }
+}
+
+export interface OutlinePlanQualityReport {
+  scope?: string
+  overall_score?: number
+  status?: string
+  summary?: string
+  issues?: OutlinePlanQualityIssue[]
+  must_fix_chapter_numbers?: number[]
+  strengths?: string[]
+  error?: string
 }
 
 export interface ReviewChapter {

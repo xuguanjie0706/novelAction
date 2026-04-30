@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, useRef } from 'react'
 import { X, Zap, BookMarked, MessageSquare } from 'lucide-react'
 import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload, llmProviderIdFromRoute } from '../../store'
 import { aiApi } from '../../api/client'
+import { memoryDisplayChapter } from '../../utils/chapterNumber'
 import type { QualityReport } from '../../types'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
@@ -31,6 +32,12 @@ export default function AIPanel({ projectId }: Props) {
     if (!projectId || !activeChapterId) return
     aiApi.listMemory(projectId).then(res => setMemories(res.data)).catch(() => {})
   }, [projectId, activeChapterId, setMemories])
+
+  const chapterById = useMemo(() => {
+    const m = new Map<string, { title: string; sort_order: number }>()
+    for (const c of chapters) m.set(c.id, { title: c.title, sort_order: c.sort_order })
+    return m
+  }, [chapters])
 
   const currentChapterMemories = useMemo(
     () => activeChapterId
@@ -269,8 +276,10 @@ export default function AIPanel({ projectId }: Props) {
                     <span className="text-xs px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded">
                       {m.memory_type}
                     </span>
-                    {m.chapter_number && (
-                      <span className="text-xs text-gray-400">第{m.chapter_number}章</span>
+                    {(m.chapter_id || m.chapter_number != null) && (
+                      <span className="text-xs text-gray-400">
+                        第{memoryDisplayChapter(m, chapterById) || '?'}章
+                      </span>
                     )}
                   </div>
                   <p className="text-xs text-gray-700 leading-relaxed">{m.content}</p>

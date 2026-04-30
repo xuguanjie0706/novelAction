@@ -4,9 +4,11 @@ import {
   ChevronRight, ChevronDown, Plus, Trash2, Pencil, Check, X,
   Sparkles, BookOpen, Users, TrendingUp, GitBranch,
 } from 'lucide-react'
-import { chaptersApi, outlineApi } from '../api/client'
+import { chaptersApi, outlineApi, projectsApi } from '../api/client'
 import { useAppStore, toOutlineApiModelProfile, routeLlmProviderPayload } from '../store'
-import type { OutlineNode } from '../types'
+import type { OutlineNode, OutlinePlanQualityReport } from '../types'
+import OutlinePlanQualityView from '../components/Outline/OutlinePlanQualityView'
+import { collectAncestorIds, findChapterPlanByNumber } from '../utils/outlineNavigate'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import OutlineAIPanel from '../components/Outline/OutlineAIPanel'
@@ -31,7 +33,9 @@ function FullGenConfigModal({
     llm_provider_id?: string
   }) => void
 }) {
-  const [scaleHint, setScaleHint] = useState<'auto' | 'short' | 'medium' | 'long'>('auto')
+  const [scaleHint, setScaleHint] = useState<
+    'micro' | 'auto' | 'short' | 'medium' | 'long' | 'epic'
+  >('auto')
   const [themeStatement, setThemeStatement] = useState('')
   // 已有大纲时默认勾选「清除重建」，避免重复叠加旧内容
   const [clearExisting, setClearExisting] = useState(hasExistingOutline)
@@ -73,10 +77,12 @@ function FullGenConfigModal({
             <label className="text-xs text-gray-500 block mb-2">篇幅倾向</label>
             <div className="grid grid-cols-2 gap-2">
               {([
-                { value: 'auto',   label: '自动',       sub: '默认约 120 万字' },
+                { value: 'micro',  label: '超短篇',     sub: '约 40 万字' },
                 { value: 'short',  label: '短篇',       sub: '约 80 万字' },
+                { value: 'auto',   label: '自动',       sub: '默认约 120 万字' },
                 { value: 'medium', label: '中篇',       sub: '约 120 万字' },
                 { value: 'long',   label: '长篇',       sub: '约 150 万字' },
+                { value: 'epic',   label: '超长篇',     sub: '约 200 万字' },
               ] as const).map(opt => (
                 <button
                   key={opt.value}
@@ -247,6 +253,7 @@ export default function OutlinePage() {
   const {
     outlineTree, setOutlineTree, setActiveChapterId,
     addGenTask, outlineNeedsReload, setOutlineNeedsReload,
+    currentProject, setCurrentProject,
   } = useAppStore()
   const [selected, setSelected] = useState<OutlineNode | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -264,13 +271,34 @@ export default function OutlinePage() {
 
   useEffect(() => { reload() }, [projectId])
 
-  // 队列任务完成后自动刷新大纲树
+  useEffect(() => {
+    if (!projectId) return
+    projectsApi.get(projectId).then(res => setCurrentProject(res.data)).catch(() => {})
+  }, [projectId, setCurrentProject])
+
+  // 队列任务完成后自动刷新大纲树与项目（含 story_core 大纲质检）
   useEffect(() => {
     if (outlineNeedsReload) {
       reload()
+      if (projectId) projectsApi.get(projectId).then(res => setCurrentProject(res.data)).catch(() => {})
       setOutlineNeedsReload(false)
     }
-  }, [outlineNeedsReload])
+  }, [outlineNeedsReload, projectId, setCurrentProject, setOutlineNeedsReload])
+
+  const bookOutlineQuality = (currentProject?.story_core as Record<string, unknown> | undefined)?.outline_quality as
+    | OutlinePlanQualityReport
+    | undefined
+
+  const jumpToChapterPlan = (num: number) => {
+    const node = findChapterPlanByNumber(outlineTree, num)
+    if (!node) {
+      toast.error(`未在大纲树中找到第 ${num} 章`)
+      return
+    }
+    setSelected(node)
+    const anc = collectAncestorIds(outlineTree, node.id)
+    setExpanded(prev => new Set([...prev, ...anc]))
+  }
 
   const toggleExpand = (id: string) => {
     setExpanded(prev => {
@@ -452,6 +480,32 @@ export default function OutlinePage() {
           <div className="flex items-center gap-1 shrink-0">
             <button
               type="button"
+              title="删除全部章节计划，保留卷与篇；正文保留并解除关联"
+              onClick={async () => {
+                if (!projectId) return
+                const ok = window.confirm(
+                  '确定清空大纲中的全部「章节计划」？\n\n'
+                  + '· 卷、篇节点会保留\n'
+                  + '· 写作端的章节正文不会删除，仅解除与大纲计划的绑定',
+                )
+                if (!ok) return
+                try {
+                  const res = await outlineApi.clearChapterPlans(projectId)
+                  const n = res.data?.deleted ?? 0
+                  toast.success(n > 0 ? `已清空 ${n} 个章节计划` : '当前没有章节计划')
+                  setSelected(null)
+                  reload()
+                } catch {
+                  toast.error('清空章节计划失败')
+                }
+              }}
+              className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg border border-gray-200 text-gray-600 bg-gray-50 hover:bg-gray-100 hover:border-gray-300"
+            >
+              <Trash2 size={12} />
+              清空章节
+            </button>
+            <button
+              type="button"
               onClick={() => setShowFullGenModal(true)}
               className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg border border-amber-200 text-amber-700 bg-amber-50 hover:bg-amber-100"
             >
@@ -497,7 +551,13 @@ export default function OutlinePage() {
       </div>
 
       {/* 右侧详情 + AI 面板 */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto flex flex-col">
+        {bookOutlineQuality && typeof bookOutlineQuality === 'object' && (
+          <div className="shrink-0 border-b border-amber-100 bg-gradient-to-r from-amber-50/90 to-white px-6 py-4">
+            <h4 className="text-xs font-semibold text-amber-900 uppercase tracking-wide mb-2">全书大纲质检</h4>
+            <OutlinePlanQualityView report={bookOutlineQuality} onChapterClick={jumpToChapterPlan} />
+          </div>
+        )}
         {selected ? (
           <NodeDetailPanel
             key={selected.id}
@@ -509,9 +569,10 @@ export default function OutlinePage() {
               reload()
               setExpanded(prev => new Set([...prev, selected.id]))
             }}
+            onJumpToChapterPlan={jumpToChapterPlan}
           />
         ) : (
-          <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-2">
+          <div className="flex flex-col items-center justify-center flex-1 text-gray-400 gap-2 min-h-[200px]">
             <span className="text-3xl">📖</span>
             <p className="text-sm">选择左侧节点查看详情</p>
             <p className="text-xs text-gray-300 text-center max-w-sm">
@@ -550,13 +611,14 @@ export default function OutlinePage() {
 // ── NodeDetailPanel ────────────────────────────────────────
 
 function NodeDetailPanel({
-  node, projectId, onOpenChapter, onSaved, onAICommitDone,
+  node, projectId, onOpenChapter, onSaved, onAICommitDone, onJumpToChapterPlan,
 }: {
   node: OutlineNode
   projectId: string
   onOpenChapter: () => void
   onSaved: (updated: OutlineNode) => void
   onAICommitDone: () => void
+  onJumpToChapterPlan: (chapterNumber: number) => void
 }) {
   const { characters, storyLines } = useAppStore()
   const [editing, setEditing] = useState(false)
@@ -603,6 +665,10 @@ function NodeDetailPanel({
   }
 
   const isExpandable = node.node_type === 'volume' || node.node_type === 'arc'
+
+  const volumeOutlineQuality = isExpandable
+    ? (node.extra?.outline_quality as OutlinePlanQualityReport | undefined)
+    : undefined
 
   const toggleCharacter = (id: string) => {
     setForm(f => ({
@@ -655,6 +721,13 @@ function NodeDetailPanel({
           )}
         </div>
       </div>
+
+      {volumeOutlineQuality && typeof volumeOutlineQuality === 'object' && (
+        <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-3 mb-4">
+          <h4 className="text-xs font-semibold text-indigo-900 mb-2">本卷 / 本篇大纲质检</h4>
+          <OutlinePlanQualityView report={volumeOutlineQuality} onChapterClick={onJumpToChapterPlan} />
+        </div>
+      )}
 
       <div className="space-y-4">
         <Field label="标题" value={form.title} editing={editing} onChange={v => setForm(f => ({ ...f, title: v }))} singleLine />

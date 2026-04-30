@@ -283,7 +283,7 @@ export interface MemoryChunk {
 
 // ── Generation Queue ──────────────────────────────────
 export type GenTaskStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled'
-export type GenTaskType = 'full_generate' | 'batch_expand' | 'continue_chapters' | 'rewrite_chapter'
+export type GenTaskType = 'full_generate' | 'batch_expand' | 'outline_quality' | 'outline_repair' | 'continue_chapters' | 'rewrite_chapter'
 
 /** 大纲 AI 质检（与章节正文质检 QualityReport 结构不同） */
 export interface OutlinePlanQualityIssue {
@@ -331,6 +331,8 @@ export interface GenTask {
   errorMsg?: string
   /** full_generate: { scale_hint: micro|auto|short|medium|long|epic, model_profile, clear_existing }
    *  batch_expand:  { nodes: [{id,title}], chapterCount, modelProfile }
+   *  outline_quality: { scope: all|volume|book, volume_node_id?, model_profile, llm_provider_id }
+   *  outline_repair: { scope: all|volume|book, volume_node_id?, model_profile, llm_provider_id }
    *  continue_chapters: { chapterIds: string[], userPrompt, modelProfile, llm_provider_id }（单章时 chapterIds 可为 1 个）
    *  rewrite_chapter: { chapterId, userPrompt, modelProfile, llm_provider_id } */
   params: Record<string, any>

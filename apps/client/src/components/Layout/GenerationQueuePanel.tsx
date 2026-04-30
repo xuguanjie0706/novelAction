@@ -4,7 +4,7 @@
  * 特性：
  *  - 固定在右下角，始终可见（有任务时）
  *  - 点击展开/收起任务列表
- *  - 自动执行 pending 任务（full_generate / batch_expand / continue_chapters / rewrite_chapter）
+ *  - 自动执行 pending 任务（full_generate / batch_expand / outline_quality / outline_repair / continue_chapters / rewrite_chapter）
  *  - 实时 SSE 进度更新
  *  - 任务完成后触发大纲树刷新
  */
@@ -42,6 +42,11 @@ function parseSseDataLine(line: string): { text?: string; error?: string; done?:
   const raw = t.slice(5).trimStart()
   if (raw === '[DONE]') return { done: true }
   try { return JSON.parse(raw) } catch { return null }
+}
+
+function toWsUrl(path: string) {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}${path}`
 }
 
 // ── 任务执行器 ─────────────────────────────────────────────
@@ -155,25 +160,198 @@ async function runOutlineQualityCheck(
 ): Promise<boolean> {
   if (signal.aborted) return false
   const { projectId, params } = task
-  pushProgress({ step: 'outline-quality', label: '正在质检全书大纲…', done: false, error: false })
+  pushProgress({ step: 'outline-quality', label: '正在启动大纲 Graph 质检…', done: false, error: false })
   try {
-    const res = await outlineApi.qualityCheck(projectId, {
+    const res = await outlineApi.startQualityCheckWorkflow(projectId, {
       model_profile: params.model_profile ?? 'gemini',
       llm_provider_id: params.llm_provider_id,
       theme_statement: params.theme_statement,
+      scope: params.scope ?? 'all',
+      volume_node_id: params.volume_node_id,
     })
-    const report = res.data as OutlinePlanQualityReport
-    const score = report?.overall_score
+    const runId = res.data.run_id
+    if (!runId) throw new Error('后端未返回 workflow run_id')
     pushProgress({
       step: 'outline-quality',
-      progressKey: 'outline-quality-book',
-      label: typeof score === 'number' ? `全书大纲质检完成：${score}分 / ${report.status || '-'}` : '全书大纲质检完成',
+      progressKey: 'outline-quality-started',
+      label: `大纲 Graph 质检已启动：${runId.slice(0, 8)}`,
       done: true,
-      error: !!report?.error,
-      outlineQualityReport: report,
-      outlineQualityScope: 'book',
+      error: false,
     })
-    return !report?.error
+
+    return await new Promise<boolean>((resolve) => {
+      let settled = false
+      const ws = new WebSocket(toWsUrl(outlineApi.qualityCheckWorkflowWsUrl(projectId, runId)))
+      const MAX_WORKFLOW_MS = 20 * 60 * 1000
+      const MAX_IDLE_MS = 3 * 60 * 1000
+      let idleTimer: number | null = null
+      const maxTimer = window.setTimeout(() => {
+        pushProgress({
+          step: 'outline-quality',
+          progressKey: 'outline-quality-timeout',
+          label: '大纲 Graph 质检超时（20分钟），任务已自动停止',
+          done: true,
+          error: true,
+          outlineQualityScope: 'book',
+        })
+        finish(false)
+      }, MAX_WORKFLOW_MS)
+      const refreshIdleTimer = () => {
+        if (idleTimer != null) window.clearTimeout(idleTimer)
+        idleTimer = window.setTimeout(() => {
+          pushProgress({
+            step: 'outline-quality',
+            progressKey: 'outline-quality-idle-timeout',
+            label: '大纲 Graph 质检长时间无进展（3分钟），连接已中断',
+            done: true,
+            error: true,
+            outlineQualityScope: 'book',
+          })
+          finish(false)
+        }, MAX_IDLE_MS)
+      }
+      const finish = (ok: boolean) => {
+        if (settled) return
+        settled = true
+        signal.removeEventListener('abort', onAbort)
+        if (idleTimer != null) {
+          window.clearTimeout(idleTimer)
+          idleTimer = null
+        }
+        window.clearTimeout(maxTimer)
+        try { ws.close() } catch { /* ignore */ }
+        resolve(ok)
+      }
+      const onAbort = () => finish(false)
+      signal.addEventListener('abort', onAbort)
+      refreshIdleTimer()
+
+      ws.onmessage = (event) => {
+        if (settled) return
+        refreshIdleTimer()
+        let evt: {
+          event?: string
+          label?: string
+          step?: number | string
+          total?: number | string
+          done?: boolean
+          error?: boolean
+          message?: string
+          node_key?: string
+          progress_key?: string
+          outline_quality_report?: unknown
+          outline_quality_scope?: 'volume' | 'book'
+          result?: OutlinePlanQualityReport & { volume_reports?: unknown[] }
+        }
+        try {
+          evt = JSON.parse(event.data)
+        } catch {
+          return
+        }
+
+        if (evt.event === 'node_start') {
+          pushProgress({
+            step: evt.node_key || 'outline-quality-node',
+            progressKey: `outline-quality-node-${evt.node_key}`,
+            label: evt.label ? `Graph 节点开始：${evt.label}` : 'Graph 节点开始',
+            done: false,
+            error: false,
+          })
+          return
+        }
+
+        if (evt.event === 'node_done') {
+          pushProgress({
+            step: evt.node_key || 'outline-quality-node',
+            progressKey: `outline-quality-node-${evt.node_key}`,
+            label: evt.label ? `Graph 节点完成：${evt.label}` : 'Graph 节点完成',
+            done: true,
+            error: false,
+          })
+          return
+        }
+
+        if (evt.event === 'progress') {
+          const rep = evt.outline_quality_report as OutlinePlanQualityReport | undefined
+          pushProgress({
+            step: evt.step ?? 'outline-quality',
+            progressKey: evt.progress_key,
+            label: evt.label ?? '',
+            done: !!evt.done,
+            error: !!evt.error,
+            outlineQualityReport: rep,
+            outlineQualityScope: evt.outline_quality_scope,
+          })
+          return
+        }
+
+        if (evt.event === 'workflow_started') {
+          pushProgress({
+            step: 'outline-quality',
+            progressKey: 'outline-quality-running',
+            label: '大纲 Graph 质检运行中…',
+            done: false,
+            error: false,
+          })
+          return
+        }
+
+        if (evt.event === 'workflow_done') {
+          const report = evt.result as OutlinePlanQualityReport | undefined
+          const score = report?.overall_score
+          const resultScope = (params.scope === 'volume' ? 'volume' : 'book') as 'volume' | 'book'
+          pushProgress({
+            step: 'outline-quality',
+            progressKey: 'outline-quality-complete',
+            label: typeof score === 'number' ? `大纲 Graph 质检完成：${score}分 / ${report?.status || '-'}` : '大纲 Graph 质检完成',
+            done: true,
+            error: !!report?.error,
+            outlineQualityReport: report,
+            outlineQualityScope: resultScope,
+          })
+          finish(!report?.error)
+          return
+        }
+
+        if (evt.event === 'workflow_error') {
+          pushProgress({
+            step: 'outline-quality',
+            progressKey: 'outline-quality-error',
+            label: `大纲 Graph 质检失败：${evt.message || '未知错误'}`,
+            done: true,
+            error: true,
+            outlineQualityScope: 'book',
+          })
+          finish(false)
+        }
+      }
+
+      ws.onerror = () => {
+        pushProgress({
+          step: 'outline-quality',
+          progressKey: 'outline-quality-ws-error',
+          label: '大纲 Graph 质检进度连接失败',
+          done: true,
+          error: true,
+          outlineQualityScope: 'book',
+        })
+        finish(false)
+      }
+
+      ws.onclose = () => {
+        if (!settled && !signal.aborted) {
+          pushProgress({
+            step: 'outline-quality',
+            progressKey: 'outline-quality-ws-closed',
+            label: '大纲 Graph 质检连接已关闭，未收到完成事件',
+            done: true,
+            error: true,
+            outlineQualityScope: 'book',
+          })
+          finish(false)
+        }
+      }
+    })
   } catch (e: any) {
     if (signal.aborted) return false
     pushProgress({
@@ -183,6 +361,153 @@ async function runOutlineQualityCheck(
       done: true,
       error: true,
       outlineQualityScope: 'book',
+    })
+    return false
+  }
+}
+
+async function runOutlineRepair(
+  task: GenTask,
+  pushProgress: (item: GenProgressItem) => void,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (signal.aborted) return false
+  const { projectId, params } = task
+  pushProgress({ step: 'outline-repair', label: '正在启动大纲 Graph 修复…', done: false, error: false })
+  try {
+    const res = await outlineApi.startRepairWorkflow(projectId, {
+      model_profile: params.model_profile ?? 'gemini',
+      llm_provider_id: params.llm_provider_id,
+      theme_statement: params.theme_statement,
+      scope: params.scope ?? 'all',
+      volume_node_id: params.volume_node_id,
+    })
+    const runId = res.data.run_id
+    if (!runId) throw new Error('后端未返回 workflow run_id')
+    pushProgress({
+      step: 'outline-repair',
+      progressKey: 'outline-repair-started',
+      label: `大纲 Graph 修复已启动：${runId.slice(0, 8)}`,
+      done: true,
+      error: false,
+    })
+
+    return await new Promise<boolean>((resolve) => {
+      let settled = false
+      const ws = new WebSocket(toWsUrl(outlineApi.qualityCheckWorkflowWsUrl(projectId, runId)))
+      const finish = (ok: boolean) => {
+        if (settled) return
+        settled = true
+        signal.removeEventListener('abort', onAbort)
+        try { ws.close() } catch { /* ignore */ }
+        resolve(ok)
+      }
+      const onAbort = () => finish(false)
+      signal.addEventListener('abort', onAbort)
+
+      ws.onmessage = (event) => {
+        if (settled) return
+        let evt: {
+          event?: string
+          label?: string
+          step?: number | string
+          done?: boolean
+          error?: boolean
+          message?: string
+          node_key?: string
+          progress_key?: string
+          outline_quality_report?: unknown
+          outline_quality_scope?: 'volume' | 'book'
+          result?: { summary?: string; status?: string; [key: string]: unknown }
+        }
+        try {
+          evt = JSON.parse(event.data)
+        } catch {
+          return
+        }
+
+        if (evt.event === 'node_start' || evt.event === 'node_done') {
+          const done = evt.event === 'node_done'
+          pushProgress({
+            step: evt.node_key || 'outline-repair-node',
+            progressKey: `outline-repair-node-${evt.node_key}`,
+            label: evt.label ? `Graph 节点${done ? '完成' : '开始'}：${evt.label}` : `Graph 节点${done ? '完成' : '开始'}`,
+            done,
+            error: false,
+          })
+          return
+        }
+
+        if (evt.event === 'progress') {
+          const rep = evt.outline_quality_report as OutlinePlanQualityReport | undefined
+          pushProgress({
+            step: evt.step ?? 'outline-repair',
+            progressKey: evt.progress_key ?? `outline-repair-${evt.step ?? Date.now()}`,
+            label: evt.label ?? '',
+            done: !!evt.done,
+            error: !!evt.error,
+            outlineQualityReport: rep,
+            outlineQualityScope: evt.outline_quality_scope,
+          })
+          return
+        }
+
+        if (evt.event === 'workflow_done') {
+          pushProgress({
+            step: 'outline-repair',
+            progressKey: 'outline-repair-complete',
+            label: evt.result?.summary || '大纲 Graph 修复完成',
+            done: true,
+            error: evt.result?.status === 'error',
+          })
+          finish(evt.result?.status !== 'error')
+          return
+        }
+
+        if (evt.event === 'workflow_error') {
+          pushProgress({
+            step: 'outline-repair',
+            progressKey: 'outline-repair-error',
+            label: `大纲 Graph 修复失败：${evt.message || '未知错误'}`,
+            done: true,
+            error: true,
+          })
+          finish(false)
+        }
+      }
+
+      ws.onerror = () => {
+        pushProgress({
+          step: 'outline-repair',
+          progressKey: 'outline-repair-ws-error',
+          label: '大纲 Graph 修复进度连接失败',
+          done: true,
+          error: true,
+        })
+        finish(false)
+      }
+
+      ws.onclose = () => {
+        if (!settled && !signal.aborted) {
+          pushProgress({
+            step: 'outline-repair',
+            progressKey: 'outline-repair-ws-closed',
+            label: '大纲 Graph 修复连接已关闭，未收到完成事件',
+            done: true,
+            error: true,
+          })
+          finish(false)
+        }
+      }
+    })
+  } catch (e: any) {
+    if (signal.aborted) return false
+    pushProgress({
+      step: 'outline-repair',
+      progressKey: 'outline-repair-error',
+      label: `大纲修复失败：${e?.message || '未知错误'}`,
+      done: true,
+      error: true,
     })
     return false
   }
@@ -713,7 +1038,7 @@ export default function GenerationQueuePanel() {
         return
       }
       updateGenTask(task.id, { status: 'done', completedMsg: msg })
-      if (task.type === 'full_generate' || task.type === 'batch_expand') setOutlineNeedsReload(true)
+      if (task.type === 'full_generate' || task.type === 'batch_expand' || task.type === 'outline_quality' || task.type === 'outline_repair') setOutlineNeedsReload(true)
       runningIdRef.current = null
     }
 
@@ -728,10 +1053,42 @@ export default function GenerationQueuePanel() {
       const checked = shouldCheckOutline ? await runOutlineQualityCheck(task, pushProgress, abort.signal) : false
       if (checked && !abort.signal.aborted) {
         toast.success('大纲质检已写入。请在「大纲」页查看卷/全书报告与必修章节。', { duration: 5000 })
+        setOutlineNeedsReload(true)
         try {
           const { data } = await projectsApi.get(task.projectId)
           setCurrentProject(data)
         } catch { /* ignore */ }
+      }
+    } else if (task.type === 'outline_quality') {
+      const checked = await runOutlineQualityCheck(task, pushProgress, abort.signal)
+      if (abort.signal.aborted) {
+        updateGenTask(task.id, { status: 'cancelled', completedMsg: undefined, errorMsg: undefined })
+        runningIdRef.current = null
+      } else if (checked) {
+        const scope = task.params.scope === 'volume' ? '单卷' : task.params.scope === 'book' ? '全书' : '大纲'
+        toast.success(`${scope}质检已写入。`, { duration: 4000 })
+        try {
+          const { data } = await projectsApi.get(task.projectId)
+          setCurrentProject(data)
+        } catch { /* ignore */ }
+        onComplete(`${scope}质检完成`)
+      } else {
+        onError('大纲质检失败')
+      }
+    } else if (task.type === 'outline_repair') {
+      const repaired = await runOutlineRepair(task, pushProgress, abort.signal)
+      if (abort.signal.aborted) {
+        updateGenTask(task.id, { status: 'cancelled', completedMsg: undefined, errorMsg: undefined })
+        runningIdRef.current = null
+      } else if (repaired) {
+        toast.success('大纲修复已应用，并已保存修复前/后快照。', { duration: 5000 })
+        try {
+          const { data } = await projectsApi.get(task.projectId)
+          setCurrentProject(data)
+        } catch { /* ignore */ }
+        onComplete('大纲修复完成')
+      } else {
+        onError('大纲修复失败')
       }
     } else if (task.type === 'batch_expand') {
       await runBatchExpand(task, pushProgress, onComplete, onError, abort.signal)

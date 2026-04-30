@@ -75,6 +75,35 @@ async def test_expand_outline_includes_batch_continuity_context():
 
 
 @pytest.mark.asyncio
+async def test_expand_outline_adds_xuanhuan_genre_guardrails():
+    captured = {}
+
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+        captured["prompt"] = prompt
+        return '{"volume_analysis": {}, "chapters": []}'
+
+    svc = AIService()
+    svc._call_ai = fake_call
+
+    await svc.expand_outline(
+        node_title="神渊回潮",
+        node_type="volume",
+        node_summary="主角深入禁地寻找真相",
+        project_title="九龙沉渊",
+        genre="玄幻",
+        world_summary="古域以阵法与血祭驱动。",
+        character_summary="林北辰：人族后裔。",
+        chapter_count=5,
+    )
+
+    prompt = captured["prompt"]
+    assert "【类型硬约束】" in prompt
+    assert "禁止现代科幻词汇与设定漂移" in prompt
+    assert "首席工程师" in prompt
+    assert "如需表达复杂遗迹或中枢，请改写为阵法中枢" in prompt
+
+
+@pytest.mark.asyncio
 async def test_gemini_expand_outline_uses_volume_sized_token_budget():
     captured = {}
 
@@ -208,6 +237,72 @@ async def test_outline_quality_check_prompt_includes_story_bible_context():
     assert "三皇子（antagonist）状态=dead" in prompt
     assert "林家九龙玺（unique/intact）" in prompt
     assert "角色死亡/封印/失踪后再登场必须有明确机制" in prompt
+
+
+@pytest.mark.asyncio
+async def test_outline_repair_plan_prompt_returns_patch_list_for_problem_chapters():
+    captured = {}
+
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+        captured["prompt"] = prompt
+        captured["context"] = context
+        return """
+        {
+          "summary": "重写第55章，避开玺尊塔硬刚。",
+          "patches": [
+            {
+              "chapter_number": 55,
+              "fields": {
+                "opening_hook": "洛红烟递来特赦令。",
+                "core_event": "林北辰潜入学院藏经阁。",
+                "character_change": "林北辰从硬闯转为暗查。",
+                "foreshadow": "埋[九龙玺深层阴谋]",
+                "end_hook": "九龙玺拓本睁开巨眼。"
+              },
+              "reason": "修复重复事件"
+            }
+          ]
+        }
+        """
+
+    svc = AIService(profile="gemini")
+    svc._call_ai = fake_call
+
+    result = await svc.outline_repair_plan(
+        project_title="天门逆玺",
+        genre="玄幻",
+        scope="book",
+        quality_report={
+            "issues": [
+                {
+                    "severity": "critical",
+                    "type": "duplicate_event",
+                    "chapter_numbers": [55, 56, 57, 58, 59, 60],
+                    "description": "卷尾复读玺尊塔硬刚。",
+                }
+            ],
+        },
+        chapters=[
+            {
+                "number": 55,
+                "title": "帝都硬闯",
+                "core_event": "林北辰硬刚玺尊塔。",
+                "character_change": "林北辰继续硬刚。",
+                "foreshadow": "",
+                "end_hook": "巨眼睁开。",
+            }
+        ],
+        story_bible_context="九龙玺是自强象征，不能被简单否定。",
+        global_outline_context="第一卷边城起势，第二卷帝都暗线。",
+    )
+
+    prompt = captured["prompt"]
+    assert "只修复质检指出的问题章节" in prompt
+    assert "第55章：帝都硬闯" in prompt
+    assert "duplicate_event" in prompt
+    assert "九龙玺是自强象征" in prompt
+    assert captured["context"]["operation"] == "outline_repair_plan"
+    assert result["patches"][0]["chapter_number"] == 55
 
 
 def test_project_schema_carries_premise():

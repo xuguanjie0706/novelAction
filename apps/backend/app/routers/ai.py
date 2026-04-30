@@ -1582,12 +1582,30 @@ class ChapterIndexPayload(BaseModel):
     hook_strength: int = 1
     continuity_notes: List[dict | str] = []
 
+class NewCharacterPayload(BaseModel):
+    """auto_debrief 从正文识别出的新配角，由 chapter_debrief 写入 DB。"""
+    name: str
+    role: str = "supporting"
+    gender: Optional[str] = None
+    age: Optional[str] = None
+    faction: Optional[str] = None
+    personality: Optional[str] = None
+    motivation: Optional[str] = None
+    background: Optional[str] = None
+    current_realm: Optional[str] = None
+    current_status: Optional[str] = "alive"
+    current_location: Optional[str] = None
+    arc_scope: Optional[str] = "mini_arc"   # single_chapter / mini_arc / long_arc
+    author_notes: Optional[str] = None
+
+
 class ChapterDebriefRequest(BaseModel):
     chapter_id: str
     character_updates: List[CharacterUpdate] = []
     storyline_updates: List[StoryLineUpdate] = []
     memory_updates: List[MemoryUpdate] = []
     asset_updates: AssetUpdates = Field(default_factory=AssetUpdates)
+    new_characters: List[NewCharacterPayload] = []   # 本章新出场、值得入库的配角
     chapter_index: Optional[ChapterIndexPayload] = None
     notes: Optional[str] = None           # 作者备注，存到 chapter
 
@@ -2080,6 +2098,40 @@ def chapter_debrief(
         except SQLAlchemyError as exc:
             chapter_index_error = exc.__class__.__name__
 
+    # ── 新配角入库（auto_debrief 从正文识别，tier=supporting/emergent）────
+    added_new_characters: List[str] = []
+    if req.new_characters:
+        existing_names = {
+            c.name for c in db.query(Character.name).filter(
+                Character.project_id == project_id
+            ).all()
+        }
+        chapter_num = display_chapter_number(chapter.title, chapter.sort_order)
+        for nc in req.new_characters:
+            if not nc.name or nc.name in existing_names:
+                continue  # 跳过重名
+            tier = "emergent" if nc.arc_scope == "single_chapter" else "supporting"
+            new_char = Character(
+                project_id=project_id,
+                name=nc.name,
+                role=nc.role or "supporting",
+                character_tier=tier,
+                gender=nc.gender,
+                age=nc.age,
+                faction=nc.faction,
+                personality=nc.personality,
+                motivation=nc.motivation,
+                background=nc.background,
+                current_realm=nc.current_realm,
+                current_status=nc.current_status or "alive",
+                current_location=nc.current_location,
+                author_notes=nc.author_notes,
+                extra={"first_appearance_chapter": chapter_num, "arc_scope": nc.arc_scope},
+            )
+            db.add(new_char)
+            existing_names.add(nc.name)
+            added_new_characters.append(nc.name)
+
     # ── 保存作者备注到章节 ────────────────────────────
     if req.notes:
         memory = MemoryChunk(
@@ -2105,11 +2157,13 @@ def chapter_debrief(
         db.rollback()
         raise HTTPException(400, f"章节复盘提交失败：{exc.__class__.__name__}")
 
+    new_char_suffix = f"、新配角入库 {len(added_new_characters)} 个（{', '.join(added_new_characters)}）" if added_new_characters else ""
     return {
         "ok": True,
         "updated_characters": updated_chars,
         "updated_storylines": updated_storylines,
         "added_memories": added_memories,
+        "added_new_characters": added_new_characters,
         "chapter_index_saved": chapter_index_saved,
         "chapter_index_error": chapter_index_error,
         "synced_foreshadows": synced_foreshadows,
@@ -2121,6 +2175,7 @@ def chapter_debrief(
             f"回收{synced_foreshadows['resolved']}条、资产新增"
             f"{asset_stats['created_items'] + asset_stats['created_skills'] + asset_stats['created_factions']}条/"
             f"更新{asset_stats['updated_items'] + asset_stats['updated_skills'] + asset_stats['updated_factions']}条"
+            f"{new_char_suffix}"
         ),
     }
 

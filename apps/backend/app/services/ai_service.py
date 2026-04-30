@@ -2,6 +2,7 @@
 AI Service — 统一使用 OpenAI 兼容协议
 支持任意 base_url + api_key（含本地 Ollama、自建网关、云厂商兼容端点等）
 """
+import asyncio
 import json
 import re
 import time
@@ -429,6 +430,20 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         为选定的大纲节点（卷或旧篇）生成详细的子章节计划。
         返回「五要素」格式：开篇钩子/核心事件/人物变化/伏笔管理/章末钩子。
         """
+        def _genre_guardrail_text(raw_genre: str) -> str:
+            genre_text = (raw_genre or "").strip()
+            if any(tag in genre_text for tag in ["玄幻", "仙侠", "古风", "武侠"]):
+                return (
+                    "【类型硬约束】\n"
+                    "当前题材为东方玄幻/仙侠/古风体系。禁止现代科幻词汇与设定漂移。\n"
+                    "严禁出现或暗示以下表达：首席工程师、机械改造/半机械人、飞船/战舰、AI/人工智能、芯片、量子、基因实验室、星际文明、控制台、程序上传。\n"
+                    "如需表达复杂遗迹或中枢，请改写为阵法中枢、古禁制、神纹、天机枢纽、血祭法坛、傀儡机关等东方玄幻语汇。"
+                )
+            return (
+                "【类型一致性】\n"
+                "保持题材语汇与世界观风格稳定，不得突然引入与当前题材冲突的现代科技设定。"
+            )
+
         system = """你是拥有30年经验的网络小说策划，深刻理解网文追读机制。
 你的大纲必须让每一章都有存在的理由，特别是「章末钩子」——
 那是让读者无法放下手机的最后一句话的设计意图。
@@ -456,11 +471,12 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 节点概述：{node_summary or '（未填写）'}
 
 世界观摘要：{world_summary[:400]}
-主要人物：{character_summary[:300]}
+主要人物（主线核心卡司，非全书全部人物——配角可按剧情需要随时引入）：{character_summary[:400]}
 全书立意：{theme_statement[:300] or '（未填写；请从创意和人物中提炼一条贯穿全书的价值命题）'}
 {global_context}{previous_context}{continuity_context}{batch_goal_context}
 
 请为本{node_type == 'volume' and '卷' or '旧篇'}生成 {chapter_count} 个章节计划，章节编号从第{start_num}章开始。
+{_genre_guardrail_text(genre)}
 
 每章使用「作家五要素」格式，返回 JSON：
 {{
@@ -613,6 +629,92 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             return json.loads(text[start:])
         except Exception as e:
             return {"error": str(e), "raw": response[:500]}
+
+    async def outline_repair_plan(
+        self,
+        project_title: str,
+        genre: str,
+        scope: str,
+        quality_report: dict,
+        chapters: list[dict],
+        story_bible_context: str = "",
+        global_outline_context: str = "",
+    ) -> dict:
+        chapter_lines = []
+        for ch in chapters:
+            chapter_lines.append(
+                " | ".join([
+                    f"第{ch.get('number', '?')}章：{ch.get('title', '未命名')}",
+                    f"开篇钩子：{ch.get('opening_hook', '')}",
+                    f"核心事件：{ch.get('core_event', '')}",
+                    f"人物变化：{ch.get('character_change', '')}",
+                    f"伏笔：{ch.get('foreshadow', '')}",
+                    f"章末钩子：{ch.get('end_hook', '')}",
+                ])
+            )
+
+        system = "你是资深网文大纲修复主编。你只输出可应用的大纲字段补丁，严格返回JSON。"
+        prompt = f"""小说：《{project_title}》（{genre}）
+修复范围：{scope}
+
+【故事圣经账本】
+{self._clip_context(story_bible_context, 1800, 12000) or '（未提供）'}
+
+【全书卷线蓝图】
+{global_outline_context[:5000] or '（未提供）'}
+
+【质检问题】
+{json.dumps(quality_report, ensure_ascii=False)[:16000 if self.profile == "gemini" else 6000]}
+
+【相关章节计划】
+{chr(10).join(chapter_lines)[:36000 if self.profile == "gemini" else 10000]}
+
+请生成大纲修复补丁，要求：
+1. 只修复质检指出的问题章节，不要整本重写，不要改无关亮点。
+2. 如果问题跨多章，按章节分别给出 patch；每个 patch 必须能独立应用。
+3. 修复要保持世界观、人物状态、道具象征、伏笔承接和下一卷钩子一致。
+4. 每个字段必须是可直接替换的短文本，不写解释性长文。
+
+返回JSON：
+{{
+  "summary": "本轮修复概述",
+  "patches": [
+    {{
+      "chapter_number": 55,
+      "fields": {{
+        "opening_hook": "新的开篇钩子",
+        "core_event": "新的核心事件",
+        "character_change": "新的人物变化",
+        "foreshadow": "新的伏笔管理",
+        "end_hook": "新的章末钩子"
+      }},
+      "reason": "为什么这样修"
+    }}
+  ]
+}}"""
+
+        response = await self._call_ai(
+            system,
+            prompt,
+            max_tokens=max_tokens_outline_quality_check(self.profile),
+            context={"operation": "outline_repair_plan", "scope": scope},
+        )
+        try:
+            text = response.strip()
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            if "```" in text:
+                fence = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
+                if fence:
+                    text = fence.group(1).strip()
+            start = text.find("{")
+            if start == -1:
+                raise ValueError("No JSON object found")
+            data = json.loads(text[start:])
+            if not isinstance(data.get("patches"), list):
+                data["patches"] = []
+            return data
+        except Exception as e:
+            return {"error": str(e), "raw": response[:500], "patches": []}
 
     # ── 全量大纲：第一步生成卷级结构 ──────────────────
     async def plan_full_structure(
@@ -913,6 +1015,8 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 5. 哪些伏笔被埋下或回收，避免后文突然出现无前因的设定
 6. 哪些新道具/法宝、功法/技能、势力需要收入系统，或已有资产状态发生变化
 7. 生成章节索引：故事日、核心事件、首次出场、实际伏笔、章末钩子强度、连续性风险
+8. 本章是否出现了不在现有角色库中、且值得长期追踪的新角色（new_characters）
+   判断标准：正文中有名有姓、有台词或行动、且 arc_scope 为 mini_arc 或以上；纯工具性一次性路人不需要入库
 
 只提取文中明确发生的变化，不要推断或猜测。
 如果某字段没有变化，不要包含它。
@@ -1043,6 +1147,23 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
       }}
     ]
   }},
+  "new_characters": [
+    {{
+      "name": "姓名",
+      "role": "supporting",
+      "gender": "男/女",
+      "age": "年龄或模糊描述",
+      "faction": "所属势力或机构",
+      "personality": "性格（1句话）",
+      "motivation": "本章/本卷的行为动机",
+      "background": "背景（1句话）",
+      "current_realm": "境界或能力层级",
+      "current_status": "alive",
+      "current_location": "本章末位置",
+      "arc_scope": "single_chapter / mini_arc / long_arc",
+      "author_notes": "给作者的提醒：此角色应如何使用、何时退出、是否有伏笔价值"
+    }}
+  ],
   "chapter_index": {{
     "story_day": "故事内时间，如 Day 8；未知则为空字符串",
     "core_events": ["本章实际发生的核心事件1", "核心事件2"],
@@ -1161,11 +1282,18 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                     if isinstance(item, (str, dict)) and item
                 ],
             }
+            # 提取 new_characters，过滤掉无效项
+            new_characters = [
+                item for item in (data.get("new_characters") or [])
+                if isinstance(item, dict) and item.get("name")
+            ][:6]   # 单章最多6个新配角，防止失控
+
             return {
                 "character_updates": char_updates,
                 "storyline_updates": sl_updates,
                 "memory_updates": memory_updates,
                 "asset_updates": asset_updates,
+                "new_characters": new_characters,
                 "chapter_index": cleaned_index,
                 "summary": data.get("summary", ""),
             }
@@ -1182,6 +1310,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                     "new_factions": [],
                     "faction_updates": [],
                 },
+                "new_characters": [],
                 "chapter_index": {},
                 "summary": "",
                 "error": f"解析失败: {e}",
@@ -1189,18 +1318,45 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
             }
 
     # ── 底层调用 ──────────────────────────────────────
+    @staticmethod
+    def _is_retryable_llm_error(err: Exception) -> bool:
+        status_code = getattr(err, "status_code", None)
+        if isinstance(status_code, int) and status_code in (408, 429, 500, 502, 503, 504):
+            return True
+        msg = str(err).lower()
+        return any(key in msg for key in ("error code: 502", "bad gateway", "timeout", "temporarily unavailable"))
+
     async def _call_ai(self, system: str, prompt: str, max_tokens: int = 2048, context: Optional[dict] = None) -> str:
         client = self._get_client()
         start = time.perf_counter()
         try:
-            resp = await client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=max_tokens,
-            )
+            # SDK 本身会重试；这里再补一层短退避，兜住网关偶发 5xx，减少工作流整体失败。
+            resp = None
+            last_error: Exception | None = None
+            retry_delays = (0.8, 1.6)
+            for attempt in range(len(retry_delays) + 1):
+                try:
+                    resp = await client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": prompt},
+                        ],
+                        max_tokens=max_tokens,
+                    )
+                    last_error = None
+                    break
+                except Exception as e:
+                    last_error = e
+                    if attempt >= len(retry_delays) or not self._is_retryable_llm_error(e):
+                        raise
+                    await asyncio.sleep(retry_delays[attempt])
+
+            if resp is None:
+                if last_error is not None:
+                    raise last_error
+                raise RuntimeError("LLM 调用失败：未获得响应")
+
             content = resp.choices[0].message.content or ""
             usage_obj = getattr(resp, "usage", None)
             usage = {

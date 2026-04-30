@@ -162,6 +162,15 @@ export const outlineApi = {
     api.post(`/projects/${pid}/outline/ai-expand/commit`, data),
   qualityCheck: (pid: string, data: any) =>
     api.post(`/projects/${pid}/outline/ai-quality-check`, data),
+  startQualityCheckWorkflow: (pid: string, data: any) =>
+    api.post<{ run_id: string }>(`/projects/${pid}/outline/ai-quality-check/workflow`, data),
+  startRepairWorkflow: (pid: string, data: any) =>
+    api.post<{ run_id: string }>(`/projects/${pid}/outline/ai-repair/workflow`, data),
+  qualityCheckWorkflowWsUrl: (pid: string, runId: string) =>
+    `/api/v1/projects/${pid}/outline/workflows/${runId}/ws`,
+  listRevisions: (pid: string) => api.get(`/projects/${pid}/outline/revisions`),
+  createRevision: (pid: string, data: any) => api.post(`/projects/${pid}/outline/revisions`, data),
+  getRevision: (pid: string, id: string) => api.get(`/projects/${pid}/outline/revisions/${id}`),
 }
 
 // ── Chapters ──────────────────────────────────────────

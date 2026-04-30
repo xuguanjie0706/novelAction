@@ -16,6 +16,10 @@ class Character(Base):
     name = Column(String(100), nullable=False)
     alias = Column(JSON, default=list)               # 别名/外号列表，如["小火龙","赤焰王"]
     role = Column(String(20), default="supporting")  # protagonist / supporting / antagonist / neutral
+    character_tier = Column(String(20), default="core")
+    # core      = Bootstrap 阶段生成的主线固定角色（8人核心卡司）
+    # supporting = 章节大纲细化时按剧情需求触发创建的配角
+    # emergent   = 单章/短弧临时角色
     gender = Column(String(20))
     age = Column(String(50))
     avatar_url = Column(String(500))

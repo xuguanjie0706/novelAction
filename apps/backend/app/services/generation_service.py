@@ -897,6 +897,9 @@ status 只能是: planned / active
 立意与类型：{ctx.get('premise', '')[:800] or '（未填写）'}
 故事核：冲突={ctx['story_core'].get('conflict','')}，主题={ctx['story_core'].get('theme','')}{power_hint}
 
+⚠️ 你正在生成"主线核心卡司（Core Cast）"——这8人是全书贯穿的主线角色，不是全书所有人物。
+后续章节写作时会按剧情需要动态补充配角，这里只需确定主线固定角色。
+
 生成8个人物（至少：1主角+3核心配角+2反派+2师长/势力角色），返回JSON数组：
 [
   {{
@@ -929,6 +932,7 @@ role 只能是: protagonist / supporting / antagonist"""
                 project_id=project.id,
                 name=item.get("name", "未命名"),
                 role=item.get("role", "supporting"),
+                character_tier="core",          # Bootstrap 生成的均为主线核心卡司
                 gender=item.get("gender"),
                 age=item.get("age"),
                 faction=item.get("faction"),
@@ -977,6 +981,9 @@ role 只能是: protagonist / supporting / antagonist"""
 创意：{ctx['logline']}
 立意与类型：{ctx.get('premise', '')[:700] or '（未填写）'}
 设定摘要：{ctx['settings_summary']}{storyline_hint}
+
+主线核心角色（固定卡司，非全书全部人物）：{', '.join(ctx.get('char_names', []))}
+⚠️ 以上只是主线人物。每卷 summary/conflict 允许并鼓励提及未命名配角（如"某城守将""地下情报商""宗门长老"等职能角色），章节细化时会按需正式创建他们。
 
 根据故事规模规划卷级结构，返回JSON数组。
 卷数建议4~8卷（最少3卷），每卷约60章（过渡卷可30章）。
@@ -1247,6 +1254,7 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
                 project_id=project.id,
                 name=c.get("name", "未命名"),
                 role=c.get("role", "supporting"),
+                character_tier="core",          # single_shot Bootstrap 生成的均为主线核心卡司
                 gender=c.get("gender"),
                 age=c.get("age"),
                 faction=c.get("faction"),

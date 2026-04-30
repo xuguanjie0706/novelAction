@@ -65,6 +65,7 @@ def _ensure_character_columns() -> None:
         "ALTER TABLE characters ADD COLUMN IF NOT EXISTS current_status VARCHAR(20)",
         "ALTER TABLE characters ADD COLUMN IF NOT EXISTS current_location VARCHAR(200)",
         "ALTER TABLE characters ADD COLUMN IF NOT EXISTS author_notes TEXT",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS character_tier VARCHAR(20) DEFAULT 'core'",
     ]
     with engine.begin() as conn:
         for ddl in ddl_statements:

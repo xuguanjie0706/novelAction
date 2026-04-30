@@ -11,7 +11,9 @@ from app.services.outline_planning import (
 import json
 
 from app.routers.outline import (
+    _apply_outline_patch_to_node,
     _detect_outline_hard_rule_issues,
+    _format_book_quality_continuity_state,
     _format_outline_batch_goal,
     _format_outline_quality_label,
     _format_outline_quality_story_bible,
@@ -19,8 +21,11 @@ from app.routers.outline import (
     _format_rolling_continuity_state,
     _merge_outline_quality_reports,
     _outline_batch_size,
+    _outline_quality_nodes_for_scope,
     _outline_node_to_chapter_context,
+    _outline_snapshot_payload,
     _sse_outline_quality_progress,
+    _with_outline_quality,
 )
 from app.models.character import Character
 from app.models.faction import Faction
@@ -139,6 +144,21 @@ def test_rolling_continuity_state_extracts_last_hook_and_foreshadows():
     assert "不得重复已发生的核心事件：黑雾线索指向萧家旧案" in state
 
 
+def test_book_quality_continuity_state_does_not_treat_target_outline_as_history():
+    state = _format_book_quality_continuity_state([
+        {
+            "number": 55,
+            "title": "帝都暗门",
+            "core_event": "林北辰潜入学院藏经阁。",
+            "end_hook": "玺尊塔巨眼睁开。",
+        }
+    ])
+
+    assert "全书质检不使用滚动连续性账本" in state
+    assert "林北辰潜入学院藏经阁" not in state
+    assert "不得重复已发生的核心事件" not in state
+
+
 def test_outline_batch_goal_names_global_and_local_ranges():
     goal = _format_outline_batch_goal(
         node_title="黑雾初临",
@@ -150,6 +170,74 @@ def test_outline_batch_goal_names_global_and_local_ranges():
     assert "全书第16-30章" in goal
     assert "本卷第16-30章" in goal
     assert "《黑雾初临》共60章" in goal
+
+
+def test_outline_snapshot_payload_preserves_tree_and_version_fields():
+    volume = OutlineNode(
+        id="00000000-0000-0000-0000-000000000101",
+        node_type="volume",
+        title="第一卷",
+        summary="边城起势",
+        hook="玺尊塔巨眼",
+        conflict="皇权压迫",
+        sort_order=0,
+        extra={"theme_stage": "自强"},
+    )
+    chapter = OutlineNode(
+        id="00000000-0000-0000-0000-000000000102",
+        parent_id=volume.id,
+        node_type="chapter_plan",
+        title="第55章：帝都暗门",
+        summary="林北辰潜入学院藏经阁。",
+        hook="特赦令失效。",
+        conflict="从硬闯转为暗查。",
+        highlight="发现九龙玺阴谋。",
+        sort_order=54,
+        extra={"foreshadow": "埋[九龙玺阴谋]", "end_hook": "巨眼睁开"},
+    )
+
+    payload = _outline_snapshot_payload([chapter, volume])
+
+    assert payload["schema_version"] == 1
+    assert [n["title"] for n in payload["nodes"]] == ["第一卷", "第55章：帝都暗门"]
+    assert payload["nodes"][0]["extra"]["theme_stage"] == "自强"
+    assert payload["nodes"][1]["extra"]["end_hook"] == "巨眼睁开"
+    assert payload["nodes"][1]["parent_id"] == str(volume.id)
+
+
+def test_apply_outline_patch_to_node_preserves_before_and_updates_plan_fields():
+    node = OutlineNode(
+        node_type="chapter_plan",
+        title="第55章：旧计划",
+        summary="重复硬刚玺尊塔。",
+        hook="旧开篇",
+        conflict="旧变化",
+        highlight="旧钩子",
+        sort_order=54,
+        extra={"foreshadow": "旧伏笔", "end_hook": "旧钩子"},
+    )
+    patch = {
+        "chapter_number": 55,
+        "fields": {
+            "opening_hook": "洛红烟递来特赦令。",
+            "core_event": "林北辰潜入学院藏经阁。",
+            "character_change": "林北辰从硬闯转为暗查。",
+            "foreshadow": "埋[九龙玺深层阴谋]",
+            "end_hook": "藏经阁最深处的九龙玺拓本睁开巨眼。",
+        },
+        "reason": "避开卷尾复读，转入调查线。",
+    }
+
+    record = _apply_outline_patch_to_node(node, patch)
+
+    assert node.hook == "洛红烟递来特赦令。"
+    assert node.summary == "林北辰潜入学院藏经阁。"
+    assert node.conflict == "林北辰从硬闯转为暗查。"
+    assert node.extra["foreshadow"] == "埋[九龙玺深层阴谋]"
+    assert node.extra["end_hook"] == "藏经阁最深处的九龙玺拓本睁开巨眼。"
+    assert record["before"]["core_event"] == "重复硬刚玺尊塔。"
+    assert record["after"]["core_event"] == "林北辰潜入学院藏经阁。"
+    assert record["reason"] == "避开卷尾复读，转入调查线。"
 
 
 def test_sse_outline_quality_progress_embeds_report_and_unique_progress_key():
@@ -186,6 +274,40 @@ def test_outline_quality_label_summarizes_score_and_must_fix_chapters():
     assert "78" in label
     assert "warning" in label
     assert "必修章节：16、22" in label
+
+
+def test_with_outline_quality_preserves_existing_volume_extra_fields():
+    node = OutlineNode(
+        node_type="volume",
+        title="黑雾初临",
+        extra={
+            "theme_stage": "主角重新站起来",
+            "target_chapters": 60,
+        },
+    )
+    report = {"scope": "volume", "overall_score": 88}
+
+    extra = _with_outline_quality(node, report)
+
+    assert extra["theme_stage"] == "主角重新站起来"
+    assert extra["target_chapters"] == 60
+    assert extra["outline_quality"] == report
+
+
+def test_outline_quality_graph_scope_splits_volume_and_book_llm_nodes():
+    assert [node.key for node in _outline_quality_nodes_for_scope("volume")] == [
+        "prepare_outline_context",
+        "quality_check_volumes",
+    ]
+    assert [node.key for node in _outline_quality_nodes_for_scope("book")] == [
+        "prepare_outline_context",
+        "quality_check_book",
+    ]
+    assert [node.key for node in _outline_quality_nodes_for_scope("all")] == [
+        "prepare_outline_context",
+        "quality_check_volumes",
+        "quality_check_book",
+    ]
 
 
 def test_outline_quality_story_bible_collects_world_and_arc_constraints():

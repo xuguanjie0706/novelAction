@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     # AI — 可选：本地 OpenAI 兼容端点（Ollama / vLLM 等）；未用 local 线路时可忽略，改用管理后台远程
     LLM_BASE_URL: str = "http://localhost:11434/v1"
     LLM_API_KEY: str = "ollama"
-    AI_MODEL: str = "qwen3:8b"
+    # 仅当前端选「本地」线路时需要；远程模型由管理后台 LlmProvider（或 GEMINI_*）决定，勿在此写死测试用模型名
+    AI_MODEL: Optional[str] = None
     # OpenAI 兼容客户端超时（秒）：连接失败快速报错；读超时避免模型无响应时无限挂起
     LLM_HTTP_CONNECT_TIMEOUT: float = 30.0
     LLM_HTTP_READ_TIMEOUT: float = 900.0

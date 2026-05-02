@@ -39,34 +39,34 @@
 
 ## AI 模型策略
 
-### 当前模型
+### 当前模型（创作端用户选择）
 
-| 环境 | 模型 | base_url |
-|------|------|----------|
-| 本地开发 | `qwen3:8b`（Ollama） | `http://localhost:11434/v1` |
-| 生产/未来 | Gemini（通过兼容代理） | 待填 |
+| 前端「模型 / 线路」 | 模型与连接来源 |
+|---------------------|----------------|
+| 远程 · 某条提供者 | 管理后台 `llm_providers`（请求带 `llm_provider_id`） |
+| 远程 · 环境变量 | `GEMINI_BASE_URL` + `GEMINI_MODEL`（无 DB 行时） |
+| 本地 | `apps/backend/.env` 的 `LLM_BASE_URL` + `LLM_API_KEY` + **`AI_MODEL`（必填）** |
 
 ### 关键决策：统一用 OpenAI 兼容协议
 
-**原因**：不绑定任何 SDK，只需改 `.env` 的 `LLM_BASE_URL` + `LLM_API_KEY` + `AI_MODEL` 即可切换模型。
+**原因**：不绑定任何 SDK；远程由管理后台或 `GEMINI_*`；本地由 `LLM_*` + `AI_MODEL`。
 
 ```env
-# 本地
+# 仅在使用「本地」线路时需要配置 AI_MODEL
 LLM_BASE_URL=http://localhost:11434/v1
 LLM_API_KEY=ollama
-AI_MODEL=qwen3:8b
+# AI_MODEL=你的本地模型 id
 
-# Gemini（通过 OpenAI 兼容层）
-LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
-LLM_API_KEY=your-gemini-api-key
-AI_MODEL=gemini-2.0-flash
+# 可选：无 DB 时的远程兜底
+# GEMINI_BASE_URL=https://...
+# GEMINI_API_KEY=...
+# GEMINI_MODEL=...
 ```
 
-### qwen3:8b 特别注意
+### 本地线路与短上下文（`model_profile=local`）
 
-- context window 约 8k，单次 prompt **控制在 1500 token 以内**
-- JSON 输出偶有格式错误，`_parse_json()` 要做容错（去 markdown fence，strip 空白）
-- 不支持 `thinking` 参数（Qwen3 某些版本有），如遇报错加 `extra_body={"enable_thinking": False}`
+- 小上下文时控制单次 prompt 长度；`_parse_json()` 做容错（fence、strip、部分网关夹带的 think 标签）
+- 若某网关对 `thinking` 类参数报错，可按网关文档在调用层用 `extra_body` 关闭
 
 ### Gemini 迁移时的变化
 
@@ -77,7 +77,7 @@ AI_MODEL=gemini-2.0-flash
 
 当前正文生成、单章质检、多章连贯性检测都按 **model_profile** 分流：
 
-- `local/default`：保留 qwen3:8b 的短上下文策略，严格裁剪 prompt，避免 8k context 溢出。
+- `local/default`：短上下文策略，严格裁剪 prompt，避免本地模型 context 溢出。
 - `gemini`：启用长上下文策略，不优先考虑 token 节省，而优先保证故事事实、人物状态、伏笔和章节承接完整。
 
 核心链路如下：
@@ -188,8 +188,8 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 前端请求 `POST /api/v1/bootstrap/stream` 时传 `mode` 参数：
 ```json
-{ "logline": "...", "mode": "sequential" }   // qwen3
-{ "logline": "...", "mode": "single_shot" }  // gemini
+{ "logline": "...", "mode": "sequential" }   // 串行，适合短上下文本地模型
+{ "logline": "...", "mode": "single_shot" }  // 单次全量，适合大上下文远程模型
 ```
 
 ---
@@ -233,7 +233,7 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 1. **改 AI 调用**：只需动 `apps/backend/app/services/ai_service.py`，不要在 router 层直接调 openai
 2. **加新数据表**：在 `apps/backend/app/models/` 新建文件 → `models/__init__.py` 导出 → `schemas/` 对应 → `routers/` 路由 → `main.py` 注册
-3. **Prompt 优化**：prompt 字符串统一放在 service 层，方便整体调整；8b 模型 prompt 末尾加 "只返回JSON，不要任何解释文字"
+3. **Prompt 优化**：prompt 字符串统一放在 service 层；需要 JSON 时在提示词末尾强调「只返回 JSON」
 4. **JSON 解析**：所有 `_call_ai` 的 JSON 解析用 `_parse_json()` 统一处理，不要 try/except 分散在各处
 5. **pgvector**：embedding 字段已在 `MemoryChunk` 预留，启用时需 `CREATE EXTENSION vector;` 并取消 `memory.py` 中的条件导入
 6. **改创作端 UI**：主要改 `apps/client/`；**管理后台**改 `apps/frontend/`（与 client 独立依赖与构建）

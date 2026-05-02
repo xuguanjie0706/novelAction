@@ -7,9 +7,8 @@ const GEN_QUEUE_STORAGE_KEY = 'novelAction:gen-queue:v1'
 
 /**
  * 全局模型路由（生成/写作等均以此为准，与串行或单次方案无关）：
- * - `local`：本地 OpenAI 兼容端点（.env 的 LLM_BASE_URL / AI_MODEL，可为 Ollama 等）
- * - `remote`：远程默认（DB 默认启用项或 GEMINI_* 环境变量）
- * - `remote:<uuid>`：指定 LlmProvider
+ * - `local`：后端 .env 的 LLM_BASE_URL / LLM_API_KEY / AI_MODEL（仅本线路读 AI_MODEL）
+ * - `remote` / `remote:<uuid>`：管理后台 LlmProvider 或 GEMINI_*；模型名由该线路决定，与 AI_MODEL 无关
  */
 function readStoredAiBackendRoute(): string {
   try {

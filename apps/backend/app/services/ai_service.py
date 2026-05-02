@@ -36,7 +36,7 @@ class AIService:
     ):
         self.profile = profile
         self._db = db
-        self.model = settings.AI_MODEL
+        self.model = (settings.AI_MODEL or "").strip()
         self.base_url = settings.LLM_BASE_URL
         self.api_key = settings.LLM_API_KEY
         self._gemini_unconfigured = False
@@ -79,6 +79,11 @@ class AIService:
             raise RuntimeError(
                 "未配置远程大模型：请在管理后台「大模型」中新增并启用/设为默认，"
                 "或设置环境变量 GEMINI_BASE_URL 与 GEMINI_MODEL"
+            )
+        if self.profile == "default" and not (self.model or "").strip():
+            raise RuntimeError(
+                "未配置本地模型：请在 apps/backend/.env 设置 AI_MODEL（OpenAI 兼容的模型 id），"
+                "或在前端顶部「模型 / 线路」中选择已启用的远程线路。"
             )
         if self._client:
             return self._client

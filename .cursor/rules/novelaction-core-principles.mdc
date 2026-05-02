@@ -37,5 +37,5 @@ alwaysApply: true
 
 ## 模型切换与上下文
 
-- 小模型（如 qwen3:8b）控制 prompt 长度并加强 JSON 容错解析。
+- 小参数本地模型控制 prompt 长度并加强 JSON 容错解析。
 - 大上下文模型可启用 `single_shot`，但保持接口参数兼容。

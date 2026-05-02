@@ -31,7 +31,7 @@ from app.models import (
 
 def _parse_json(text: str):
     """容错 JSON 解析：去 markdown fence、去 think 标签、strip 空白"""
-    # 去掉 <think>...</think>（qwen3 thinking mode）
+    # 去掉 <think>...</think>（部分兼容端点会输出 think 块）
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     text = text.strip()
     # 去掉 ```json ... ``` 或 ``` ... ```

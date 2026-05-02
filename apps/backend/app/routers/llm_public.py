@@ -66,7 +66,7 @@ def llm_overview(db: Session = Depends(get_db)):
     eff_model = conn[1] if conn else None
 
     return LlmOverviewOut(
-        local_model_name=settings.AI_MODEL,
+        local_model_name=(settings.AI_MODEL or "").strip() or "未配置",
         remote_ready=conn is not None,
         effective_remote_model=eff_model,
         remote_agent=remote_agent,

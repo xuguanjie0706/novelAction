@@ -65,6 +65,44 @@ def _clean_outline_text(value: object, limit: int = 120) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
+def _is_xuanhuan_like_genre(genre: str | None) -> bool:
+    raw = (genre or "").strip()
+    return any(tag in raw for tag in ("玄幻", "仙侠", "古风", "武侠"))
+
+
+def _sanitize_xuanhuan_outline_text(text: str) -> str:
+    cleaned = text
+    replacements = [
+        ("首席工程师", "大阵主祭"),
+        ("AI化", "傀儡化"),
+        ("人工智能", "灵智禁制"),
+        ("AI", "灵智"),
+        ("半机械", "半傀"),
+        ("机械", "机关"),
+        ("芯片", "命纹碎片"),
+        ("量子", "微尘"),
+        ("基因实验室", "血脉禁室"),
+        ("星际文明", "诸天古域"),
+        ("星际", "诸天"),
+        ("程序上传", "神识刻印"),
+        ("控制台", "阵枢石台"),
+    ]
+    for src, dst in replacements:
+        cleaned = cleaned.replace(src, dst)
+    return cleaned
+
+
+def _sanitize_generated_outline_chapter(chapter: dict, genre: str | None) -> dict:
+    if not _is_xuanhuan_like_genre(genre):
+        return chapter
+    sanitized = dict(chapter)
+    for field in ("title", "opening_hook", "core_event", "character_change", "foreshadow", "end_hook"):
+        value = sanitized.get(field)
+        if isinstance(value, str) and value:
+            sanitized[field] = _sanitize_xuanhuan_outline_text(value)
+    return sanitized
+
+
 def _outline_batch_size(model_profile: str) -> int:
     return 30 if model_profile == "gemini" else 15
 
@@ -147,6 +185,30 @@ def _format_outline_batch_goal(
         f"本批生成全书第{global_start}-{global_end}章，也是《{node_title}》本卷第{local_start}-{local_end}章；"
         f"《{node_title}》共{planned_chapters}章。本批要承接已有章节，不得重启本卷冲突或提前透支后续卷爆点。"
     )
+
+
+def _format_outline_word_budget_context(
+    *,
+    target_words: int | None,
+    chapter_count: int,
+    chapter_word_target: int = TARGET_WORDS_PER_CHAPTER,
+    scope_label: str = "全书",
+) -> str:
+    estimated_words = max(0, chapter_count) * chapter_word_target
+    lines = [
+        f"{scope_label}当前章节数：{chapter_count} 章",
+        f"{scope_label}按每章约{chapter_word_target}字估算：约{estimated_words}字",
+    ]
+    if target_words and target_words > 0:
+        gap = target_words - estimated_words
+        gap_label = f"+{gap}" if gap >= 0 else str(gap)
+        lines.append(f"{scope_label}目标总字数：{target_words}字（差值：{gap_label}字）")
+    else:
+        lines.append(f"{scope_label}目标总字数：未设置（建议在项目中设定 target_words）")
+    lines.append(
+        f"{scope_label}节奏要求：禁止后期跨位面速刷；必须保证中后期仍有足够章节承载势力升级、人物代价、伏笔回收与终局铺垫。"
+    )
+    return "\n".join(lines)
 
 
 def _format_global_outline_context(volume_nodes: list[tuple[OutlineNode, int]]) -> str:
@@ -973,6 +1035,11 @@ async def _prepare_outline_quality_context(ctx: dict[str, Any]) -> dict[str, Any
         skills=skills,
         foreshadows=foreshadows,
     )
+    book_word_budget_context = _format_outline_word_budget_context(
+        target_words=project.target_words,
+        chapter_count=len(chapters),
+        scope_label="全书",
+    )
 
     return {
         **ctx,
@@ -982,6 +1049,7 @@ async def _prepare_outline_quality_context(ctx: dict[str, Any]) -> dict[str, Any
         "volume_nodes": volume_nodes,
         "global_outline_context": global_outline_context,
         "story_bible_context": story_bible_context,
+        "book_word_budget_context": book_word_budget_context,
         "volume_reports": [],
     }
 
@@ -1060,6 +1128,17 @@ async def _quality_check_outline_volumes(ctx: dict[str, Any]) -> dict[str, Any]:
                 *volume_chapters,
             ]),
             chapters=volume_chapters,
+            word_budget_context="\n".join([
+                ctx.get("book_word_budget_context", ""),
+                _format_outline_word_budget_context(
+                    target_words=(
+                        ((volume.extra or {}).get("target_chapters") if isinstance(volume.extra, dict) else None)
+                        or TARGET_CHAPTERS_PER_VOLUME
+                    ) * TARGET_WORDS_PER_CHAPTER,
+                    chapter_count=len(volume_chapters),
+                    scope_label=f"卷《{volume.title}》",
+                ),
+            ]),
         )
         report = _merge_outline_quality_reports(report, hard_rule_report)
         volume.extra = _with_outline_quality(volume, report)
@@ -1125,6 +1204,7 @@ async def _quality_check_outline_book(ctx: dict[str, Any]) -> dict[str, Any]:
         previous_chapters_context="",
         continuity_state=_format_book_quality_continuity_state(chapters),
         chapters=chapters,
+        word_budget_context=ctx.get("book_word_budget_context", ""),
     )
     report = _merge_outline_quality_reports(report, hard_rule_report)
 
@@ -1246,6 +1326,11 @@ async def _build_outline_repair_plan(ctx: dict[str, Any]) -> dict[str, Any]:
         chapters=relevant_chapters,
         story_bible_context=ctx["story_bible_context"],
         global_outline_context=ctx["global_outline_context"],
+        word_budget_context=_format_outline_word_budget_context(
+            target_words=project.target_words,
+            chapter_count=len(chapters if req.scope == "book" else relevant_chapters),
+            scope_label="修复范围",
+        ),
     )
     await publish({
         "event": "progress",
@@ -1528,7 +1613,11 @@ async def ai_full_generate_outline(
                     continuity_state=continuity_state,
                     batch_goal=batch_goal,
                 )
-                batch_chapters = result.get("chapters", [])
+                batch_chapters = [
+                    _sanitize_generated_outline_chapter(ch, project.genre)
+                    for ch in (result.get("chapters", []) or [])
+                    if isinstance(ch, dict)
+                ]
                 if not batch_chapters:
                     detail = result.get("error") or result.get("raw") or "AI 未返回 chapters 数组"
                     batch_error = True
@@ -1973,22 +2062,25 @@ def commit_expand(
         raise HTTPException(404, "Parent node not found")
 
     results = []
+    project = db.query(Project).filter(Project.id == project_id).first()
+    genre = project.genre if project else None
     for i, ch in enumerate(req.chapters):
+        safe_ch = _sanitize_generated_outline_chapter(ch, genre) if isinstance(ch, dict) else {}
         node = OutlineNode(
             project_id=project_id,
             parent_id=parent.id,
             node_type="chapter_plan",
-            title=f"第{ch.get('number', i + 1)}章：{ch.get('title', '未命名')}",
-            summary=ch.get("core_event"),
-            hook=ch.get("opening_hook"),
-            highlight=ch.get("end_hook"),    # 章末钩子放 highlight 字段
-            conflict=ch.get("character_change"),
+            title=f"第{safe_ch.get('number', i + 1)}章：{safe_ch.get('title', '未命名')}",
+            summary=safe_ch.get("core_event"),
+            hook=safe_ch.get("opening_hook"),
+            highlight=safe_ch.get("end_hook"),    # 章末钩子放 highlight 字段
+            conflict=safe_ch.get("character_change"),
             sort_order=i,
             extra={
-                "foreshadow":    ch.get("foreshadow", ""),
-                "pacing":        ch.get("pacing", "medium"),
-                "word_estimate": ch.get("word_estimate", TARGET_WORDS_PER_CHAPTER),
-                "end_hook":      ch.get("end_hook", ""),
+                "foreshadow":    safe_ch.get("foreshadow", ""),
+                "pacing":        safe_ch.get("pacing", "medium"),
+                "word_estimate": safe_ch.get("word_estimate", TARGET_WORDS_PER_CHAPTER),
+                "end_hook":      safe_ch.get("end_hook", ""),
             },
         )
         db.add(node)

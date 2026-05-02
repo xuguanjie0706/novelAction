@@ -1,6 +1,6 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
-import type { LlmOverview } from '../types'
+import type { AiChatMessage, LlmOverview } from '../types'
 import {
   extractUsage,
   finishLlmCall,
@@ -146,6 +146,14 @@ export const chapterIndexesApi = {
     api.patch(`/projects/${pid}/chapter-indexes/chapter/${chapterId}`, data),
 }
 
+// ── Quality Debts ─────────────────────────────────────
+export const qualityDebtsApi = {
+  list: (pid: string, status?: string) =>
+    api.get(`/projects/${pid}/quality-debts/${status ? `?status=${status}` : ''}`),
+  update: (pid: string, id: string, data: any) =>
+    api.patch(`/projects/${pid}/quality-debts/${id}`, data),
+}
+
 // ── Outline ───────────────────────────────────────────
 export const outlineApi = {
   getTree: (pid: string) => api.get(`/projects/${pid}/outline/`),
@@ -199,6 +207,15 @@ export const llmApi = {
 
 export const aiApi = {
   qualityCheck: (pid: string, data: any) => api.post(`/projects/${pid}/ai/quality-check`, data),
+  listChatMessages: (
+    pid: string,
+    params: { context_type: 'outline' | 'writing' | 'general'; chapter_id?: string },
+  ) => {
+    const q = new URLSearchParams({ context_type: params.context_type })
+    if (params.chapter_id) q.set('chapter_id', params.chapter_id)
+    return api.get<AiChatMessage[]>(`/projects/${pid}/ai/chat/messages?${q.toString()}`)
+  },
+  chatStreamUrl: (pid: string) => `/api/v1/projects/${pid}/ai/chat/stream`,
   extractMemory: (
     pid: string,
     chapterId: string,

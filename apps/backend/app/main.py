@@ -5,7 +5,7 @@ from app.config import settings
 from app.database import engine, Base
 from app.routers import projects, world_settings, characters, outline, chapters, chapter_indexes, ai, generate, admin_llm, llm_public, admin_llm_calls
 from app.routers import storylines, power_systems, skills, items, factions
-from app.routers import foreshadows
+from app.routers import foreshadows, quality_debts
 from app.services.llm_config import seed_llm_from_env_if_empty
 
 
@@ -116,6 +116,74 @@ def _ensure_foreshadow_columns() -> None:
         ))
 
 
+def _ensure_memory_embedding_column() -> None:
+    """
+    开发环境兼容迁移：
+    1. 启用 pgvector 扩展（若未安装则跳过，不影响启动）
+    2. 若 embedding 列维度与当前配置不一致（旧库 1536 → 新 768），删列重建
+    3. 无 embedding 列时以正确维度新建
+
+    修改列类型是破坏性操作（历史向量全部清空），但首次迁移时本就无有效向量，
+    后续服务启动如果维度已匹配则直接跳过，安全幂等。
+    """
+    from app.config import settings as app_settings
+
+    target_dim = app_settings.EMBEDDING_DIM
+
+    with engine.begin() as conn:
+        # ── 启用 pgvector 扩展 ──────────────────────────────────────────────
+        try:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        except Exception:  # noqa: BLE001
+            # 数据库用户无权限或 pgvector 未安装 → 跳过，语义检索会自动降级
+            return
+
+        # ── 查当前 embedding 列是否存在及维度 ─────────────────────────────
+        row = conn.execute(text("""
+            SELECT atttypmod
+            FROM pg_attribute
+            WHERE attrelid = 'memory_chunks'::regclass
+              AND attname  = 'embedding'
+              AND attnum   > 0
+              AND NOT attisdropped
+        """)).fetchone()
+
+        if row is None:
+            # 列不存在 → 新建
+            conn.execute(text(
+                f"ALTER TABLE memory_chunks ADD COLUMN IF NOT EXISTS embedding vector({target_dim})"
+            ))
+        else:
+            # atttypmod 对 vector 类型：维度存在 typmod 里，具体值 = dim + 某固定偏移
+            # 最可靠的方式是读 column_type 字符串
+            type_row = conn.execute(text("""
+                SELECT pg_catalog.format_type(atttypid, atttypmod)
+                FROM pg_attribute
+                WHERE attrelid = 'memory_chunks'::regclass
+                  AND attname  = 'embedding'
+                  AND attnum   > 0
+                  AND NOT attisdropped
+            """)).fetchone()
+            col_type = type_row[0] if type_row else ""
+            # 形如 "vector(1536)" 或 "vector(768)"
+            if f"vector({target_dim})" not in col_type:
+                # 维度不匹配 → 删列重建（历史向量本就无效）
+                conn.execute(text("ALTER TABLE memory_chunks DROP COLUMN embedding"))
+                conn.execute(text(
+                    f"ALTER TABLE memory_chunks ADD COLUMN embedding vector({target_dim})"
+                ))
+
+        # ── 建立 HNSW 近似最近邻索引（已存在则跳过）──────────────────────
+        try:
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_memory_chunks_embedding_cosine
+                ON memory_chunks
+                USING hnsw (embedding vector_cosine_ops)
+            """))
+        except Exception:  # noqa: BLE001
+            pass  # 旧版 pgvector 无 HNSW，退化到 IVFFlat 或顺序扫描均可接受
+
+
 # 自动建表（开发用，生产建议改用 Alembic）
 Base.metadata.create_all(bind=engine)
 _ensure_project_columns()
@@ -123,6 +191,7 @@ _ensure_outline_node_columns()
 _ensure_character_columns()
 _ensure_character_relationship_columns()
 _ensure_foreshadow_columns()
+_ensure_memory_embedding_column()
 seed_llm_from_env_if_empty()
 
 app = FastAPI(
@@ -160,6 +229,7 @@ app.include_router(skills.router, prefix="/api/v1")
 app.include_router(items.router, prefix="/api/v1")
 app.include_router(factions.router, prefix="/api/v1")
 app.include_router(foreshadows.router, prefix="/api/v1")
+app.include_router(quality_debts.router, prefix="/api/v1")
 
 
 @app.get("/health")

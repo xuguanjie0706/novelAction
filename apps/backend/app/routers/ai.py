@@ -5,12 +5,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
+from datetime import datetime
 from uuid import UUID, uuid4
 import json
 import re
 import hashlib
 
-from app.database import get_db
+from app.database import get_db, SessionLocal
+from app.services.embedding_service import embed_chunk_async
 from app.models import (
     Chapter,
     MemoryChunk,
@@ -27,6 +29,8 @@ from app.models import (
     Item,
     Skill,
     ChapterDebriefCache,
+    AiChatMessage,
+    QualityDebt,
 )
 from app.schemas import MemoryChunkCreate, MemoryChunkOut
 from app.services.ai_service import AIService
@@ -36,6 +40,22 @@ router = APIRouter(prefix="/projects/{project_id}/ai", tags=["ai"])
 
 _ALLOWED_CHARACTER_STATUS = {"alive", "dead", "missing", "sealed", "transformed"}
 _ALLOWED_STORYLINE_STATUS = {"planned", "active", "climax", "resolved", "dropped"}
+_QUALITY_DEBT_TYPES = {
+    "character",
+    "character_state",
+    "character_location",
+    "continuity",
+    "continuity_gap",
+    "foreshadow",
+    "hook_continuity",
+    "hooks",
+    "outline_alignment",
+    "plot",
+    "setting",
+    "setting_consistency",
+    "power_system",
+}
+_QUALITY_DEBT_SEVERITIES = {"critical", "high", "medium"}
 
 
 def _plain_text(html: str | None) -> str:
@@ -45,6 +65,174 @@ def _plain_text(html: str | None) -> str:
 def _truncate(text: str | None, limit: int) -> str:
     clean = (text or "").strip()
     return clean[:limit]
+
+
+def _extract_patch_text(value) -> str:
+    if isinstance(value, dict):
+        for key in ("replacement", "suggestion", "suggested_fix", "patch", "description"):
+            text = value.get(key)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, str):
+        return value.strip()
+    return ""
+
+
+def _quality_debt_fingerprint(project_id: str, chapter_id: str, issue_type: str, summary: str) -> str:
+    raw = f"{project_id}|{chapter_id}|{issue_type}|{summary.strip()[:240]}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _extract_quality_debt_items(report: dict | None) -> list[dict]:
+    if not isinstance(report, dict):
+        return []
+
+    candidates: list[dict] = []
+    for issue in report.get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        issue_type = str(issue.get("type") or "plot").strip().lower()
+        severity = str(issue.get("severity") or "medium").strip().lower()
+        summary = str(issue.get("description") or issue.get("summary") or "").strip()
+        suggested_fix = (
+            _extract_patch_text(issue.get("suggested_patch"))
+            or _extract_patch_text(issue.get("suggestion"))
+            or _extract_patch_text(issue.get("suggested_fix"))
+        )
+        candidates.append({
+            "issue_type": issue_type,
+            "severity": severity,
+            "summary": summary,
+            "suggested_fix": suggested_fix,
+        })
+
+    for suggestion in report.get("suggestions") or []:
+        if not isinstance(suggestion, dict):
+            continue
+        issue_type = str(suggestion.get("type") or "plot").strip().lower()
+        severity = str(suggestion.get("severity") or "medium").strip().lower()
+        summary = str(suggestion.get("description") or suggestion.get("summary") or suggestion.get("suggestion") or "").strip()
+        candidates.append({
+            "issue_type": issue_type,
+            "severity": severity,
+            "summary": summary,
+            "suggested_fix": _extract_patch_text(suggestion.get("suggested_fix") or suggestion.get("suggestion")),
+        })
+
+    debts: list[dict] = []
+    seen = set()
+    for item in candidates:
+        issue_type = item["issue_type"]
+        severity = item["severity"]
+        summary = item["summary"]
+        if not summary:
+            continue
+        if severity not in _QUALITY_DEBT_SEVERITIES:
+            continue
+        if issue_type not in _QUALITY_DEBT_TYPES:
+            continue
+        dedupe_key = (issue_type, summary[:240])
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        debts.append({
+            **item,
+            "severity": severity,
+            "summary": _truncate(summary, 500),
+            "suggested_fix": _truncate(item.get("suggested_fix") or "", 500),
+        })
+    return debts[:8]
+
+
+def _sync_quality_debts(db: Session, project_id: str, chapter: Chapter, report: dict) -> list[QualityDebt]:
+    synced: list[QualityDebt] = []
+    for item in _extract_quality_debt_items(report):
+        fingerprint = _quality_debt_fingerprint(
+            project_id,
+            str(chapter.id),
+            item["issue_type"],
+            item["summary"],
+        )
+        debt = db.query(QualityDebt).filter(
+            QualityDebt.project_id == project_id,
+            QualityDebt.fingerprint == fingerprint,
+        ).first()
+        if debt:
+            debt.severity = item["severity"]
+            debt.summary = item["summary"]
+            debt.suggested_fix = item.get("suggested_fix") or debt.suggested_fix
+        else:
+            debt = QualityDebt(
+                project_id=project_id,
+                chapter_id=chapter.id,
+                source_chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
+                issue_type=item["issue_type"],
+                severity=item["severity"],
+                status="pending",
+                summary=item["summary"],
+                suggested_fix=item.get("suggested_fix") or None,
+                fingerprint=fingerprint,
+            )
+            db.add(debt)
+        synced.append(debt)
+    return synced
+
+
+def _build_quality_debt_context(debts: list[QualityDebt]) -> str:
+    pending = [d for d in debts if getattr(d, "status", "pending") == "pending"]
+    if not pending:
+        return ""
+    lines = ["【未解决质量债务 / 必须修正或规避】"]
+    for debt in pending[:8]:
+        line = (
+            f"- 第{debt.source_chapter_number}章 "
+            f"[{debt.severity}/{debt.issue_type}] {debt.summary}"
+        )
+        if debt.suggested_fix:
+            line += f"；修正方向：{debt.suggested_fix}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _pending_quality_debts_for_chapter(
+    db: Session,
+    project_id: str,
+    chapter: Chapter,
+    limit: int = 8,
+) -> list[QualityDebt]:
+    return (
+        db.query(QualityDebt)
+        .filter(
+            QualityDebt.project_id == project_id,
+            QualityDebt.status == "pending",
+            QualityDebt.source_chapter_number <= display_chapter_number(chapter.title, chapter.sort_order),
+        )
+        .order_by(QualityDebt.source_chapter_number.desc(), QualityDebt.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def _strip_tail_meta_lines(text: str | None) -> str:
+    """过滤章末结构化元信息，避免误当正文承接。"""
+    lines = str(text or "").splitlines()
+    cleaned: list[str] = []
+    for line in lines:
+        raw = line.strip()
+        if not raw:
+            cleaned.append(line)
+            continue
+        if re.match(r"^\*{0,2}\s*章末钩子强度", raw):
+            continue
+        if re.match(r"^\*{0,2}\s*伏笔埋设", raw):
+            continue
+        if re.match(r"^[-•]\s*F[-_ ]?\d{1,4}\s*[:：\-]", raw, flags=re.IGNORECASE):
+            continue
+        if re.search(r"\bch[_-]?\d+\s*(回收|铺垫)\b", raw, flags=re.IGNORECASE):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned).strip()
 
 
 _SETTING_CORE_LABELS = [
@@ -732,6 +920,90 @@ def _build_chapter_index_context(db: Session, project_id: str, chapter: Chapter)
     return "\n\n".join(sections)
 
 
+def _build_plot_dossier_context(db: Session, project_id: str, chapter: Chapter, large_context: bool = False) -> str:
+    """情节档案：章节索引主线 + 伏笔状态 + 当前活跃故事线。"""
+    index_rows = (
+        db.query(ChapterIndex, Chapter)
+        .join(Chapter, Chapter.id == ChapterIndex.chapter_id)
+        .filter(
+            ChapterIndex.project_id == project_id,
+            Chapter.project_id == project_id,
+            Chapter.sort_order < chapter.sort_order,
+        )
+        .order_by(Chapter.sort_order)
+        .all()
+    )
+    chapter_limit = 60 if large_context else 16
+    index_lines = []
+    for idx, ch in index_rows[-chapter_limit:]:
+        num = display_chapter_number(ch.title, ch.sort_order)
+        events = "；".join(_fmt_index_item(e) for e in (idx.core_events or [])[: (6 if large_context else 3)])
+        hook = _truncate(idx.ending_hook, 220 if large_context else 120) if idx.ending_hook else ""
+        notes = "；".join(_fmt_index_item(n) for n in (idx.continuity_notes or [])[: (5 if large_context else 2)])
+        parts = [f"第{num}章《{ch.title}》"]
+        if idx.story_day:
+            parts.append(f"故事日={idx.story_day}")
+        if events:
+            parts.append(f"核心事件={events}")
+        if hook:
+            parts.append(f"章末钩子={hook}")
+        if notes:
+            parts.append(f"连续性备注={notes}")
+        index_lines.append("；".join(parts))
+
+    foreshadow_rows = (
+        db.query(Foreshadow)
+        .filter(Foreshadow.project_id == project_id)
+        .order_by(Foreshadow.priority.desc(), Foreshadow.created_at.asc())
+        .all()
+    )
+    foreshadow_limit = 30 if large_context else 12
+    foreshadow_lines = []
+    for f in foreshadow_rows[:foreshadow_limit]:
+        parts = [f.code or "F-?", f.title, f"状态={f.status}"]
+        if f.laid_chapter_number:
+            parts.append(f"埋点=第{f.laid_chapter_number}章")
+        if f.resolved_chapter_number:
+            parts.append(f"回收=第{f.resolved_chapter_number}章")
+        if f.description:
+            parts.append(f"说明={_truncate(f.description, 200 if large_context else 90)}")
+        foreshadow_lines.append("；".join(parts))
+
+    storyline_rows = (
+        db.query(StoryLine)
+        .filter(
+            StoryLine.project_id == project_id,
+            StoryLine.status.in_(["planned", "active", "climax"]),
+        )
+        .order_by(StoryLine.sort_order)
+        .all()
+    )
+    storyline_limit = 24 if large_context else 8
+    storyline_lines = []
+    for s in storyline_rows[:storyline_limit]:
+        beats = list(s.key_beats or [])
+        tail = ""
+        if beats:
+            last = beats[-1]
+            if isinstance(last, dict):
+                tail = str(last.get("beat") or last.get("milestone") or "")
+            else:
+                tail = str(last)
+        storyline_lines.append(
+            f"{s.name}（{s.line_type}/{s.status}）："
+            f"{_truncate(tail or s.core_conflict or s.description, 260 if large_context else 120)}"
+        )
+
+    sections = []
+    if index_lines:
+        sections.append("章节索引（情节档案）：\n" + "\n".join(f"- {line}" for line in index_lines))
+    if foreshadow_lines:
+        sections.append("伏笔档案（含已回收/未回收）：\n" + "\n".join(f"- {line}" for line in foreshadow_lines))
+    if storyline_lines:
+        sections.append("故事线档案（活跃中）：\n" + "\n".join(f"- {line}" for line in storyline_lines))
+    return "\n\n".join(sections)
+
+
 class QualityCheckRequest(BaseModel):
     chapter_id: str
     check_types: List[str] = ["plot", "character", "setting_consistency", "pacing", "hooks", "outline_alignment"]
@@ -744,6 +1016,185 @@ class SuggestRequest(BaseModel):
     prompt: str
     model_profile: Literal["local", "gemini"] = "local"
     llm_provider_id: Optional[UUID] = None
+
+
+class ChatMessageOut(BaseModel):
+    id: UUID
+    project_id: UUID
+    chapter_id: Optional[UUID]
+    context_type: str
+    role: str
+    content: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ChatStreamRequest(BaseModel):
+    prompt: str
+    context_type: Literal["outline", "writing", "general"] = "general"
+    chapter_id: Optional[UUID] = None
+    model_profile: Literal["local", "gemini"] = "local"
+    llm_provider_id: Optional[UUID] = None
+
+
+def _format_outline_chat_foreshadows(node: OutlineNode) -> str:
+    parts: list[str] = []
+    for label, value in [
+        ("埋伏笔", node.foreshadows_laid),
+        ("收伏笔", node.foreshadows_resolved),
+    ]:
+        if not value:
+            continue
+        descs = [
+            item.get("description", "") if isinstance(item, dict) else str(item)
+            for item in value[:5]
+        ]
+        text = "；".join(d for d in descs if d)
+        if text:
+            parts.append(f"{label}={text}")
+    legacy = (node.extra or {}).get("foreshadow", "") if isinstance(node.extra, dict) else ""
+    if legacy and not parts:
+        parts.append(f"伏笔={legacy}")
+    return "；".join(parts)
+
+
+def _format_outline_chat_node(node: OutlineNode) -> str:
+    node_type = {"volume": "卷", "arc": "篇", "chapter_plan": "章"}.get(node.node_type, node.node_type)
+    parts = [f"- [{node_type}] {node.title}"]
+    if node.summary:
+        parts.append(f"核心事件：{_truncate(node.summary, 600)}")
+    if node.hook:
+        parts.append(f"开篇钩子：{_truncate(node.hook, 300)}")
+    if node.conflict:
+        parts.append(f"人物变化/冲突：{_truncate(node.conflict, 400)}")
+    if node.highlight:
+        parts.append(f"高光/章末：{_truncate(node.highlight, 400)}")
+    if node.power_milestone:
+        parts.append(f"实力里程碑：{_truncate(node.power_milestone, 300)}")
+    if node.emotional_tone:
+        parts.append(f"情感基调：{node.emotional_tone}")
+    if node.pacing:
+        parts.append(f"节奏：{node.pacing}")
+    foreshadows = _format_outline_chat_foreshadows(node)
+    if foreshadows:
+        parts.append(foreshadows)
+    extra = node.extra if isinstance(node.extra, dict) else {}
+    for key, label in [("story_day", "故事日"), ("end_hook", "章末钩子"), ("pacing", "节奏补充")]:
+        value = extra.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(f"{label}：{_truncate(value, 220)}")
+    return "；".join(parts)
+
+
+def _format_outline_chat_context(
+    *,
+    project: Project,
+    outline_nodes: list[OutlineNode],
+    characters: list[Character],
+    storylines: list[StoryLine],
+    power_systems: list[PowerSystem],
+) -> str:
+    sections = [
+        "【作品】",
+        f"标题：{project.title}",
+    ]
+    if project.genre:
+        sections.append(f"类型：{project.genre}")
+    if project.logline:
+        sections.append(f"一句话创意：{_truncate(project.logline, 800)}")
+    if project.premise:
+        sections.append(f"立意/故事核：{_truncate(project.premise, 1200)}")
+
+    if characters:
+        sections.append("\n【人物状态】")
+        for c in characters[:80]:
+            head = f"- {c.name}（{c.role}）"
+            if c.current_realm:
+                head += f"境界={c.current_realm}"
+            parts = [head]
+            if c.realm_rank is not None:
+                parts.append(f"境界序号={c.realm_rank}")
+            if c.current_status and c.current_status != "alive":
+                parts.append(f"状态={c.current_status}")
+            if c.current_location:
+                parts.append(f"位置={c.current_location}")
+            if c.motivation:
+                parts.append(f"动机={_truncate(c.motivation, 240)}")
+            sections.append("；".join(parts))
+
+    if power_systems:
+        sections.append("\n【力量体系】")
+        for p in power_systems[:20]:
+            level_names = []
+            if isinstance(p.levels, list):
+                level_names = [
+                    item.get("name", "") if isinstance(item, dict) else str(item)
+                    for item in p.levels[:20]
+                ]
+            parts = [f"- {p.name}（{p.system_type}）"]
+            if p.description:
+                parts.append(_truncate(p.description, 500))
+            if p.breakthrough_condition:
+                parts.append(f"突破条件={_truncate(p.breakthrough_condition, 400)}")
+            if level_names:
+                parts.append("境界序列=" + " > ".join(n for n in level_names if n))
+            sections.append("；".join(parts))
+
+    if storylines:
+        sections.append("\n【故事线】")
+        for s in storylines[:40]:
+            parts = [f"- {s.name}（{s.line_type}/{s.status}）"]
+            if s.core_conflict or s.description:
+                parts.append(_truncate(s.core_conflict or s.description, 500))
+            if s.key_beats:
+                parts.append(f"关键节拍={json.dumps(s.key_beats, ensure_ascii=False)[:1200]}")
+            sections.append("；".join(parts))
+
+    sections.append("\n【大纲树】")
+    if outline_nodes:
+        for node in outline_nodes[:600]:
+            sections.append(_format_outline_chat_node(node))
+    else:
+        sections.append("（暂无大纲节点）")
+
+    return "\n".join(sections)
+
+
+def _format_writing_chat_context(
+    *,
+    project: Project,
+    chapter: Chapter,
+    outline_node: Optional[OutlineNode],
+    prev_chapter: Optional[Chapter],
+) -> str:
+    sections = [
+        "【作品】",
+        f"标题：{project.title}",
+    ]
+    if project.genre:
+        sections.append(f"类型：{project.genre}")
+    if project.premise:
+        sections.append(f"立意/故事核：{_truncate(project.premise, 1200)}")
+
+    sections.append("\n【当前章节】")
+    sections.append(f"标题：{chapter.title}")
+    sections.append(f"章节序号：{display_chapter_number(chapter.title, chapter.sort_order)}")
+
+    if outline_node:
+        sections.append("\n【当前章节大纲】")
+        sections.append(_format_outline_chat_node(outline_node))
+
+    if prev_chapter and prev_chapter.content:
+        prev_plain = _plain_text(prev_chapter.content)
+        sections.append("\n【上一章结尾】")
+        sections.append(prev_plain[-1800:])
+
+    sections.append("\n【当前章节正文】")
+    plain = _plain_text(chapter.content)
+    sections.append(plain if plain else "（当前章节暂无正文）")
+    return "\n".join(sections)
 
 
 class ChapterCoherenceCheckRequest(BaseModel):
@@ -845,8 +1296,15 @@ async def quality_check(
                 f"主角当前={ps.protagonist_current_rank or '未知'}；规则={rules}"
             )
         else:
+            highest_level = "未知"
+            if ps.levels:
+                last_level = ps.levels[-1]
+                if isinstance(last_level, dict):
+                    highest_level = last_level.get("name", "") or "未知"
+                else:
+                    highest_level = str(last_level) or "未知"
             power_systems_summary.append(
-                f"{ps.name}：最高境界={ps.levels[-1].get('name','') if ps.levels else '未知'}，主角当前={ps.protagonist_current_rank or '未知'}"
+                f"{ps.name}：最高境界={highest_level}，主角当前={ps.protagonist_current_rank or '未知'}"
             )
 
     # ── 大纲上下文（本章节点）────────────────────────────
@@ -888,6 +1346,12 @@ async def quality_check(
         project_id=project_id,
         chapter=chapter,
     )
+    plot_dossier_context = _build_plot_dossier_context(
+        db=db,
+        project_id=project_id,
+        chapter=chapter,
+        large_context=large_context,
+    )
 
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
@@ -909,13 +1373,14 @@ async def quality_check(
         outline_context=outline_context,
         continuity_context=continuity_context,
         chapter_index_context=chapter_index_context,
+        plot_dossier_context=plot_dossier_context,
     )
 
     # 缓存质检结果
     chapter.last_quality_score = result.get("overall_score")
     chapter.last_quality_report = result
-    from sqlalchemy.sql import func
     chapter.quality_checked_at = func.now()
+    _sync_quality_debts(db, project_id, chapter, result)
     db.commit()
 
     return result
@@ -1123,6 +1588,172 @@ def list_chapter_coherence_reports(
     ]
 
 
+# ── AI 对话（持久化 + 上下文感知）──────────────────────
+def _chat_context_label(context_type: str, chapter: Optional[Chapter] = None) -> str:
+    if context_type == "outline":
+        return "大纲"
+    if context_type == "writing":
+        return f"当前章节正文：{chapter.title if chapter else '未选择章节'}"
+    return "项目"
+
+
+def _query_chat_messages(
+    db: Session,
+    *,
+    project_id: str,
+    context_type: str,
+    chapter_id: Optional[UUID],
+):
+    query = db.query(AiChatMessage).filter(
+        AiChatMessage.project_id == project_id,
+        AiChatMessage.context_type == context_type,
+    )
+    if chapter_id:
+        query = query.filter(AiChatMessage.chapter_id == chapter_id)
+    else:
+        query = query.filter(AiChatMessage.chapter_id.is_(None))
+    return query
+
+
+@router.get("/chat/messages", response_model=List[ChatMessageOut])
+def list_chat_messages(
+    project_id: str,
+    context_type: Literal["outline", "writing", "general"] = "general",
+    chapter_id: Optional[UUID] = None,
+    db: Session = Depends(get_db),
+):
+    return _query_chat_messages(
+        db,
+        project_id=project_id,
+        context_type=context_type,
+        chapter_id=chapter_id,
+    ).order_by(AiChatMessage.created_at.asc()).limit(200).all()
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    project_id: str,
+    req: ChatStreamRequest,
+    db: Session = Depends(get_db),
+):
+    prompt = req.prompt.strip()
+    if not prompt:
+        raise HTTPException(400, "请输入对话内容")
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    chapter: Optional[Chapter] = None
+    context_text = ""
+    if req.context_type == "outline":
+        outline_nodes = db.query(OutlineNode).filter(
+            OutlineNode.project_id == project_id
+        ).order_by(OutlineNode.sort_order).all()
+        characters = db.query(Character).filter(Character.project_id == project_id).all()
+        storylines = db.query(StoryLine).filter(StoryLine.project_id == project_id).order_by(StoryLine.sort_order).all()
+        power_systems = db.query(PowerSystem).filter(PowerSystem.project_id == project_id).order_by(PowerSystem.sort_order).all()
+        context_text = _format_outline_chat_context(
+            project=project,
+            outline_nodes=outline_nodes,
+            characters=characters,
+            storylines=storylines,
+            power_systems=power_systems,
+        )
+    elif req.context_type == "writing":
+        if not req.chapter_id:
+            raise HTTPException(400, "写作对话需要当前章节")
+        chapter = db.query(Chapter).filter(
+            Chapter.id == req.chapter_id,
+            Chapter.project_id == project_id,
+        ).first()
+        if not chapter:
+            raise HTTPException(404, "Chapter not found")
+        outline_node = None
+        if chapter.outline_node_id:
+            outline_node = db.query(OutlineNode).filter(
+                OutlineNode.id == chapter.outline_node_id,
+                OutlineNode.project_id == project_id,
+            ).first()
+        prev_chapter = db.query(Chapter).filter(
+            Chapter.project_id == project_id,
+            Chapter.sort_order < chapter.sort_order,
+        ).order_by(Chapter.sort_order.desc()).first()
+        context_text = _format_writing_chat_context(
+            project=project,
+            chapter=chapter,
+            outline_node=outline_node,
+            prev_chapter=prev_chapter,
+        )
+    else:
+        context_text = "\n".join([
+            "【作品】",
+            f"标题：{project.title}",
+            f"类型：{project.genre or '未设置'}",
+            f"一句话创意：{_truncate(project.logline, 800) or '未设置'}",
+            f"立意/故事核：{_truncate(project.premise, 1200) or '未设置'}",
+        ])
+
+    existing_messages = _query_chat_messages(
+        db,
+        project_id=project_id,
+        context_type=req.context_type,
+        chapter_id=req.chapter_id if req.context_type == "writing" else None,
+    ).order_by(AiChatMessage.created_at.desc()).limit(12).all()
+    chat_history = [
+        {"role": item.role, "content": item.content}
+        for item in reversed(existing_messages)
+    ]
+
+    user_message = AiChatMessage(
+        project_id=project_id,
+        chapter_id=req.chapter_id if req.context_type == "writing" else None,
+        context_type=req.context_type,
+        role="user",
+        content=prompt,
+    )
+    db.add(user_message)
+    db.commit()
+
+    svc = AIService(
+        "gemini" if req.model_profile == "gemini" else "default",
+        db=db,
+        llm_provider_id=req.llm_provider_id,
+    )
+
+    async def event_stream():
+        chunks: list[str] = []
+        try:
+            async for chunk in svc.chat_stream(
+                user_prompt=prompt,
+                context_label=_chat_context_label(req.context_type, chapter),
+                context_text=context_text,
+                chat_history=chat_history,
+            ):
+                chunks.append(chunk)
+                yield f"data: {json.dumps({'text': chunk})}\n\n"
+            assistant_text = "".join(chunks).strip()
+            if assistant_text:
+                db.add(AiChatMessage(
+                    project_id=project_id,
+                    chapter_id=req.chapter_id if req.context_type == "writing" else None,
+                    context_type=req.context_type,
+                    role="assistant",
+                    content=assistant_text,
+                ))
+                db.commit()
+        except Exception as exc:
+            db.rollback()
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ── AI 建议（流式）─────────────────────────────────────
 @router.post("/suggest/stream")
 async def suggest_stream(
@@ -1193,6 +1824,12 @@ async def extract_memory(
     db.commit()
     for r in results:
         db.refresh(r)
+
+    # 异步向量化（不阻塞响应）
+    for r in results:
+        embed_text = f"{r.title or ''}\n{r.content}".strip()
+        embed_chunk_async(r.id, embed_text, SessionLocal)
+
     return results
 
 
@@ -1361,7 +1998,7 @@ async def draft_assist_stream(
 
     prev_tail = ""
     if prev_chapter and prev_chapter.content:
-        clean = _plain_text(prev_chapter.content)
+        clean = _strip_tail_meta_lines(_plain_text(prev_chapter.content))
         prev_limit = 3000 if large_context else 400
         prev_tail = clean[-prev_limit:] if len(clean) > prev_limit else clean
 
@@ -1384,6 +2021,14 @@ async def draft_assist_stream(
         chapter=chapter,
         outline_node=outline_node,
         large_context=large_context,
+    )
+    quality_debt_context = _build_quality_debt_context(
+        _pending_quality_debts_for_chapter(
+            db=db,
+            project_id=project_id,
+            chapter=chapter,
+            limit=12 if large_context else 6,
+        )
     )
 
     svc = AIService(
@@ -1447,6 +2092,7 @@ async def draft_assist_stream(
                 replace_existing=req.replace_existing,
                 continuity_context=continuity_context,
                 chapter_index_context=chapter_index_context,
+                quality_debt_context=quality_debt_context,
                 writing_brief_context=writing_brief_context,
             ):
                 yield f"data: {json.dumps({'text': chunk})}\n\n"
@@ -1924,6 +2570,7 @@ def chapter_debrief(
     updated_chars: List[str] = []
     updated_storylines: List[str] = []
     added_memories: List[str] = []
+    _new_memory_chunks: List[MemoryChunk] = []  # 用于批量触发 embedding
     chapter_index_saved = False
     chapter_index_error: Optional[str] = None
     synced_foreshadows = {"created": 0, "updated": 0, "resolved": 0}
@@ -2055,6 +2702,7 @@ def chapter_debrief(
             tags=mu.tags[:8],
         )
         db.add(memory)
+        _new_memory_chunks.append(memory)
         added_memories.append(memory.title or memory.memory_type)
 
     # ── 写入/更新结构化资产（实体状态），与 memory_updates 的事件证据互补 ──
@@ -2144,6 +2792,7 @@ def chapter_debrief(
             tags=["复盘备注"],
         )
         db.add(memory)
+        _new_memory_chunks.append(memory)
         added_memories.append(memory.title)
 
     db.query(ChapterDebriefCache).filter(
@@ -2156,6 +2805,11 @@ def chapter_debrief(
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(400, f"章节复盘提交失败：{exc.__class__.__name__}")
+
+    # 异步向量化新增记忆（不阻塞响应）
+    for mc in _new_memory_chunks:
+        embed_text = f"{mc.title or ''}\n{mc.content}".strip()
+        embed_chunk_async(mc.id, embed_text, SessionLocal)
 
     new_char_suffix = f"、新配角入库 {len(added_new_characters)} 个（{', '.join(added_new_characters)}）" if added_new_characters else ""
     return {

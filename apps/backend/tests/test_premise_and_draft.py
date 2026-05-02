@@ -8,8 +8,12 @@ from app.models.character import Character
 from app.models.faction import Faction
 from app.models.foreshadow import Foreshadow
 from app.models.item import Item
+from app.models.ai_chat import AiChatMessage
 from app.models.outline import OutlineNode
+from app.models.power_system import PowerSystem
+from app.models.project import Project
 from app.models.skill import Skill
+from app.models.storyline import StoryLine
 from app.models.world_setting import WorldSetting
 from app.services import generation_service as generation_module
 from app.services.generation_service import GenerationService
@@ -22,8 +26,12 @@ from app.routers.ai import (
     NewItemAsset,
     _chapter_debrief_content_hash,
     _apply_asset_updates,
+    _build_quality_debt_context,
     _build_writing_brief_context,
+    _extract_quality_debt_items,
     _foreshadow_payload_from_index_item,
+    _format_outline_chat_context,
+    _format_writing_chat_context,
     _sync_chapter_index_foreshadows,
 )
 from app.services.ai_service import AIService
@@ -170,6 +178,7 @@ async def test_outline_quality_check_prompt_requires_patchable_findings():
         global_outline_context="卷一黑雾初临；卷二丹塔旧盟。",
         previous_chapters_context="第15章：黑雾指向萧家旧案。",
         continuity_state="下一批开篇必须承接：萧家旧案。",
+        word_budget_context="全书目标总字数：2500000字；当前估算：1820000字；中后期不得速刷。",
         chapters=[
             {
                 "number": 16,
@@ -188,6 +197,8 @@ async def test_outline_quality_check_prompt_requires_patchable_findings():
     assert "伏笔" in prompt
     assert "suggested_patch" in prompt
     assert "第15章：黑雾指向萧家旧案。" in prompt
+    assert "【篇幅与字数约束】" in prompt
+    assert "中后期不得速刷" in prompt
     assert captured["max_tokens"] >= 4096
     assert result["overall_score"] == 82
     assert result["must_fix_chapter_numbers"] == [16]
@@ -220,6 +231,7 @@ async def test_outline_quality_check_prompt_includes_story_bible_context():
         scope="book",
         node_title="全书大纲",
         story_bible_context="三皇子（antagonist）状态=dead；林家九龙玺（unique/intact）：正统自强象征",
+        word_budget_context="全书目标总字数：2500000字；当前估算：2010000字。",
         chapters=[
             {
                 "number": 125,
@@ -237,6 +249,7 @@ async def test_outline_quality_check_prompt_includes_story_bible_context():
     assert "三皇子（antagonist）状态=dead" in prompt
     assert "林家九龙玺（unique/intact）" in prompt
     assert "角色死亡/封印/失踪后再登场必须有明确机制" in prompt
+    assert "【篇幅与字数约束】" in prompt
 
 
 @pytest.mark.asyncio
@@ -294,6 +307,7 @@ async def test_outline_repair_plan_prompt_returns_patch_list_for_problem_chapter
         ],
         story_bible_context="九龙玺是自强象征，不能被简单否定。",
         global_outline_context="第一卷边城起势，第二卷帝都暗线。",
+        word_budget_context="修复范围目标总字数：2500000字；当前估算：1860000字；必须补足中后期承载章节。",
     )
 
     prompt = captured["prompt"]
@@ -301,6 +315,8 @@ async def test_outline_repair_plan_prompt_returns_patch_list_for_problem_chapter
     assert "第55章：帝都硬闯" in prompt
     assert "duplicate_event" in prompt
     assert "九龙玺是自强象征" in prompt
+    assert "【篇幅与字数约束】" in prompt
+    assert "必须补足中后期承载章节" in prompt
     assert captured["context"]["operation"] == "outline_repair_plan"
     assert result["patches"][0]["chapter_number"] == 55
 
@@ -1009,6 +1025,101 @@ async def test_draft_prompt_includes_continuity_ledger():
     assert "不得写成四段斗之气" in captured["prompt"]
 
 
+def test_extract_quality_debt_items_keeps_only_unresolved_hard_issues():
+    report = {
+        "issues": [
+            {
+                "severity": "high",
+                "type": "character_state",
+                "description": "萧炎上一章仍在矿洞，本章突然出现在宗门大殿。",
+                "suggestion": "补足转场，或改为仍在矿洞。",
+            },
+            {
+                "severity": "medium",
+                "type": "foreshadow",
+                "description": "黑雾伏笔来源与第8章章末索引冲突。",
+                "suggested_patch": {"replacement": "保持黑雾来自魂殿支线。"},
+            },
+            {
+                "severity": "medium",
+                "type": "pacing",
+                "description": "节奏可以更紧凑。",
+                "suggestion": "减少环境描写。",
+            },
+            {
+                "severity": "low",
+                "type": "setting_consistency",
+                "description": "炼气层级名称偶有不统一。",
+            },
+        ],
+        "suggestions": [
+            "多写一点动作细节。",
+            {"type": "outline_alignment", "severity": "high", "suggestion": "本章必须兑现旧誓钩子。"},
+        ],
+    }
+
+    debts = _extract_quality_debt_items(report)
+
+    assert [d["issue_type"] for d in debts] == [
+        "character_state",
+        "foreshadow",
+        "outline_alignment",
+    ]
+    assert debts[0]["severity"] == "high"
+    assert "矿洞" in debts[0]["summary"]
+    assert "保持黑雾来自魂殿支线" in debts[1]["suggested_fix"]
+    assert "旧誓钩子" in debts[2]["suggested_fix"]
+
+
+def test_build_quality_debt_context_formats_pending_items():
+    class Debt:
+        status = "pending"
+        severity = "high"
+        issue_type = "character_state"
+        source_chapter_number = 12
+        summary = "师姐上一章仍在阵门外，本章不得突然参战。"
+        suggested_fix = "补足入阵过程，或保持她在阵外。"
+
+    context = _build_quality_debt_context([Debt()])
+
+    assert "【未解决质量债务 / 必须修正或规避】" in context
+    assert "第12章" in context
+    assert "character_state" in context
+    assert "不得突然参战" in context
+    assert "补足入阵过程" in context
+
+
+@pytest.mark.asyncio
+async def test_draft_prompt_includes_quality_debt_context():
+    captured = {}
+
+    async def fake_stream(system: str, prompt: str, max_tokens: int = 4096, context=None):
+        captured["prompt"] = prompt
+        yield "正文"
+
+    svc = AIService()
+    svc._stream_ai = fake_stream
+
+    async for _ in svc.draft_assist_stream(
+        chapter_title="第13章：入阵",
+        outline_hook="主角踏入血阵",
+        outline_summary="主角独自入阵调查旧誓",
+        outline_conflict="必须独自承担风险",
+        outline_highlight="血阵深处传来师父旧音",
+        outline_foreshadow="回收血印伏笔",
+        prev_chapter_tail="师姐仍在阵门外疗伤。",
+        world_summary="血阵入阵后不可随意传送。",
+        character_summary="主角；师姐（位置:阵门外，状态:重伤）",
+        memory_summary="",
+        existing_content="",
+        quality_debt_context="【未解决质量债务 / 必须修正或规避】\n- 第12章 [high/character_state] 师姐仍在阵门外，不得突然参战。",
+    ):
+        pass
+
+    assert "【未解决质量债务 / 必须修正或规避】" in captured["prompt"]
+    assert "师姐仍在阵门外，不得突然参战" in captured["prompt"]
+
+
 @pytest.mark.asyncio
 async def test_auto_debrief_extracts_memory_updates_for_foreshadow_and_information_source():
     captured = {}
@@ -1326,3 +1437,190 @@ async def test_gemini_chapter_coherence_uses_full_text_and_project_context():
     assert "末尾事实：主角还不知道魂殿真名" in captured["prompt"]
     assert "项目事实：魂殿真名尚未公开" in captured["prompt"]
     assert captured["max_tokens"] >= 8192
+
+
+def test_outline_chat_context_exposes_breakthrough_path_from_outline():
+    project = Project(title="苍穹丹祖", premise="废柴少年以丹道重塑丹田。")
+    protagonist = Character(name="萧炎", role="protagonist", current_realm="五段斗之气")
+    outline = OutlineNode(
+        title="第16章：丹田再鸣",
+        node_type="chapter_plan",
+        summary="萧炎借玄尘传承补全裂纹丹田。",
+        conflict="从自卑隐忍到主动承认自己还能修炼。",
+        power_milestone="突破至六段斗之气，并稳定第一缕丹火。",
+        hook="古戒在污水落下前发烫。",
+        highlight="丹田震鸣，六段斗之气终于稳定下来。",
+        sort_order=16,
+    )
+
+    context = _format_outline_chat_context(
+        project=project,
+        outline_nodes=[outline],
+        characters=[protagonist],
+        storylines=[],
+        power_systems=[],
+    )
+
+    assert "【大纲树】" in context
+    assert "第16章：丹田再鸣" in context
+    assert "突破至六段斗之气" in context
+    assert "萧炎（protagonist）境界=五段斗之气" in context
+
+
+def test_writing_chat_context_reads_current_chapter_body_not_navigation_menu():
+    project = Project(title="苍穹丹祖", premise="废柴少年以丹道重塑丹田。")
+    chapter = Chapter(
+        title="第16章：丹田再鸣",
+        content="<p>萧炎掌心古戒发烫，玄尘传承沿经脉补全丹田裂纹。</p><p>他以第一缕丹火压住反噬，六段斗之气终于稳定。</p>",
+        sort_order=15,
+    )
+    outline = OutlineNode(
+        title="第16章：丹田再鸣",
+        node_type="chapter_plan",
+        summary="萧炎借玄尘传承突破。",
+        power_milestone="突破至六段斗之气",
+        sort_order=16,
+    )
+
+    context = _format_writing_chat_context(
+        project=project,
+        chapter=chapter,
+        outline_node=outline,
+        prev_chapter=None,
+    )
+
+    assert "【当前章节正文】" in context
+    assert "玄尘传承沿经脉补全丹田裂纹" in context
+    assert "六段斗之气终于稳定" in context
+    assert "左侧导航" not in context
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_uses_context_and_persists_operation_metadata():
+    captured = {}
+
+    async def fake_stream(system: str, prompt: str, max_tokens: int = 4096, context=None):
+        captured["system"] = system
+        captured["prompt"] = prompt
+        captured["context"] = context
+        yield "主角通过玄尘传承补全丹田裂纹。"
+
+    svc = AIService(profile="gemini")
+    svc._stream_ai = fake_stream
+
+    chunks = []
+    async for chunk in svc.chat_stream(
+        user_prompt="这个大纲里面主角怎么突破的？",
+        context_label="大纲",
+        context_text="【大纲树】第16章：丹田再鸣；实力里程碑：突破至六段斗之气。",
+        chat_history=[
+            {"role": "user", "content": "先看一下第十六章"},
+            {"role": "assistant", "content": "第十六章重点是丹田修复。"},
+        ],
+    ):
+        chunks.append(chunk)
+
+    assert chunks == ["主角通过玄尘传承补全丹田裂纹。"]
+    assert "你是小说创作系统里的对话助手" in captured["system"]
+    assert "【当前对话上下文：大纲】" in captured["prompt"]
+    assert "这个大纲里面主角怎么突破的？" in captured["prompt"]
+    assert "第16章：丹田再鸣" in captured["prompt"]
+    assert "先看一下第十六章" in captured["prompt"]
+    assert captured["context"]["operation"] == "chat_stream"
+
+
+class _ChatFakeQuery:
+    def __init__(self, result):
+        self.result = result
+
+    def filter(self, *conditions):
+        return self
+
+    def order_by(self, *columns):
+        return self
+
+    def limit(self, count):
+        return self
+
+    def first(self):
+        if isinstance(self.result, list):
+            return self.result[0] if self.result else None
+        return self.result
+
+    def all(self):
+        if isinstance(self.result, list):
+            return self.result
+        return [self.result] if self.result is not None else []
+
+
+class _ChatFakeDb:
+    def __init__(self, project, outline):
+        self.project = project
+        self.outline = outline
+        self.added = []
+        self.commits = 0
+
+    def query(self, model):
+        if model is Project:
+            return _ChatFakeQuery(self.project)
+        if model is OutlineNode:
+            return _ChatFakeQuery([self.outline])
+        if model in (Character, StoryLine, PowerSystem, AiChatMessage):
+            return _ChatFakeQuery([])
+        return _ChatFakeQuery([])
+
+    def add(self, row):
+        self.added.append(row)
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_route_persists_user_and_assistant_messages(monkeypatch):
+    class FakeAIService:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def chat_stream(self, **kwargs):
+            yield "主角通过玄尘传承补全丹田裂纹。"
+
+    monkeypatch.setattr(ai_router, "AIService", FakeAIService)
+    project = Project(title="苍穹丹祖", premise="废柴少年以丹道重塑丹田。")
+    outline = OutlineNode(
+        title="第16章：丹田再鸣",
+        node_type="chapter_plan",
+        summary="萧炎借玄尘传承补全裂纹丹田。",
+        power_milestone="突破至六段斗之气",
+        sort_order=16,
+    )
+    db = _ChatFakeDb(project, outline)
+
+    response = await ai_router.chat_stream(
+        "00000000-0000-0000-0000-000000000001",
+        ai_router.ChatStreamRequest(
+            prompt="这个大纲里面主角怎么突破的？",
+            context_type="outline",
+            model_profile="gemini",
+        ),
+        db,
+    )
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+    persisted = [row for row in db.added if isinstance(row, AiChatMessage)]
+    assert [row.role for row in persisted] == ["user", "assistant"]
+    assert persisted[0].content == "这个大纲里面主角怎么突破的？"
+    assert persisted[1].content == "主角通过玄尘传承补全丹田裂纹。"
+    assert db.commits == 2
+    event_text = "".join(chunks)
+    text_events = [
+        json.loads(line.removeprefix("data: "))["text"]
+        for line in event_text.splitlines()
+        if line.startswith("data: ") and "[DONE]" not in line
+    ]
+    assert text_events == ["主角通过玄尘传承补全丹田裂纹。"]

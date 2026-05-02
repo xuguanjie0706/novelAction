@@ -24,6 +24,7 @@ from app.routers.outline import (
     _outline_quality_nodes_for_scope,
     _outline_node_to_chapter_context,
     _outline_snapshot_payload,
+    _sanitize_generated_outline_chapter,
     _sse_outline_quality_progress,
     _with_outline_quality,
 )
@@ -506,3 +507,27 @@ def test_outline_node_to_chapter_context_preserves_existing_plan_fields():
         "pacing": "medium",
         "word_estimate": TARGET_WORDS_PER_CHAPTER,
     }
+
+
+def test_sanitize_generated_outline_chapter_for_xuanhuan_genre():
+    chapter = {
+        "number": 161,
+        "title": "神渊枢纽：AI回响",
+        "opening_hook": "控制台上的程序上传进度突然跳动。",
+        "core_event": "林北辰遭遇半机械守卫，发现芯片里封印的记忆。",
+        "character_change": "他意识到父亲并非首席工程师，而是被AI化的囚徒。",
+        "foreshadow": "埋[量子密钥] 收[星际文明遗迹]",
+        "end_hook": "基因实验室深处传来熟悉的呼喊。",
+    }
+
+    cleaned = _sanitize_generated_outline_chapter(chapter, "玄幻")
+
+    assert "首席工程师" not in cleaned["character_change"]
+    assert "AI化" not in cleaned["character_change"]
+    assert "半机械" not in cleaned["core_event"]
+    assert "芯片" not in cleaned["core_event"]
+    assert "控制台" not in cleaned["opening_hook"]
+    assert "程序上传" not in cleaned["opening_hook"]
+    assert "量子" not in cleaned["foreshadow"]
+    assert "星际文明" not in cleaned["foreshadow"]
+    assert "基因实验室" not in cleaned["end_hook"]

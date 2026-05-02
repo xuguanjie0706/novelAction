@@ -51,8 +51,13 @@ def max_tokens_draft_stream(large_context: bool) -> int:
     )
 
 
-def max_tokens_auto_debrief() -> int:
-    return settings.AUTO_DEBRIEF_MAX_TOKENS
+def max_tokens_auto_debrief(profile: str = "default") -> int:
+    """复盘 JSON 输出复杂，需按模型分档，不能统一用小值。"""
+    return (
+        settings.GEMINI_AUTO_DEBRIEF_MAX_TOKENS
+        if _is_gemini(profile)
+        else settings.LOCAL_AUTO_DEBRIEF_MAX_TOKENS
+    )
 
 
 def max_tokens_plan_full_structure(profile: str) -> int:

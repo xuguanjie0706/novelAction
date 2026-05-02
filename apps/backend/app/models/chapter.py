@@ -30,6 +30,7 @@ class Chapter(Base):
     project = relationship("Project", back_populates="chapters")
     outline_node = relationship("OutlineNode", back_populates="chapter")
     versions = relationship("ChapterVersion", back_populates="chapter", cascade="all, delete-orphan")
+    ai_chat_messages = relationship("AiChatMessage", back_populates="chapter", cascade="all, delete-orphan")
 
 
 class ChapterVersion(Base):

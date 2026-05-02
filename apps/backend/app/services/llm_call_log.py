@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -88,13 +89,23 @@ def _row_to_dict(row: LlmCallLog) -> Dict[str, Any]:
     }
 
 
-def list_llm_calls(limit: int = 200, db: Session | None = None) -> List[Dict[str, Any]]:
+def list_llm_calls(
+    limit: int = 200,
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    db: Session | None = None,
+) -> List[Dict[str, Any]]:
     own_db = db is None
     db = db or SessionLocal()
     try:
+        q = db.query(LlmCallLog)
+        if since is not None:
+            q = q.filter(LlmCallLog.created_at >= since)
+        if until is not None:
+            q = q.filter(LlmCallLog.created_at <= until)
         rows = (
-            db.query(LlmCallLog)
-            .order_by(LlmCallLog.created_at.desc())
+            q.order_by(LlmCallLog.created_at.desc())
             .limit(max(1, min(limit, 2000)))
             .all()
         )

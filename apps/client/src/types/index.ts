@@ -376,6 +376,21 @@ export interface ChapterIndex {
   updated_at?: string
 }
 
+// ── Quality Debt ──────────────────────────────────────
+export interface QualityDebt {
+  id: string
+  project_id: string
+  chapter_id: string
+  source_chapter_number: number
+  issue_type: string
+  severity: 'critical' | 'high' | 'medium' | 'low' | string
+  status: 'pending' | 'resolved' | 'dismissed'
+  summary: string
+  suggested_fix?: string
+  created_at: string
+  updated_at?: string
+}
+
 // ── AI ────────────────────────────────────────────────
 export interface QualityReport {
   overall_score: number
@@ -387,6 +402,16 @@ export interface QualityReport {
   issues: Array<{ type: string; description: string }>
   suggestions: string[]
   summary: string
+}
+
+export interface AiChatMessage {
+  id: string
+  project_id: string
+  chapter_id?: string | null
+  context_type: 'outline' | 'writing' | 'general'
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
 }
 
 /** GET /api/v1/llm/overview — 启用的远程线路列表（不含密钥） */

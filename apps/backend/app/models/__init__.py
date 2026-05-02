@@ -5,6 +5,7 @@ from app.models.outline import OutlineNode
 from app.models.chapter import Chapter, ChapterVersion
 from app.models.chapter_index import ChapterIndex
 from app.models.memory import MemoryChunk
+from app.models.ai_chat import AiChatMessage
 from app.models.llm_provider import LlmProvider
 # 新增模块（导入顺序需在 Character/Project 之后，因有外键依赖）
 from app.models.storyline import StoryLine
@@ -17,6 +18,7 @@ from app.models.foreshadow import Foreshadow
 from app.models.llm_call_log import LlmCallLog
 from app.models.chapter_debrief_cache import ChapterDebriefCache
 from app.models.outline_revision import OutlineRevision
+from app.models.quality_debt import QualityDebt
 
 __all__ = [
     "Project",
@@ -26,6 +28,7 @@ __all__ = [
     "Chapter", "ChapterVersion",
     "ChapterIndex",
     "MemoryChunk",
+    "AiChatMessage",
     "LlmProvider",
     "StoryLine",
     "PowerSystem",
@@ -37,4 +40,5 @@ __all__ = [
     "LlmCallLog",
     "ChapterDebriefCache",
     "OutlineRevision",
+    "QualityDebt",
 ]

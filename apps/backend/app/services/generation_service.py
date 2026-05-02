@@ -497,10 +497,16 @@ grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
         if not isinstance(data, list):
             data = data.get("skills", [])
 
-        char_name_map = {c: c for c in ctx.get("char_names", [])}
+        # ★ 修复：用名字→UUID 映射，mastered_by_character_ids 存真实 UUID
+        char_name_to_id: dict = ctx.get("char_name_to_id", {})
         results = []
         for i, item in enumerate(data):
-            mastered = [n for n in item.get("mastered_by", []) if n in char_name_map]
+            # 将 AI 返回的人物名转换为对应的 character UUID 列表
+            mastered_ids = [
+                char_name_to_id[name]
+                for name in item.get("mastered_by", [])
+                if name in char_name_to_id
+            ]
             sk = Skill(
                 project_id=project.id,
                 name=item.get("name", f"功法{i+1}"),
@@ -511,7 +517,7 @@ grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
                 description=item.get("description"),
                 effects=item.get("effects"),
                 limitations=item.get("limitations"),
-                mastered_by_character_ids=mastered,
+                mastered_by_character_ids=mastered_ids,
                 sort_order=i,
             )
             self.db.add(sk)
@@ -559,8 +565,11 @@ status 只能是: intact / damaged / destroyed / lost / unknown
         if not isinstance(data, list):
             data = data.get("items", [])
 
+        char_name_to_id: dict = ctx.get("char_name_to_id", {})
         results = []
         for i, item in enumerate(data):
+            owner_name = item.get("current_owner", "") or ""
+            owner_uuid_str = char_name_to_id.get(owner_name) if owner_name else None
             it = Item(
                 project_id=project.id,
                 name=item.get("name", f"道具{i+1}"),
@@ -572,6 +581,7 @@ status 只能是: intact / damaged / destroyed / lost / unknown
                 limitations=item.get("limitations"),
                 story_significance=item.get("story_significance"),
                 status=item.get("status", "intact"),
+                current_owner_id=UUID(owner_uuid_str) if owner_uuid_str else None,
                 sort_order=i,
             )
             self.db.add(it)
@@ -959,6 +969,8 @@ role 只能是: protagonist / supporting / antagonist"""
         ctx["char_realms"] = {
             c.name: (c.current_realm or "未知") for c in results
         }
+        # ★ 修复：名字→UUID 映射，供 Skill/Item 存真实 character_id
+        ctx["char_name_to_id"] = {c.name: str(c.id) for c in results}
         return results
 
     # ══════════════════════════════════════════════════════════

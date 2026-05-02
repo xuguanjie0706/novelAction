@@ -1009,6 +1009,7 @@ function TaskCard({ task, onRemove, onCancel }: { task: GenTask; onRemove: () =>
 export default function GenerationQueuePanel() {
   const genQueue = useAppStore(s => s.genQueue)
   const genQueueOpen = useAppStore(s => s.genQueueOpen)
+  const aiPanelOpen = useAppStore(s => s.aiPanelOpen)
   const setGenQueueOpen = useAppStore(s => s.setGenQueueOpen)
   const updateGenTask = useAppStore(s => s.updateGenTask)
   const pushGenProgress = useAppStore(s => s.pushGenProgress)
@@ -1017,6 +1018,7 @@ export default function GenerationQueuePanel() {
   const setCurrentProject = useAppStore(s => s.setCurrentProject)
   const upsertChapter = useAppStore(s => s.upsertChapter)
   const setMemories = useAppStore(s => s.setMemories)
+  const [queueAvoidRightDrawer, setQueueAvoidRightDrawer] = useState(false)
 
   // 避免并发执行：记录正在运行的任务 id
   const runningIdRef = useRef<string | null>(null)
@@ -1128,14 +1130,31 @@ export default function GenerationQueuePanel() {
     }
   }, [genQueue, executeTask])
 
+  useEffect(() => {
+    const onQueueDrawerAvoid = (event: Event) => {
+      const custom = event as CustomEvent<boolean>
+      setQueueAvoidRightDrawer(!!custom.detail)
+    }
+    window.addEventListener('queue-drawer-avoid', onQueueDrawerAvoid)
+    return () => window.removeEventListener('queue-drawer-avoid', onQueueDrawerAvoid)
+  }, [])
+
   // 没有任务时不渲染面板
   if (genQueue.length === 0) return null
 
   const runningCount = genQueue.filter(t => t.status === 'running' || t.status === 'pending').length
   const hasRunning = runningCount > 0
+  const rightOffset = queueAvoidRightDrawer
+    ? 'calc(min(100vw, 36rem) + 0.5rem)'
+    : aiPanelOpen
+      ? 'calc(20rem + 0.5rem)'
+      : '1rem'
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+    <div
+      className="fixed bottom-4 z-50 flex flex-col items-end gap-2 transition-all"
+      style={{ right: rightOffset }}
+    >
       {/* 展开时的任务列表 */}
       {genQueueOpen && (
         <div className="w-80 bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden">

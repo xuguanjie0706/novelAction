@@ -1,17 +1,26 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { App, Button, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd'
+import { App, Button, DatePicker, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd'
+import type { RangePickerProps } from 'antd/es/date-picker'
 import type { ColumnsType } from 'antd/es/table'
 import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
+import dayjs, { type Dayjs } from 'dayjs'
 import { http } from '../api/http'
 import type { LlmCallRecord } from '../types/llm'
 
 const { Text, Title } = Typography
+
+const rangePresets: RangePickerProps['presets'] = [
+  { label: '今天', value: [dayjs().startOf('day'), dayjs().endOf('day')] },
+  { label: '最近7天', value: [dayjs().subtract(6, 'day').startOf('day'), dayjs().endOf('day')] },
+  { label: '最近30天', value: [dayjs().subtract(29, 'day').startOf('day'), dayjs().endOf('day')] },
+]
 
 export default function LlmCallLogsPage() {
   const { message } = App.useApp()
   const [rows, setRows] = useState<LlmCallRecord[]>([])
   const [loading, setLoading] = useState(false)
   const [detailRow, setDetailRow] = useState<LlmCallRecord | null>(null)
+  const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null] | null>(null)
 
   const operationLabel = (op?: string) => {
     const m: Record<string, string> = {
@@ -38,17 +47,30 @@ export default function LlmCallLogsPage() {
     }
   }
 
+  const apiRange = useMemo((): [Dayjs, Dayjs] | null => {
+    const a = dateRange?.[0]
+    const b = dateRange?.[1]
+    if (a && b) return [a, b]
+    return null
+  }, [dateRange])
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const { data } = await http.get<LlmCallRecord[]>('/api/v1/admin/llm-calls/?limit=300')
+      const qs = new URLSearchParams()
+      qs.set('limit', '1000')
+      if (apiRange) {
+        qs.set('since', apiRange[0].startOf('day').toISOString())
+        qs.set('until', apiRange[1].endOf('day').toISOString())
+      }
+      const { data } = await http.get<LlmCallRecord[]>(`/api/v1/admin/llm-calls/?${qs.toString()}`)
       setRows(data)
     } catch {
       message.error('加载 LLM 调用记录失败')
     } finally {
       setLoading(false)
     }
-  }, [message])
+  }, [message, apiRange])
 
   useEffect(() => {
     void load()
@@ -68,6 +90,8 @@ export default function LlmCallLogsPage() {
     () => rows.reduce((sum, r) => sum + (r.token_usage?.total_tokens || 0), 0),
     [rows],
   )
+
+  const hasDateFilter = apiRange != null
 
   const columns: ColumnsType<LlmCallRecord> = [
     {
@@ -165,10 +189,19 @@ export default function LlmCallLogsPage() {
         <div>
           <Title level={4} style={{ margin: 0 }}>LLM 调用记录</Title>
           <Text type="secondary">
-            共 {rows.length} 条，累计 token：{totalTokens}
+            共 {rows.length} 条
+            {hasDateFilter ? '（所选时间范围内，最多 1000 条）' : '（最多 1000 条）'}
+            ，累计 token：{totalTokens}
           </Text>
         </div>
-        <Space>
+        <Space wrap>
+          <DatePicker.RangePicker
+            value={dateRange}
+            presets={rangePresets}
+            allowClear
+            placeholder={['开始日期', '结束日期']}
+            onChange={(v) => setDateRange(v)}
+          />
           <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>
             刷新
           </Button>

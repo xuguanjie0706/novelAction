@@ -29,6 +29,7 @@ class Project(Base):
     outline_nodes = relationship("OutlineNode", back_populates="project", cascade="all, delete-orphan")
     chapters = relationship("Chapter", back_populates="project", cascade="all, delete-orphan")
     memory_chunks = relationship("MemoryChunk", back_populates="project", cascade="all, delete-orphan")
+    ai_chat_messages = relationship("AiChatMessage", back_populates="project", cascade="all, delete-orphan")
     # 新增模块
     story_lines = relationship("StoryLine", back_populates="project", cascade="all, delete-orphan")
     power_systems = relationship("PowerSystem", back_populates="project", cascade="all, delete-orphan")

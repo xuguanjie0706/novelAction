@@ -1,3 +1,6 @@
+from datetime import datetime
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -8,8 +11,13 @@ router = APIRouter(prefix="/admin/llm-calls", tags=["admin-llm-calls"])
 
 
 @router.get("/")
-def list_calls(limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db)):
-    return list_llm_calls(limit=limit, db=db)
+def list_calls(
+    limit: int = Query(default=200, ge=1, le=1000),
+    since: Optional[datetime] = Query(default=None, description="含该时刻起（ISO8601）"),
+    until: Optional[datetime] = Query(default=None, description="含该时刻止（ISO8601）"),
+    db: Session = Depends(get_db),
+):
+    return list_llm_calls(limit=limit, since=since, until=until, db=db)
 
 
 @router.delete("/")

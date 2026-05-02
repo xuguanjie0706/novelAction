@@ -113,6 +113,7 @@ class AIService:
         outline_context: str = "",
         continuity_context: str = "",
         chapter_index_context: str = "",
+        plot_dossier_context: str = "",
     ) -> dict:
         large_context = self._large_context_enabled()
         memory_count = 120 if large_context else 20
@@ -165,6 +166,11 @@ class AIService:
             f"{self._clip_context(chapter_index_context, 1600, 20000)}"
             if chapter_index_context else ""
         )
+        plot_dossier_text = (
+            f"\n情节档案（章节索引/伏笔/故事线，优先用于一致性核验）：\n"
+            f"{self._clip_context(plot_dossier_context, 2200, 30000)}"
+            if plot_dossier_context else ""
+        )
         chapter_plain = self._plain_text(chapter_content)
         chapter_body = self._clip_context(chapter_plain, 2000, 120000)
         chapter_label = "完整正文" if large_context else "正文（前2000字）"
@@ -190,6 +196,7 @@ class AIService:
 {outline_text}
 {continuity_text}
 {chapter_index_text}
+{plot_dossier_text}
 
 近期记忆条目（供参考）：
 {memory_text}
@@ -215,12 +222,30 @@ class AIService:
   "summary": "整体评价一句话"
 }}"""
 
-        response = await self._call_ai(
-            system,
-            prompt,
-            max_tokens=max_tokens_chapter_quality_check(large_context),
-            context={"operation": "quality_check", "chapter_title": chapter_title},
-        )
+        try:
+            response = await self._call_ai(
+                system,
+                prompt,
+                max_tokens=max_tokens_chapter_quality_check(large_context),
+                context={"operation": "quality_check", "chapter_title": chapter_title, "attempt": 1},
+            )
+        except Exception as first_exc:
+            try:
+                response = await self._call_ai(
+                    system,
+                    prompt + "\n\n请重新质检一次：若第一次思路有偏差，以情节档案与当前章节正文为最高优先级。",
+                    max_tokens=max_tokens_chapter_quality_check(large_context),
+                    context={"operation": "quality_check", "chapter_title": chapter_title, "attempt": 2},
+                )
+            except Exception as second_exc:
+                return {
+                    "overall_score": 0,
+                    "dimensions": {},
+                    "issues": [],
+                    "suggestions": [],
+                    "summary": "质检服务暂时不可用，请稍后重试",
+                    "error": f"quality_check_upstream_error: {first_exc.__class__.__name__}/{second_exc.__class__.__name__}",
+                }
         try:
             import re
             text = response.strip()
@@ -363,6 +388,50 @@ class AIService:
             prompt,
             max_tokens=max_tokens_suggest_stream(self.profile),
             context={"operation": "suggest_stream"},
+        ):
+            yield chunk
+
+    # ── 持久化对话 ───────────────────────────────────
+    async def chat_stream(
+        self,
+        user_prompt: str,
+        context_label: str,
+        context_text: str,
+        chat_history: list[dict] | None = None,
+    ) -> AsyncGenerator[str, None]:
+        system = (
+            "你是小说创作系统里的对话助手，回答必须基于用户当前打开的作品上下文。"
+            "如果上下文不足，要明确说明缺失信息，并给出下一步可检查的位置。"
+        )
+        history_lines = []
+        for item in (chat_history or [])[-12:]:
+            role = "作者" if item.get("role") == "user" else "AI助手"
+            content = str(item.get("content") or "").strip()
+            if content:
+                history_lines.append(f"{role}：{content[:1200]}")
+
+        context_limit = 50000 if self.profile == "gemini" else 8000
+        prompt = f"""【当前对话上下文：{context_label}】
+{self._clip_context(context_text, 2000, context_limit) or '（未提供）'}
+
+【最近对话】
+{chr(10).join(history_lines) or '（暂无）'}
+
+【作者问题】
+{user_prompt}
+
+请像可以连续追问的写作搭档一样回答：
+1. 先直接回答问题，不要泛泛提供写作建议。
+2. 引用大纲/正文/设定中的具体依据。
+3. 如果用户问“怎么突破/为何如此/前后是否矛盾”，优先从当前上下文抽取因果链。
+4. 不要把左侧导航菜单、按钮名称当作小说内容。
+"""
+
+        async for chunk in self._stream_ai(
+            system,
+            prompt,
+            max_tokens=max_tokens_suggest_stream(self.profile),
+            context={"operation": "chat_stream"},
         ):
             yield chunk
 
@@ -540,6 +609,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         node_summary: str = "",
         theme_statement: str = "",
         story_bible_context: str = "",
+        word_budget_context: str = "",
     ) -> dict:
         """
         大纲质检：检查卷内/全书章节计划的连续性，并返回可定位、可修复的问题列表。
@@ -575,6 +645,9 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 【滚动连续性账本】
 {continuity_state[:2200] or '（未提供）'}
 
+【篇幅与字数约束】
+{self._clip_context(word_budget_context, 600, 6000) or '（未提供）'}
+
 【待质检章节计划】
 {chr(10).join(chapter_lines)[:40000 if self.profile == "gemini" else 12000]}
 
@@ -586,6 +659,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 5. 节奏与追读：开篇钩子、章末钩子、高潮分布是否支撑追读
 6. 全书立意：核心事件是否服务主题，而不是单纯堆事件
 7. 故事圣经一致性：角色死亡/封印/失踪后再登场必须有明确机制；核心道具、力量体系、势力目标、世界规则和人物弧线不得被后续章节随意否定
+8. 篇幅兑现：检查当前大纲是否支撑目标字数，重点识别中后期节奏压缩（如跨位面速刷、关键成长阶段被跳过）
 
 返回JSON：
 {{
@@ -639,6 +713,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         chapters: list[dict],
         story_bible_context: str = "",
         global_outline_context: str = "",
+        word_budget_context: str = "",
     ) -> dict:
         chapter_lines = []
         for ch in chapters:
@@ -663,6 +738,9 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 【全书卷线蓝图】
 {global_outline_context[:5000] or '（未提供）'}
 
+【篇幅与字数约束】
+{self._clip_context(word_budget_context, 600, 6000) or '（未提供）'}
+
 【质检问题】
 {json.dumps(quality_report, ensure_ascii=False)[:16000 if self.profile == "gemini" else 6000]}
 
@@ -674,6 +752,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 2. 如果问题跨多章，按章节分别给出 patch；每个 patch 必须能独立应用。
 3. 修复要保持世界观、人物状态、道具象征、伏笔承接和下一卷钩子一致。
 4. 每个字段必须是可直接替换的短文本，不写解释性长文。
+5. 修复后要保持篇幅兑现能力：不能把中后期关键阶段压缩成速刷；必要时通过补强过渡与代价链来恢复长篇承载力。
 
 返回JSON：
 {{
@@ -825,6 +904,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         # 生成前从数据库整理出的事实账本，约束跨章连续性
         continuity_context: str = "",
         chapter_index_context: str = "",
+        quality_debt_context: str = "",
         writing_brief_context: str = "",
     ) -> AsyncGenerator[str, None]:
         """
@@ -891,6 +971,11 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             if chapter_index_context
             else ""
         )
+        quality_debt_part = (
+            f"\n{self._clip_context(quality_debt_context, 1200, 12000)}\n"
+            if quality_debt_context
+            else ""
+        )
         writing_brief_part = (
             f"\n{self._clip_context(writing_brief_context, 1200, 20000)}\n"
             if writing_brief_context
@@ -947,6 +1032,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 {prev_part}
 {continuity_part}
 {chapter_index_part}
+{quality_debt_part}
 
 【本章大纲计划】
 标题：{chapter_title}{day_part}
@@ -1180,7 +1266,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
         response = await self._call_ai(
             system,
             prompt,
-            max_tokens=max_tokens_auto_debrief(),
+            max_tokens=max_tokens_auto_debrief(self.profile),
             context={"operation": "auto_extract_debrief", "chapter_title": chapter_title},
         )
         try:

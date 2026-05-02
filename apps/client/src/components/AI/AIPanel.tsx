@@ -1,15 +1,17 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react'
-import { X, Zap, BookMarked, MessageSquare } from 'lucide-react'
+import { useLocation } from 'react-router-dom'
+import { X, Zap, BookMarked, MessageSquare, SendHorizontal, Loader2 } from 'lucide-react'
 import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload, llmProviderIdFromRoute } from '../../store'
 import { aiApi } from '../../api/client'
 import { memoryDisplayChapter } from '../../utils/chapterNumber'
-import type { QualityReport } from '../../types'
+import type { AiChatMessage, QualityReport } from '../../types'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 
 interface Props { projectId: string }
 
-type Tab = 'check' | 'suggest' | 'memory'
+type Tab = 'check' | 'chat' | 'memory'
+type ChatContextType = 'outline' | 'writing' | 'general'
 
 const DIMENSION_LABELS: Record<string, string> = {
   plot: '情节',
@@ -22,11 +24,14 @@ const DIMENSION_LABELS: Record<string, string> = {
 
 export default function AIPanel({ projectId }: Props) {
   const { setAiPanelOpen, activeChapterId, memories, setMemories, chapters } = useAppStore()
+  const location = useLocation()
   const [tab, setTab] = useState<Tab>('check')
   const [loading, setLoading] = useState(false)
   const [report, setReport] = useState<QualityReport | null>(null)
-  const [suggestText, setSuggestText] = useState('')
-  const [streamOutput, setStreamOutput] = useState('')
+  const [chatInput, setChatInput] = useState('')
+  const [chatMessages, setChatMessages] = useState<AiChatMessage[]>([])
+  const [chatLoading, setChatLoading] = useState(false)
+  const messagesEndRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!projectId || !activeChapterId) return
@@ -38,6 +43,31 @@ export default function AIPanel({ projectId }: Props) {
     for (const c of chapters) m.set(c.id, { title: c.title, sort_order: c.sort_order })
     return m
   }, [chapters])
+
+  const activeChapter = useMemo(
+    () => chapters.find((c) => c.id === activeChapterId),
+    [activeChapterId, chapters],
+  )
+
+  const chatContextType = useMemo<ChatContextType>(() => {
+    if (location.pathname.includes('/outline')) return 'outline'
+    if (location.pathname.includes('/write')) return 'writing'
+    return 'general'
+  }, [location.pathname])
+
+  const chatChapterId = chatContextType === 'writing' ? activeChapterId ?? undefined : undefined
+
+  const chatContextLabel = useMemo(() => {
+    if (chatContextType === 'outline') return '大纲'
+    if (chatContextType === 'writing') return activeChapter ? `正文：${activeChapter.title}` : '正文'
+    return '项目'
+  }, [activeChapter, chatContextType])
+
+  const chatPlaceholder = chatContextType === 'outline'
+    ? '这个大纲里面主角怎么突破的？'
+    : chatContextType === 'writing'
+      ? '这段正文里主角突破的代价写清楚了吗？'
+      : '这个项目当前最需要补强什么？'
 
   const currentChapterMemories = useMemo(
     () => activeChapterId
@@ -51,12 +81,27 @@ export default function AIPanel({ projectId }: Props) {
       setReport(null)
       return
     }
-    const chapter = chapters.find((c) => c.id === activeChapterId)
-    const cached = chapter && 'last_quality_report' in chapter
-      ? (chapter as { last_quality_report?: QualityReport }).last_quality_report
+    const cached = activeChapter && 'last_quality_report' in activeChapter
+      ? (activeChapter as { last_quality_report?: QualityReport }).last_quality_report
       : undefined
     setReport(cached ?? null)
-  }, [activeChapterId, chapters])
+  }, [activeChapter, activeChapterId])
+
+  useEffect(() => {
+    if (tab !== 'chat') return
+    if (chatContextType === 'writing' && !chatChapterId) {
+      setChatMessages([])
+      return
+    }
+    aiApi.listChatMessages(projectId, {
+      context_type: chatContextType,
+      chapter_id: chatChapterId,
+    }).then(res => setChatMessages(res.data)).catch(() => {})
+  }, [chatChapterId, chatContextType, projectId, tab])
+
+  useEffect(() => {
+    if (tab === 'chat') messagesEndRef.current?.scrollIntoView({ block: 'end' })
+  }, [chatMessages, chatLoading, tab])
 
   // ── 质检 ──────────────────────────────────────────────
   const runQualityCheck = async () => {
@@ -75,43 +120,94 @@ export default function AIPanel({ projectId }: Props) {
     }
   }
 
-  // ── AI 建议（流式）──────────────────────────────────────
-  const runSuggest = async () => {
-    if (!activeChapterId || !suggestText.trim()) return
-    setStreamOutput('')
-    setLoading(true)
+  // ── AI 对话（流式 + 后端持久化）───────────────────────────
+  const sendChat = async () => {
+    const prompt = chatInput.trim()
+    if (!prompt || chatLoading) return
+    if (chatContextType === 'writing' && !activeChapterId) {
+      toast.error('请先选择一个章节')
+      return
+    }
+
+    const now = new Date().toISOString()
+    const assistantId = `tmp-assistant-${Date.now()}`
+    const userMessage: AiChatMessage = {
+      id: `tmp-user-${Date.now()}`,
+      project_id: projectId,
+      chapter_id: chatChapterId ?? null,
+      context_type: chatContextType,
+      role: 'user',
+      content: prompt,
+      created_at: now,
+    }
+    const assistantMessage: AiChatMessage = {
+      id: assistantId,
+      project_id: projectId,
+      chapter_id: chatChapterId ?? null,
+      context_type: chatContextType,
+      role: 'assistant',
+      content: '',
+      created_at: now,
+    }
+    setChatMessages(prev => [...prev, userMessage, assistantMessage])
+    setChatInput('')
+    setChatLoading(true)
     try {
       const route = useAppStore.getState().aiBackendRoute
-      const response = await fetch(
-        `/api/v1/projects/${projectId}/ai/suggest/stream`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chapter_id: activeChapterId,
-            prompt: suggestText,
-            model_profile: modelProfileFromRoute(route),
-            ...routeLlmProviderPayload(route),
-          }),
-        }
-      )
+      const response = await fetch(aiApi.chatStreamUrl(projectId), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt,
+          context_type: chatContextType,
+          chapter_id: chatChapterId,
+          model_profile: modelProfileFromRoute(route),
+          ...routeLlmProviderPayload(route),
+        }),
+      })
+      if (!response.ok || !response.body) throw new Error('对话请求失败')
       const reader = response.body!.getReader()
       const decoder = new TextDecoder()
+      let buffer = ''
+      const applyLine = (rawLine: string) => {
+        const line = rawLine.trim()
+        if (!line.startsWith('data: ') || line.includes('[DONE]')) return
+        const payload = JSON.parse(line.slice(6)) as { text?: string; error?: string }
+        if (payload.error) throw new Error(payload.error)
+        if (!payload.text) return
+        setChatMessages(prev => prev.map(m =>
+          m.id === assistantId ? { ...m, content: m.content + payload.text } : m
+        ))
+      }
       while (true) {
         const { value, done } = await reader.read()
         if (done) break
-        const lines = decoder.decode(value).split('\n')
-        for (const line of lines) {
-          if (line.startsWith('data: ') && !line.includes('[DONE]')) {
-            try {
-              const { text } = JSON.parse(line.slice(6))
-              setStreamOutput(prev => prev + text)
-            } catch { }
-          }
-        }
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+        for (const line of lines) applyLine(line)
       }
+      if (buffer.trim()) applyLine(buffer)
+      const refreshed = await aiApi.listChatMessages(projectId, {
+        context_type: chatContextType,
+        chapter_id: chatChapterId,
+      })
+      setChatMessages(refreshed.data)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '对话失败'
+      setChatMessages(prev => prev.map(m =>
+        m.id === assistantId ? { ...m, content: `对话失败：${message}` } : m
+      ))
+      toast.error(message)
     } finally {
-      setLoading(false)
+      setChatLoading(false)
+    }
+  }
+
+  const handleChatKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      void sendChat()
     }
   }
 
@@ -161,7 +257,7 @@ export default function AIPanel({ projectId }: Props) {
       <div className="flex border-b border-gray-100 shrink-0">
         {([
           { key: 'check', icon: Zap, label: '质检' },
-          { key: 'suggest', icon: MessageSquare, label: '建议' },
+          { key: 'chat', icon: MessageSquare, label: '对话' },
           { key: 'memory', icon: BookMarked, label: '记忆库' },
         ] as const).map(({ key, icon: Icon, label }) => (
           <button
@@ -180,7 +276,7 @@ export default function AIPanel({ projectId }: Props) {
         ))}
       </div>
       {/* 内容 */}
-      <div className="flex-1 overflow-auto p-4">
+      <div className={clsx('flex-1 min-h-0', tab === 'chat' ? 'flex flex-col' : 'overflow-auto p-4')}>
 
         {/* 质检 */}
         {tab === 'check' && (
@@ -232,27 +328,62 @@ export default function AIPanel({ projectId }: Props) {
           </div>
         )}
 
-        {/* AI 建议 */}
-        {tab === 'suggest' && (
-          <div className="space-y-3">
-            <textarea
-              value={suggestText}
-              onChange={e => setSuggestText(e.target.value)}
-              placeholder="告诉 AI 你想优化什么...&#10;例如：这章节奏太慢，帮我想想如何加强冲突"
-              className="w-full h-28 text-sm border border-gray-200 rounded-lg p-3 resize-none focus:outline-none focus:ring-1 focus:ring-amber-400"
-            />
-            <button
-              onClick={runSuggest}
-              disabled={loading || !suggestText.trim()}
-              className="w-full py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-sm rounded-lg"
-            >
-              {loading ? '生成中...' : '获取建议'}
-            </button>
-            {streamOutput && (
-              <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap bg-gray-50 rounded-lg p-3 max-h-96 overflow-auto">
-                {streamOutput}
-              </div>
-            )}
+        {/* AI 对话 */}
+        {tab === 'chat' && (
+          <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2">
+              <span className="min-w-0 truncate text-xs font-medium text-amber-800">{chatContextLabel}</span>
+              {chatLoading && <Loader2 size={13} className="shrink-0 animate-spin text-amber-600" />}
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto space-y-3 pr-1">
+              {chatMessages.length === 0 && (
+                <div className="rounded-lg bg-gray-50 px-3 py-4 text-center text-xs text-gray-400">
+                  {chatPlaceholder}
+                </div>
+              )}
+              {chatMessages.map((m) => (
+                <div
+                  key={m.id}
+                  className={clsx(
+                    'flex',
+                    m.role === 'user' ? 'justify-end' : 'justify-start',
+                  )}
+                >
+                  <div
+                    className={clsx(
+                      'max-w-[92%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm leading-relaxed',
+                      m.role === 'user'
+                        ? 'bg-amber-500 text-white'
+                        : 'bg-gray-50 text-gray-700',
+                    )}
+                  >
+                    {m.content || (m.role === 'assistant' && chatLoading ? '思考中...' : '')}
+                  </div>
+                </div>
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
+
+            <div className="flex items-end gap-2 border-t border-gray-100 pt-3">
+              <textarea
+                value={chatInput}
+                onChange={e => setChatInput(e.target.value)}
+                onKeyDown={handleChatKeyDown}
+                disabled={chatLoading || (chatContextType === 'writing' && !activeChapterId)}
+                placeholder={chatPlaceholder}
+                className="min-h-[44px] max-h-28 flex-1 resize-none rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-amber-400 disabled:bg-gray-50 disabled:text-gray-400"
+              />
+              <button
+                type="button"
+                onClick={() => void sendChat()}
+                disabled={chatLoading || !chatInput.trim() || (chatContextType === 'writing' && !activeChapterId)}
+                title="发送"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-500 text-white transition-colors hover:bg-amber-600 disabled:opacity-50"
+              >
+                {chatLoading ? <Loader2 size={16} className="animate-spin" /> : <SendHorizontal size={16} />}
+              </button>
+            </div>
           </div>
         )}
 

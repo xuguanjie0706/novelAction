@@ -57,8 +57,27 @@ function isUuidLike(s?: string): boolean {
 function htmlTail(html: string, maxChars = 200): string {
   const div = document.createElement('div')
   div.innerHTML = html
-  const text = (div.innerText || div.textContent || '').replace(/\s+/g, ' ').trim()
+  const raw = (div.innerText || div.textContent || '').trim()
+  const text = stripTailMetaLines(raw).replace(/\s+/g, ' ').trim()
   return text.length <= maxChars ? text : '…' + text.slice(-maxChars)
+}
+
+/** 过滤章末常见的结构化元信息，避免当成正文尾段展示/带入 */
+function stripTailMetaLines(text: string): string {
+  if (!text) return ''
+  const skipLine = (line: string): boolean => {
+    const t = line.trim()
+    if (!t) return false
+    if (/^\*{0,2}\s*章末钩子强度/.test(t)) return true
+    if (/^\*{0,2}\s*伏笔埋设/.test(t)) return true
+    if (/^[-•]\s*F[-_ ]?\d{1,4}\s*[:：\-]/i.test(t)) return true
+    if (/\bch[_-]?\d+\s*(?:回收|铺垫)\b/i.test(t)) return true
+    return false
+  }
+  return text
+    .split('\n')
+    .filter((line) => !skipLine(line))
+    .join('\n')
 }
 
 function hasHtmlTextContent(html?: string): boolean {

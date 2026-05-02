@@ -61,6 +61,10 @@ export default function WritePage() {
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [sidebarHidden, setSidebarHidden] = useState(false)  // 专注模式时收起左侧
+  const nextSortOrder = useMemo(
+    () => (chapters.length ? Math.max(...chapters.map(ch => ch.sort_order)) + 1 : 0),
+    [chapters],
+  )
 
   const loadData = useCallback(() => {
     if (!projectId) return
@@ -124,12 +128,12 @@ export default function WritePage() {
     if (existing) { setActiveChapterId(existing.id); return }
     try {
       const res = await chaptersApi.create(projectId, {
-        title: node.title, outline_node_id: node.id, sort_order: chapters.length,
+        title: node.title, outline_node_id: node.id, sort_order: nextSortOrder,
       })
       upsertChapter(res.data)
       setActiveChapterId(res.data.id)
     } catch { toast.error('创建章节失败') }
-  }, [projectId, chapterByNodeId, chapters.length])
+  }, [projectId, chapterByNodeId, nextSortOrder])
 
   const syncFromOutline = async () => {
     if (!projectId) return
@@ -139,7 +143,7 @@ export default function WritePage() {
       for (const node of syncablePlans) {
         if (!chapterByNodeId.has(node.id)) {
           const res = await chaptersApi.create(projectId, {
-            title: node.title, outline_node_id: node.id, sort_order: chapters.length + created,
+            title: node.title, outline_node_id: node.id, sort_order: nextSortOrder + created,
           })
           upsertChapter(res.data)
           created++
@@ -154,7 +158,7 @@ export default function WritePage() {
     setCreating(true)
     try {
       const res = await chaptersApi.create(projectId, {
-        title: `第${chapters.length + 1}章`, sort_order: chapters.length,
+        title: `第${chapters.length + 1}章`, sort_order: nextSortOrder,
       })
       upsertChapter(res.data)
       setActiveChapterId(res.data.id)

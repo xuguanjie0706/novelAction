@@ -478,6 +478,13 @@ export default function OutlinePage() {
     projectsApi.get(projectId).then(res => setCurrentProject(res.data)).catch(() => {})
   }, [projectId, setCurrentProject])
 
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('queue-drawer-avoid', { detail: isCompareDrawerOpen }))
+    return () => {
+      window.dispatchEvent(new CustomEvent('queue-drawer-avoid', { detail: false }))
+    }
+  }, [isCompareDrawerOpen])
+
   // 队列任务完成后自动刷新大纲树与项目（含 story_core 大纲质检）
   useEffect(() => {
     if (outlineNeedsReload) {
@@ -522,12 +529,15 @@ export default function OutlinePage() {
     try {
       const listRes = await chaptersApi.list(projectId)
       const chapters = listRes.data
+      const nextSortOrder = chapters.length
+        ? Math.max(...chapters.map((c: any) => Number(c.sort_order) || 0)) + 1
+        : 0
       let chapter = chapters.find((c: any) => c.outline_node_id === node.id)
       if (!chapter) {
         const createRes = await chaptersApi.create(projectId, {
           title: node.title,
           outline_node_id: node.id,
-          sort_order: chapters.length,
+          sort_order: nextSortOrder,
         })
         chapter = createRes.data
       }

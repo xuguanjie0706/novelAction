@@ -1,4 +1,4 @@
-from app.models import ChapterIndex, MemoryChunk
+from app.models import ChapterIndex, MemoryChunk, QualityDebt
 from app.routers.chapters import delete_chapter_artifacts
 
 
@@ -31,4 +31,4 @@ def test_delete_chapter_artifacts_removes_memory_and_chapter_index():
     delete_chapter_artifacts(db, "project-id", "chapter-id")
 
     deleted_models = [call[1] for call in db.calls if call[0] == "delete"]
-    assert deleted_models == [MemoryChunk, ChapterIndex]
+    assert deleted_models == [MemoryChunk, ChapterIndex, QualityDebt]

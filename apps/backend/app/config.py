@@ -43,9 +43,13 @@ class Settings(BaseSettings):
     LOCAL_SUGGEST_STREAM_MAX_TOKENS: int = 2048
     LOCAL_EXTRACT_MEMORY_MAX_TOKENS: int = 2048
 
-    AUTO_DEBRIEF_MAX_TOKENS: int = 1500
+    # 复盘（auto_debrief）max_tokens — JSON 输出包含六类资产子字段，必须足够大
+    # 旧默认 1500 几乎必然截断，导致 JSON 解析失败、复盘链路静默失效
+    GEMINI_AUTO_DEBRIEF_MAX_TOKENS: int = 8192
+    LOCAL_AUTO_DEBRIEF_MAX_TOKENS: int = 4096
 
     EMBEDDING_MODEL: str = "nomic-embed-text"         # Ollama 本地 embedding 模型
+    EMBEDDING_DIM: int = 768                          # nomic-embed-text 输出 768 维
 
     # App
     SECRET_KEY: str = "change-me-in-production"

@@ -4,6 +4,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
 from app.database import Base
+from app.config import settings
 
 try:
     from pgvector.sqlalchemy import Vector
@@ -32,10 +33,10 @@ class MemoryChunk(Base):
     chapter_number = Column(Integer)               # 发生在第几章
     tags = Column(JSON, default=list)              # ["林默", "青云宗", "关键伏笔"]
 
-    # pgvector embedding (1536 dim for text-embedding-3-small)
+    # pgvector embedding — 维度由 EMBEDDING_DIM 配置项决定（nomic-embed-text = 768）
     # 如果 pgvector 未安装则跳过
     if HAS_PGVECTOR:
-        embedding = Column(Vector(1536))
+        embedding = Column(Vector(settings.EMBEDDING_DIM))
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

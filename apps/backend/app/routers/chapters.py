@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
-from app.models import Chapter, ChapterIndex, ChapterVersion, MemoryChunk
+from app.models import Chapter, ChapterIndex, ChapterVersion, MemoryChunk, QualityDebt
 from app.schemas import ChapterCreate, ChapterUpdate, ChapterOut, ChapterVersionOut
 
 router = APIRouter(prefix="/projects/{project_id}/chapters", tags=["chapters"])
@@ -28,10 +28,31 @@ def delete_chapter_artifacts(db: Session, project_id: str, chapter_id: str) -> N
         ChapterIndex.project_id == project_id,
         ChapterIndex.chapter_id == chapter_id,
     ).delete(synchronize_session=False)
+    db.query(QualityDebt).filter(
+        QualityDebt.project_id == project_id,
+        QualityDebt.chapter_id == chapter_id,
+    ).delete(synchronize_session=False)
+
+
+def normalize_chapter_sort_orders(db: Session, project_id: str) -> None:
+    """
+    统一章节排序为连续整数，避免历史数据出现重复/空洞 sort_order 导致前端显示错乱。
+    """
+    chapters = db.query(Chapter).filter(
+        Chapter.project_id == project_id
+    ).order_by(Chapter.sort_order, Chapter.created_at, Chapter.id).all()
+    changed = False
+    for index, chapter in enumerate(chapters):
+        if chapter.sort_order != index:
+            chapter.sort_order = index
+            changed = True
+    if changed:
+        db.commit()
 
 
 @router.get("/", response_model=List[ChapterOut])
 def list_chapters(project_id: str, db: Session = Depends(get_db)):
+    normalize_chapter_sort_orders(db, project_id)
     return db.query(Chapter).filter(
         Chapter.project_id == project_id
     ).order_by(Chapter.sort_order).all()
@@ -39,10 +60,17 @@ def list_chapters(project_id: str, db: Session = Depends(get_db)):
 
 @router.post("/", response_model=ChapterOut, status_code=201)
 def create_chapter(project_id: str, payload: ChapterCreate, db: Session = Depends(get_db)):
+    normalize_chapter_sort_orders(db, project_id)
+    last = db.query(Chapter).filter(
+        Chapter.project_id == project_id
+    ).order_by(Chapter.sort_order.desc()).first()
+    next_sort_order = (last.sort_order + 1) if last else 0
+
     chapter = Chapter(
         project_id=project_id,
         word_count=count_words(payload.content),
-        **payload.model_dump()
+        **payload.model_dump(),
+        sort_order=next_sort_order,
     )
     db.add(chapter)
     db.commit()
@@ -73,6 +101,7 @@ def update_chapter(project_id: str, chapter_id: str, payload: ChapterUpdate, db:
     for field, value in data.items():
         setattr(chapter, field, value)
     db.commit()
+    normalize_chapter_sort_orders(db, project_id)
     db.refresh(chapter)
     return chapter
 
@@ -87,6 +116,7 @@ def delete_chapter(project_id: str, chapter_id: str, db: Session = Depends(get_d
     delete_chapter_artifacts(db, project_id, chapter_id)
     db.delete(chapter)
     db.commit()
+    normalize_chapter_sort_orders(db, project_id)
 
 
 # --- 版本历史 ---

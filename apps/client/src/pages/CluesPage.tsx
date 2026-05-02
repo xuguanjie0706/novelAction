@@ -5,13 +5,22 @@ import {
   ChevronDown, ChevronRight, BookMarked, ClipboardList,
   AlertTriangle, Star, Anchor,
 } from 'lucide-react'
-import { foreshadowsApi, chapterIndexesApi } from '../api/client'
-import type { Foreshadow, ChapterIndex } from '../types'
+import { foreshadowsApi, chapterIndexesApi, qualityDebtsApi } from '../api/client'
+import type { Foreshadow, ChapterIndex, QualityDebt } from '../types'
 import { useAppStore } from '../store'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 
 // ── 工具 ─────────────────────────────────────────────────────────────────────
+const CHAPTER_NUM_PREFIX = /^\s*第\s*0*(\d+)\s*章/
+
+function displayChapterNumber(title?: string, sortOrder?: number): number {
+  const raw = (title || '').trim()
+  const m = CHAPTER_NUM_PREFIX.exec(raw)
+  if (m) return Math.max(1, Number(m[1]))
+  const so = Number.isFinite(sortOrder as number) ? Number(sortOrder) : 0
+  return Math.max(1, so + 1)
+}
 
 const STATUS_LABEL: Record<string, string> = { open: '未回收', resolved: '已回收', dropped: '已放弃' }
 const STATUS_COLOR: Record<string, string> = {
@@ -31,6 +40,22 @@ const PLANNED_ACTION_LABEL: Record<'resolve' | 'develop', string> = {
 const PLANNED_ACTION_COLOR: Record<'resolve' | 'develop', string> = {
   resolve: 'bg-amber-50 text-amber-600',
   develop: 'bg-indigo-50 text-indigo-600',
+}
+const QUALITY_DEBT_STATUS_LABEL: Record<QualityDebt['status'], string> = {
+  pending: '未解决',
+  resolved: '已修复',
+  dismissed: '已忽略',
+}
+const QUALITY_DEBT_STATUS_COLOR: Record<QualityDebt['status'], string> = {
+  pending: 'bg-red-50 text-red-700 border-red-100',
+  resolved: 'bg-green-50 text-green-700 border-green-100',
+  dismissed: 'bg-gray-50 text-gray-500 border-gray-100',
+}
+const QUALITY_DEBT_SEVERITY_COLOR: Record<string, string> = {
+  critical: 'bg-red-600 text-white',
+  high: 'bg-red-100 text-red-700',
+  medium: 'bg-amber-100 text-amber-700',
+  low: 'bg-gray-100 text-gray-500',
 }
 const PRIORITY_STARS = (p: number) =>
   Array.from({ length: 5 }).map((_, i) => (
@@ -390,9 +415,91 @@ function ChapterIndexCard({ index, chapterTitle }: { index: ChapterIndex; chapte
   )
 }
 
+// ── 质量债务卡片 ──────────────────────────────────────────────────────────────
+
+function QualityDebtCard({
+  debt,
+  chapterTitle,
+  onStatusChange,
+}: {
+  debt: QualityDebt
+  chapterTitle?: string
+  onStatusChange: (status: QualityDebt['status']) => void
+}) {
+  return (
+    <div className="rounded-xl border border-gray-100 bg-white p-3 shadow-sm space-y-2">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-mono text-red-600 bg-red-50 px-1.5 py-0.5 rounded">
+              Ch.{debt.source_chapter_number.toString().padStart(3, '0')}
+            </span>
+            <span className={clsx(
+              'text-[10px] px-1.5 py-0.5 rounded font-medium',
+              QUALITY_DEBT_SEVERITY_COLOR[debt.severity] || QUALITY_DEBT_SEVERITY_COLOR.medium,
+            )}>
+              {debt.severity}
+            </span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+              {debt.issue_type}
+            </span>
+            <span className={clsx(
+              'text-[10px] px-1.5 py-0.5 rounded border',
+              QUALITY_DEBT_STATUS_COLOR[debt.status],
+            )}>
+              {QUALITY_DEBT_STATUS_LABEL[debt.status]}
+            </span>
+          </div>
+          <div className="text-sm font-medium text-gray-800">
+            {chapterTitle || `第 ${debt.source_chapter_number} 章`}
+          </div>
+        </div>
+        {debt.status === 'pending' && (
+          <AlertTriangle size={16} className="text-red-400 shrink-0 mt-1" />
+        )}
+      </div>
+
+      <p className="text-sm text-gray-700 leading-6">{debt.summary}</p>
+      {debt.suggested_fix && (
+        <p className="text-xs text-gray-500 leading-5 bg-gray-50 rounded-lg px-2 py-1.5">
+          修正方向：{debt.suggested_fix}
+        </p>
+      )}
+
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          type="button"
+          onClick={() => onStatusChange('resolved')}
+          disabled={debt.status === 'resolved'}
+          className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg border border-green-100 text-green-700 hover:bg-green-50 disabled:opacity-50"
+        >
+          <CheckCircle size={12} />已修复
+        </button>
+        <button
+          type="button"
+          onClick={() => onStatusChange('dismissed')}
+          disabled={debt.status === 'dismissed'}
+          className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg border border-gray-100 text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+        >
+          <XCircle size={12} />忽略
+        </button>
+        {debt.status !== 'pending' && (
+          <button
+            type="button"
+            onClick={() => onStatusChange('pending')}
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg border border-red-100 text-red-600 hover:bg-red-50"
+          >
+            <Circle size={12} />重开
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── 主页面 ────────────────────────────────────────────────────────────────────
 
-type TabKey = 'foreshadow' | 'plotarchive'
+type TabKey = 'foreshadow' | 'plotarchive' | 'qualitydebt'
 
 export default function CluesPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -401,13 +508,18 @@ export default function CluesPage() {
   const [activeTab, setActiveTab] = useState<TabKey>('foreshadow')
   const [foreshadows, setForeshadows] = useState<Foreshadow[]>([])
   const [chapterIndexes, setChapterIndexes] = useState<ChapterIndex[]>([])
+  const [qualityDebts, setQualityDebts] = useState<QualityDebt[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [filterStatus, setFilterStatus] = useState<string>('all')
 
-  const chapterTitle = useCallback(
-    (num: number) => chapters.find(c => c.sort_order + 1 === num)?.title,
+  const chapterById = useCallback(
+    (chapterId: string) => chapters.find(c => c.id === chapterId),
+    [chapters],
+  )
+  const chapterTitleByDisplayNumber = useCallback(
+    (num: number) => chapters.find(c => displayChapterNumber(c.title, c.sort_order) === num)?.title,
     [chapters],
   )
 
@@ -415,12 +527,14 @@ export default function CluesPage() {
     if (!projectId) return
     setLoading(true)
     try {
-      const [fsRes, ciRes] = await Promise.all([
+      const [fsRes, ciRes, qdRes] = await Promise.all([
         foreshadowsApi.list(projectId),
         chapterIndexesApi.list(projectId),
+        qualityDebtsApi.list(projectId),
       ])
       setForeshadows(fsRes.data)
       setChapterIndexes(ciRes.data)
+      setQualityDebts(qdRes.data)
     } catch {
       toast.error('数据加载失败')
     } finally {
@@ -465,6 +579,18 @@ export default function CluesPage() {
 
   const openCount = foreshadows.filter(f => f.status === 'open').length
   const resolvedCount = foreshadows.filter(f => f.status === 'resolved').length
+  const pendingDebtCount = qualityDebts.filter(d => d.status === 'pending').length
+
+  const handleQualityDebtStatus = async (id: string, status: QualityDebt['status']) => {
+    if (!projectId) return
+    try {
+      const res = await qualityDebtsApi.update(projectId, id, { status })
+      setQualityDebts(prev => prev.map(d => d.id === id ? res.data : d))
+      toast.success('质量债务已更新')
+    } catch {
+      toast.error('更新失败')
+    }
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -473,6 +599,7 @@ export default function CluesPage() {
         {([
           { key: 'foreshadow' as TabKey, label: '伏笔管理', icon: Anchor },
           { key: 'plotarchive' as TabKey, label: '情节档案', icon: ClipboardList },
+          { key: 'qualitydebt' as TabKey, label: '质量债务', icon: AlertTriangle },
         ]).map(({ key, label, icon: Icon }) => (
           <button
             key={key}
@@ -489,6 +616,11 @@ export default function CluesPage() {
             {key === 'foreshadow' && openCount > 0 && (
               <span className="ml-1 text-[10px] bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full font-medium">
                 {openCount}
+              </span>
+            )}
+            {key === 'qualitydebt' && pendingDebtCount > 0 && (
+              <span className="ml-1 text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-medium">
+                {pendingDebtCount}
               </span>
             )}
           </button>
@@ -576,7 +708,7 @@ export default function CluesPage() {
             </div>
           )}
         </div>
-      ) : (
+      ) : activeTab === 'plotarchive' ? (
         /* ── 情节档案 Tab ── */
         <div className="flex-1 overflow-auto p-4 space-y-3">
           <div className="flex items-center justify-between">
@@ -598,7 +730,36 @@ export default function CluesPage() {
                   <ChapterIndexCard
                     key={idx.id}
                     index={idx}
-                    chapterTitle={chapterTitle(idx.chapter_number)}
+                    chapterTitle={chapterById(String(idx.chapter_id))?.title}
+                  />
+                ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        /* ── 质量债务 Tab ── */
+        <div className="flex-1 overflow-auto p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-gray-400">
+              共 {qualityDebts.length} 条债务 · {pendingDebtCount} 条未解决 · 由章节质检自动生成
+            </p>
+          </div>
+          {qualityDebts.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-center gap-3">
+              <AlertTriangle size={32} className="text-gray-200" />
+              <p className="text-sm text-gray-500">暂无质量债务</p>
+              <p className="text-xs text-gray-400">章节质检发现的硬性连续性问题会沉淀到这里</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {[...qualityDebts]
+                .sort((a, b) => a.source_chapter_number - b.source_chapter_number)
+                .map(debt => (
+                  <QualityDebtCard
+                    key={debt.id}
+                    debt={debt}
+                    chapterTitle={chapterTitleByDisplayNumber(debt.source_chapter_number)}
+                    onStatusChange={status => handleQualityDebtStatus(debt.id, status)}
                   />
                 ))}
             </div>

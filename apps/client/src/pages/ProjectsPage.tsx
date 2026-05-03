@@ -55,7 +55,7 @@ export default function ProjectsPage() {
   const [creating, setCreating] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [showWizard, setShowWizard] = useState(false)
-  const [form, setForm] = useState({ title: '', genre: '', logline: '', premise: '' })
+  const [form, setForm] = useState({ title: '', genre: '', logline: '', premise: '', target_words: 1200000 })
 
   useEffect(() => {
     projectsApi.list()
@@ -84,7 +84,7 @@ export default function ProjectsPage() {
       const res = await projectsApi.create(form)
       setProjects(prev => [res.data, ...prev])
       setShowForm(false)
-      setForm({ title: '', genre: '', logline: '', premise: '' })
+      setForm({ title: '', genre: '', logline: '', premise: '', target_words: 1200000 })
       setCurrentProject(res.data)
       navigate(`/project/${res.data.id}/outline`)
     } catch {

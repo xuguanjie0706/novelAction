@@ -362,6 +362,17 @@ def test_gemini_setting_blueprints_cover_world_bible_categories():
     assert blueprints[0]["title"] == "作品立意"
 
 
+def test_safe_int_parses_llm_integer_fields():
+    si = generation_module._safe_int
+    assert si(None, 3) == 3
+    assert si("30", 60) == 30
+    assert si("第12章启动", None) == 12
+    assert si(8, 5, min_v=1, max_v=10) == 8
+    assert si(99, 5, min_v=1, max_v=10) == 10
+    assert si("abc", 7) == 7
+    assert si(0, 5) == 0
+
+
 def test_single_shot_prompt_uses_shared_targets_without_short_array_examples():
     prompt_builder = getattr(generation_module, "_single_shot_prompt", None)
     assert prompt_builder is not None

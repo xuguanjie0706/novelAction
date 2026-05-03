@@ -17,6 +17,7 @@ class BootstrapRequest(BaseModel):
     mode: Literal["sequential", "single_shot"] = "single_shot"
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
+    target_words: int = 1_200_000  # 全书目标字数，驱动卷章结构规划
 
 
 @router.post("/stream")
@@ -39,7 +40,12 @@ async def bootstrap_stream(
     )
 
     async def event_stream():
-        async for chunk in svc.bootstrap(logline=req.logline, premise=req.premise or "", mode=req.mode):
+        async for chunk in svc.bootstrap(
+            logline=req.logline,
+            premise=req.premise or "",
+            mode=req.mode,
+            target_words=req.target_words,
+        ):
             yield chunk
         # 心跳结束
         yield "data: {\"event\": \"end\"}\n\n"

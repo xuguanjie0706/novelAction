@@ -11,7 +11,7 @@ class ProjectCreate(BaseModel):
     premise: Optional[str] = None
     world_overview: Optional[str] = None
     story_core: Optional[dict] = {}
-    target_words: Optional[str] = None
+    target_words: Optional[int] = None
 
 
 class ProjectUpdate(BaseModel):
@@ -22,7 +22,7 @@ class ProjectUpdate(BaseModel):
     world_overview: Optional[str] = None
     story_core: Optional[dict] = None
     status: Optional[str] = None
-    target_words: Optional[str] = None
+    target_words: Optional[int] = None
     cover_url: Optional[str] = None
 
 
@@ -35,7 +35,7 @@ class ProjectOut(BaseModel):
     world_overview: Optional[str]
     story_core: Optional[dict]
     status: str
-    target_words: Optional[str]
+    target_words: Optional[int]
     cover_url: Optional[str]
     created_at: datetime
     updated_at: Optional[datetime]

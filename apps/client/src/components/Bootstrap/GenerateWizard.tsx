@@ -6,6 +6,14 @@ import { llmApi } from '../../api/client'
 import type { LlmOverview } from '../../types'
 import { llmProviderIdFromRoute, modelProfileFromRoute, routeLlmProviderPayload, useAppStore } from '../../store'
 
+// ── 字数目标选项 ──────────────────────────────────────────────
+const WORD_OPTIONS = [
+  { label: '短篇',   value: 800000,  desc: '80万字 · 约6卷' },
+  { label: '标准',   value: 1200000, desc: '120万字 · 约9卷' },
+  { label: '长篇',   value: 1500000, desc: '150万字 · 约11卷' },
+  { label: '超长篇', value: 2000000, desc: '200万字 · 约15卷' },
+] as const
+
 interface Props {
   onClose: () => void
 }
@@ -56,6 +64,8 @@ export default function GenerateWizard({ onClose }: Props) {
   const [phase, setPhase] = useState<'input' | 'generating' | 'done'>('input')
   const [logline, setLogline] = useState('')
   const [mode, setMode] = useState<Mode>('single_shot')
+  const [targetWords, setTargetWords] = useState(1200000)
+  const [customWordMode, setCustomWordMode] = useState(false)
   const [steps, setSteps] = useState<StepState[]>(
     STEP_DEFS.map(s => ({ ...s, status: 'pending' }))
   )
@@ -155,6 +165,7 @@ export default function GenerateWizard({ onClose }: Props) {
         body: JSON.stringify({
           logline: logline.trim(),
           mode,
+          target_words: targetWords,
           model_profile: modelProfileFromRoute(aiBackendRoute),
           ...routeLlmProviderPayload(aiBackendRoute),
         }),
@@ -353,6 +364,61 @@ export default function GenerateWizard({ onClose }: Props) {
                   </div>
                 </button>
               </div>
+            </div>
+
+            {/* 字数目标 */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-medium text-gray-700">全书字数目标</label>
+                <button
+                  type="button"
+                  onClick={() => setCustomWordMode(m => !m)}
+                  className="text-xs text-amber-500 hover:text-amber-600"
+                >
+                  {customWordMode ? '快捷选择' : '自定义'}
+                </button>
+              </div>
+
+              {customWordMode ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={300000}
+                    max={5000000}
+                    step={100000}
+                    value={targetWords}
+                    onChange={e => setTargetWords(Number(e.target.value) || 1200000)}
+                    className="h-9 w-36 rounded-xl border border-gray-200 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                  <span className="text-xs text-gray-400">
+                    字 · 约 {Math.round(targetWords / 2300)} 章 / {Math.ceil(Math.round(targetWords / 2300) / 60)} 卷
+                  </span>
+                </div>
+              ) : (
+                <div className="grid grid-cols-4 gap-2">
+                  {WORD_OPTIONS.map(opt => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setTargetWords(opt.value)}
+                      className={clsx(
+                        'rounded-xl border py-2.5 text-center transition-all',
+                        targetWords === opt.value
+                          ? 'border-amber-400 bg-amber-50 ring-1 ring-amber-300'
+                          : 'border-gray-100 hover:border-gray-200 bg-white'
+                      )}
+                    >
+                      <div className={clsx(
+                        'text-sm font-semibold',
+                        targetWords === opt.value ? 'text-amber-700' : 'text-gray-700'
+                      )}>
+                        {opt.label}
+                      </div>
+                      <div className="text-[10px] text-gray-400 mt-0.5 leading-tight">{opt.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             <button

@@ -398,11 +398,850 @@ def _chapter_duplicate_signature(chapter: dict) -> tuple[str, str, str] | None:
     return (core_event, character_change, end_hook)
 
 
-def _detect_outline_hard_rule_issues(chapters: list[dict]) -> dict:
+# 传统修真术语池：当项目自定义的 PowerSystem 不包含这些词时，出现即视为体系漂移。
+# 命中时按 critical 处理，要求重写章节大纲。
+TRADITIONAL_CULTIVATION_BLACKLIST: set[str] = {
+    # 仙侠九境（练气→飞升）
+    "练气", "炼气", "筑基", "金丹", "结丹", "元婴", "化神",
+    "炼虚", "合体", "大乘", "渡劫", "飞升",
+    # 仙人位阶
+    "真仙", "天仙", "玄仙", "金仙", "大罗金仙", "罗汉", "菩萨",
+    # 斗气大陆体系（来自《斗破苍穹》，作为模仿参考时不应直接照搬术语）
+    "斗者", "斗师", "大斗师", "斗灵", "斗王", "斗皇", "斗宗", "斗尊", "斗圣", "斗帝",
+    # 完美世界/遮天体系
+    "搬血", "洞天", "化灵", "铸神",
+    # 武道
+    "宗师境", "大宗师", "武圣", "武神",
+}
+
+# 玄幻/仙侠题材下的现代/科幻词汇黑名单。
+MODERN_BLACKLIST_FOR_XUANHUAN: set[str] = {
+    "AI", "人工智能", "芯片", "量子", "基因实验室", "克隆体",
+    "电脑", "服务器", "处理器", "代码块",
+    "宇宙飞船", "星舰", "机甲", "机器人",
+    "激光炮", "等离子", "纳米机器人",
+}
+
+# 在 character_change 中出现这些词时，视为已交代境界跌落/重伤的合理代价，跳过回退告警。
+REALM_REGRESSION_TRIGGER_WORDS: set[str] = {
+    "跌落", "重伤", "被封", "废功", "重创", "反噬", "失去修为",
+    "境界跌落", "修为尽失", "被封印", "受重创", "走火入魔",
+    "境界倒退", "修为跌落", "压制", "副作用", "代价", "透支",
+    "封印", "燃烧寿元", "烧寿命", "夺舍",
+}
+
+# 角色死亡 / 永久退场标记词；命中即视为该章节宣告该角色离场。
+CHARACTER_DEATH_MARKERS: set[str] = {
+    "牺牲", "殒落", "陨落", "阵亡", "身死", "去世", "死亡",
+    "魂飞魄散", "自毁", "同归于尽", "暴毙", "猝死", "战死",
+    "身殒", "殉道", "献祭", "永镇", "魂消", "魂灭",
+}
+
+# 死亡后再次出场的合理回收机制。命中其一视为已交代复活/化身/假死。
+CHARACTER_REVIVAL_TRIGGERS: set[str] = {
+    "归来", "重生", "复活", "苏醒", "神魂", "残识", "寄宿",
+    "化身", "分身", "虚影", "假死", "重塑", "复苏",
+    "夺舍", "转世", "魂归", "执念", "藏身", "潜伏",
+    "残魂", "魂魄", "传承", "意志", "回光返照",
+}
+
+# 角色"主动登场"信号词；在角色名附近命中说明该章里有该角色的实际行动。
+CHARACTER_ACTIVE_APPEARANCE_VERBS: set[str] = {
+    "送来", "送给", "送出", "提供", "告诉", "告知", "出手",
+    "现身", "登场", "援助", "救下", "保护", "联手",
+    "传授", "交给", "递给", "示警", "嘱咐", "说道",
+    "解释", "出现在", "回来", "重返", "出关",
+}
+
+# 自我决定型主题指纹：项目主题包含其中任一关键词时视为「凡人逆袭」类立意，
+# 此时不应该用「天选血脉/完美炉胎」等设定为主角强大背书。
+SELF_DETERMINATION_THEME_KEYWORDS: set[str] = {
+    "我命由我", "我命", "凡人", "草根", "自律", "苦修", "苦练",
+    "逆袭", "后天突破", "后天", "不靠天赋", "不靠血脉",
+    "白手起家", "平凡", "普通人",
+}
+
+# 反主题揭露：把主角强大归因于「被选中/血脉/天命/转世」的设定。
+# 仅在主题为自我决定型时才视为冲突。
+DESTINY_REVEAL_PATTERNS: set[str] = {
+    "完美炉胎", "完美载体", "完美容器", "天选之子", "天选之人",
+    "天命之人", "命定之人", "选中", "选定",
+    "血脉觉醒", "神血", "上古血脉", "帝者血脉", "古神血脉",
+    "神族后裔", "古神后裔", "圣血",
+    "天命", "宿命", "注定", "命中注定",
+    "转世重生", "真神转世", "古神转世", "上古真灵",
+    "先天道体", "先天圣体", "万年灵根", "万古一帝", "天纵之资",
+    "炉胎", "载体", "实验体", "试验体",
+}
+
+# 强主角指代标记：仅当 protagonist_names 不可用时使用的回退指代词。
+# 故意比较窄，避免命中 NPC 真相揭露（如「圣塔少主原来是炉胎」）。
+PROTAGONIST_CONTEXT_HINTS: set[str] = {
+    "主角", "他本是", "他原本", "他实际", "他真正", "他乃是",
+    "他天生其实",
+}
+
+
+def _collect_power_system_whitelist(power_systems) -> set[str]:
+    """从所有 PowerSystem.levels 抽取合法境界名（含去掉「境」后缀的简写）。"""
+    whitelist: set[str] = set()
+    for system in power_systems or []:
+        name = (getattr(system, "name", None) or "").strip()
+        if name:
+            whitelist.add(name)
+        levels = getattr(system, "levels", None)
+        if not isinstance(levels, list):
+            continue
+        for level in levels:
+            if not isinstance(level, dict):
+                continue
+            level_name = (level.get("name") or "").strip()
+            if not level_name:
+                continue
+            whitelist.add(level_name)
+            if level_name.endswith("境") and len(level_name) > 1:
+                whitelist.add(level_name[:-1])
+    return whitelist
+
+
+def _build_realm_rank_map(power_systems) -> tuple[dict[str, int], int | None, int | None]:
+    """构造 {境界名: rank} 映射，并返回 (map, max_system_rank, declared_protagonist_end_rank)."""
+    name_to_rank: dict[str, int] = {}
+    max_rank = 0
+    end_rank: int | None = None
+    for system in power_systems or []:
+        levels = getattr(system, "levels", None)
+        if isinstance(levels, list):
+            for level in levels:
+                if not isinstance(level, dict):
+                    continue
+                level_name = (level.get("name") or "").strip()
+                rank = level.get("rank")
+                if not level_name or not isinstance(rank, int) or rank <= 0:
+                    continue
+                if level_name not in name_to_rank or rank > name_to_rank[level_name]:
+                    name_to_rank[level_name] = rank
+                if level_name.endswith("境") and len(level_name) > 1:
+                    bare = level_name[:-1]
+                    if bare not in name_to_rank or rank > name_to_rank[bare]:
+                        name_to_rank[bare] = rank
+                if rank > max_rank:
+                    max_rank = rank
+        declared = getattr(system, "protagonist_end_rank", None)
+        if isinstance(declared, int) and declared > 0:
+            end_rank = max(end_rank or 0, declared)
+    return name_to_rank, (max_rank or None), end_rank
+
+
+def _scan_banned_terms(text: str, banned: set[str]) -> set[str]:
+    if not text:
+        return set()
+    return {term for term in banned if term and term in text}
+
+
+def _detect_outline_terminology_issues(
+    chapters: list[dict],
+    *,
+    power_systems,
+    genre: str = "",
+) -> list[dict]:
+    """
+    扫描章节大纲文本，识别两类术语脱轨：
+      1. 项目 PowerSystem 之外的传统修真术语（critical）。
+      2. 玄幻题材下的现代/科幻词汇（critical）。
+    """
+    if power_systems is None:
+        return []
+    whitelist = _collect_power_system_whitelist(power_systems)
+    cultivation_pool = {term for term in TRADITIONAL_CULTIVATION_BLACKLIST if term not in whitelist}
+    is_xuanhuan = _is_xuanhuan_like_genre(genre)
+    modern_pool = MODERN_BLACKLIST_FOR_XUANHUAN if is_xuanhuan else set()
+
+    if not cultivation_pool and not modern_pool:
+        return []
+
+    issues: list[dict] = []
+    whitelist_label = "、".join(sorted(whitelist)) if whitelist else "（项目尚未配置力量体系）"
+
+    for chapter in chapters:
+        number = chapter.get("number")
+        if not isinstance(number, int):
+            continue
+        text_blob = " | ".join(
+            str(chapter.get(field, ""))
+            for field in ("title", "opening_hook", "core_event", "character_change", "foreshadow", "end_hook")
+        )
+        cultivation_hits = sorted(_scan_banned_terms(text_blob, cultivation_pool))
+        modern_hits = sorted(_scan_banned_terms(text_blob, modern_pool))
+
+        if cultivation_hits:
+            issues.append({
+                "severity": "critical",
+                "type": "continuity",
+                "chapter_numbers": [number],
+                "description": (
+                    f"第{number}章使用了项目力量体系外的修真术语：{'、'.join(cultivation_hits)}。"
+                    f"项目实际境界白名单：{whitelist_label[:160]}。"
+                    "需替换为项目自定义境界，否则破坏世界观一致性，连锁影响后续卷设定。"
+                ),
+                "suggested_patch": {
+                    "chapter_number": number,
+                    "field": "core_event",
+                    "replacement": "",
+                },
+            })
+        if modern_hits:
+            issues.append({
+                "severity": "critical",
+                "type": "continuity",
+                "chapter_numbers": [number],
+                "description": (
+                    f"第{number}章在玄幻/仙侠题材下出现现代/科幻词汇：{'、'.join(modern_hits)}。"
+                    "需改写为东方玄幻意象（阵法中枢、古禁制、神纹、天机枢纽、血脉禁室等）。"
+                ),
+                "suggested_patch": {
+                    "chapter_number": number,
+                    "field": "core_event",
+                    "replacement": "",
+                },
+            })
+    return issues
+
+
+def _extract_protagonist_realm_rank(
+    chapter: dict,
+    name_to_rank: dict[str, int],
+) -> int | None:
+    """
+    仅扫描 character_change 字段（描述「谁的认知/处境/关系发生变化」），
+    避免把对手境界误判为主角境界。返回该章节出现的最大 rank。
+    """
+    text = str(chapter.get("character_change") or "")
+    if not text or not name_to_rank:
+        return None
+    found_rank: int | None = None
+    for name, rank in name_to_rank.items():
+        if name and name in text:
+            if found_rank is None or rank > found_rank:
+                found_rank = rank
+    return found_rank
+
+
+def _detect_outline_power_curve_issues(
+    chapters: list[dict],
+    *,
+    power_systems,
+    scope: str = "volume",
+) -> list[dict]:
+    """
+    战力曲线确定性校验：
+      1. 主角境界回落 ≥ 2 级 但 character_change 未交代代价 → high。
+      2. 在书级范围下，主角已抵达终点境界但剩余章节 > 25%（且总章 > 60）→ high pacing。
+    """
+    if not power_systems:
+        return []
+    name_to_rank, max_system_rank, declared_end_rank = _build_realm_rank_map(power_systems)
+    if not name_to_rank:
+        return []
+
+    sorted_chapters = sorted(
+        [c for c in chapters if isinstance(c.get("number"), int)],
+        key=lambda c: c["number"],
+    )
+    total_chapters = len(sorted_chapters)
+    if total_chapters == 0:
+        return []
+
+    issues: list[dict] = []
+    running_max = 0
+    last_peak_chapter: int | None = None
+    for chapter in sorted_chapters:
+        rank = _extract_protagonist_realm_rank(chapter, name_to_rank)
+        if rank is None:
+            continue
+        number = chapter["number"]
+        change_text = str(chapter.get("character_change") or "")
+        has_trigger = any(trig in change_text for trig in REALM_REGRESSION_TRIGGER_WORDS)
+        if rank + 2 <= running_max and not has_trigger:
+            issues.append({
+                "severity": "high",
+                "type": "continuity",
+                "chapter_numbers": [number],
+                "description": (
+                    f"第{number}章主角境界回落到 rank{rank}（character_change 提及），"
+                    f"但前文最高已达 rank{running_max}，本章未在 character_change 交代"
+                    "跌落/重伤/反噬/封印/透支寿元等代价机制，属于无解释的境界倒退。"
+                ),
+                "suggested_patch": {
+                    "chapter_number": number,
+                    "field": "character_change",
+                    "replacement": "",
+                },
+            })
+        if rank > running_max:
+            running_max = rank
+            last_peak_chapter = number
+
+    if scope == "book" and last_peak_chapter is not None and total_chapters >= 60:
+        target_end_rank = declared_end_rank if declared_end_rank else max_system_rank
+        if target_end_rank and running_max >= target_end_rank:
+            remaining = total_chapters - last_peak_chapter
+            remaining_ratio = remaining / total_chapters if total_chapters else 0
+            if remaining_ratio > 0.25:
+                issues.append({
+                    "severity": "high",
+                    "type": "pacing",
+                    "chapter_numbers": [last_peak_chapter],
+                    "description": (
+                        f"第{last_peak_chapter}章主角境界已达 rank{running_max}"
+                        f"（接近/达到终点 rank{target_end_rank}），但全书剩余 {remaining} 章"
+                        f"（约 {remaining_ratio:.0%}），后期境界提升空间已耗尽，"
+                        "必然导致跨地图速刷或重复刷怪。建议放缓中段境界推进，"
+                        "或在大纲规划层（plan_full_structure）扩展终点境界与卷数。"
+                    ),
+                    "suggested_patch": {
+                        "chapter_number": last_peak_chapter,
+                        "field": "core_event",
+                        "replacement": "",
+                    },
+                })
+
+    return issues
+
+
+def _name_near_marker(text: str, name: str, markers, window: int = 18) -> bool:
+    """检查 text 中 name 出现位置 ±window 字符内是否有任一 marker。"""
+    if not name or not text:
+        return False
+    pos = 0
+    while True:
+        i = text.find(name, pos)
+        if i == -1:
+            return False
+        snippet = text[max(0, i - window): i + len(name) + window]
+        for m in markers:
+            if m and m in snippet:
+                return True
+        pos = i + len(name)
+
+
+def _collect_character_aliases(characters) -> dict[str, str]:
+    """构造 {name_or_alias: canonical_name} 映射；按长度降序排序便于后续优先匹配长名。"""
+    name_to_canonical: dict[str, str] = {}
+    for char in characters or []:
+        canonical = (getattr(char, "name", None) or "").strip()
+        if not canonical:
+            continue
+        name_to_canonical[canonical] = canonical
+        aliases = getattr(char, "alias", None)
+        if isinstance(aliases, list):
+            for alias in aliases:
+                if isinstance(alias, str):
+                    a = alias.strip()
+                    if a and a not in name_to_canonical:
+                        name_to_canonical[a] = canonical
+    return name_to_canonical
+
+
+def _detect_outline_character_death_continuity(
+    chapters: list[dict],
+    *,
+    characters,
+) -> list[dict]:
+    """
+    检测角色死亡后无机制再次主动登场。
+    判断流程（按章节顺序）：
+      1. 章节文本中角色名 ±18 字符内出现死亡词 → 标记该角色为已宣告死亡。
+      2. 已宣告死亡的角色，若后续章节出现复活类触发词 → 视为机制说明，重置警戒。
+      3. 已宣告死亡且未交代复活时，再次出现主动登场动词 → critical issue。
+    仅扫描 core_event/character_change/end_hook 等剧情字段，不扫描 foreshadow（伏笔
+    可以提及死者而不构成实际登场）。
+    """
+    if not characters:
+        return []
+    name_to_canonical = _collect_character_aliases(characters)
+    if not name_to_canonical:
+        return []
+
+    sorted_chapters = sorted(
+        [c for c in chapters if isinstance(c.get("number"), int)],
+        key=lambda c: c["number"],
+    )
+
+    death_state: dict[str, int] = {}     # canonical -> first death chapter
+    explained_after: dict[str, int] = {}  # canonical -> chapter where revival explained
+    issues: list[dict] = []
+    seen_pair: set[tuple[str, int]] = set()
+
+    # 长名优先匹配，避免 "鬼手长老" 命中 "鬼手"
+    sorted_names = sorted(name_to_canonical.keys(), key=len, reverse=True)
+
+    for chapter in sorted_chapters:
+        number = chapter["number"]
+        text_blob = " | ".join(
+            str(chapter.get(field, ""))
+            for field in ("title", "opening_hook", "core_event", "character_change", "end_hook")
+        )
+        if not text_blob:
+            continue
+
+        for raw_name in sorted_names:
+            canonical = name_to_canonical[raw_name]
+            if raw_name not in text_blob:
+                continue
+
+            # 1) 死亡宣告
+            if canonical not in death_state:
+                if _name_near_marker(text_blob, raw_name, CHARACTER_DEATH_MARKERS, window=22):
+                    death_state[canonical] = number
+                continue
+
+            # 2) 已死亡，本章是否给出复活机制
+            if canonical not in explained_after:
+                if _name_near_marker(text_blob, raw_name, CHARACTER_REVIVAL_TRIGGERS, window=22):
+                    explained_after[canonical] = number
+                    continue
+                # 3) 检测主动登场
+                if _name_near_marker(text_blob, raw_name, CHARACTER_ACTIVE_APPEARANCE_VERBS, window=14):
+                    pair_key = (canonical, number)
+                    if pair_key in seen_pair:
+                        continue
+                    seen_pair.add(pair_key)
+                    issues.append({
+                        "severity": "critical",
+                        "type": "continuity",
+                        "chapter_numbers": [death_state[canonical], number],
+                        "description": (
+                            f"《{canonical}》在第{death_state[canonical]}章被宣告死亡/殒落/自毁，"
+                            f"但在第{number}章再次主动登场（提供道具/援助/现身/出手），"
+                            "且本章未交代复活、神魂寄宿、假死、化身、传承等机制；属于角色生死逻辑断层。"
+                            "建议在死亡章节加埋[残魂寄宿于X物]或在再现章节明确化身/分身/复苏触发词。"
+                        ),
+                        "suggested_patch": {
+                            "chapter_number": number,
+                            "field": "character_change",
+                            "replacement": "",
+                        },
+                    })
+
+    return issues
+
+
+def _theme_is_self_determination(theme_statement: str, premise: str = "") -> bool:
+    """判断项目主题是否属于「凡人逆袭」类。"""
+    blob = f"{theme_statement or ''} || {premise or ''}"
+    if not blob.strip():
+        return False
+    return any(kw in blob for kw in SELF_DETERMINATION_THEME_KEYWORDS)
+
+
+def _detect_outline_theme_alignment_issues(
+    chapters: list[dict],
+    *,
+    theme_statement: str = "",
+    premise: str = "",
+    protagonist_names: list[str] | None = None,
+) -> list[dict]:
+    """
+    主题对齐校验：当主题属于「凡人逆袭」类时，章节中出现「完美炉胎/天选/血脉觉醒/
+    转世重生/帝者血脉/圣体/道体」等揭露 + 主角指代 → medium。
+
+    注意只扫描 core_event 与 character_change（揭露主角真实身份的字段），
+    不扫描 foreshadow（埋伏笔可以提及这些词）。
+    """
+    if not _theme_is_self_determination(theme_statement, premise):
+        return []
+
+    sorted_chapters = sorted(
+        [c for c in chapters if isinstance(c.get("number"), int)],
+        key=lambda c: c["number"],
+    )
+    if not sorted_chapters:
+        return []
+
+    # 主角名片：优先方案（强精度）。未提供时退化为「揭露必须出现在
+    # character_change 字段」的回退方案——character_change 通常描述主角变化，
+    # 即便提及 NPC 也更可能是与主角相关的弧线节点。
+    protagonist_set = {n.strip() for n in (protagonist_names or []) if n and isinstance(n, str)}
+
+    issues: list[dict] = []
+    seen_chapters: set[int] = set()
+
+    for chapter in sorted_chapters:
+        number = chapter["number"]
+        if number in seen_chapters:
+            continue
+        text_blob = " | ".join(
+            str(chapter.get(field, ""))
+            for field in ("title", "core_event", "character_change", "end_hook")
+        )
+        if not text_blob:
+            continue
+
+        revealed = sorted(p for p in DESTINY_REVEAL_PATTERNS if p in text_blob)
+        if not revealed:
+            continue
+
+        if protagonist_set:
+            # 强精度：揭露词必须出现在主角名 ±30 字符内
+            has_protagonist_marker = any(
+                _name_near_marker(text_blob, name, revealed, window=30)
+                for name in protagonist_set
+            )
+        else:
+            # 回退：揭露词必须出现在 character_change 字段，或匹配窄主角指代
+            char_change_text = str(chapter.get("character_change") or "")
+            has_protagonist_marker = (
+                any(p in char_change_text for p in revealed)
+                or any(hint in text_blob for hint in PROTAGONIST_CONTEXT_HINTS)
+            )
+        if not has_protagonist_marker:
+            continue
+
+        seen_chapters.add(number)
+        issues.append({
+            "severity": "medium",
+            "type": "theme_alignment",
+            "chapter_numbers": [number],
+            "description": (
+                f"第{number}章揭示主角真实身份/起源时使用了「{('、'.join(revealed))[:80]}」类设定，"
+                "把主角强大归因于「被选中/血脉/天命」，与「我命由我 / 凡人逆袭 / 草根崛起」"
+                "类立意相冲突，会削弱草根爽感。"
+                "建议改写为「主角原本是实验残次品 / 被弃用炉胎 / 被否定的载体」，"
+                "再以后天苦修把『注定』改写成『逆天』，强化主题。"
+            ),
+            "suggested_patch": {
+                "chapter_number": number,
+                "field": "core_event",
+                "replacement": "",
+            },
+        })
+
+    return issues
+
+
+# ─────────────────────────────────────────────────────────────
+#  Foreshadow ledger auditor
+# ─────────────────────────────────────────────────────────────
+
+def _detect_outline_foreshadow_issues(
+    chapters: list[dict],
+    *,
+    foreshadows,
+) -> list[dict]:
+    """
+    伏笔台账确定性审计（基于 Foreshadow 表）：
+      1. 已过期未回收：status=open + planned_resolve_chapter < 当前最新章号 → high pacing。
+      2. 高优先级长期挂账：priority>=4 + status=open + 跨度 > 100 章 → medium。
+      3. 主线被弃：priority>=5 + status=dropped → high continuity。
+    """
+    if not foreshadows:
+        return []
+    sorted_chapters = sorted(
+        [c.get("number") for c in chapters if isinstance(c.get("number"), int)]
+    )
+    if not sorted_chapters:
+        return []
+    latest_chapter = sorted_chapters[-1]
+
+    issues: list[dict] = []
+
+    for f in foreshadows:
+        title = (getattr(f, "title", None) or "未命名伏笔").strip() or "未命名伏笔"
+        code = (getattr(f, "code", None) or "").strip()
+        label = f"{code}「{title}」" if code else f"「{title}」"
+        status = (getattr(f, "status", None) or "open").strip()
+        priority = getattr(f, "priority", None) or 3
+        laid_no = getattr(f, "laid_chapter_number", None)
+        planned_no = getattr(f, "planned_resolve_chapter", None)
+
+        # Rule 3: critical priority dropped
+        if status == "dropped" and isinstance(priority, int) and priority >= 5:
+            anchor_chapter = laid_no if isinstance(laid_no, int) else latest_chapter
+            issues.append({
+                "severity": "high",
+                "type": "continuity",
+                "chapter_numbers": [anchor_chapter],
+                "description": (
+                    f"高优先级伏笔 {label}（priority={priority}）状态为 dropped，"
+                    "属于关键主线悬念被丢弃，会让前期铺垫变成无效投入。"
+                    "建议恢复 status=open 并安排在合适卷末回收，或在 character_change 中明确「悬念失效原因」。"
+                ),
+                "suggested_patch": {
+                    "chapter_number": anchor_chapter,
+                    "field": "foreshadow",
+                    "replacement": "",
+                },
+            })
+            continue
+
+        if status != "open":
+            continue
+
+        # Rule 1: planned resolution overdue
+        if isinstance(planned_no, int) and planned_no > 0 and planned_no < latest_chapter:
+            issues.append({
+                "severity": "high",
+                "type": "pacing",
+                "chapter_numbers": [planned_no],
+                "description": (
+                    f"伏笔 {label} 计划于第 {planned_no} 章回收，但全书已写到第 {latest_chapter} 章"
+                    "仍未结清，属于已过期未回收。"
+                    "建议在最近卷末追加回收章节，或显式 dropped 并交代「悬念被新冲突替代」。"
+                ),
+                "suggested_patch": {
+                    "chapter_number": planned_no,
+                    "field": "foreshadow",
+                    "replacement": "",
+                },
+            })
+            continue
+
+        # Rule 2: high-priority long-aged open
+        if (
+            isinstance(priority, int)
+            and priority >= 4
+            and isinstance(laid_no, int)
+            and laid_no > 0
+            and (latest_chapter - laid_no) > 100
+        ):
+            issues.append({
+                "severity": "medium",
+                "type": "pacing",
+                "chapter_numbers": [laid_no],
+                "description": (
+                    f"高优先级伏笔 {label}（priority={priority}）在第 {laid_no} 章埋下，"
+                    f"距今已跨越 {latest_chapter - laid_no} 章仍未回收，长期挂账会让读者忘记前文铺垫。"
+                    "建议在中段卷末安排显性进展（部分回收/再激活）以维持紧张感。"
+                ),
+                "suggested_patch": {
+                    "chapter_number": laid_no,
+                    "field": "foreshadow",
+                    "replacement": "",
+                },
+            })
+
+    return issues
+
+
+# ─────────────────────────────────────────────────────────────
+#  Embedding-based soft duplicate detection
+# ─────────────────────────────────────────────────────────────
+
+# 把每章压成一段文本喂给 embedding，再做余弦比较。
+# 余弦阈值参考：
+#   ≥ 0.92 → 几乎确定重复（critical）
+#   ≥ 0.85 → 高度相似软重复（high）
+#   ≥ 0.78 → 怀疑同质化（medium）
+SEMANTIC_DUP_THRESHOLD_HIGH = 0.85
+SEMANTIC_DUP_THRESHOLD_MEDIUM = 0.78
+SEMANTIC_DUP_WINDOW_VOLUME = 9999      # volume 范围内全配对
+SEMANTIC_DUP_WINDOW_BOOK = 60          # book 范围内只比相邻 60 章
+
+
+def _outline_chapter_signature_text(chapter: dict) -> str:
+    parts: list[str] = []
+    for field in ("title", "core_event", "character_change", "end_hook"):
+        text = _clean_outline_text(chapter.get(field), 220)
+        if text:
+            parts.append(text)
+    return " || ".join(parts)
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        norm_a += x * x
+        norm_b += y * y
+    if norm_a <= 0 or norm_b <= 0:
+        return 0.0
+    return dot / (norm_a ** 0.5 * norm_b ** 0.5)
+
+
+def _detect_outline_embedding_duplicates(
+    chapters: list[dict],
+    vectors_by_number: dict[int, list[float]],
+    *,
+    scope: str = "volume",
+    threshold_high: float = SEMANTIC_DUP_THRESHOLD_HIGH,
+    threshold_medium: float = SEMANTIC_DUP_THRESHOLD_MEDIUM,
+) -> list[dict]:
+    """
+    纯函数：对已经向量化好的章节做两两余弦比较，超过阈值视为软重复。
+      - cosine ≥ threshold_high → high 严重度（追读节奏受损）。
+      - cosine ≥ threshold_medium → medium 严重度（提示同质化）。
+    跨距过远的对（在 book 范围下 > SEMANTIC_DUP_WINDOW_BOOK）不参与比较。
+    """
+    if not chapters or len(vectors_by_number) < 2:
+        return []
+    sorted_chapters = sorted(
+        [c for c in chapters if isinstance(c.get("number"), int) and c["number"] in vectors_by_number],
+        key=lambda c: c["number"],
+    )
+    if len(sorted_chapters) < 2:
+        return []
+
+    window = SEMANTIC_DUP_WINDOW_VOLUME if scope == "volume" else SEMANTIC_DUP_WINDOW_BOOK
+
+    issues: list[dict] = []
+    seen_pairs: set[tuple[int, int]] = set()
+
+    for i, ch_a in enumerate(sorted_chapters):
+        n_a = ch_a["number"]
+        v_a = vectors_by_number[n_a]
+        for ch_b in sorted_chapters[i + 1:]:
+            n_b = ch_b["number"]
+            if n_b - n_a > window:
+                break
+            pair = (n_a, n_b)
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            v_b = vectors_by_number[n_b]
+            sim = _cosine_similarity(v_a, v_b)
+            if sim >= threshold_high:
+                severity = "high"
+            elif sim >= threshold_medium:
+                severity = "medium"
+            else:
+                continue
+            label_a = _clean_outline_text(ch_a.get("title"), 32) or f"第{n_a}章"
+            label_b = _clean_outline_text(ch_b.get("title"), 32) or f"第{n_b}章"
+            issues.append({
+                "severity": severity,
+                "type": "duplicate_event",
+                "chapter_numbers": [n_a, n_b],
+                "description": (
+                    f"第{n_a}章《{label_a}》与第{n_b}章《{label_b}》语义相似度 {sim:.2f}，"
+                    "两章在核心事件、人物变化和章末钩子上高度同质，会让读者产生"
+                    "「重复看了一遍」的疲劳感。建议拆解为「阶段性失败 → 卷末高潮」"
+                    "的递进结构，避免同一目标被反复完成。"
+                ),
+                "suggested_patch": {
+                    "chapter_number": n_b,
+                    "field": "core_event",
+                    "replacement": "",
+                },
+            })
+
+    return issues
+
+
+async def compute_outline_chapter_vectors(
+    chapters: list[dict],
+) -> dict[int, list[float]]:
+    """
+    异步：对每个章节签名文本调 embedding_service.embed_texts 拿向量。
+    任何失败都安全降级返回空 dict（不影响 QC 主流程）。
+    """
+    from app.services.embedding_service import embed_texts
+
+    pairs: list[tuple[int, str]] = []
+    for chapter in chapters:
+        number = chapter.get("number")
+        if not isinstance(number, int):
+            continue
+        text = _outline_chapter_signature_text(chapter)
+        if not text:
+            continue
+        pairs.append((number, text))
+    if len(pairs) < 2:
+        return {}
+    try:
+        vectors = await embed_texts([text for _, text in pairs])
+    except Exception:
+        return {}
+    if not vectors or len(vectors) != len(pairs):
+        return {}
+    return {number: vec for (number, _), vec in zip(pairs, vectors) if isinstance(vec, list)}
+
+
+async def analyze_outline_embedding_duplicates(
+    chapters: list[dict],
+    *,
+    scope: str = "volume",
+) -> dict:
+    """
+    异步包装：取向量 → 比对 → 返回与 _detect_outline_hard_rule_issues 同结构的报告。
+    embedding 不可用或失败时返回 pass 报告，不阻塞 QC。
+    """
+    vectors = await compute_outline_chapter_vectors(chapters)
+    if not vectors:
+        return {
+            "overall_score": 100,
+            "status": "pass",
+            "summary": "embedding 语义去重未运行（向量服务不可用或样本不足）。",
+            "issues": [],
+            "must_fix_chapter_numbers": [],
+        }
+    issues = _detect_outline_embedding_duplicates(chapters, vectors, scope=scope)
+    if not issues:
+        return {
+            "overall_score": 100,
+            "status": "pass",
+            "summary": "embedding 语义去重未发现软重复。",
+            "issues": [],
+            "must_fix_chapter_numbers": [],
+        }
+    must_fix = sorted({
+        n for issue in issues for n in issue.get("chapter_numbers", []) if isinstance(n, int)
+    })
+    score = min(_HARD_RULE_SEVERITY_TO_SCORE.get(i.get("severity", ""), 80) for i in issues)
+    return {
+        "overall_score": score,
+        "status": "fail",
+        "summary": f"embedding 语义去重发现 {len(issues)} 对软重复章节。",
+        "issues": issues,
+        "must_fix_chapter_numbers": must_fix,
+    }
+
+
+_HARD_RULE_SEVERITY_TO_SCORE: dict[str, int] = {
+    "critical": 55,
+    "high": 70,
+    "medium": 80,
+    "low": 90,
+}
+
+
+def _detect_outline_hard_rule_issues(
+    chapters: list[dict],
+    *,
+    power_systems=None,
+    genre: str = "",
+    scope: str = "volume",
+    characters=None,
+    theme_statement: str = "",
+    premise: str = "",
+    foreshadows=None,
+) -> dict:
     """
     Deterministic outline checks for failures that should not depend on LLM judgment.
-    Keep this narrow: exact mirrored chapter endings are always structural defects.
+    Sub-checks:
+      1. Exact mirrored chapter endings (duplicate_event / critical) — always on.
+      2. Power-system terminology drift (continuity / critical) — when power_systems provided.
+      3. Realm regression without trigger + end-of-book pacing collapse
+         (continuity / pacing / high) — when power_systems provided.
+      4. Character death without revival mechanism (continuity / critical)
+         — when characters provided.
+      5. Theme alignment (theme_alignment / medium) — when theme_statement contains
+         self-determination keywords (我命由我 / 凡人逆袭 / 草根崛起 ...).
+      6. Foreshadow ledger overdue / abandoned (pacing or continuity / medium-high)
+         — when foreshadows provided.
+
+    Backward compatibility: when all extra context kwargs are absent, only the
+    duplicate_event check runs and the original score (55 on fail, 100 on pass) is
+    preserved.
     """
+    issues: list[dict] = []
+    must_fix: set[int] = set()
+
+    # Sub-check 1: exact mirrored core_event/character_change/end_hook (existing logic)
     signatures: dict[tuple[str, str, str], list[int]] = {}
     for chapter in chapters:
         signature = _chapter_duplicate_signature(chapter)
@@ -413,9 +1252,6 @@ def _detect_outline_hard_rule_issues(chapters: list[dict]) -> dict:
             **signatures,
             signature: [*signatures.get(signature, []), number],
         }
-
-    issues = []
-    must_fix: set[int] = set()
     for numbers in signatures.values():
         if len(numbers) < 2:
             continue
@@ -436,6 +1272,69 @@ def _detect_outline_hard_rule_issues(chapters: list[dict]) -> dict:
             },
         })
 
+    # Sub-check 2: terminology hard whitelist/blacklist
+    terminology_issues = _detect_outline_terminology_issues(
+        chapters,
+        power_systems=power_systems,
+        genre=genre,
+    )
+    for issue in terminology_issues:
+        for number in issue.get("chapter_numbers", []) or []:
+            if isinstance(number, int):
+                must_fix.add(number)
+    issues.extend(terminology_issues)
+
+    # Sub-check 3: realm regression + end-of-book pacing
+    power_curve_issues = _detect_outline_power_curve_issues(
+        chapters,
+        power_systems=power_systems,
+        scope=scope,
+    )
+    for issue in power_curve_issues:
+        for number in issue.get("chapter_numbers", []) or []:
+            if isinstance(number, int):
+                must_fix.add(number)
+    issues.extend(power_curve_issues)
+
+    # Sub-check 4: character death continuity
+    death_issues = _detect_outline_character_death_continuity(
+        chapters,
+        characters=characters,
+    )
+    for issue in death_issues:
+        for number in issue.get("chapter_numbers", []) or []:
+            if isinstance(number, int):
+                must_fix.add(number)
+    issues.extend(death_issues)
+
+    # Sub-check 5: theme alignment
+    protagonist_names = [
+        getattr(char, "name", None) for char in (characters or [])
+        if getattr(char, "role", None) == "protagonist" and getattr(char, "name", None)
+    ]
+    theme_issues = _detect_outline_theme_alignment_issues(
+        chapters,
+        theme_statement=theme_statement,
+        premise=premise,
+        protagonist_names=protagonist_names,
+    )
+    for issue in theme_issues:
+        for number in issue.get("chapter_numbers", []) or []:
+            if isinstance(number, int):
+                must_fix.add(number)
+    issues.extend(theme_issues)
+
+    # Sub-check 6: foreshadow ledger
+    foreshadow_issues = _detect_outline_foreshadow_issues(
+        chapters,
+        foreshadows=foreshadows,
+    )
+    for issue in foreshadow_issues:
+        for number in issue.get("chapter_numbers", []) or []:
+            if isinstance(number, int):
+                must_fix.add(number)
+    issues.extend(foreshadow_issues)
+
     if not issues:
         return {
             "overall_score": 100,
@@ -445,8 +1344,13 @@ def _detect_outline_hard_rule_issues(chapters: list[dict]) -> dict:
             "must_fix_chapter_numbers": [],
         }
 
+    score = min(
+        _HARD_RULE_SEVERITY_TO_SCORE.get(issue.get("severity", ""), 80)
+        for issue in issues
+    )
+
     return {
-        "overall_score": 55,
+        "overall_score": score,
         "status": "fail",
         "summary": f"硬规则发现 {len(issues)} 个确定性结构问题。",
         "issues": issues,
@@ -927,7 +1831,9 @@ async def ai_expand_outline(
 # ─────────────────────────────────────────────────────────────
 
 class FullGenerateRequest(BaseModel):
-    scale_hint: str = "auto"      # micro / auto / short / medium / long / epic — 篇幅倾向，后端按 60 章/卷校准
+    # scale_hint 已废弃：卷章数现在由 project.target_words 驱动。
+    # 保留字段以兼容旧前端调用，后端将忽略它。
+    scale_hint: str = "auto"
     theme_statement: Optional[str] = None
     model_profile: str = "default"
     llm_provider_id: Optional[UUID] = None
@@ -1051,6 +1957,10 @@ async def _prepare_outline_quality_context(ctx: dict[str, Any]) -> dict[str, Any
         "story_bible_context": story_bible_context,
         "book_word_budget_context": book_word_budget_context,
         "volume_reports": [],
+        "power_systems": power_systems,
+        "characters": characters,
+        "foreshadows": foreshadows,
+        "premise": project.premise or "",
     }
 
 
@@ -1108,7 +2018,21 @@ async def _quality_check_outline_volumes(ctx: dict[str, Any]) -> dict[str, Any]:
             "progress_key": f"outline-quality-volume-{volume.id}",
         })
 
-        hard_rule_report = _detect_outline_hard_rule_issues(volume_chapters)
+        hard_rule_report = _detect_outline_hard_rule_issues(
+            volume_chapters,
+            power_systems=ctx.get("power_systems"),
+            genre=project.genre or "玄幻",
+            scope="volume",
+            characters=ctx.get("characters"),
+            theme_statement=ctx.get("theme_statement", ""),
+            premise=ctx.get("premise", ""),
+            foreshadows=ctx.get("foreshadows"),
+        )
+        embedding_report = await analyze_outline_embedding_duplicates(
+            volume_chapters,
+            scope="volume",
+        )
+        hard_rule_report = _merge_outline_quality_reports(hard_rule_report, embedding_report)
         svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
         report = await svc.outline_quality_check(
             project_title=project.title,
@@ -1190,7 +2114,21 @@ async def _quality_check_outline_book(ctx: dict[str, Any]) -> dict[str, Any]:
         "outline_quality_scope": "book",
         "progress_key": "outline-quality-book",
     })
-    hard_rule_report = _detect_outline_hard_rule_issues(chapters)
+    hard_rule_report = _detect_outline_hard_rule_issues(
+        chapters,
+        power_systems=ctx.get("power_systems"),
+        genre=project.genre or "玄幻",
+        scope="book",
+        characters=ctx.get("characters"),
+        theme_statement=ctx.get("theme_statement", ""),
+        premise=ctx.get("premise", ""),
+        foreshadows=ctx.get("foreshadows"),
+    )
+    embedding_report = await analyze_outline_embedding_duplicates(
+        chapters,
+        scope="book",
+    )
+    hard_rule_report = _merge_outline_quality_reports(hard_rule_report, embedding_report)
     svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
     report = await svc.outline_quality_check(
         project_title=project.title,
@@ -1639,6 +2577,7 @@ async def ai_full_generate_outline(
             return
 
         for ci, ch in enumerate(all_chapters):
+            _word_est = int(ch.get("word_estimate") or TARGET_WORDS_PER_CHAPTER)
             db.add(OutlineNode(
                 project_id=project_id,
                 parent_id=target_node.id,
@@ -1649,10 +2588,11 @@ async def ai_full_generate_outline(
                 highlight=ch.get("end_hook"),
                 conflict=ch.get("character_change"),
                 sort_order=ci,
+                expected_words=_word_est,  # 同步写 DB 列（单一数据源）
                 extra={
                     "foreshadow":    ch.get("foreshadow", ""),
                     "pacing":        ch.get("pacing", "medium"),
-                    "word_estimate": ch.get("word_estimate", TARGET_WORDS_PER_CHAPTER),
+                    "word_estimate": _word_est,
                     "end_hook":      ch.get("end_hook", ""),
                 },
             ))
@@ -1710,6 +2650,10 @@ async def ai_full_generate_outline(
             db.query(Chapter).filter(
                 Chapter.project_id == project_id
             ).update({"outline_node_id": None}, synchronize_session=False)
+            # outline_revisions.volume_node_id → outline_nodes.id，不先解除会触发 FK 错误
+            db.query(OutlineRevision).filter(
+                OutlineRevision.project_id == project_id,
+            ).update({"volume_node_id": None}, synchronize_session=False)
             db.query(OutlineNode).filter(
                 OutlineNode.project_id == project_id
             ).delete(synchronize_session=False)
@@ -1784,6 +2728,12 @@ async def ai_full_generate_outline(
             # ════════════════════════════════════════════
             yield f"data: {json.dumps({'event': 'progress', 'step': 1, 'total': '?', 'label': 'AI 正在分析故事，规划卷章结构…'}, ensure_ascii=False)}\n\n"
 
+            # 从 project.target_words 派生规划参数（单一数据源）
+            from app.services.outline_planning import words_to_plan
+            proj_target_words = int(project.target_words or 1_200_000)
+            tw_plan = words_to_plan(proj_target_words)
+            derived_scale_hint = tw_plan["scale_label"]
+
             try:
                 structure = await svc.plan_full_structure(
                     project_title=project.title,
@@ -1792,7 +2742,8 @@ async def ai_full_generate_outline(
                     world_summary=world_summary,
                     character_summary=char_summary,
                     theme_statement=theme_statement,
-                    scale_hint=req.scale_hint,
+                    scale_hint=derived_scale_hint,
+                    target_words=proj_target_words,
                 )
             except Exception as e:
                 yield f"data: {json.dumps({'event': 'error', 'message': f'结构规划失败：{str(e)}'}, ensure_ascii=False)}\n\n"
@@ -1807,7 +2758,7 @@ async def ai_full_generate_outline(
                 yield f"data: {json.dumps({'event': 'error', 'message': 'AI 未返回有效的卷结构，请重试'}, ensure_ascii=False)}\n\n"
                 return
 
-            volumes_data = normalize_volume_plan(volumes_data, req.scale_hint)
+            volumes_data = normalize_volume_plan(volumes_data, target_words=proj_target_words)
 
             total_steps = 1 + len(volumes_data)
             total_chapters_planned = sum(v["planned_chapters"] for v in volumes_data)
@@ -2066,6 +3017,7 @@ def commit_expand(
     genre = project.genre if project else None
     for i, ch in enumerate(req.chapters):
         safe_ch = _sanitize_generated_outline_chapter(ch, genre) if isinstance(ch, dict) else {}
+        _word_est = int(safe_ch.get("word_estimate") or TARGET_WORDS_PER_CHAPTER)
         node = OutlineNode(
             project_id=project_id,
             parent_id=parent.id,
@@ -2076,10 +3028,11 @@ def commit_expand(
             highlight=safe_ch.get("end_hook"),    # 章末钩子放 highlight 字段
             conflict=safe_ch.get("character_change"),
             sort_order=i,
+            expected_words=_word_est,  # 同步写 DB 列（单一数据源）
             extra={
                 "foreshadow":    safe_ch.get("foreshadow", ""),
                 "pacing":        safe_ch.get("pacing", "medium"),
-                "word_estimate": safe_ch.get("word_estimate", TARGET_WORDS_PER_CHAPTER),
+                "word_estimate": _word_est,
                 "end_hook":      safe_ch.get("end_hook", ""),
             },
         )

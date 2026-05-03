@@ -288,6 +288,18 @@ export function RecommendationsPanel() {
   )
 }
 
+// 字数选项配置
+const WORD_COUNT_OPTIONS = [
+  { label: '短篇', value: 800000,  sub: '约80万字 / 6卷' },
+  { label: '标准', value: 1200000, sub: '约120万字 / 9卷' },
+  { label: '长篇', value: 1500000, sub: '约150万字 / 11卷' },
+  { label: '超长', value: 2000000, sub: '约200万字 / 15卷' },
+] as const
+
+function wordsToVols(w: number) {
+  return Math.ceil(Math.round(w / 2300) / 60)
+}
+
 export function CreateProjectDialog({
   form,
   creating,
@@ -296,13 +308,17 @@ export function CreateProjectDialog({
   onClose,
   onUseAi,
 }: {
-  form: { title: string; genre: string; logline: string; premise: string }
+  form: { title: string; genre: string; logline: string; premise: string; target_words: number }
   creating: boolean
-  onChange: React.Dispatch<React.SetStateAction<{ title: string; genre: string; logline: string; premise: string }>>
+  onChange: React.Dispatch<React.SetStateAction<{ title: string; genre: string; logline: string; premise: string; target_words: number }>>
   onCreate: () => void
   onClose: () => void
   onUseAi: () => void
 }) {
+  const [customMode, setCustomMode] = React.useState(false)
+  const estChapters = Math.round(form.target_words / 2300)
+  const estVols = wordsToVols(form.target_words)
+
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-gray-950/30 px-4">
       <div className="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl">
@@ -344,6 +360,53 @@ export function CreateProjectDialog({
             rows={5}
             className="w-full resize-none rounded-lg border border-gray-200 px-3 py-3 text-sm outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
           />
+
+          {/* 字数目标选择器 */}
+          <div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-xs font-medium text-gray-500">全书字数目标</span>
+              <button
+                type="button"
+                onClick={() => setCustomMode(m => !m)}
+                className="text-xs text-amber-500 hover:text-amber-600"
+              >
+                {customMode ? '快捷选择' : '自定义'}
+              </button>
+            </div>
+
+            {customMode ? (
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={300000}
+                  max={5000000}
+                  step={100000}
+                  value={form.target_words}
+                  onChange={e => onChange(f => ({ ...f, target_words: Number(e.target.value) || 1200000 }))}
+                  className="h-9 w-36 rounded-lg border border-gray-200 px-3 text-sm outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+                />
+                <span className="text-xs text-gray-400">字（约 {estChapters} 章 / {estVols} 卷）</span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-4 gap-1.5">
+                {WORD_COUNT_OPTIONS.map(opt => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => onChange(f => ({ ...f, target_words: opt.value }))}
+                    className={`rounded-lg border py-2 text-center transition ${
+                      form.target_words === opt.value
+                        ? 'border-amber-400 bg-amber-50 text-amber-700'
+                        : 'border-gray-200 text-gray-600 hover:border-amber-200'
+                    }`}
+                  >
+                    <div className="text-sm font-semibold">{opt.label}</div>
+                    <div className="text-[10px] text-gray-400">{opt.sub}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="mt-5 flex flex-wrap gap-2">

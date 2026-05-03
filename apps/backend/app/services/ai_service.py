@@ -809,20 +809,18 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         world_summary: str,
         character_summary: str,
         theme_statement: str = "",
-        scale_hint: str = "auto",   # micro / auto / short / medium / long / epic
+        scale_hint: str = "auto",   # 保留兼容，不再驱动计算
+        target_words: int = 1_200_000,  # 单一数据源
     ) -> dict:
         """
-        全量大纲规划：AI 规划卷结构，后端会按每卷约 60 章校准章节数。
+        全量大纲规划：AI 规划卷结构，后端按 target_words 校准章节数。
         返回: { "volumes": [{ title, summary, hook, conflict, planned_chapters: int }] }
         """
-        scale_desc = {
-            "micro":  "超短篇，约 180 章、约 41 万字，拆成约 3 个 60 章左右的卷",
-            "auto":   "默认约 540 章、约 124 万字，拆成 9 个 60 章左右的卷",
-            "short":  "短篇长篇化，约 360 章、约 80 万字，拆成 6 个 60 章左右的卷",
-            "medium": "标准长篇，约 540 章、约 124 万字，拆成 9 个 60 章左右的卷",
-            "long":   "长篇，约 660 章、约 152 万字，拆成 11 个 60 章左右的卷",
-            "epic":   "超长篇，约 870 章、约 200 万字，拆成约 15 个 60 章左右的卷",
-        }.get(scale_hint, "根据故事自由决定")
+        from app.services.outline_planning import words_to_plan
+        tw_plan = words_to_plan(target_words)
+        total_chapters_hint = tw_plan["total_chapters"]
+        vol_min = max(3, tw_plan["total_volumes"] - 1)
+        vol_max = tw_plan["total_volumes"] + 1
 
         system = "你是资深网络小说策划，擅长根据故事特质规划最合适的卷章结构。严格返回JSON，不要任何额外文字。"
         prompt = f"""小说：《{project_title}》（{genre}）
@@ -831,10 +829,11 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 世界观：{world_summary[:300] or '（未填写）'}
 主要人物：{character_summary[:200] or '（未填写）'}
 
-篇幅倾向：{scale_desc}
+【字数目标】全书目标：{target_words:,}字，折合约{total_chapters_hint}章，建议{vol_min}~{vol_max}卷。
 
 请根据这个故事的特质规划卷级结构。
 章节数必须服务于「每卷约 60 章、每章 2200-2400 字」的长篇目录结构：planned_chapters 优先使用 60，必要时允许 30，不要使用篇/arc结构。
+所有卷的 planned_chapters 之和须尽量接近{total_chapters_hint}章，勿少于{vol_min * 30}章。
 每卷必须围绕全书立意形成一个阶段性证明：人物选择如何变化，价值冲突如何升级，不能只做事件堆叠。
 
 返回JSON：
@@ -911,6 +910,8 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         chapter_index_context: str = "",
         quality_debt_context: str = "",
         writing_brief_context: str = "",
+        # 本章字数目标（来自 OutlineNode.expected_words）
+        word_target: int = 2300,
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
@@ -935,9 +936,14 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 8. 写完正文后，必须追加「章节速查索引」区块，使用固定模板，便于后续复盘与连续性追踪
 9. 直接给出正文，不要解释、不要旁白、不要说"好的"之类的废话"""
 
+        # 根据大纲 word_target 动态计算续写字数
+        full_target = max(1500, int(word_target or 2300))
+        cont_target_lo = max(800, round(full_target * 0.5))
+        cont_target_hi = max(1200, round(full_target * 0.7))
+
         if replace_existing:
             task_line = (
-                "【整章重写】请根据本章大纲与故事背景，写出全新正文约2200-2400字，"
+                f"【整章重写】请根据本章大纲与故事背景，写出全新正文约{full_target}字（±200字），"
                 "不要复述或抄袭旧稿套话；若旧稿与大纲冲突，以大纲为准。"
             )
         elif has_content:
@@ -945,10 +951,10 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             task_line = (
                 f"当前已写内容（最后{existing_tail_limit}字供衔接参考）：\n"
                 f"{self._clip_context(existing_content, 500, 4000, from_end=True)}\n\n"
-                "请根据章节计划，续写接下来约1200-1600字的正文，保持章节爽点与情绪推进："
+                f"请根据章节计划，续写接下来约{cont_target_lo}-{cont_target_hi}字的正文，保持章节爽点与情绪推进："
             )
         else:
-            task_line = "请根据章节计划，写出本章完整初稿约2200-2400字，第一句话必须立刻抓住读者，并在章末留下追读钩子："
+            task_line = f"请根据章节计划，写出本章完整初稿约{full_target}字（±200字），第一句话必须立刻抓住读者，并在章末留下追读钩子："
 
         # 本地小模型仍保持短上下文；Gemini 使用长上下文，优先保证故事连续性。
         premise_part = (

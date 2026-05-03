@@ -203,6 +203,13 @@ const compareSnapshots = (baseNodes: RevisionSnapshotNode[], targetNodes: Revisi
 
 // ── 全量生成配置弹窗（只收集参数，执行交给队列）──────────────
 
+const OUTLINE_WORD_OPTIONS = [
+  { label: '短篇',   value: 800000  },
+  { label: '标准',   value: 1200000 },
+  { label: '长篇',   value: 1500000 },
+  { label: '超长篇', value: 2000000 },
+] as const
+
 function FullGenConfigModal({
   projectId,
   hasExistingOutline,
@@ -220,18 +227,43 @@ function FullGenConfigModal({
     llm_provider_id?: string
   }) => void
 }) {
-  const [scaleHint, setScaleHint] = useState<
-    'micro' | 'auto' | 'short' | 'medium' | 'long' | 'epic'
-  >('auto')
+  const { currentProject, setCurrentProject } = useAppStore()
+  const initWords = Number(currentProject?.target_words) || 1200000
+  const [targetWords, setTargetWords] = useState(initWords)
+  const [customMode, setCustomMode] = useState(false)
   const [themeStatement, setThemeStatement] = useState('')
-  // 已有大纲时默认勾选「清除重建」，避免重复叠加旧内容
   const [clearExisting, setClearExisting] = useState(hasExistingOutline)
+  const [saving, setSaving] = useState(false)
 
-  const handleStart = () => {
+  const estChapters = Math.round(targetWords / 2300)
+  const estVols = Math.ceil(estChapters / 60)
+
+  // target_words 转为 scale_hint 标签（兼容后端旧字段）
+  const toScaleHint = (w: number) => {
+    if (w <= 500000) return 'micro'
+    if (w <= 900000) return 'short'
+    if (w <= 1400000) return 'medium'
+    if (w <= 1700000) return 'long'
+    return 'epic'
+  }
+
+  const handleStart = async () => {
     if (clearExisting && !window.confirm('将清除现有全部大纲节点，确定继续？')) return
+    // 若字数有变化，先 PATCH 保存到项目
+    if (targetWords !== initWords && currentProject) {
+      setSaving(true)
+      try {
+        const res = await projectsApi.update(currentProject.id, { target_words: targetWords })
+        setCurrentProject(res.data)
+      } catch {
+        // 静默失败：即使保存失败也继续生成，后端会用传入参数
+      } finally {
+        setSaving(false)
+      }
+    }
     const route = useAppStore.getState().aiBackendRoute
     onDispatch({
-      scale_hint: scaleHint,
+      scale_hint: toScaleHint(targetWords),
       theme_statement: themeStatement.trim() || undefined,
       model_profile: toOutlineApiModelProfile(route),
       clear_existing: clearExisting,
@@ -253,41 +285,69 @@ function FullGenConfigModal({
 
         <div className="px-5 py-4 space-y-4">
           <p className="text-xs text-gray-500 leading-relaxed">
-            AI 读取项目的 logline、类型、世界观、人物生成大纲；后端会按「每卷约 60 章」校准并写入大纲树。
+            AI 读取项目的 logline、类型、世界观、人物生成大纲；后端会按字数目标推算卷数并写入大纲树。
             <span className="block mt-1 text-amber-600 font-medium">
               任务将在右下角队列中后台运行，不影响当前操作。
             </span>
           </p>
 
-          {/* 篇幅倾向 */}
+          {/* 字数目标（单一数据源） */}
           <div>
-            <label className="text-xs text-gray-500 block mb-2">篇幅倾向</label>
-            <div className="grid grid-cols-2 gap-2">
-              {([
-                { value: 'micro',  label: '超短篇',     sub: '约 40 万字' },
-                { value: 'short',  label: '短篇',       sub: '约 80 万字' },
-                { value: 'auto',   label: '自动',       sub: '默认约 120 万字' },
-                { value: 'medium', label: '中篇',       sub: '约 120 万字' },
-                { value: 'long',   label: '长篇',       sub: '约 150 万字' },
-                { value: 'epic',   label: '超长篇',     sub: '约 200 万字' },
-              ] as const).map(opt => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => setScaleHint(opt.value)}
-                  className={clsx(
-                    'text-left px-3 py-2.5 rounded-xl border transition-all',
-                    scaleHint === opt.value
-                      ? 'border-indigo-400 bg-indigo-50 ring-1 ring-indigo-300'
-                      : 'border-gray-200 hover:border-gray-300 bg-white'
-                  )}
-                >
-                  <div className={clsx('text-xs font-medium', scaleHint === opt.value ? 'text-indigo-700' : 'text-gray-700')}>
-                    {opt.label}
-                  </div>
-                  <div className="text-[11px] text-gray-400 mt-0.5">{opt.sub}</div>
-                </button>
-              ))}
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-medium text-gray-500">全书字数目标</label>
+              <button
+                type="button"
+                onClick={() => setCustomMode(m => !m)}
+                className="text-xs text-amber-500 hover:text-amber-600"
+              >
+                {customMode ? '快捷选择' : '自定义'}
+              </button>
+            </div>
+
+            {customMode ? (
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={300000}
+                  max={5000000}
+                  step={100000}
+                  value={targetWords}
+                  onChange={e => setTargetWords(Number(e.target.value) || 1200000)}
+                  className="h-9 w-36 rounded-lg border border-gray-200 px-3 text-sm outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+                />
+                <span className="text-xs text-gray-400">字</span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-4 gap-1.5">
+                {OUTLINE_WORD_OPTIONS.map(opt => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setTargetWords(opt.value)}
+                    className={clsx(
+                      'rounded-xl border py-2 text-center transition-all',
+                      targetWords === opt.value
+                        ? 'border-indigo-400 bg-indigo-50 ring-1 ring-indigo-300'
+                        : 'border-gray-200 hover:border-gray-300 bg-white'
+                    )}
+                  >
+                    <div className={clsx('text-xs font-medium', targetWords === opt.value ? 'text-indigo-700' : 'text-gray-700')}>
+                      {opt.label}
+                    </div>
+                    <div className="text-[10px] text-gray-400 mt-0.5">{(opt.value / 10000).toFixed(0)}万字</div>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* 实时预览 */}
+            <div className="mt-2 rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-xs text-amber-700">
+              约 <span className="font-semibold">{estChapters}</span> 章 ·
+              约 <span className="font-semibold">{estVols}</span> 卷 ·
+              每章均约 2300 字
+              {targetWords !== initWords && (
+                <span className="ml-2 text-amber-500">（修改后将保存到项目）</span>
+              )}
             </div>
           </div>
 
@@ -297,16 +357,12 @@ function FullGenConfigModal({
               value={themeStatement}
               onChange={e => setThemeStatement(e.target.value)}
               placeholder="例如：人在被命运压低时，仍能靠选择重塑自身价值。"
-              className="w-full min-h-[76px] text-sm border border-gray-200 rounded-xl px-3 py-2 resize-y focus:outline-none focus:ring-2 focus:ring-amber-300 placeholder:text-gray-300"
+              className="w-full min-h-[64px] text-sm border border-gray-200 rounded-xl px-3 py-2 resize-y focus:outline-none focus:ring-2 focus:ring-amber-300 placeholder:text-gray-300"
             />
             <p className="mt-1 text-[11px] text-gray-400 leading-relaxed">
-              留空时后端会从项目故事核中读取主题，仍为空则让 AI 从创意和人物中提炼。
+              留空时后端会从项目故事核中读取主题。
             </p>
           </div>
-
-          <p className="text-[11px] text-gray-400 leading-relaxed">
-            使用顶部栏当前选择的模型加入队列。
-          </p>
 
           {/* 模式说明 */}
           <div className="rounded-xl border border-gray-100 bg-gray-50 divide-y divide-gray-100 text-xs overflow-hidden">
@@ -353,10 +409,11 @@ function FullGenConfigModal({
           </button>
           <button
             onClick={handleStart}
-            className="flex items-center gap-2 px-4 py-1.5 text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white rounded-lg shadow-sm"
+            disabled={saving}
+            className="flex items-center gap-2 px-4 py-1.5 text-sm font-medium bg-amber-500 hover:bg-amber-600 text-white rounded-lg shadow-sm disabled:opacity-50"
           >
             <Sparkles size={14} />
-            加入队列并开始
+            {saving ? '保存中...' : '加入队列并开始'}
           </button>
         </div>
       </div>

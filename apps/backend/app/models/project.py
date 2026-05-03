@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, DateTime, JSON
+from sqlalchemy import Column, String, Text, DateTime, JSON, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -17,7 +17,7 @@ class Project(Base):
     world_overview = Column(Text)                  # 世界观简述
     story_core = Column(JSON, default=dict)        # 故事核: {drive, conflict, theme, ...}
     status = Column(String(20), default="drafting") # drafting/writing/completed
-    target_words = Column(String(20))              # 目标字数
+    target_words = Column(Integer, default=1200000)  # 目标字数（整数）
     cover_url = Column(String(500))
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())

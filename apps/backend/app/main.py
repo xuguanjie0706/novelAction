@@ -95,6 +95,25 @@ def _ensure_project_columns() -> None:
     """
     ddl_statements = [
         "ALTER TABLE projects ADD COLUMN IF NOT EXISTS premise TEXT",
+        # target_words 从 VARCHAR(20) 升级为 INTEGER，旧字符串值自动转换
+        # USING 子句：把旧字符串强制转为 INTEGER（NULL 时保持 NULL）
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'projects'
+                  AND column_name = 'target_words'
+                  AND data_type <> 'integer'
+            ) THEN
+                ALTER TABLE projects
+                    ALTER COLUMN target_words TYPE INTEGER
+                    USING NULLIF(target_words, '')::INTEGER;
+            END IF;
+        END $$;
+        """,
+        # 若列不存在则新建（全新部署）
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS target_words INTEGER DEFAULT 1200000",
     ]
     with engine.begin() as conn:
         for ddl in ddl_statements:

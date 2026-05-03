@@ -2094,6 +2094,11 @@ async def draft_assist_stream(
                 chapter_index_context=chapter_index_context,
                 quality_debt_context=quality_debt_context,
                 writing_brief_context=writing_brief_context,
+                word_target=int(
+                    (outline_node.expected_words if outline_node and outline_node.expected_words else None)
+                    or (outline_node.extra or {}).get("word_estimate")
+                    or 2300
+                ),
             ):
                 yield f"data: {json.dumps({'text': chunk})}\n\n"
         except Exception as e:

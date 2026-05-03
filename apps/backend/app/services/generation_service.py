@@ -47,6 +47,82 @@ def _parse_json(text: str):
     return json.loads(text)
 
 
+def _coerce_power_system_rank(value, levels: list, default: int | None) -> int | None:
+    """
+    DB 列 protagonist_*_rank 为 Integer，须对应 levels[].rank。
+    LLM 常误填境界中文名；此处尽量解析为整数，失败则回退 default。
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value == int(value):
+        return int(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return default
+        try:
+            return int(s)
+        except ValueError:
+            pass
+        norm_levels = [lv for lv in (levels or []) if isinstance(lv, dict)]
+        for lv in norm_levels:
+            name = (lv.get("name") or "").strip()
+            if not name:
+                continue
+            if s == name or name in s or s in name:
+                r = lv.get("rank")
+                if isinstance(r, int):
+                    return r
+                try:
+                    return int(r)
+                except (TypeError, ValueError):
+                    continue
+    return default
+
+
+def _safe_int(
+    value,
+    default: int | None = None,
+    *,
+    min_v: int | None = None,
+    max_v: int | None = None,
+) -> int | None:
+    """
+    单次生成 JSON 里 Integer 字段常被写成字符串或非数字文案；
+    尽量解析为 int，失败则 default；可选 min/max 裁剪。
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        out = value
+    elif isinstance(value, float) and value == int(value):
+        out = int(value)
+    elif isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return default
+        try:
+            out = int(s)
+        except ValueError:
+            m = re.search(r"-?\d+", s)
+            if not m:
+                return default
+            out = int(m.group(0))
+    else:
+        return default
+    if min_v is not None:
+        out = max(min_v, out)
+    if max_v is not None:
+        out = min(max_v, out)
+    return out
+
+
 def _sse(event: str, **kwargs) -> str:
     payload = {"event": event, **kwargs}
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -111,12 +187,18 @@ def _setting_extra_with_defaults(item: dict) -> dict:
     return extra
 
 
-def _single_shot_prompt(logline: str, premise: str = "") -> str:
+def _single_shot_prompt(logline: str, premise: str = "", target_words: int = 1_200_000) -> str:
+    from app.services.outline_planning import words_to_plan
+    plan = words_to_plan(target_words)
+    vol_min = max(3, plan["total_volumes"] - 1)
+    vol_max = plan["total_volumes"] + 1
+    total_chapters_hint = plan["total_chapters"]
     setting_blueprints = _setting_blueprints_for_prompt()
     return f"""根据以下创意，生成完整的小说初始化数据：
 
 创意：{logline}
 立意与类型（作品基本面）：{premise[:2000] or '（未填写，请根据创意自动提炼作品定位、主题命题、核心矛盾与禁忌边界）'}
+【全书字数目标】{target_words:,}字，折合约{total_chapters_hint}章
 
 返回一个 JSON 对象，顶层字段固定为：
 project, power_systems, factions, storylines, skills, items, characters, settings, outline, memory, relations。
@@ -136,6 +218,7 @@ project 字段结构：
 power_systems 每个元素字段：
 name, system_type, description, cultivation_method, breakthrough_condition, special_rules,
 protagonist_start_rank, protagonist_end_rank, levels。
+protagonist_start_rank 与 protagonist_end_rank 必须是整数（与 levels 中某一层的 rank 一致），禁止写境界中文名。
 levels 至少 6 个层级，每层包含 rank, name, description, requirements, abilities, sub_level_count。
 
 factions 每个元素字段：
@@ -176,7 +259,7 @@ from_name, to_name, relation_type, description, intensity。
 - items 必须生成 {ITEM_MIN_TARGET}~{ITEM_MAX_TARGET} 个关键道具。
 - characters 必须生成 {CHARACTER_TARGET} 个：1 主角、3 核心配角、2 反派、2 师长/势力角色。
 - settings 必须生成 {len(GEMINI_SETTING_BLUEPRINTS)} 张，严格按以下【世界设定蓝图】顺序生成，不要少卡，不要合并卡。
-- outline 必须生成 4~8 卷。
+- outline 必须生成 {vol_min}~{vol_max} 卷，所有卷 planned_chapters 之和须尽量接近{total_chapters_hint}章。
 - memory 必须生成 10 条初始记忆库种子。
 
 世界设定蓝图：
@@ -216,20 +299,21 @@ class GenerationService:
         logline: str,
         premise: str = "",
         mode: Literal["sequential", "single_shot"] = "sequential",
+        target_words: int = 1_200_000,
     ) -> AsyncGenerator[str, None]:
         if mode == "single_shot":
-            async for chunk in self._single_shot(logline, premise):
+            async for chunk in self._single_shot(logline, premise, target_words=target_words):
                 yield chunk
         else:
-            async for chunk in self._sequential(logline, premise):
+            async for chunk in self._sequential(logline, premise, target_words=target_words):
                 yield chunk
 
     # ══════════════════════════════════════════════════════════
     #  方案 A：串行步进
     # ══════════════════════════════════════════════════════════
 
-    async def _sequential(self, logline: str, premise: str = "") -> AsyncGenerator[str, None]:
-        ctx = {"logline": logline, "premise": premise}   # 上下文在步骤间传递
+    async def _sequential(self, logline: str, premise: str = "", target_words: int = 1_200_000) -> AsyncGenerator[str, None]:
+        ctx = {"logline": logline, "premise": premise, "target_words": target_words}   # 上下文在步骤间传递
 
         try:
             # Step 1 — 项目基础
@@ -302,12 +386,12 @@ class GenerationService:
     #  方案 B：单次全量（适合 Gemini）
     # ══════════════════════════════════════════════════════════
 
-    async def _single_shot(self, logline: str, premise: str = "") -> AsyncGenerator[str, None]:
+    async def _single_shot(self, logline: str, premise: str = "", target_words: int = 1_200_000) -> AsyncGenerator[str, None]:
         yield _sse("step_start", step="all", label="AI 全量生成中（单次调用）...")
 
         system = """你是专业的网络小说策划，根据一句话创意生成完整的小说初始化数据。
 严格返回 JSON，不要任何额外文字。"""
-        prompt = _single_shot_prompt(logline, premise)
+        prompt = _single_shot_prompt(logline, premise, target_words=target_words)
 
         try:
             raw = await self.ai._call_ai(
@@ -321,7 +405,7 @@ class GenerationService:
             yield _sse("step_done", step="all", count=1)
 
             yield _sse("step_start", step="saving", label="写入数据库...")
-            project = await self._save_all(data, logline, premise)
+            project = await self._save_all(data, logline, premise, target_words=target_words)
             yield _sse("step_done", step="saving", count=1)
             yield _sse("complete", project_id=str(project.id))
 
@@ -370,6 +454,7 @@ class GenerationService:
             premise=data.get("premise") or ctx.get("premise") or "",
             world_overview=data.get("world_overview", ""),
             story_core=data.get("story_core", {}),
+            target_words=int(ctx.get("target_words") or 1_200_000),
         )
         self.db.add(project)
         self.db.commit()
@@ -790,6 +875,7 @@ status 只能是: intact / damaged / destroyed / lost / unknown
 ]
 system_type 只能是: cultivation / magic / ability / tech / hybrid
 levels 至少包含 6 个境界，按强弱从低到高排列。
+protagonist_start_rank、protagonist_end_rank 必须是整数，且等于 levels 中某一层的 rank，禁止填境界中文名。
 只返回JSON数组，不要说明文字。"""
 
         raw = await self._call_with_retry(system, prompt)
@@ -799,6 +885,11 @@ levels 至少包含 6 个境界，按强弱从低到高排列。
 
         results = []
         for i, item in enumerate(data):
+            levels = item.get("levels", [])
+            start_raw = item.get("protagonist_start_rank")
+            if start_raw is None:
+                start_raw = item.get("protagonist_current_rank")
+            end_raw = item.get("protagonist_end_rank")
             ps = PowerSystem(
                 project_id=project.id,
                 name=item.get("name", "修炼体系"),
@@ -807,9 +898,9 @@ levels 至少包含 6 个境界，按强弱从低到高排列。
                 cultivation_method=item.get("cultivation_method"),
                 breakthrough_condition=item.get("breakthrough_condition"),
                 special_rules=item.get("special_rules"),
-                levels=item.get("levels", []),
-                protagonist_current_rank=item.get("protagonist_start_rank", 1),
-                protagonist_end_rank=item.get("protagonist_end_rank"),
+                levels=levels,
+                protagonist_current_rank=_coerce_power_system_rank(start_raw, levels, 1),
+                protagonist_end_rank=_coerce_power_system_rank(end_raw, levels, None),
                 sort_order=i,
             )
             self.db.add(ps)
@@ -989,6 +1080,14 @@ role 只能是: protagonist / supporting / antagonist"""
             f"\n故事线（每卷 summary 应说明推进了哪条线）：{ctx.get('storyline_summary', '')}"
             if ctx.get('storyline_summary') else ""
         )
+        # 从 target_words 推算卷数区间（单一数据源）
+        from app.services.outline_planning import words_to_plan
+        tw = int(project.target_words or 1_200_000)
+        plan = words_to_plan(tw)
+        vol_min = max(3, plan["total_volumes"] - 1)
+        vol_max = plan["total_volumes"] + 1
+        total_chapters_hint = plan["total_chapters"]
+
         prompt = f"""小说：《{ctx['project_title']}》主角：{ctx['protagonist']}
 创意：{ctx['logline']}
 立意与类型：{ctx.get('premise', '')[:700] or '（未填写）'}
@@ -998,7 +1097,9 @@ role 只能是: protagonist / supporting / antagonist"""
 ⚠️ 以上只是主线人物。每卷 summary/conflict 允许并鼓励提及未命名配角（如"某城守将""地下情报商""宗门长老"等职能角色），章节细化时会按需正式创建他们。
 
 根据故事规模规划卷级结构，返回JSON数组。
-卷数建议4~8卷（最少3卷），每卷约60章（过渡卷可30章）。
+【字数目标】全书目标：{tw:,}字，折合约{total_chapters_hint}章，建议{vol_min}~{vol_max}卷（勿少于{vol_min}卷）。
+每卷 planned_chapters 只能填 30 或 60（过渡/尾卷可填30），不要其他数字。
+所有卷的 planned_chapters 之和须尽量接近{total_chapters_hint}章。
 
 [
   {{
@@ -1010,7 +1111,6 @@ role 只能是: protagonist / supporting / antagonist"""
     "planned_chapters": 60
   }}
 ]
-planned_chapters 只能填 30 或 60，不要其他数字。
 只返回JSON数组，不要任何说明文字。"""
 
         raw = await self._call_with_retry(system, prompt)
@@ -1151,7 +1251,7 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
     #  单次全量保存（方案B）
     # ══════════════════════════════════════════════════════════
 
-    async def _save_all(self, data: dict, logline: str, premise: str = "") -> Project:
+    async def _save_all(self, data: dict, logline: str, premise: str = "", target_words: int = 1_200_000) -> Project:
         """把方案B生成的完整 JSON 一次性存库"""
         p = data["project"]
         project = Project(
@@ -1161,12 +1261,18 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
             premise=p.get("premise") or premise or "",
             world_overview=p.get("world_overview", ""),
             story_core=p.get("story_core", {}),
+            target_words=target_words,
         )
         self.db.add(project)
         self.db.flush()
 
         # 境界体系
         for i, ps in enumerate(data.get("power_systems", [])):
+            levels = ps.get("levels", [])
+            start_raw = ps.get("protagonist_start_rank")
+            if start_raw is None:
+                start_raw = ps.get("protagonist_current_rank")
+            end_raw = ps.get("protagonist_end_rank")
             self.db.add(PowerSystem(
                 project_id=project.id,
                 name=ps.get("name", "修炼体系"),
@@ -1175,9 +1281,9 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
                 cultivation_method=ps.get("cultivation_method"),
                 breakthrough_condition=ps.get("breakthrough_condition"),
                 special_rules=ps.get("special_rules"),
-                levels=ps.get("levels", []),
-                protagonist_current_rank=ps.get("protagonist_start_rank", 1),
-                protagonist_end_rank=ps.get("protagonist_end_rank"),
+                levels=levels,
+                protagonist_current_rank=_coerce_power_system_rank(start_raw, levels, 1),
+                protagonist_end_rank=_coerce_power_system_rank(end_raw, levels, None),
                 sort_order=i,
             ))
 
@@ -1214,7 +1320,7 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
                 core_conflict=sl.get("core_conflict"),
                 resolution_direction=sl.get("resolution_direction"),
                 status=sl.get("status", "planned"),
-                start_chapter=sl.get("start_chapter"),
+                start_chapter=_safe_int(sl.get("start_chapter"), None),
                 sort_order=i,
             ))
 
@@ -1289,7 +1395,7 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
 
         def save_node(item, idx=0):
             # bootstrap 阶段只保存卷级节点，忽略 children
-            planned = item.get("planned_chapters", 60)
+            planned = _safe_int(item.get("planned_chapters"), 60)
             if planned not in (30, 60):
                 planned = 60
             node = OutlineNode(
@@ -1300,7 +1406,7 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
                 summary=item.get("summary"),
                 hook=item.get("hook"),
                 conflict=item.get("conflict"),
-                sort_order=item.get("sort_order", idx),
+                sort_order=_safe_int(item.get("sort_order"), idx),
                 extra={"planned_chapters": planned},
             )
             self.db.add(node)
@@ -1330,7 +1436,7 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
                     to_character_id=tc.id,
                     relation_type=r.get("relation_type", "认识"),
                     description=r.get("description"),
-                    intensity=int(r.get("intensity", 5)),
+                    intensity=_safe_int(r.get("intensity"), 5, min_v=1, max_v=10) or 5,
                 ))
 
         self.db.commit()

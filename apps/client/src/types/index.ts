@@ -8,7 +8,7 @@ export interface Project {
   world_overview?: string
   story_core?: Record<string, any>
   status: 'drafting' | 'writing' | 'completed'
-  target_words?: string
+  target_words?: number
   cover_url?: string
   created_at: string
   updated_at?: string

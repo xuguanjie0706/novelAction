@@ -155,7 +155,8 @@ def delete_chapter(project_id: str, chapter_id: str, db: Session = Depends(get_d
     ).first()
     if not chapter:
         raise HTTPException(404, "Chapter not found")
-    delete_chapter_artifacts(db, project_id, chapter_id)
+    # 含复盘缓存、本章伏笔与 resolved 外键等，避免删 chapters 行时触发 FK 约束（仅删记忆/index/债不够）
+    clear_chapter_rewrite_derivatives(db, project_id, chapter_id)
     db.delete(chapter)
     db.commit()
     normalize_chapter_sort_orders(db, project_id)

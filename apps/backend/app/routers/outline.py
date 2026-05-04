@@ -1780,6 +1780,153 @@ def _outline_node_to_chapter_context(node: OutlineNode) -> dict:
     }
 
 
+def _anchor_volume_for_expand(node: OutlineNode, id_map: dict) -> OutlineNode | None:
+    """从当前展开节点向上找到所属卷（用于判断「前几卷」范围）。"""
+    cur: OutlineNode | None = node
+    seen: set = set()
+    while cur is not None and cur.id not in seen:
+        seen.add(cur.id)
+        if getattr(cur, "node_type", None) == "volume":
+            return cur
+        pid = cur.parent_id
+        if not pid:
+            return None
+        cur = id_map.get(pid)
+    return None
+
+
+def _chapter_plan_root_volume(node: OutlineNode, id_map: dict) -> OutlineNode | None:
+    """章节计划所属根卷（parent 链上第一个 volume）。"""
+    cur: OutlineNode | None = node
+    seen: set = set()
+    while cur is not None and cur.id not in seen:
+        seen.add(cur.id)
+        if getattr(cur, "node_type", None) == "volume":
+            return cur
+        if not cur.parent_id:
+            return None
+        cur = id_map.get(cur.parent_id)
+    return None
+
+
+def _prior_volume_chapter_plan_nodes(
+    all_nodes: list[OutlineNode],
+    id_map: dict,
+    anchor_volume: OutlineNode,
+) -> list[OutlineNode]:
+    """严格早于 anchor 卷的根卷下，所有已落库的 chapter_plan。"""
+    anchor_order = anchor_volume.sort_order or 0
+    out: list[OutlineNode] = []
+    for n in all_nodes:
+        if getattr(n, "node_type", None) != "chapter_plan":
+            continue
+        root = _chapter_plan_root_volume(n, id_map)
+        if root is None or getattr(root, "node_type", None) != "volume":
+            continue
+        if (root.sort_order or 0) < anchor_order:
+            out.append(n)
+    return out
+
+
+def _sort_chapter_plan_nodes(nodes: list[OutlineNode]) -> list[OutlineNode]:
+    def sort_key(n: OutlineNode):
+        ctx = _outline_node_to_chapter_context(n)
+        num = ctx.get("number")
+        try:
+            inum = int(num) if num is not None else 0
+        except (TypeError, ValueError):
+            inum = 0
+        return (inum, str(n.id))
+
+    return sorted(nodes, key=sort_key)
+
+
+def _compact_prior_volume_plot_lines(
+    chapters_ctx: list[dict],
+    *,
+    core_lim: int,
+    hook_lim: int,
+    fs_lim: int,
+) -> list[str]:
+    lines: list[str] = []
+    for ch in chapters_ctx:
+        num = ch.get("number") if ch.get("number") is not None else "?"
+        title = _clean_outline_text(ch.get("title"), 48)
+        core = _clean_outline_text(ch.get("core_event"), core_lim)
+        hook = _clean_outline_text(ch.get("end_hook"), hook_lim)
+        fs = _clean_outline_text(ch.get("foreshadow"), fs_lim)
+        line = f"第{num}章《{title}》| 核心：{core} | 章末：{hook}"
+        if fs:
+            line += f" | 伏笔：{fs}"
+        lines.append(line)
+    return lines
+
+
+def _format_prior_volumes_plot_context(chapters_ctx: list[dict], max_chars: int) -> str:
+    """前几卷章纲情节链：优先保留全部章节，通过缩短字段适配 token；仍过长则截断并提示。"""
+    if not chapters_ctx or max_chars < 120:
+        return ""
+    for core_lim, hook_lim, fs_lim in ((90, 72, 72), (60, 48, 48), (42, 36, 36), (28, 24, 24)):
+        lines = _compact_prior_volume_plot_lines(
+            chapters_ctx, core_lim=core_lim, hook_lim=hook_lim, fs_lim=fs_lim
+        )
+        text = "\n".join(lines)
+        if len(text) <= max_chars:
+            return text
+    return text[: max_chars - 24] + "\n…（前几卷情节链过长已截断）"
+
+
+def _build_prior_foreshadow_ledger(
+    chapters_ctx: list[dict],
+    foreshadow_rows: list[Foreshadow],
+    max_chars: int,
+) -> str:
+    """章纲五要素中的伏笔行 + 伏笔表中仍未回收的条目。"""
+    if max_chars < 80:
+        return ""
+    parts: list[str] = []
+    used: set[str] = set()
+    ch_lines: list[str] = []
+    for ch in chapters_ctx:
+        raw = (ch.get("foreshadow") or "").strip()
+        if not raw:
+            continue
+        key = raw[:240]
+        if key in used:
+            continue
+        used.add(key)
+        num = ch.get("number") if ch.get("number") is not None else "?"
+        ch_lines.append(f"第{num}章：{raw}")
+    if ch_lines:
+        parts.append("【来自前几卷章纲五要素】\n" + "\n".join(ch_lines))
+
+    db_lines: list[str] = []
+    open_rows = [f for f in foreshadow_rows if (f.status or "open") == "open"]
+    open_rows.sort(key=lambda f: (-(f.priority or 3), str(f.id)))
+    for f in open_rows:
+        code = f.code or "—"
+        title = _clean_outline_text(f.title, 80)
+        desc = _clean_outline_text(f.description, 140)
+        plan = f.planned_resolve_chapter
+        plan_s = f"预计第{plan}章回收" if plan else "回收章未定"
+        db_lines.append(f"{code} {title} | {plan_s} | {desc}")
+    if db_lines:
+        parts.append("【伏笔表（仍未回收）】\n" + "\n".join(db_lines))
+
+    text = "\n\n".join(parts)
+    if len(text) > max_chars:
+        return text[: max_chars - 20] + "\n…（伏笔台账过长已截断）"
+    return text
+
+
+def _ai_expand_prior_plot_budget(model_profile: str) -> int:
+    return 14000 if model_profile == "gemini" else 6500
+
+
+def _ai_expand_prior_foreshadow_budget(model_profile: str) -> int:
+    return 8000 if model_profile == "gemini" else 3200
+
+
 def _load_existing_chapter_context(
     db: Session,
     project_id: str,
@@ -2249,6 +2396,32 @@ async def ai_expand_outline(
         protagonist_max_realm=prior_max_realm,
     )
 
+    # 第二卷及以后：带入「严格早于当前卷」的已落库章纲情节链 + 伏笔（与全局最近 N 章窗口互补）
+    all_outline_nodes = db.query(OutlineNode).filter(OutlineNode.project_id == project_id).all()
+    id_map = {n.id: n for n in all_outline_nodes}
+    anchor_vol = _anchor_volume_for_expand(node, id_map)
+    prior_plot_context = ""
+    prior_ledger_context = ""
+    if anchor_vol is not None:
+        prior_nodes = _prior_volume_chapter_plan_nodes(all_outline_nodes, id_map, anchor_vol)
+        if prior_nodes:
+            prior_ctx = [
+                _outline_node_to_chapter_context(n) for n in _sort_chapter_plan_nodes(prior_nodes)
+            ]
+            plot_budget = _ai_expand_prior_plot_budget(req.model_profile)
+            ledger_budget = _ai_expand_prior_foreshadow_budget(req.model_profile)
+            prior_plot_context = _format_prior_volumes_plot_context(prior_ctx, plot_budget)
+            foreshadow_rows = db.query(Foreshadow).filter(Foreshadow.project_id == project_id).all()
+            prior_ledger_context = _build_prior_foreshadow_ledger(
+                prior_ctx, foreshadow_rows, ledger_budget
+            )
+
+    story_core = project.story_core if project and isinstance(project.story_core, dict) else {}
+    theme_statement = ""
+    if project:
+        theme_statement = (project.premise or "").strip() or (story_core.get("theme") or "").strip()
+        theme_statement = theme_statement[:2000]
+
     svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
     genre = (project.genre or "玄幻") if project else "玄幻"
 
@@ -2263,11 +2436,14 @@ async def ai_expand_outline(
                 genre=genre,
                 world_summary=world_summary,
                 character_summary=char_summary,
+                theme_statement=theme_statement,
                 existing_chapters=existing_count,
                 chapter_count=req.chapter_count,
                 global_outline_context=global_outline_context,
                 previous_chapters_context=previous_chapters_context,
                 continuity_state=continuity_state,
+                prior_volumes_plot_context=prior_plot_context,
+                prior_foreshadow_ledger=prior_ledger_context,
                 realm_whitelist=realm_whitelist,
                 protagonist_state=protagonist_state,
             )
@@ -2527,6 +2703,12 @@ async def _quality_check_outline_volumes(ctx: dict[str, Any]) -> dict[str, Any]:
                 ),
             ]),
         )
+        if svc._truncation_warnings:
+            await publish({
+                "event": "truncation_warning",
+                "label": f"⚠️ 质检《{volume.title}》时部分上下文被截断，结果可能不完整",
+                "details": svc._truncation_warnings,
+            })
         report = _merge_outline_quality_reports(report, hard_rule_report)
         volume.extra = _with_outline_quality(volume, report)
         db.add(volume)
@@ -2607,6 +2789,12 @@ async def _quality_check_outline_book(ctx: dict[str, Any]) -> dict[str, Any]:
         chapters=chapters,
         word_budget_context=ctx.get("book_word_budget_context", ""),
     )
+    if svc._truncation_warnings:
+        await publish({
+            "event": "truncation_warning",
+            "label": "⚠️ 全书质检时部分上下文被截断，结果可能不完整",
+            "details": svc._truncation_warnings,
+        })
     report = _merge_outline_quality_reports(report, hard_rule_report)
 
     current_core = project.story_core if isinstance(project.story_core, dict) else {}
@@ -2733,6 +2921,13 @@ async def _build_outline_repair_plan(ctx: dict[str, Any]) -> dict[str, Any]:
             scope_label="修复范围",
         ),
     )
+    # 截断警告：如果有字段被实际截断，推送提示给前端
+    if svc._truncation_warnings:
+        await publish({
+            "event": "truncation_warning",
+            "label": "⚠️ 部分上下文因长度过大被截断，修复质量可能受影响",
+            "details": svc._truncation_warnings,
+        })
     await publish({
         "event": "progress",
         "step": "repair_plan",

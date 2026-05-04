@@ -112,6 +112,37 @@ async def test_expand_outline_adds_xuanhuan_genre_guardrails():
 
 
 @pytest.mark.asyncio
+async def test_expand_outline_includes_prior_volumes_when_provided():
+    captured: dict = {}
+
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+        captured["prompt"] = prompt
+        return '{"volume_analysis": {}, "chapters": []}'
+
+    svc = AIService()
+    svc._call_ai = fake_call
+
+    await svc.expand_outline(
+        node_title="第二卷：暗潮",
+        node_type="volume",
+        node_summary="承接第一卷末钩子",
+        project_title="测试书",
+        genre="玄幻",
+        world_summary="测试世界",
+        character_summary="主角：测",
+        chapter_count=3,
+        prior_volumes_plot_context="第1章《开篇》| 核心：事件A | 章末：钩子A",
+        prior_foreshadow_ledger="【来自前几卷章纲五要素】\n第1章：埋[石符]",
+    )
+
+    p = captured["prompt"]
+    assert "【前几卷已规划章纲" in p
+    assert "事件A" in p
+    assert "【前几卷伏笔台账" in p
+    assert "石符" in p
+
+
+@pytest.mark.asyncio
 async def test_gemini_expand_outline_uses_volume_sized_token_budget():
     captured = {}
 

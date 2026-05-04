@@ -11,7 +11,7 @@
 
 import React, { useEffect, useRef, useCallback, useState } from 'react'
 import {
-  Loader2, CheckCircle2, AlertCircle, ChevronUp, ChevronDown,
+  Loader2, CheckCircle2, AlertCircle, AlertTriangle, ChevronUp, ChevronDown,
   ListTodo, X, BookOpen,
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -175,7 +175,13 @@ async function runOutlineQualityCheck(
 ): Promise<boolean> {
   if (signal.aborted) return false
   const { projectId, params } = task
-  pushProgress({ step: 'outline-quality', label: '正在启动大纲 Graph 质检…', done: false, error: false })
+  pushProgress({
+    step: 'outline-quality',
+    progressKey: 'outline-quality-launch',
+    label: '正在启动大纲 Graph 质检…',
+    done: false,
+    error: false,
+  })
   try {
     const res = await outlineApi.startQualityCheckWorkflow(projectId, {
       model_profile: params.model_profile ?? 'gemini',
@@ -188,7 +194,7 @@ async function runOutlineQualityCheck(
     if (!runId) throw new Error('后端未返回 workflow run_id')
     pushProgress({
       step: 'outline-quality',
-      progressKey: 'outline-quality-started',
+      progressKey: 'outline-quality-launch',
       label: `大纲 Graph 质检已启动：${runId.slice(0, 8)}`,
       done: true,
       error: false,
@@ -257,10 +263,24 @@ async function runOutlineQualityCheck(
           outline_quality_report?: unknown
           outline_quality_scope?: 'volume' | 'book'
           result?: OutlinePlanQualityReport & { volume_reports?: unknown[] }
+          details?: string[]
         }
         try {
           evt = JSON.parse(event.data)
         } catch {
+          return
+        }
+
+        if (evt.event === 'truncation_warning') {
+          pushProgress({
+            step: 'outline-quality-truncation',
+            progressKey: `outline-quality-truncation-${Date.now()}`,
+            label: evt.label ?? '⚠️ 部分上下文被截断，质检结果可能不完整',
+            done: true,
+            error: false,
+            warning: true,
+            warningDetails: evt.details,
+          })
           return
         }
 
@@ -388,7 +408,13 @@ async function runOutlineRepair(
 ): Promise<boolean> {
   if (signal.aborted) return false
   const { projectId, params } = task
-  pushProgress({ step: 'outline-repair', label: '正在启动大纲 Graph 修复…', done: false, error: false })
+  pushProgress({
+    step: 'outline-repair',
+    progressKey: 'outline-repair-launch',
+    label: '正在启动大纲 Graph 修复…',
+    done: false,
+    error: false,
+  })
   try {
     const res = await outlineApi.startRepairWorkflow(projectId, {
       model_profile: params.model_profile ?? 'gemini',
@@ -401,7 +427,7 @@ async function runOutlineRepair(
     if (!runId) throw new Error('后端未返回 workflow run_id')
     pushProgress({
       step: 'outline-repair',
-      progressKey: 'outline-repair-started',
+      progressKey: 'outline-repair-launch',
       label: `大纲 Graph 修复已启动：${runId.slice(0, 8)}`,
       done: true,
       error: false,
@@ -434,10 +460,24 @@ async function runOutlineRepair(
           outline_quality_report?: unknown
           outline_quality_scope?: 'volume' | 'book'
           result?: { summary?: string; status?: string; [key: string]: unknown }
+          details?: string[]
         }
         try {
           evt = JSON.parse(event.data)
         } catch {
+          return
+        }
+
+        if (evt.event === 'truncation_warning') {
+          pushProgress({
+            step: 'outline-repair-truncation',
+            progressKey: `outline-repair-truncation-${Date.now()}`,
+            label: evt.label ?? '⚠️ 部分上下文被截断，修复质量可能受影响',
+            done: true,
+            error: false,
+            warning: true,
+            warningDetails: evt.details,
+          })
           return
         }
 
@@ -587,6 +627,7 @@ async function runContinueChapters(
   signal: AbortSignal,
   upsertChapter: (chapter: Chapter) => void,
   setMemories: (memories: MemoryChunk[]) => void,
+  markChapterDebriefCommitted: (chapterId: string) => void,
 ) {
   const { projectId, params } = task
   const chapterIds: string[] = Array.isArray(params.chapterIds) ? params.chapterIds : []
@@ -727,6 +768,7 @@ async function runContinueChapters(
           llmProviderId,
           { omitChapterIndex: indexPersistedFromDraft },
         )
+        markChapterDebriefCommitted(chapterId)
         const indexLabel =
           applied.chapterIndexSaved || indexPersistedFromDraft ? 'ChapterIndex 已写入' : 'ChapterIndex 未更新'
         pushProgress({
@@ -785,6 +827,7 @@ async function runRewriteChapter(
   signal: AbortSignal,
   upsertChapter: (chapter: Chapter) => void,
   setMemories: (memories: MemoryChunk[]) => void,
+  markChapterDebriefCommitted: (chapterId: string) => void,
 ) {
   const { projectId, params } = task
   const chapterId: string | undefined = typeof params.chapterId === 'string' ? params.chapterId : undefined
@@ -915,6 +958,7 @@ async function runRewriteChapter(
         llmProviderId,
         { omitChapterIndex: indexPersistedFromDraft },
       )
+      markChapterDebriefCommitted(chapterId)
       pushProgress({
         step: 'debrief',
         label: `✓ 自动复盘完成：${applied.characterCount} 个人物/${applied.storylineCount} 条故事线/${applied.memoryCount} 条记忆，${
@@ -1033,13 +1077,14 @@ function TaskCard({ task, onRemove, onCancel }: { task: GenTask; onRemove: () =>
         )}>
           {task.progress.map((p, idx) => {
             const pk = progressRowKey(p, idx)
-            const expandable = !!p.outlineQualityReport
+            const expandable = !!p.outlineQualityReport || !!(p.warning && p.warningDetails?.length)
             const open = expandedPk === pk
             return (
               <div key={pk} className={clsx(
                 'rounded px-2 py-1',
-                p.error ? 'bg-red-100 text-red-700' :
-                p.done ? 'bg-green-100 text-green-700' :
+                p.error   ? 'bg-red-100 text-red-700' :
+                p.warning ? 'bg-yellow-50 text-yellow-800' :
+                p.done    ? 'bg-green-100 text-green-700' :
                 'bg-white text-gray-600'
               )}>
                 <div
@@ -1048,6 +1093,8 @@ function TaskCard({ task, onRemove, onCancel }: { task: GenTask; onRemove: () =>
                 >
                   {p.error ? (
                     <AlertCircle size={10} className="shrink-0 mt-0.5" />
+                  ) : p.warning ? (
+                    <AlertTriangle size={10} className="shrink-0 mt-0.5 text-yellow-600" />
                   ) : p.done ? (
                     <CheckCircle2 size={10} className="shrink-0 mt-0.5" />
                   ) : (
@@ -1065,6 +1112,13 @@ function TaskCard({ task, onRemove, onCancel }: { task: GenTask; onRemove: () =>
                 {open && p.outlineQualityReport && (
                   <div className="mt-1.5 pl-4 border-l border-green-200">
                     <OutlinePlanQualityView report={p.outlineQualityReport} variant="minimal" />
+                  </div>
+                )}
+                {open && p.warning && p.warningDetails && p.warningDetails.length > 0 && (
+                  <div className="mt-1.5 pl-4 border-l border-yellow-300 space-y-0.5">
+                    {p.warningDetails.map((d, i) => (
+                      <p key={i} className="text-[10px] text-yellow-700">{d}</p>
+                    ))}
                   </div>
                 )}
               </div>
@@ -1101,6 +1155,7 @@ export default function GenerationQueuePanel() {
   const setCurrentProject = useAppStore(s => s.setCurrentProject)
   const upsertChapter = useAppStore(s => s.upsertChapter)
   const setMemories = useAppStore(s => s.setMemories)
+  const markChapterDebriefCommitted = useAppStore(s => s.markChapterDebriefCommitted)
   const [queueAvoidRightDrawer, setQueueAvoidRightDrawer] = useState(false)
 
   // 避免并发执行：记录正在运行的任务 id
@@ -1178,9 +1233,9 @@ export default function GenerationQueuePanel() {
     } else if (task.type === 'batch_expand') {
       await runBatchExpand(task, pushProgress, onComplete, onError, abort.signal)
     } else if (task.type === 'continue_chapters') {
-      await runContinueChapters(task, pushProgress, onComplete, onError, abort.signal, upsertChapter, setMemories)
+      await runContinueChapters(task, pushProgress, onComplete, onError, abort.signal, upsertChapter, setMemories, markChapterDebriefCommitted)
     } else if (task.type === 'rewrite_chapter') {
-      await runRewriteChapter(task, pushProgress, onComplete, onError, abort.signal, upsertChapter, setMemories)
+      await runRewriteChapter(task, pushProgress, onComplete, onError, abort.signal, upsertChapter, setMemories, markChapterDebriefCommitted)
     } else {
       onError('未知任务类型')
     }

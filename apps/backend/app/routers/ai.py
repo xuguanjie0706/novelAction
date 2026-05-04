@@ -1038,6 +1038,8 @@ class ChatStreamRequest(BaseModel):
     prompt: str
     context_type: Literal["outline", "writing", "general"] = "general"
     chapter_id: Optional[UUID] = None
+    """写作对话：将其他章节正文一并并入模型上下文（须属本书；当前章不必重复勾选，最多 8 章）。"""
+    additional_chapter_ids: Optional[List[UUID]] = Field(default=None, max_length=8)
     model_profile: Literal["local", "gemini"] = "local"
     llm_provider_id: Optional[UUID] = None
 
@@ -1198,6 +1200,56 @@ def _format_writing_chat_context(
     plain = _plain_text(chapter.content)
     sections.append(plain if plain else "（当前章节暂无正文）")
     return "\n".join(sections)
+
+
+def _append_reference_chapters_to_writing_context(
+    db: Session,
+    *,
+    project_id: str,
+    anchor_chapter_id: UUID,
+    additional_chapter_ids: Optional[List[UUID]],
+    base_context: str,
+) -> str:
+    if not additional_chapter_ids:
+        return base_context
+    seen: set[UUID] = set()
+    ordered: list[UUID] = []
+    for raw in additional_chapter_ids:
+        if raw == anchor_chapter_id:
+            continue
+        if raw in seen:
+            continue
+        seen.add(raw)
+        ordered.append(raw)
+        if len(ordered) >= 8:
+            break
+    if not ordered:
+        return base_context
+    rows = (
+        db.query(Chapter)
+        .filter(Chapter.project_id == project_id, Chapter.id.in_(ordered))
+        .all()
+    )
+    by_id = {c.id: c for c in rows}
+    blocks: list[str] = []
+    for cid in ordered:
+        ch = by_id.get(cid)
+        if not ch:
+            continue
+        pl = _plain_text(ch.content)
+        narr, _ = split_plain_manuscript_and_index_block(pl)
+        body = (narr.strip() if narr.strip() else pl)[:12000]
+        num = display_chapter_number(ch.title, ch.sort_order)
+        blocks.append(
+            f"【参考章节《{ch.title}》（序号：{num}）】\n{body or '（该章暂无正文）'}"
+        )
+    if not blocks:
+        return base_context
+    return (
+        base_context
+        + "\n\n【作者指定参考的其他章节（仅作对话依据；当前章见上文）】\n"
+        + "\n\n".join(blocks)
+    )
 
 
 class ChapterCoherenceCheckRequest(BaseModel):
@@ -1886,6 +1938,13 @@ async def chat_stream(
             outline_node=outline_node,
             prev_chapter=prev_chapter,
         )
+        context_text = _append_reference_chapters_to_writing_context(
+            db,
+            project_id=project_id,
+            anchor_chapter_id=chapter.id,
+            additional_chapter_ids=req.additional_chapter_ids,
+            base_context=context_text,
+        )
     else:
         context_text = "\n".join([
             "【作品】",
@@ -1916,6 +1975,9 @@ async def chat_stream(
     db.add(user_message)
     db.commit()
 
+    # StreamingResponse 返回后 get_db 会先关闭 Session；不得在 event_stream 内再读 ORM（会触发 DetachedInstanceError）
+    context_label = _chat_context_label(req.context_type, chapter)
+
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
         db=db,
@@ -1927,7 +1989,7 @@ async def chat_stream(
         try:
             async for chunk in svc.chat_stream(
                 user_prompt=prompt,
-                context_label=_chat_context_label(req.context_type, chapter),
+                context_label=context_label,
                 context_text=context_text,
                 chat_history=chat_history,
             ):
@@ -1968,6 +2030,9 @@ async def suggest_stream(
     if not chapter:
         raise HTTPException(404, "Chapter not found")
 
+    chapter_content_snapshot = chapter.content or ""
+    suggest_prompt = req.prompt
+
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
         db=db,
@@ -1976,8 +2041,8 @@ async def suggest_stream(
 
     async def event_stream():
         async for chunk in svc.suggest_stream(
-            chapter_content=chapter.content,
-            user_prompt=req.prompt
+            chapter_content=chapter_content_snapshot,
+            user_prompt=suggest_prompt,
         ):
             yield f"data: {json.dumps({'text': chunk})}\n\n"
         yield "data: [DONE]\n\n"
@@ -2248,6 +2313,52 @@ async def draft_assist_stream(
         )
     )
 
+    # StreamingResponse 返回后 Session 会关闭；此处一次性读出 draft_assist_stream 所需的 ORM 字段
+    def _fmt_foreshadows_for_stream(node) -> str:
+        if not node:
+            return ""
+        laid = node.foreshadows_laid or []
+        resolved = node.foreshadows_resolved or []
+        parts = []
+        if laid:
+            descs = [
+                (f.get("description", "") if isinstance(f, dict) else str(f))
+                for f in laid[:3]
+            ]
+            parts.append("埋[" + "；".join(d for d in descs if d) + "]")
+        if resolved:
+            descs = [
+                (f.get("description", "") if isinstance(f, dict) else str(f))
+                for f in resolved[:3]
+            ]
+            parts.append("收[" + "；".join(d for d in descs if d) + "]")
+        if not parts:
+            legacy = (node.extra or {}).get("foreshadow", "")
+            if legacy:
+                return legacy
+        return "  ".join(parts)
+
+    outline_foreshadow_str = _fmt_foreshadows_for_stream(outline_node)
+    story_day_str = (outline_node.extra or {}).get("story_day", "") if outline_node else ""
+    if outline_node:
+        word_target_val = int(
+            (outline_node.expected_words if outline_node.expected_words else None)
+            or (outline_node.extra or {}).get("word_estimate")
+            or 2300
+        )
+    else:
+        word_target_val = 2300
+    chapter_title_str = chapter.title or ""
+    outline_hook_str = outline_node.hook or "" if outline_node else ""
+    outline_summary_str = outline_node.summary or "" if outline_node else ""
+    outline_conflict_str = outline_node.conflict or "" if outline_node else ""
+    outline_highlight_str = outline_node.highlight or "" if outline_node else ""
+    outline_power_milestone_str = outline_node.power_milestone or "" if outline_node else ""
+    outline_emotional_tone_str = outline_node.emotional_tone or "" if outline_node else ""
+    premise_str = project.premise or ""
+    user_prompt_str = req.user_prompt or ""
+    stream_log_ctx = {"project_id": str(project_id), "chapter_id": str(req.chapter_id)}
+
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
         db=db,
@@ -2256,47 +2367,16 @@ async def draft_assist_stream(
 
     async def event_stream():
         try:
-            # ── 伏笔：优先读结构化字段，兼容旧 extra.foreshadow ──
-            def _fmt_foreshadows(node) -> str:
-                if not node:
-                    return ""
-                laid = node.foreshadows_laid or []
-                resolved = node.foreshadows_resolved or []
-                parts = []
-                if laid:
-                    descs = [
-                        (f.get("description", "") if isinstance(f, dict) else str(f))
-                        for f in laid[:3]
-                    ]
-                    parts.append("埋[" + "；".join(d for d in descs if d) + "]")
-                if resolved:
-                    descs = [
-                        (f.get("description", "") if isinstance(f, dict) else str(f))
-                        for f in resolved[:3]
-                    ]
-                    parts.append("收[" + "；".join(d for d in descs if d) + "]")
-                # 兼容旧数据：extra.foreshadow 文本
-                if not parts:
-                    legacy = (node.extra or {}).get("foreshadow", "")
-                    if legacy:
-                        return legacy
-                return "  ".join(parts)
-
-            # ── story_day（新字段，存于 extra）───────────────────
-            story_day = ""
-            if outline_node:
-                story_day = (outline_node.extra or {}).get("story_day", "")
-
             async for chunk in svc.draft_assist_stream(
-                chapter_title=chapter.title,
-                outline_hook=outline_node.hook or "" if outline_node else "",
-                outline_summary=outline_node.summary or "" if outline_node else "",
-                outline_conflict=outline_node.conflict or "" if outline_node else "",
-                outline_highlight=outline_node.highlight or "" if outline_node else "",
-                outline_foreshadow=_fmt_foreshadows(outline_node),
-                outline_power_milestone=outline_node.power_milestone or "" if outline_node else "",
-                outline_emotional_tone=outline_node.emotional_tone or "" if outline_node else "",
-                story_day=story_day,
+                chapter_title=chapter_title_str,
+                outline_hook=outline_hook_str,
+                outline_summary=outline_summary_str,
+                outline_conflict=outline_conflict_str,
+                outline_highlight=outline_highlight_str,
+                outline_foreshadow=outline_foreshadow_str,
+                outline_power_milestone=outline_power_milestone_str,
+                outline_emotional_tone=outline_emotional_tone_str,
+                story_day=story_day_str,
                 chapter_manifest=chapter_manifest_names,
                 prev_chapter_tail=prev_tail,
                 world_summary=world_summary,
@@ -2304,23 +2384,16 @@ async def draft_assist_stream(
                 storyline_summary=storyline_summary,
                 memory_summary=memory_summary,
                 existing_content=existing_content,
-                premise=project.premise or "",
-                user_prompt=req.user_prompt or "",
+                premise=premise_str,
+                user_prompt=user_prompt_str,
                 replace_existing=req.replace_existing,
                 continuity_context=continuity_context,
                 chapter_index_context=chapter_index_context,
                 quality_debt_context=quality_debt_context,
                 writing_brief_context=writing_brief_context,
                 plot_dossier_context=plot_dossier_context,
-                word_target=int(
-                    (outline_node.expected_words if outline_node and outline_node.expected_words else None)
-                    or (outline_node.extra or {}).get("word_estimate")
-                    or 2300
-                ),
-                stream_log_context={
-                    "project_id": str(project_id),
-                    "chapter_id": str(req.chapter_id),
-                },
+                word_target=word_target_val,
+                stream_log_context=stream_log_ctx,
             ):
                 yield f"data: {json.dumps({'text': chunk})}\n\n"
         except Exception as e:

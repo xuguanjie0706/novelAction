@@ -189,6 +189,9 @@ interface AppState {
   /** 大纲树是否需要刷新（队列任务完成后置 true，OutlinePage 检测到后 reload 并置 false） */
   outlineNeedsReload: boolean
   setOutlineNeedsReload: (v: boolean) => void
+  /** 队列已自动提交复盘的章节 ID 集合，避免切换复盘 tab 时重复触发 AI 分析 */
+  queueCommittedDebriefIds: Set<string>
+  markChapterDebriefCommitted: (chapterId: string) => void
 }
 
 const _storedQueueState = readStoredGenQueueState()
@@ -355,4 +358,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   outlineNeedsReload: false,
   setOutlineNeedsReload: (v) => set({ outlineNeedsReload: v }),
+  queueCommittedDebriefIds: new Set<string>(),
+  markChapterDebriefCommitted: (chapterId) =>
+    set((state) => ({ queueCommittedDebriefIds: new Set([...state.queueCommittedDebriefIds, chapterId]) })),
 }))

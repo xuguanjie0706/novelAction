@@ -1,6 +1,7 @@
 import { Layout, Menu, theme } from 'antd'
 import {
   BookOutlined,
+  CheckSquareOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
   PictureOutlined,
@@ -20,6 +21,7 @@ export default function AdminLayout() {
 
   const selected = useMemo(() => {
     if (loc.pathname.startsWith('/novels')) return ['/novels']
+    if (loc.pathname.startsWith('/debriefs')) return ['/debriefs']
     if (loc.pathname.startsWith('/reading-review')) return ['/reading-review']
     if (loc.pathname.startsWith('/llm-calls')) return ['/llm-calls']
     if (loc.pathname.startsWith('/image-providers')) return ['/image-providers']
@@ -54,6 +56,12 @@ export default function AdminLayout() {
               icon: <BookOutlined />,
               label: '小说管理',
               onClick: () => navigate('/novels'),
+            },
+            {
+              key: '/debriefs',
+              icon: <CheckSquareOutlined />,
+              label: '复盘列表',
+              onClick: () => navigate('/debriefs'),
             },
             {
               key: '/llm',

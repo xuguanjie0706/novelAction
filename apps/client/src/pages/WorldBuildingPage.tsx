@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Trash2, ChevronRight, GitBranch, Zap, Sword, Package, Shield } from 'lucide-react'
+import { Plus, Trash2, ChevronRight, GitBranch, Zap, Sword, Package, Shield, Search } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { storylinesApi, powerSystemsApi, skillsApi, itemsApi, factionsApi } from '../api/client'
@@ -510,7 +510,9 @@ function SkillsTab({ projectId }: { projectId: string }) {
   const [selected, setSelected] = useState<Skill | null>(null)
   const [form, setForm] = useState<Partial<Skill>>({})
   const [saving, setSaving] = useState(false)
-  const [filterType, setFilterType] = useState<string>('')
+  const [searchQ, setSearchQ]         = useState('')
+  const [filterType, setFilterType]   = useState('')
+  const [filterGrade, setFilterGrade] = useState('')
 
   useEffect(() => {
     skillsApi.list(projectId).then(r => {
@@ -545,47 +547,104 @@ function SkillsTab({ projectId }: { projectId: string }) {
   }
 
   const f = (key: keyof Skill) => (v: string) => setForm(prev => ({ ...prev, [key]: v }))
-  const filtered = filterType ? skills.filter(s => s.skill_type === filterType) : skills
+
+  const filtered = useMemo(() => {
+    const q = searchQ.trim().toLowerCase()
+    return skills.filter(s => {
+      if (q && !s.name.toLowerCase().includes(q) && !(s.source ?? '').toLowerCase().includes(q)) return false
+      if (filterType && s.skill_type !== filterType) return false
+      if (filterGrade && s.grade !== filterGrade) return false
+      return true
+    })
+  }, [skills, searchQ, filterType, filterGrade])
+
+  const hasFilter = searchQ.trim() !== '' || filterType !== '' || filterGrade !== ''
 
   return (
     <div className="flex h-full">
-      <div className="w-56 border-r border-gray-100 bg-white flex flex-col shrink-0">
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100">
+      <div className="w-60 border-r border-gray-100 bg-white flex flex-col shrink-0">
+        {/* 顶栏 */}
+        <div className="flex items-center justify-between px-3 py-2.5 border-b border-gray-100 shrink-0">
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">功法技能</span>
-          <button onClick={handleCreate} className="text-amber-500 hover:text-amber-600"><Plus size={16} /></button>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400">{hasFilter ? `${filtered.length}/` : ''}{skills.length}</span>
+            <button onClick={handleCreate} className="text-amber-500 hover:text-amber-600"><Plus size={16} /></button>
+          </div>
+        </div>
+        {/* 搜索 */}
+        <div className="px-3 pt-2.5 pb-1.5 shrink-0">
+          <div className="relative">
+            <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="搜索名称、来源…"
+              className="w-full pl-7 pr-6 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50 focus:outline-none focus:ring-1 focus:ring-amber-400 focus:bg-white transition-colors" />
+            {searchQ && <button onClick={() => setSearchQ('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 text-xs">✕</button>}
+          </div>
         </div>
         {/* 类型筛选 */}
-        <div className="px-3 py-2 border-b border-gray-100 flex flex-wrap gap-1">
-          <button onClick={() => setFilterType('')} className={clsx('text-xs px-2 py-0.5 rounded-full border', !filterType ? 'bg-amber-100 text-amber-700 border-amber-200' : 'text-gray-400 border-gray-200')}>全部</button>
-          {Object.entries(SKILL_TYPE_META).map(([k, v]) => (
-            <button key={k} onClick={() => setFilterType(filterType === k ? '' : k)}
-              className={clsx('text-xs px-2 py-0.5 rounded-full border', filterType === k ? v.color : 'text-gray-400 border-gray-200')}>
-              {v.label}
+        <div className="px-3 pb-1 shrink-0">
+          <p className="text-[9px] text-gray-400 mb-1 uppercase tracking-wide">类型</p>
+          <div className="flex flex-wrap gap-1">
+            <button onClick={() => setFilterType('')}
+              className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-medium transition-colors',
+                filterType === '' ? 'bg-gray-700 text-white border-gray-700' : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-400')}>
+              全部
             </button>
-          ))}
+            {Object.entries(SKILL_TYPE_META).map(([k, v]) => (
+              <button key={k} onClick={() => setFilterType(filterType === k ? '' : k)}
+                className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-medium transition-colors',
+                  filterType === k ? v.color : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-400')}>
+                {v.label}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex-1 overflow-auto py-2">
-          {filtered.map(s => {
+        {/* 品阶筛选 */}
+        <div className="px-3 pb-2 shrink-0">
+          <p className="text-[9px] text-gray-400 mb-1 uppercase tracking-wide">品阶</p>
+          <div className="flex flex-wrap gap-1">
+            <button onClick={() => setFilterGrade('')}
+              className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-medium transition-colors',
+                filterGrade === '' ? 'bg-gray-700 text-white border-gray-700' : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-400')}>
+              全部
+            </button>
+            {Object.entries(GRADE_META).map(([k, v]) => (
+              <button key={k} onClick={() => setFilterGrade(filterGrade === k ? '' : k)}
+                className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-medium transition-colors',
+                  filterGrade === k ? 'bg-gray-700 text-white border-gray-700' : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-400')}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {/* 列表 */}
+        <div className="flex-1 overflow-auto border-t border-gray-100">
+          {filtered.length > 0 ? filtered.map(s => {
             const tm = SKILL_TYPE_META[s.skill_type]
             const gm = GRADE_META[s.grade]
             return (
               <button key={s.id} onClick={() => selectItem(s)}
-                className={clsx('w-full flex items-start gap-2 px-4 py-2.5 text-left transition-colors border-l-2',
+                className={clsx('w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors border-l-2',
                   selected?.id === s.id ? 'bg-amber-50 border-l-amber-400' : 'border-l-transparent hover:bg-gray-50')}>
                 <div className="min-w-0 w-full">
                   <div className="flex items-center justify-between gap-1">
-                    <span className="text-sm font-medium text-gray-800 truncate">{s.name}</span>
-                    <span className={clsx('text-xs shrink-0', gm?.color)}>{gm?.label}</span>
+                    <span className="text-xs font-medium text-gray-800 truncate">{s.name}</span>
+                    <span className={clsx('text-[10px] shrink-0 font-medium', gm?.color)}>{gm?.label}</span>
                   </div>
-                  <div className="flex gap-1 mt-0.5">
-                    <span className={clsx('text-xs px-1.5 py-0.5 rounded border', tm?.color)}>{tm?.label}</span>
-                    {s.level_required && <span className="text-xs text-gray-400 truncate">{s.level_required}</span>}
+                  <div className="flex gap-1 mt-0.5 items-center">
+                    <span className={clsx('text-[10px] px-1 py-0.5 rounded border', tm?.color)}>{tm?.label}</span>
+                    {s.level_required && <span className="text-[10px] text-gray-400 truncate">{s.level_required}</span>}
                   </div>
                 </div>
               </button>
             )
-          })}
-          {filtered.length === 0 && <p className="text-xs text-gray-400 text-center py-8">暂无技能</p>}
+          }) : (
+            <div className="py-10 text-center">
+              {skills.length === 0
+                ? <p className="text-xs text-gray-400 px-4">暂无功法，点击 + 创建</p>
+                : <p className="text-xs text-gray-400 px-4">无匹配结果<br /><button onClick={() => { setSearchQ(''); setFilterType(''); setFilterGrade('') }} className="mt-1 text-amber-500 hover:underline">清除筛选</button></p>
+              }
+            </div>
+          )}
         </div>
       </div>
 
@@ -675,6 +734,9 @@ function ItemsTab({ projectId }: { projectId: string }) {
   const [selected, setSelected] = useState<Item | null>(null)
   const [form, setForm] = useState<Partial<Item>>({})
   const [saving, setSaving] = useState(false)
+  const [searchQ, setSearchQ]           = useState('')
+  const [filterType, setFilterType]     = useState('')
+  const [filterRarity, setFilterRarity] = useState('')
 
   useEffect(() => {
     itemsApi.list(projectId).then(r => {
@@ -710,34 +772,108 @@ function ItemsTab({ projectId }: { projectId: string }) {
 
   const f = (key: keyof Item) => (v: string) => setForm(prev => ({ ...prev, [key]: v }))
 
+  const filtered = useMemo(() => {
+    const q = searchQ.trim().toLowerCase()
+    return items.filter(s => {
+      if (q && !s.name.toLowerCase().includes(q) && !(s.origin ?? '').toLowerCase().includes(q)) return false
+      if (filterType && s.item_type !== filterType) return false
+      if (filterRarity && s.rarity !== filterRarity) return false
+      return true
+    })
+  }, [items, searchQ, filterType, filterRarity])
+
+  const hasFilter = searchQ.trim() !== '' || filterType !== '' || filterRarity !== ''
+
   return (
     <div className="flex h-full">
-      <div className="w-56 border-r border-gray-100 bg-white flex flex-col shrink-0">
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100">
+      <div className="w-60 border-r border-gray-100 bg-white flex flex-col shrink-0">
+        {/* 顶栏 */}
+        <div className="flex items-center justify-between px-3 py-2.5 border-b border-gray-100 shrink-0">
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">道具法宝</span>
-          <button onClick={handleCreate} className="text-amber-500 hover:text-amber-600"><Plus size={16} /></button>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400">{hasFilter ? `${filtered.length}/` : ''}{items.length}</span>
+            <button onClick={handleCreate} className="text-amber-500 hover:text-amber-600"><Plus size={16} /></button>
+          </div>
         </div>
-        <div className="flex-1 overflow-auto py-2">
-          {items.map(s => {
+        {/* 搜索 */}
+        <div className="px-3 pt-2.5 pb-1.5 shrink-0">
+          <div className="relative">
+            <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="搜索名称、来历…"
+              className="w-full pl-7 pr-6 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50 focus:outline-none focus:ring-1 focus:ring-amber-400 focus:bg-white transition-colors" />
+            {searchQ && <button onClick={() => setSearchQ('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 text-xs">✕</button>}
+          </div>
+        </div>
+        {/* 类型筛选 */}
+        <div className="px-3 pb-1 shrink-0">
+          <p className="text-[9px] text-gray-400 mb-1 uppercase tracking-wide">类型</p>
+          <div className="flex flex-wrap gap-1">
+            <button onClick={() => setFilterType('')}
+              className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-medium transition-colors',
+                filterType === '' ? 'bg-gray-700 text-white border-gray-700' : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-400')}>
+              全部
+            </button>
+            {Object.entries(ITEM_TYPE_META).map(([k, v]) => (
+              <button key={k} onClick={() => setFilterType(filterType === k ? '' : k)}
+                className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-medium transition-colors',
+                  filterType === k ? 'bg-gray-700 text-white border-gray-700' : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-400')}>
+                {v.icon} {v.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {/* 稀有度筛选 */}
+        <div className="px-3 pb-2 shrink-0">
+          <p className="text-[9px] text-gray-400 mb-1 uppercase tracking-wide">稀有度</p>
+          <div className="flex flex-wrap gap-1">
+            <button onClick={() => setFilterRarity('')}
+              className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-medium transition-colors',
+                filterRarity === '' ? 'bg-gray-700 text-white border-gray-700' : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-400')}>
+              全部
+            </button>
+            {Object.entries(RARITY_META).map(([k, v]) => (
+              <button key={k} onClick={() => setFilterRarity(filterRarity === k ? '' : k)}
+                className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-medium transition-colors',
+                  filterRarity === k ? 'bg-gray-700 text-white border-gray-700' : `bg-gray-50 border-gray-200 hover:border-gray-400 ${v.color}`)}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {/* 列表 */}
+        <div className="flex-1 overflow-auto border-t border-gray-100">
+          {filtered.length > 0 ? filtered.map(s => {
             const tm = ITEM_TYPE_META[s.item_type]
             const rm = RARITY_META[s.rarity]
+            const sm = ITEM_STATUS_META[s.status ?? 'intact']
             return (
               <button key={s.id} onClick={() => selectItem(s)}
-                className={clsx('w-full flex items-start gap-3 px-4 py-2.5 text-left transition-colors border-l-2',
+                className={clsx('w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors border-l-2',
                   selected?.id === s.id ? 'bg-amber-50 border-l-amber-400' : 'border-l-transparent hover:bg-gray-50')}>
-                <span className="text-xl leading-none mt-0.5 shrink-0">{tm?.icon}</span>
-                <div className="min-w-0">
-                  <div className="text-sm font-medium text-gray-800 truncate">{s.name}</div>
-                  <div className="flex gap-1 items-center">
-                    <span className={clsx('text-xs', rm?.color)}>{rm?.label}</span>
-                    <span className="text-xs text-gray-300">·</span>
-                    <span className="text-xs text-gray-400">{tm?.label}</span>
+                <span className="text-base leading-none mt-0.5 shrink-0">{tm?.icon}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-xs font-medium text-gray-800 truncate">{s.name}</span>
+                    <span className={clsx('text-[10px] shrink-0 font-medium', rm?.color)}>{rm?.label}</span>
+                  </div>
+                  <div className="flex gap-1 items-center mt-0.5">
+                    <span className="text-[10px] text-gray-400">{tm?.label}</span>
+                    {sm && s.status !== 'intact' && (
+                      <><span className="text-[10px] text-gray-300">·</span>
+                      <span className={clsx('text-[10px]', sm.color)}>{sm.label}</span></>
+                    )}
                   </div>
                 </div>
               </button>
             )
-          })}
-          {items.length === 0 && <p className="text-xs text-gray-400 text-center py-8">暂无道具</p>}
+          }) : (
+            <div className="py-10 text-center">
+              {items.length === 0
+                ? <p className="text-xs text-gray-400 px-4">暂无道具，点击 + 创建</p>
+                : <p className="text-xs text-gray-400 px-4">无匹配结果<br /><button onClick={() => { setSearchQ(''); setFilterType(''); setFilterRarity('') }} className="mt-1 text-amber-500 hover:underline">清除筛选</button></p>
+              }
+            </div>
+          )}
         </div>
       </div>
 

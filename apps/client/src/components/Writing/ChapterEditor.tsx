@@ -3,7 +3,7 @@ import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import CharacterCount from '@tiptap/extension-character-count'
 import Placeholder from '@tiptap/extension-placeholder'
-import { chaptersApi, aiApi, storylinesApi, foreshadowsApi, chapterIndexesApi } from '../../api/client'
+import { chaptersApi, aiApi, storylinesApi, foreshadowsApi, chapterIndexesApi, charactersApi } from '../../api/client'
 import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload, llmProviderIdFromRoute } from '../../store'
 import type { Chapter, Character, OutlineNode, StoryLine, Foreshadow, ChapterIndex } from '../../types'
 import toast from 'react-hot-toast'
@@ -11,7 +11,7 @@ import {
   BookOpen, Sparkles, X, Zap, Target, Users, Flag, GitBranch, RefreshCw,
   Maximize2, Minimize2, Clock, ChevronDown, ChevronRight, Anchor,
   Feather, PenLine, ListPlus, CheckCircle, Circle,
-  CheckSquare, TrendingUp, MapPin, Swords, Bot, Save, Trash2, ClipboardList,
+  CheckSquare, TrendingUp, MapPin, Swords, Bot, Save, Trash2, ClipboardList, UserPlus,
 } from 'lucide-react'
 import clsx from 'clsx'
 import {
@@ -30,6 +30,22 @@ interface Props {
   onFocusModeChange?: (v: boolean) => void
 }
 
+type NewCharacterSuggestion = {
+  name: string
+  role?: string
+  gender?: string
+  age?: string
+  faction?: string
+  personality?: string
+  motivation?: string
+  background?: string
+  current_realm?: string
+  current_status?: string
+  current_location?: string
+  arc_scope?: string
+  author_notes?: string
+}
+
 type AutoDebriefResponse = {
   character_updates: Array<{
     character_id: string
@@ -46,6 +62,7 @@ type AutoDebriefResponse = {
     status?: string
     beat?: string
   }>
+  new_characters?: NewCharacterSuggestion[]
   asset_updates?: Record<string, unknown>
   summary?: string
   error?: string
@@ -161,6 +178,7 @@ export default function ChapterEditor({
     chapters, characters, storyLines, setStoryLines, setMemories, addGenTask,
   } = useAppStore()
   const genQueue = useAppStore(s => s.genQueue)
+  const queueCommittedDebriefIds = useAppStore(s => s.queueCommittedDebriefIds)
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
   const storylineAutoSyncingRef = useRef(false)
   const memoryAutoSyncingRef = useRef(false)
@@ -202,6 +220,7 @@ export default function ChapterEditor({
   const [aiSuggestedSlIds, setAiSuggestedSlIds]       = useState<Set<string>>(new Set())
   const [aiDebriefSummary, setAiDebriefSummary]       = useState('')
   const [aiSuggestedAssetUpdates, setAiSuggestedAssetUpdates] = useState<Record<string, unknown> | null>(null)
+  const [aiNewCharacters, setAiNewCharacters] = useState<NewCharacterSuggestion[]>([])
 
   // ── 底部伏笔面板 ───────────────────────────────────────────────────
   const [bottomPanelOpen, setBottomPanelOpen]   = useState(false)
@@ -338,6 +357,7 @@ export default function ChapterEditor({
     setAiSuggestedCharIds(new Set())
     setAiSuggestedSlIds(new Set())
     setAiSuggestedAssetUpdates(null)
+    setAiNewCharacters([])
     debriefAutoLoadedChapterRef.current = null
     setManuscriptView((chapter.manuscript_raw_snapshot || '').trim() ? 'prose' : 'source')
   }, [chapter.id])
@@ -676,6 +696,8 @@ export default function ChapterEditor({
     setAiSuggestedSlIds(suggestedSlIds)
     setAiSuggestedAssetUpdates(data.asset_updates || null)
     setAiDebriefSummary(data.summary || '')
+    const validNewChars = (data.new_characters || []).filter(nc => typeof nc.name === 'string' && nc.name.trim())
+    setAiNewCharacters(validNewChars)
 
     const total = suggestedCharIds.size + suggestedSlIds.size
     const assetCount = data.asset_updates
@@ -684,7 +706,7 @@ export default function ChapterEditor({
         0,
       )
       : 0
-    if (total > 0 || assetCount > 0) {
+    if (total > 0 || assetCount > 0 || validNewChars.length > 0) {
       if (source === 'cache') {
         toast('已复用本章复盘结果', { icon: 'ℹ️' })
       } else {
@@ -728,9 +750,14 @@ export default function ChapterEditor({
     if (!hasHtmlTextContent(chapter.content)) return
     if (debriefAutoLoadedChapterRef.current === chapter.id) return
     if (autoDebriefing || debriefSubmitting) return
+    // 队列已自动提交复盘，无需重复 AI 分析
+    if (queueCommittedDebriefIds.has(chapter.id)) {
+      debriefAutoLoadedChapterRef.current = chapter.id
+      return
+    }
     debriefAutoLoadedChapterRef.current = chapter.id
     void runAutoDebrief(false)
-  }, [contextOpen, contextTab, chapter.id, chapter.content, autoDebriefing, debriefSubmitting, runAutoDebrief])
+  }, [contextOpen, contextTab, chapter.id, chapter.content, autoDebriefing, debriefSubmitting, runAutoDebrief, queueCommittedDebriefIds])
 
   const submitDebrief = async (selectedAssetUpdates?: Record<string, unknown>) => {
     const characterUpdates = Object.entries(charUpdates)
@@ -777,19 +804,26 @@ export default function ChapterEditor({
         character_updates: characterUpdates as any,
         storyline_updates: storylineUpdates as any,
         asset_updates: hasAssetUpdates ? effectiveAssetUpdates || undefined : undefined,
+        new_characters: aiNewCharacters.length > 0 ? aiNewCharacters as any : undefined,
         notes: debriefNotes || undefined,
       })
       toast.success(res.data.message)
-      const [refreshedStorylines, refreshedMemories] = await Promise.all([
+      const refreshRequests: Promise<any>[] = [
         storylinesApi.list(projectId),
         aiApi.listMemory(projectId),
-      ])
+      ]
+      if (aiNewCharacters.length > 0) refreshRequests.push(charactersApi.list(projectId))
+      const [refreshedStorylines, refreshedMemories, refreshedCharsRes] = await Promise.all(refreshRequests)
       setStoryLines(refreshedStorylines.data)
       setMemories(refreshedMemories.data)
+      if (refreshedCharsRes) {
+        refreshedCharsRes.data.forEach((c: any) => useAppStore.getState().upsertCharacter(c))
+      }
       // 清空表单
       setCharUpdates({})
       setStorylineBeats({})
       setAiSuggestedAssetUpdates(null)
+      setAiNewCharacters([])
       setDebriefNotes('')
     } catch {
       toast.error('复盘提交失败')
@@ -1477,6 +1511,7 @@ export default function ChapterEditor({
                   aiSuggestedCharIds={aiSuggestedCharIds}
                   aiSuggestedSlIds={aiSuggestedSlIds}
                   aiSuggestedAssetUpdates={aiSuggestedAssetUpdates}
+                  aiNewCharacters={aiNewCharacters}
                   aiSummary={aiDebriefSummary}
                   onAutoDebrief={runAutoDebrief}
                   onSubmit={submitDebrief}
@@ -1618,6 +1653,7 @@ interface DebriefPanelProps {
   aiSuggestedCharIds?: Set<string>
   aiSuggestedSlIds?: Set<string>
   aiSuggestedAssetUpdates?: Record<string, unknown> | null
+  aiNewCharacters?: NewCharacterSuggestion[]
   aiSummary?: string
   onAutoDebrief?: (forceRefresh?: boolean) => void
   onSubmit: (selectedAssetUpdates?: Record<string, unknown>) => void
@@ -1647,6 +1683,7 @@ function DebriefPanel({
   aiSuggestedCharIds = new Set(),
   aiSuggestedSlIds = new Set(),
   aiSuggestedAssetUpdates = null,
+  aiNewCharacters = [],
   aiSummary,
   onAutoDebrief,
   onSubmit,
@@ -1728,7 +1765,7 @@ function DebriefPanel({
           </div>
           <p className="text-[11px] text-amber-800 leading-relaxed">{aiSummary}</p>
           <p className="text-[10px] text-amber-500 mt-1">
-            已预填 {aiSuggestedCharIds.size} 个人物、{aiSuggestedSlIds.size} 条故事线、{totalAssetCount} 条资产变化，请检查后提交
+            已预填 {aiSuggestedCharIds.size} 个人物、{aiSuggestedSlIds.size} 条故事线、{totalAssetCount} 条资产变化{aiNewCharacters.length > 0 ? `、${aiNewCharacters.length} 个新配角` : ''}，请检查后提交
           </p>
         </div>
       ) : (
@@ -2016,6 +2053,32 @@ function DebriefPanel({
           className="w-full text-[11px] border border-novel-border rounded-novel px-3 py-2 bg-novel-card text-novel-ink placeholder:text-novel-ink-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-novel-accent resize-none"
         />
       </section>
+
+      {/* AI 建议新配角入库 */}
+      {aiNewCharacters.length > 0 && (
+        <section>
+          <div className="flex items-center gap-1.5 mb-2">
+            <UserPlus size={11} className="text-emerald-600" />
+            <span className="text-[11px] font-semibold text-novel-ink">本章新配角入库</span>
+            <span className="ml-auto text-[10px] text-emerald-600 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5">AI 建议</span>
+          </div>
+          <div className="space-y-1.5">
+            {aiNewCharacters.map((nc, i) => (
+              <div key={i} className="rounded-novel border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-[11px]">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-novel-ink">{nc.name}</span>
+                  {nc.faction && <span className="text-emerald-700 bg-emerald-100 rounded px-1">{nc.faction}</span>}
+                  {nc.current_realm && <span className="text-novel-ink-muted">{nc.current_realm}</span>}
+                </div>
+                {nc.personality && <p className="text-novel-ink-muted mt-0.5 leading-relaxed">{nc.personality}</p>}
+                {nc.motivation && <p className="text-novel-ink-faint mt-0.5">动机：{nc.motivation}</p>}
+                {nc.author_notes && <p className="text-amber-700 mt-0.5 italic">{nc.author_notes}</p>}
+              </div>
+            ))}
+          </div>
+          <p className="text-[10px] text-novel-ink-faint mt-1.5">提交后自动写入人物库</p>
+        </section>
+      )}
 
       {/* 空状态提示 */}
       {displayChars.length === 0 && activeStorylines.length === 0 && (

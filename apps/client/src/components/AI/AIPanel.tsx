@@ -31,12 +31,23 @@ export default function AIPanel({ projectId }: Props) {
   const [chatInput, setChatInput] = useState('')
   const [chatMessages, setChatMessages] = useState<AiChatMessage[]>([])
   const [chatLoading, setChatLoading] = useState(false)
+  /** 写作对话：并入模型上下文的额外章节（不含当前章） */
+  const [chatRefChapterIds, setChatRefChapterIds] = useState<string[]>([])
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!projectId || !activeChapterId) return
     aiApi.listMemory(projectId).then(res => setMemories(res.data)).catch(() => {})
   }, [projectId, activeChapterId, setMemories])
+
+  useEffect(() => {
+    setChatRefChapterIds([])
+  }, [projectId])
+
+  useEffect(() => {
+    if (!activeChapterId) return
+    setChatRefChapterIds(prev => prev.filter(id => id !== activeChapterId))
+  }, [activeChapterId])
 
   const chapterById = useMemo(() => {
     const m = new Map<string, { title: string; sort_order: number }>()
@@ -62,6 +73,23 @@ export default function AIPanel({ projectId }: Props) {
     if (chatContextType === 'writing') return activeChapter ? `正文：${activeChapter.title}` : '正文'
     return '项目'
   }, [activeChapter, chatContextType])
+
+  const chaptersSortedForChat = useMemo(
+    () => [...chapters].sort((a, b) => a.sort_order - b.sort_order),
+    [chapters],
+  )
+
+  const toggleChatRefChapter = (id: string) => {
+    if (id === activeChapterId) return
+    setChatRefChapterIds(prev => {
+      if (prev.includes(id)) return prev.filter(x => x !== id)
+      if (prev.length >= 8) {
+        toast.error('参考章节最多 8 章')
+        return prev
+      }
+      return [...prev, id]
+    })
+  }
 
   const chatPlaceholder = chatContextType === 'outline'
     ? '这个大纲里面主角怎么突破的？'
@@ -124,9 +152,15 @@ export default function AIPanel({ projectId }: Props) {
   const sendChat = async () => {
     const prompt = chatInput.trim()
     if (!prompt || chatLoading) return
-    if (chatContextType === 'writing' && !activeChapterId) {
-      toast.error('请先选择一个章节')
-      return
+    if (chatContextType === 'writing') {
+      if (!activeChapterId) {
+        toast.error('请先选择一个章节')
+        return
+      }
+      if (!chapters.some(c => c.id === activeChapterId)) {
+        toast.error('当前章节不在本书列表中，请在左侧重新选择一章后再试')
+        return
+      }
     }
 
     const now = new Date().toISOString()
@@ -161,6 +195,9 @@ export default function AIPanel({ projectId }: Props) {
           prompt,
           context_type: chatContextType,
           chapter_id: chatChapterId,
+          ...(chatContextType === 'writing' && chatRefChapterIds.length > 0
+            ? { additional_chapter_ids: chatRefChapterIds }
+            : {}),
           model_profile: modelProfileFromRoute(route),
           ...routeLlmProviderPayload(route),
         }),
@@ -335,6 +372,45 @@ export default function AIPanel({ projectId }: Props) {
               <span className="min-w-0 truncate text-xs font-medium text-amber-800">{chatContextLabel}</span>
               {chatLoading && <Loader2 size={13} className="shrink-0 animate-spin text-amber-600" />}
             </div>
+
+            {chatContextType === 'writing' && chaptersSortedForChat.length > 0 && (
+              <details className="rounded-lg border border-gray-200 bg-gray-50/80 text-xs">
+                <summary className="cursor-pointer select-none px-3 py-2 font-medium text-gray-700 hover:bg-gray-100/80">
+                  参考章节（可选）
+                  {chatRefChapterIds.length > 0 && (
+                    <span className="ml-1.5 font-normal text-amber-700">已选 {chatRefChapterIds.length} 章</span>
+                  )}
+                </summary>
+                <p className="border-t border-gray-100 px-3 py-1.5 text-[11px] leading-snug text-gray-500">
+                  勾选后，本轮对话会把对应章节的正文一并交给模型，便于对照伏笔、前后设定等。当前章已默认在上下文中，无需勾选。
+                </p>
+                <div className="max-h-36 space-y-0.5 overflow-y-auto border-t border-gray-100 px-2 py-2">
+                  {chaptersSortedForChat.map(ch => {
+                    const isCurrent = ch.id === activeChapterId
+                    const checked = chatRefChapterIds.includes(ch.id)
+                    return (
+                      <label
+                        key={ch.id}
+                        className={clsx(
+                          'flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-white/90',
+                          isCurrent && 'cursor-not-allowed opacity-50',
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          className="shrink-0 rounded border-gray-300 text-amber-600 focus:ring-amber-400"
+                          checked={checked}
+                          disabled={isCurrent || chatLoading}
+                          onChange={() => toggleChatRefChapter(ch.id)}
+                        />
+                        <span className="min-w-0 truncate text-gray-700">{ch.title}</span>
+                        {isCurrent && <span className="shrink-0 text-[10px] text-gray-400">当前</span>}
+                      </label>
+                    )
+                  })}
+                </div>
+              </details>
+            )}
 
             <div className="min-h-0 flex-1 overflow-auto space-y-3 pr-1">
               {chatMessages.length === 0 && (

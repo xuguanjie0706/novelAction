@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Crown, User, Swords, Zap, BookOpen, Eye, Trash2, Heart, TrendingUp, FileText, Target, NotebookPen } from 'lucide-react'
+import { Plus, Crown, User, Swords, Zap, BookOpen, Eye, Trash2, Heart, TrendingUp, FileText, Target, NotebookPen, Search, Users } from 'lucide-react'
 import { charactersApi, outlineApi } from '../api/client'
 import { useAppStore } from '../store'
 import type { Character } from '../types'
@@ -487,11 +487,34 @@ function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
 
 // ── 主页面 ────────────────────────────────────────────────
 
+type RoleFilter   = 'all' | 'protagonist' | 'supporting' | 'antagonist' | 'neutral'
+type StatusFilter = 'all' | 'alive' | 'dead' | 'missing' | 'sealed' | 'transformed'
+type GroupBy      = 'role' | 'faction'
+
+const ROLE_CHIPS: { key: RoleFilter; label: string }[] = [
+  { key: 'all',         label: '全部' },
+  { key: 'protagonist', label: '主角' },
+  { key: 'antagonist',  label: '反派' },
+  { key: 'supporting',  label: '配角' },
+  { key: 'neutral',     label: '中立' },
+]
+const STATUS_CHIPS: { key: StatusFilter; label: string }[] = [
+  { key: 'all',         label: '全部' },
+  { key: 'alive',       label: '存活' },
+  { key: 'dead',        label: '死亡' },
+  { key: 'missing',     label: '失踪' },
+  { key: 'sealed',      label: '封印' },
+]
+
 export default function CharactersPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const { characters, setCharacters, upsertCharacter, removeCharacter } = useAppStore()
-  const [selected, setSelected] = useState<Character | null>(null)
-  const [creating, setCreating] = useState(false)
+  const [selected, setSelected]         = useState<Character | null>(null)
+  const [creating, setCreating]         = useState(false)
+  const [searchQ, setSearchQ]           = useState('')
+  const [roleFilter, setRoleFilter]     = useState<RoleFilter>('all')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [groupBy, setGroupBy]           = useState<GroupBy>('role')
 
   useEffect(() => {
     if (!projectId) return
@@ -501,16 +524,50 @@ export default function CharactersPage() {
     })
   }, [projectId])
 
-  const protagonist = characters.find(c => c.role === 'protagonist')
-  const supporting  = characters.filter(c => c.role === 'supporting')
-  const antagonists = characters.filter(c => c.role === 'antagonist')
-  const neutrals    = characters.filter(c => c.role === 'neutral')
-  const groups = [
-    { key: 'protagonist' as const, chars: protagonist ? [protagonist] : [] },
-    { key: 'supporting'  as const, chars: supporting },
-    { key: 'antagonist'  as const, chars: antagonists },
-    { key: 'neutral'     as const, chars: neutrals },
-  ]
+  // ── 过滤 ──────────────────────────────────────────────────
+  const filteredChars = useMemo(() => {
+    const q = searchQ.trim().toLowerCase()
+    return characters.filter(c => {
+      if (q && !c.name.toLowerCase().includes(q) && !(c.faction ?? '').toLowerCase().includes(q)) return false
+      if (roleFilter !== 'all' && c.role !== roleFilter) return false
+      if (statusFilter !== 'all' && (c.current_status ?? 'alive') !== statusFilter) return false
+      return true
+    })
+  }, [characters, searchQ, roleFilter, statusFilter])
+
+  // ── 分组 ──────────────────────────────────────────────────
+  const groups = useMemo(() => {
+    if (groupBy === 'role') {
+      const order: RoleFilter[] = ['protagonist', 'antagonist', 'supporting', 'neutral']
+      return order
+        .map(role => ({
+          key: role,
+          label: ROLE_META[role as keyof typeof ROLE_META]?.label ?? role,
+          color: ROLE_META[role as keyof typeof ROLE_META]?.color ?? '',
+          chars: filteredChars.filter(c => c.role === role),
+        }))
+        .filter(g => g.chars.length > 0)
+    } else {
+      const map = new Map<string, Character[]>()
+      filteredChars.forEach(c => {
+        const key = c.faction?.trim() || '无势力'
+        if (!map.has(key)) map.set(key, [])
+        map.get(key)!.push(c)
+      })
+      return Array.from(map.entries())
+        .sort((a, b) => {
+          if (a[0] === '无势力') return 1
+          if (b[0] === '无势力') return -1
+          return b[1].length - a[1].length
+        })
+        .map(([faction, chars]) => ({
+          key: faction,
+          label: faction,
+          color: 'bg-blue-50 text-blue-700 border-blue-200',
+          chars,
+        }))
+    }
+  }, [filteredChars, groupBy])
 
   const handleCreate = async () => {
     if (!projectId || creating) return
@@ -530,52 +587,146 @@ export default function CharactersPage() {
     toast.success('已删除')
   }
 
+  const hasFilter = searchQ.trim() !== '' || roleFilter !== 'all' || statusFilter !== 'all'
+
   return (
     <div className="flex h-full">
       {/* 左栏：人物列表 */}
-      <div className="w-56 border-r border-gray-100 bg-white flex flex-col shrink-0 overflow-auto">
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 shrink-0">
+      <div className="w-60 border-r border-gray-100 bg-white flex flex-col shrink-0">
+
+        {/* 顶栏 */}
+        <div className="flex items-center justify-between px-3 py-2.5 border-b border-gray-100 shrink-0">
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">人物库</span>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-400">{characters.length} 人</span>
+            <span className="text-xs text-gray-400">
+              {hasFilter ? `${filteredChars.length}/` : ''}{characters.length} 人
+            </span>
             <button onClick={handleCreate} disabled={creating} className="text-amber-500 hover:text-amber-600 disabled:opacity-50">
               <Plus size={16} />
             </button>
           </div>
         </div>
-        <div className="flex-1 overflow-auto py-2">
-          {groups.map(({ key, chars }) => chars.length > 0 && (
-            <div key={key} className="mb-2">
-              <div className="px-4 py-1">
-                <span className={clsx('text-xs font-semibold px-2 py-0.5 rounded-full border', ROLE_META[key].color)}>
-                  {ROLE_META[key].label}
+
+        {/* 搜索框 */}
+        <div className="px-3 pt-2.5 pb-1.5 shrink-0">
+          <div className="relative">
+            <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input
+              value={searchQ}
+              onChange={e => setSearchQ(e.target.value)}
+              placeholder="搜索姓名、势力…"
+              className="w-full pl-7 pr-3 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50 focus:outline-none focus:ring-1 focus:ring-amber-400 focus:bg-white transition-colors"
+            />
+            {searchQ && (
+              <button onClick={() => setSearchQ('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 text-xs">✕</button>
+            )}
+          </div>
+        </div>
+
+        {/* 分组切换 */}
+        <div className="px-3 pb-1.5 shrink-0">
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+            <button
+              onClick={() => setGroupBy('role')}
+              className={clsx('flex-1 flex items-center justify-center gap-1 text-[10px] py-1 rounded-md font-medium transition-colors',
+                groupBy === 'role' ? 'bg-white text-amber-700 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
+              <Crown size={9} />按角色
+            </button>
+            <button
+              onClick={() => setGroupBy('faction')}
+              className={clsx('flex-1 flex items-center justify-center gap-1 text-[10px] py-1 rounded-md font-medium transition-colors',
+                groupBy === 'faction' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-700')}>
+              <Users size={9} />按势力
+            </button>
+          </div>
+        </div>
+
+        {/* 角色筛选 */}
+        <div className="px-3 pb-1 shrink-0">
+          <div className="flex gap-1 flex-wrap">
+            {ROLE_CHIPS.map(chip => (
+              <button key={chip.key} onClick={() => setRoleFilter(chip.key)}
+                className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-medium transition-colors',
+                  roleFilter === chip.key
+                    ? chip.key === 'all' ? 'bg-gray-700 text-white border-gray-700'
+                      : ROLE_META[chip.key as keyof typeof ROLE_META]?.color + ' border-current'
+                    : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-400')}>
+                {chip.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 状态筛选 */}
+        <div className="px-3 pb-2 shrink-0">
+          <div className="flex gap-1 flex-wrap">
+            {STATUS_CHIPS.map(chip => (
+              <button key={chip.key} onClick={() => setStatusFilter(chip.key)}
+                className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-medium transition-colors',
+                  statusFilter === chip.key
+                    ? 'bg-gray-700 text-white border-gray-700'
+                    : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-400')}>
+                {chip.key !== 'all' && (
+                  <span className={clsx('inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle',
+                    STATUS_META[chip.key]?.dot ?? 'bg-gray-400')} />
+                )}
+                {chip.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 列表 */}
+        <div className="flex-1 overflow-auto border-t border-gray-100">
+          {groups.length > 0 ? groups.map(group => (
+            <div key={group.key} className="mb-1">
+              <div className="px-3 pt-2 pb-1 flex items-center gap-1.5">
+                <span className={clsx('text-[10px] font-semibold px-1.5 py-0.5 rounded-full border', group.color)}>
+                  {group.label}
                 </span>
+                <span className="text-[10px] text-gray-400">{group.chars.length}</span>
               </div>
-              {chars.map(c => {
+              {group.chars.map(c => {
                 const sm = STATUS_META[c.current_status ?? 'alive'] ?? STATUS_META.alive
+                const rm = ROLE_META[c.role as keyof typeof ROLE_META] ?? ROLE_META.supporting
                 return (
                   <button key={c.id} onClick={() => setSelected(c)}
-                    className={clsx('w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors border-l-2',
+                    className={clsx('w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors border-l-2',
                       selected?.id === c.id ? 'bg-amber-50 border-l-amber-400' : 'border-l-transparent hover:bg-gray-50')}>
                     <div className="relative shrink-0">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-200 to-amber-400 flex items-center justify-center">
-                        <span className="text-white text-xs font-bold">{c.name[0]}</span>
+                      <div className={clsx('w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold',
+                        c.role === 'protagonist' ? 'bg-gradient-to-br from-amber-300 to-amber-500'
+                        : c.role === 'antagonist' ? 'bg-gradient-to-br from-red-300 to-red-500'
+                        : 'bg-gradient-to-br from-gray-300 to-gray-400')}>
+                        {c.name[0]}
                       </div>
-                      <span className={clsx('absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white', sm.dot)} />
+                      <span className={clsx('absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border-2 border-white', sm.dot)} />
                     </div>
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-gray-800 truncate">{c.name}</div>
-                      <div className="text-xs text-gray-400 truncate">
-                        {c.current_realm ?? c.faction ?? c.gender ?? ''}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs font-medium text-gray-800 truncate">{c.name}</span>
+                        {groupBy === 'faction' && c.role && (
+                          <span className={clsx('shrink-0 text-[9px] px-1 rounded border', rm.color)}>{rm.label}</span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-gray-400 truncate">
+                        {groupBy === 'role'
+                          ? (c.current_realm ?? c.faction ?? c.current_location ?? c.gender ?? '')
+                          : (c.current_realm ?? c.faction_rank ?? c.gender ?? '')}
                       </div>
                     </div>
                   </button>
                 )
               })}
             </div>
-          ))}
-          {characters.length === 0 && (
-            <p className="text-xs text-gray-400 text-center py-8 px-4">暂无人物，点击 + 创建</p>
+          )) : (
+            <div className="py-10 text-center">
+              {characters.length === 0
+                ? <p className="text-xs text-gray-400 px-4">暂无人物，点击 + 创建</p>
+                : <p className="text-xs text-gray-400 px-4">无匹配人物<br /><button onClick={() => { setSearchQ(''); setRoleFilter('all'); setStatusFilter('all') }} className="mt-1 text-amber-500 hover:underline">清除筛选</button></p>
+              }
+            </div>
           )}
         </div>
       </div>

@@ -316,6 +316,10 @@ export interface GenProgressItem {
   label: string
   done: boolean
   error: boolean
+  /** 上下文截断等非致命警告 */
+  warning?: boolean
+  /** 截断详情列表，warning=true 时可能存在 */
+  warningDetails?: string[]
   /** 与 step 组合区分同日进度行（如大纲质检 vs 展开进度） */
   progressKey?: string
   outlineQualityReport?: OutlinePlanQualityReport | null

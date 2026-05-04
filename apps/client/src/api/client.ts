@@ -293,6 +293,21 @@ export const aiApi = {
       tags?: string[]
     }>
     asset_updates?: Record<string, unknown>
+    new_characters?: Array<{
+      name: string
+      role?: string
+      gender?: string
+      age?: string
+      faction?: string
+      personality?: string
+      motivation?: string
+      background?: string
+      current_realm?: string
+      current_status?: string
+      current_location?: string
+      arc_scope?: string
+      author_notes?: string
+    }>
     chapter_index?: {
       story_day?: string
       core_events?: Array<Record<string, unknown> | string>

@@ -46,6 +46,8 @@ export interface ReviewChapter {
 export interface ReviewMemoryChunk {
   id: string
   chapter_id?: string | null
+  /** 与章节 sort_order+1 或业务章号一致，便于排序展示 */
+  chapter_number?: number | null
   memory_type: 'event' | 'character_state' | 'foreshadow' | 'setting' | 'conflict' | string
   title?: string
   content: string

@@ -4,6 +4,22 @@ type ModelProfile = 'local' | 'gemini'
 type MemoryType = 'event' | 'character_state' | 'foreshadow' | 'setting' | 'conflict'
 type AssetUpdates = Record<string, unknown>
 
+interface NewCharacterResult {
+  name: string
+  role?: string
+  gender?: string
+  age?: string
+  faction?: string
+  personality?: string
+  motivation?: string
+  background?: string
+  current_realm?: string
+  current_status?: string
+  current_location?: string
+  arc_scope?: string
+  author_notes?: string
+}
+
 interface AutoDebriefResult {
   character_updates?: Array<{
     character_id?: string
@@ -13,6 +29,7 @@ interface AutoDebriefResult {
     add_skill_name?: string
     add_skill_mastery?: string
   }>
+  new_characters?: NewCharacterResult[]
   storyline_updates?: Array<{
     storyline_id?: string
     storyline_name?: string
@@ -110,12 +127,16 @@ export async function autoCommitGeneratedChapterDebrief(
   // 连续续写链路中必须调用 chapter-debrief：即使 AI 未抽出结构化增量，也要落库并清掉 debrief 缓存，
   // 否则下一章 draft 仍读旧人物/记忆；此前此处直接 return 会跳过整次提交。
 
+  const newCharacters = (data.new_characters || [])
+    .filter((nc) => typeof nc.name === 'string' && nc.name.trim())
+
   const commitPayload: Parameters<typeof aiApi.chapterDebrief>[1] = {
     chapter_id: chapterId,
     character_updates: characterUpdates as any,
     storyline_updates: storylineUpdates as any,
     memory_updates: memoryUpdates,
     asset_updates: data.asset_updates,
+    new_characters: newCharacters as any,
     notes: data.summary ? `AI生成自动复盘：${data.summary}` : undefined,
   }
   if (!options?.omitChapterIndex && data.chapter_index) {

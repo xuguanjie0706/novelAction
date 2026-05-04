@@ -359,6 +359,12 @@ export default function OutlineAIPanel({ node, projectId, onCommitDone }: Props)
           新手的大纲只写 <span className="font-semibold">①核心事件</span> 和 <span className="font-semibold">②开篇钩子</span>，
           忽略 <span className="font-semibold text-red-700">③人物变化 · ④伏笔管理 · ⑤章末钩子</span>——这就是追读断崖的根本原因。
           AI 将为每一章强制生成五要素。
+          {node.node_type === 'volume' ? (
+            <>
+              {' '}
+              若当前不是第一卷，后端会自动把<strong>前几卷已落库的章纲情节</strong>与<strong>伏笔台账</strong>（章纲五要素里的伏笔行 + 伏笔表中未回收项）一并交给模型，便于承接长线。
+            </>
+          ) : null}
         </p>
       </div>
 

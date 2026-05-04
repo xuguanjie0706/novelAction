@@ -75,7 +75,12 @@ export default function WritePage() {
         setExpanded(new Set<string>(oRes.data.map((n: OutlineNode) => n.id)))
         setChapters(cRes.data)
         setStoryLines(slRes.data)
-        if (!activeChapterId && cRes.data.length > 0) setActiveChapterId(cRes.data[0].id)
+        // 切换项目或刷新后：全局 store 里可能仍是上一本书的 chapter_id，写作侧栏对话会带错 id → 后端 404 / 对话失败
+        const chapterIds = new Set(cRes.data.map((c: Chapter) => c.id))
+        const currentActive = useAppStore.getState().activeChapterId
+        if (!currentActive || !chapterIds.has(currentActive)) {
+          useAppStore.getState().setActiveChapterId(cRes.data.length > 0 ? cRes.data[0].id : null)
+        }
         setLoadState('ready')
       })
       .catch(() => { setLoadState('error'); toast.error('数据加载失败') })

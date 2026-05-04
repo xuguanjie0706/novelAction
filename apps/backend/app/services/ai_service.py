@@ -4,10 +4,13 @@ AI Service — 统一使用 OpenAI 兼容协议
 """
 import asyncio
 import json
+import logging
 import re
 import time
 from typing import List, AsyncGenerator, Optional
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy.orm import Session
 
@@ -51,6 +54,7 @@ class AIService:
             else:
                 self._gemini_unconfigured = True
         self._client = None
+        self._truncation_warnings: list[str] = []  # 本次调用中发生的截断记录
 
     def _large_context_enabled(self) -> bool:
         return self.profile == "gemini"
@@ -59,15 +63,32 @@ class AIService:
         self,
         text: str | None,
         local_limit: int,
-        large_limit: int,
+        large_limit: int | None,
         from_end: bool = False,
+        field_name: str = "",
     ) -> str:
+        """裁剪上下文。large_limit=None 表示大上下文模型（Gemini）不截断。
+        真正发生截断时记录 warning，并在 self._truncation_warnings 追加提示。
+        """
         clean = (text or "").strip()
         if not clean:
             return ""
-        limit = large_limit if self._large_context_enabled() else local_limit
+        if self._large_context_enabled():
+            if large_limit is None:
+                return clean  # Gemini：不截断
+            limit = large_limit
+        else:
+            limit = local_limit
         if len(clean) <= limit:
             return clean
+        label = f"[{field_name}] " if field_name else ""
+        logger.warning(
+            "⚠️ 上下文截断 %sprofile=%s limit=%d original_len=%d",
+            label, self.profile, limit, len(clean),
+        )
+        self._truncation_warnings.append(
+            f"字段 {field_name or '未知'} 被截断：原始长度 {len(clean)} 字符，限制 {limit} 字符"
+        )
         return clean[-limit:] if from_end else clean[:limit]
 
     def _plain_text(self, content: str | None) -> str:
@@ -697,6 +718,8 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         previous_chapters_context: str = "",
         continuity_state: str = "",
         batch_goal: str = "",
+        prior_volumes_plot_context: str = "",       # 当前卷之前各卷已落库章纲（情节链）
+        prior_foreshadow_ledger: str = "",          # 前文伏笔汇总 + 伏笔表未回收项
         realm_whitelist: list[str] | None = None,   # 项目合法境界名白名单
         protagonist_state: str = "",                 # 主角当前结构化状态（境界/位置/持有物）
     ) -> dict:
@@ -740,6 +763,16 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             f"\n【本批任务边界】\n{batch_goal[:800]}\n"
             if batch_goal else ""
         )
+        plot = (prior_volumes_plot_context or "").strip()
+        prior_plot_block = (
+            f"\n【前几卷已规划章纲（情节链；勿重复已发生核心事件）】\n{plot[:18000]}\n"
+            if plot else ""
+        )
+        ledger = (prior_foreshadow_ledger or "").strip()
+        prior_ledger_block = (
+            f"\n【前几卷伏笔台账（未收束线索须在本卷章纲中继续埋/收）】\n{ledger[:10000]}\n"
+            if ledger else ""
+        )
         protagonist_state_context = (
             f"\n【主角当前状态（结构化硬约束，优先级高于任何叙事摘要）】\n{protagonist_state}\n"
             if protagonist_state else ""
@@ -769,7 +802,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 世界观摘要：{world_summary[:400]}
 主要人物（主线核心卡司，非全书全部人物——配角可按剧情需要随时引入）：{character_summary[:500]}
 全书立意：{theme_statement[:300] or '（未填写；请从创意和人物中提炼一条贯穿全书的价值命题）'}
-{realm_constraint_block}{protagonist_state_context}{global_context}{previous_context}{continuity_context}{batch_goal_context}
+{realm_constraint_block}{protagonist_state_context}{global_context}{prior_plot_block}{prior_ledger_block}{previous_context}{continuity_context}{batch_goal_context}
 请为本{node_type == 'volume' and '卷' or '旧篇'}生成 {chapter_count} 个章节计划，章节编号从第{start_num}章开始。
 {_genre_guardrail_text(genre)}
 
@@ -802,7 +835,9 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 4. 前3章追读钩子要特别强
 5. 伏笔要有连续性，本卷内至少有2条贯穿始终的伏笔线
 6. 如果提供了已生成章节上下文或滚动连续性账本，必须承接上一批章末钩子、人物状态和未回收伏笔，不得重复已发生的核心事件
-7. 本批第一章要自然回应上一批最后一章留下的具体悬念；如果处于新卷开头，则先承接全书卷线蓝图再开启本卷核心问题"""
+7. 本批第一章要自然回应上一批最后一章留下的具体悬念；如果处于新卷开头，则先承接全书卷线蓝图再开启本卷核心问题
+8. 若提供了「前几卷已规划章纲」：不得复述或改头换面重复前序已写核心事件；新卷情节在其上推进
+9. 若提供了「前几卷伏笔台账」：本卷各章 foreshadow 字段须点名埋/收，优先处理台账中高优先级仍未回收条目，并与章纲五要素一致"""
 
         max_tok = max_tokens_expand_outline(self.profile)
         response = await self._call_ai(system, prompt, max_tokens=max_tok, context={"operation": "expand_outline", "node_title": node_title})
@@ -860,22 +895,22 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 全书立意：{theme_statement or '（未填写）'}
 
 【故事圣经账本】
-{self._clip_context(story_bible_context, 1800, 12000) or '（未提供）'}
+{self._clip_context(story_bible_context, 1800, None, field_name="story_bible") or '（未提供）'}
 
 【全书卷线蓝图】
-{global_outline_context[:3000] or '（未提供）'}
+{self._clip_context(global_outline_context, 3000, None, field_name="global_outline") or '（未提供）'}
 
 【前文/已有章节上下文】
-{previous_chapters_context[:3000] or '（未提供）'}
+{self._clip_context(previous_chapters_context, 3000, None, field_name="previous_chapters") or '（未提供）'}
 
 【滚动连续性账本】
-{continuity_state[:2200] or '（未提供）'}
+{self._clip_context(continuity_state, 2200, None, field_name="continuity_state") or '（未提供）'}
 
 【篇幅与字数约束】
-{self._clip_context(word_budget_context, 600, 6000) or '（未提供）'}
+{self._clip_context(word_budget_context, 600, None, field_name="word_budget") or '（未提供）'}
 
 【待质检章节计划】
-{chr(10).join(chapter_lines)[:40000 if self.profile == "gemini" else 12000]}
+{self._clip_context(chr(10).join(chapter_lines), 12000, None, field_name="chapter_lines_quality")}
 
 请检查：
 1. 卷内连续性：章节因果是否断裂、是否重复同类事件、人物状态是否跳变
@@ -959,19 +994,19 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 修复范围：{scope}
 
 【故事圣经账本】
-{self._clip_context(story_bible_context, 1800, 12000) or '（未提供）'}
+{self._clip_context(story_bible_context, 1800, None, field_name="story_bible") or '（未提供）'}
 
 【全书卷线蓝图】
-{global_outline_context[:5000] or '（未提供）'}
+{self._clip_context(global_outline_context, 5000, None, field_name="global_outline") or '（未提供）'}
 
 【篇幅与字数约束】
-{self._clip_context(word_budget_context, 600, 6000) or '（未提供）'}
+{self._clip_context(word_budget_context, 600, None, field_name="word_budget") or '（未提供）'}
 
 【质检问题】
-{json.dumps(quality_report, ensure_ascii=False)[:16000 if self.profile == "gemini" else 6000]}
+{self._clip_context(json.dumps(quality_report, ensure_ascii=False), 6000, None, field_name="quality_report")}
 
 【相关章节计划】
-{chr(10).join(chapter_lines)[:36000 if self.profile == "gemini" else 10000]}
+{self._clip_context(chr(10).join(chapter_lines), 10000, None, field_name="chapter_lines_repair")}
 
 请生成大纲修复补丁，要求：
 1. 只修复质检指出的问题章节，不要整本重写，不要改无关亮点。
@@ -1629,11 +1664,26 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                     if isinstance(item, (str, dict)) and item
                 ],
             }
-            # 提取 new_characters，过滤掉无效项
-            new_characters = [
-                item for item in (data.get("new_characters") or [])
-                if isinstance(item, dict) and item.get("name")
-            ][:6]   # 单章最多6个新配角，防止失控
+            # 提取 new_characters，过滤掉无效项；兼容 AI 把多人写进单个 description 字段的错误格式
+            raw_new_chars = data.get("new_characters") or []
+            new_characters = []
+            for item in raw_new_chars:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("name"):
+                    new_characters.append(item)
+                elif item.get("description") and not item.get("name"):
+                    # AI 错误地把多人名写进了 description，尝试拆分恢复
+                    desc = str(item["description"])
+                    # 按中文顿号、逗号、换行、分号分割
+                    import re as _re2
+                    parts = _re2.split(r"[、，,；;\n]+", desc)
+                    for part in parts:
+                        # 取括号前的名字，如 "王虎（黑煞宗监工）" → "王虎"
+                        name = _re2.split(r"[（(【]", part.strip())[0].strip()
+                        if name and 1 <= len(name) <= 10:
+                            new_characters.append({"name": name, "role": "supporting", "current_status": "alive"})
+            new_characters = new_characters[:6]  # 单章最多6个新配角，防止失控
 
             return {
                 "character_updates": char_updates,

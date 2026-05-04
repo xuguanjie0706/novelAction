@@ -25,6 +25,21 @@ import {
   commitOutlineExpand,
 } from '../../utils/outlineAiExpand'
 import { autoCommitGeneratedChapterDebrief } from '../../utils/generatedChapterDebrief'
+import {
+  splitStreamedDraftText,
+  parseChapterIndexMarkdown,
+  fallbackChapterIndexFromRawMarkdown,
+  htmlToPlainForSplit,
+} from '../../utils/draftChapterIndexSplit'
+
+/** 续写：旧叙事 plain + 本次流式全文，便于与入库正文对照 */
+function manuscriptRawSnapshotForContinue(chapterContentHtml: string, accumulatedPlain: string): string {
+  const prev = htmlToPlainForSplit(chapterContentHtml || '').trim()
+  const acc = accumulatedPlain.trim()
+  if (!prev) return acc
+  if (!acc) return prev
+  return `${prev}\n\n${acc}`
+}
 
 function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -643,14 +658,40 @@ async function runContinueChapters(
 
       if (!accumulated.trim()) throw new Error('未收到正文内容')
 
-      pushProgress({ step: phaseStep('draft'), label: `✓ 正文生成完成 ${stepLabel}`, done: true, error: false })
-      pushProgress({ step: phaseStep('save'), label: `正在保存 ${stepLabel}…`, done: false, error: false })
+      const { body: draftBody, indexMarkdown } = splitStreamedDraftText(accumulated.trim())
+      if (!draftBody.trim()) throw new Error('未收到叙事正文（可能只有索引块）')
 
-      const appendedHtml = plainTextDraftToHtml(accumulated.trim())
+      pushProgress({ step: phaseStep('draft'), label: `✓ 正文生成完成 ${stepLabel}`, done: true, error: false })
+      pushProgress({ step: phaseStep('save'), label: `正在保存叙事正文 ${stepLabel}…`, done: false, error: false })
+
+      const appendedHtml = plainTextDraftToHtml(draftBody.trim())
       const nextContent = `${chapter.content || ''}${chapter.content ? '\n' : ''}${appendedHtml}`
-      const updateRes = await chaptersApi.update(projectId, chapterId, { content: nextContent })
+      const manuscript_raw_snapshot = manuscriptRawSnapshotForContinue(chapter.content, accumulated.trim())
+      const updateRes = await chaptersApi.update(projectId, chapterId, {
+        content: nextContent,
+        manuscript_raw_snapshot,
+      })
       upsertChapter(updateRes.data)
-      pushProgress({ step: phaseStep('save'), label: `✓ ${stepLabel} 已保存`, done: true, error: false })
+      pushProgress({ step: phaseStep('save'), label: `✓ ${stepLabel} 已保存（仅叙事；稿末见模型调用记录）`, done: true, error: false })
+
+      let indexPersistedFromDraft = false
+      if (indexMarkdown) {
+        pushProgress({ step: phaseStep('index'), label: `正在写入 ChapterIndex ${stepLabel}…`, done: false, error: false })
+        try {
+          const parsed = parseChapterIndexMarkdown(indexMarkdown)
+          const chapter_index = parsed ?? fallbackChapterIndexFromRawMarkdown(indexMarkdown)
+          await aiApi.chapterDebrief(projectId, { chapter_id: chapterId, chapter_index })
+          indexPersistedFromDraft = true
+          pushProgress({ step: phaseStep('index'), label: '✓ 索引已从流式稿末解析入库', done: true, error: false })
+        } catch (e: any) {
+          pushProgress({
+            step: phaseStep('index'),
+            label: `索引解析入库失败：${e?.message || '未知错误'}`,
+            done: true,
+            error: true,
+          })
+        }
+      }
 
       pushProgress({ step: phaseStep('quality'), label: `正在质检 ${stepLabel}…`, done: false, error: false })
       try {
@@ -679,8 +720,15 @@ async function runContinueChapters(
 
       pushProgress({ step: phaseStep('debrief'), label: `正在复盘并写入 ChapterIndex ${stepLabel}…`, done: false, error: false })
       try {
-        const applied = await autoCommitGeneratedChapterDebrief(projectId, chapterId, modelProfile, llmProviderId)
-        const indexLabel = applied.chapterIndexSaved ? 'ChapterIndex 已写入' : 'ChapterIndex 未更新'
+        const applied = await autoCommitGeneratedChapterDebrief(
+          projectId,
+          chapterId,
+          modelProfile,
+          llmProviderId,
+          { omitChapterIndex: indexPersistedFromDraft },
+        )
+        const indexLabel =
+          applied.chapterIndexSaved || indexPersistedFromDraft ? 'ChapterIndex 已写入' : 'ChapterIndex 未更新'
         pushProgress({
           step: phaseStep('debrief'),
           label: `✓ 复盘完成：${applied.characterCount} 个人物/${applied.storylineCount} 条故事线/${applied.memoryCount} 条记忆，${indexLabel}`,
@@ -803,10 +851,35 @@ async function runRewriteChapter(
 
     if (!accumulated.trim()) throw new Error('未收到正文内容')
 
+    const { body: draftBody, indexMarkdown } = splitStreamedDraftText(accumulated.trim())
+    if (!draftBody.trim()) throw new Error('未收到叙事正文（可能只有索引块）')
+
     pushProgress({ step: 'draft', label: `✓ 《${chapter.title}》重写完成，正在保存…`, done: true, error: false })
-    const updateRes = await chaptersApi.update(projectId, chapterId, { content: plainTextDraftToHtml(accumulated.trim()) })
+    const updateRes = await chaptersApi.update(projectId, chapterId, {
+      content: plainTextDraftToHtml(draftBody.trim()),
+      manuscript_raw_snapshot: accumulated.trim(),
+    })
     upsertChapter(updateRes.data)
-    pushProgress({ step: 'save', label: '✓ 新正文已替换并保存', done: true, error: false })
+    pushProgress({ step: 'save', label: '✓ 已保存叙事正文（稿末见模型调用记录）', done: true, error: false })
+
+    let indexPersistedFromDraft = false
+    if (indexMarkdown) {
+      pushProgress({ step: 'index', label: '正在写入 ChapterIndex…', done: false, error: false })
+      try {
+        const parsed = parseChapterIndexMarkdown(indexMarkdown)
+        const chapter_index = parsed ?? fallbackChapterIndexFromRawMarkdown(indexMarkdown)
+        await aiApi.chapterDebrief(projectId, { chapter_id: chapterId, chapter_index })
+        indexPersistedFromDraft = true
+        pushProgress({ step: 'index', label: '✓ 索引已从流式稿末解析入库', done: true, error: false })
+      } catch (e: any) {
+        pushProgress({
+          step: 'index',
+          label: `索引解析入库失败：${e?.message || '未知错误'}`,
+          done: true,
+          error: true,
+        })
+      }
+    }
 
     pushProgress({ step: 'quality', label: '正在质检重写后的章节…', done: false, error: false })
     try {
@@ -835,10 +908,18 @@ async function runRewriteChapter(
 
     pushProgress({ step: 'debrief', label: '正在自动复盘人物、故事线、记忆和 ChapterIndex…', done: false, error: false })
     try {
-      const applied = await autoCommitGeneratedChapterDebrief(projectId, chapterId, modelProfile, llmProviderId)
+      const applied = await autoCommitGeneratedChapterDebrief(
+        projectId,
+        chapterId,
+        modelProfile,
+        llmProviderId,
+        { omitChapterIndex: indexPersistedFromDraft },
+      )
       pushProgress({
         step: 'debrief',
-        label: `✓ 自动复盘完成：${applied.characterCount} 个人物/${applied.storylineCount} 条故事线/${applied.memoryCount} 条记忆，${applied.chapterIndexSaved ? 'ChapterIndex 已写入' : 'ChapterIndex 未更新'}`,
+        label: `✓ 自动复盘完成：${applied.characterCount} 个人物/${applied.storylineCount} 条故事线/${applied.memoryCount} 条记忆，${
+          applied.chapterIndexSaved || indexPersistedFromDraft ? 'ChapterIndex 已写入' : 'ChapterIndex 未更新'
+        }`,
         done: true,
         error: false,
       })

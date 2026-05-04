@@ -249,6 +249,8 @@ export interface Chapter {
   outline_node_id?: string
   title: string
   content: string
+  /** 最近一次 AI 返回的完整纯文本（含稿末索引），与 content 分离，用于「原文」对照 */
+  manuscript_raw_snapshot?: string | null
   word_count: number
   sort_order: number
   status: 'draft' | 'writing' | 'done' | 'reviewed'

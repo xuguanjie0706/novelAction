@@ -27,12 +27,18 @@ interface CoherenceReport {
   error?: string
 }
 
+interface CoherenceApplyEventRecord {
+  applied_at: string
+  applied: Array<{ chapter_id: string; skipped: boolean; word_count?: number; reason?: string }>
+}
+
 interface CoherenceReportHistoryItem {
   id: string
   name: string
   model_profile: ModelProfile
   selected_chapter_ids: string[]
   result: CoherenceReport
+  apply_events?: CoherenceApplyEventRecord[]
   created_at: string
 }
 
@@ -221,6 +227,8 @@ export default function ChapterCoherencePage() {
       setApplyReportId(null)
       const chRes = await chaptersApi.list(selectedProjectId)
       setChapters(chRes.data as Chapter[])
+      const hRes = await aiApi.listChapterCoherenceReports(selectedProjectId, 20)
+      setHistory(hRes.data as CoherenceReportHistoryItem[])
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
       const msg = typeof detail === 'string' ? detail : '写入失败'
@@ -437,6 +445,7 @@ export default function ChapterCoherencePage() {
                         {item.model_profile === 'gemini' ? '远程模型' : '本地模型'} ·
                         {' '}
                         {item.selected_chapter_ids.length} 章 · 综合分 {item.result?.overall_score ?? '-'}
+                        {item.apply_events?.length ? ` · 已改正文 ${item.apply_events.length} 次` : ''}
                       </div>
                     </button>
                     <button

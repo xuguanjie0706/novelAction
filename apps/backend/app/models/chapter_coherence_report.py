@@ -15,4 +15,6 @@ class ChapterCoherenceReport(Base):
     model_profile = Column(String(20), nullable=False, default="local")
     selected_chapter_ids = Column(JSON, nullable=False, default=list)
     result = Column(JSON, nullable=False, default=dict)
+    # 根据本评测「改正文」写入数据库的历史（append-only，便于在阅读评测页回顾）
+    apply_events = Column(JSON, nullable=False, default=list)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

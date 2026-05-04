@@ -26,6 +26,7 @@ from app.services.llm_token_budgets import (
     max_tokens_suggest_stream,
 )
 from app.services.llm_call_log import log_llm_call
+from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 
 
 class AIService:
@@ -178,6 +179,9 @@ class AIService:
             if plot_dossier_context else ""
         )
         chapter_plain = self._plain_text(chapter_content)
+        narr_qc, _ = split_plain_manuscript_and_index_block(chapter_plain)
+        if narr_qc.strip():
+            chapter_plain = narr_qc.strip()
         chapter_body = self._clip_context(chapter_plain, 2000, 120000)
         chapter_label = "完整正文" if large_context else "正文（前2000字）"
 
@@ -288,6 +292,9 @@ class AIService:
         for idx, chapter in enumerate(chapters, start=1):
             title = chapter.get("title", "未命名章节")
             content = self._plain_text(chapter.get("content") or "")
+            narr_c, _ = split_plain_manuscript_and_index_block(content)
+            if narr_c.strip():
+                content = narr_c.strip()
             content_preview = self._clip_context(content, 1800, 60000) if content else "（正文为空）"
             content_label = "完整正文" if large_context else "正文（截断）"
             chapter_blocks.append(
@@ -1128,6 +1135,8 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         plot_dossier_context: str = "",
         # 本章字数目标（来自 OutlineNode.expected_words）
         word_target: int = 2300,
+        # 写入 llm_call_logs.context，便于对账（含模型完整原文 output_payload.text）
+        stream_log_context: dict | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
@@ -1280,7 +1289,10 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 {index_template}{extra}"""
 
         max_tok = max_tokens_draft_stream(large_context)
-        async for chunk in self._stream_ai(system, prompt, max_tokens=max_tok, context={"operation": "draft_assist_stream", "chapter_title": chapter_title}):
+        stream_ctx: dict = {"operation": "draft_assist_stream", "chapter_title": chapter_title}
+        if stream_log_context:
+            stream_ctx.update(stream_log_context)
+        async for chunk in self._stream_ai(system, prompt, max_tokens=max_tok, context=stream_ctx):
             yield chunk
 
     # ── 自动复盘提取 ──────────────────────────────────
@@ -1324,8 +1336,16 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             "不得用英文撰写剧情摘要、伏笔说明或章末钩子；专有名词（人名、功法、法宝、地名）与正文用字保持一致。"
         )
 
-        prompt = f"""章节{chapter_number}《{chapter_title}》正文（前2500字）：
-{chapter_content[:2500]}
+        narrative_body = self._clip_context(
+            (chapter_content or "").strip(),
+            12000,
+            120000,
+        )
+
+        prompt = f"""章节{chapter_number}《{chapter_title}》
+
+【叙事正文】（业务库仅存叙事；须通读下列全文以提取人物、故事线、资产与记忆；稿末模板仅保留在模型调用记录中供对账）
+{narrative_body}
 
 当前人物状态（对照基准）：
 {chars_text}
@@ -1340,7 +1360,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 4. 哪些信息来源需要记录，避免后文凭空知道信息
 5. 哪些伏笔被埋下或回收，避免后文突然出现无前因的设定
 6. 哪些新道具/法宝、功法/技能、势力需要收入系统，或已有资产状态发生变化
-7. 生成章节索引：故事日、核心事件、首次出场、实际伏笔、章末钩子强度、连续性风险
+7. 生成章节索引（chapter_index）：完全依据上方叙事正文归纳；须与正文事实一致
 8. 本章是否出现了不在现有角色库中、且值得长期追踪的新角色（new_characters）
    判断标准：正文中有名有姓、有台词或行动、且 arc_scope 为 mini_arc 或以上；纯工具性一次性路人不需要入库
 

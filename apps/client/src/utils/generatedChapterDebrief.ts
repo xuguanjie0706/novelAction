@@ -55,6 +55,8 @@ export async function autoCommitGeneratedChapterDebrief(
   chapterId: string,
   modelProfile: ModelProfile,
   llmProviderId?: string,
+  /** 起草入库已从稿末解析并写入 chapter_index 时，避免 auto-debrief 的 chapter_index 覆盖 */
+  options?: { omitChapterIndex?: boolean },
 ): Promise<GeneratedChapterDebriefStats> {
   const debriefRes = await aiApi.autoDebrief(projectId, {
     chapter_id: chapterId,
@@ -108,15 +110,18 @@ export async function autoCommitGeneratedChapterDebrief(
   // 连续续写链路中必须调用 chapter-debrief：即使 AI 未抽出结构化增量，也要落库并清掉 debrief 缓存，
   // 否则下一章 draft 仍读旧人物/记忆；此前此处直接 return 会跳过整次提交。
 
-  const commitRes = await aiApi.chapterDebrief(projectId, {
+  const commitPayload: Parameters<typeof aiApi.chapterDebrief>[1] = {
     chapter_id: chapterId,
     character_updates: characterUpdates as any,
     storyline_updates: storylineUpdates as any,
     memory_updates: memoryUpdates,
     asset_updates: data.asset_updates,
-    chapter_index: data.chapter_index,
     notes: data.summary ? `AI生成自动复盘：${data.summary}` : undefined,
-  })
+  }
+  if (!options?.omitChapterIndex && data.chapter_index) {
+    commitPayload.chapter_index = data.chapter_index
+  }
+  const commitRes = await aiApi.chapterDebrief(projectId, commitPayload)
 
   const d = commitRes.data as Record<string, unknown> | undefined
   const assetStats = (d?.asset_updates as Record<string, unknown>) || {}

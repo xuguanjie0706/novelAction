@@ -14,6 +14,7 @@ class ChapterCreate(BaseModel):
 class ChapterUpdate(BaseModel):
     title: Optional[str] = None
     content: Optional[str] = None
+    manuscript_raw_snapshot: Optional[str] = None
     sort_order: Optional[int] = None
     status: Optional[str] = None
 
@@ -24,6 +25,7 @@ class ChapterOut(BaseModel):
     outline_node_id: Optional[uuid.UUID]
     title: str
     content: str
+    manuscript_raw_snapshot: Optional[str] = None
     word_count: int
     sort_order: int
     status: str

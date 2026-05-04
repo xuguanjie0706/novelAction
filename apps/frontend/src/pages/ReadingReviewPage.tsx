@@ -23,6 +23,7 @@ import { http } from '../api/http'
 import type { LlmOverview } from '../types/llm'
 import type {
   ChapterCoherenceResult,
+  CoherenceApplyChapterResult,
   CoherenceApplyPreviewResponse,
   CoherenceApplyRevisionPreview,
   CoherenceReportRecord,
@@ -54,6 +55,13 @@ function scoreTag(score: number | undefined) {
   if (score == null) return <Tag>未评测</Tag>
   const matched = SCORE_COLORS.find((item) => score >= item.min) ?? SCORE_COLORS[SCORE_COLORS.length - 1]
   return <Tag color={matched.color}>{matched.text} {score}</Tag>
+}
+
+function formatApplyChapterLine(chapterList: ReviewChapter[], a: CoherenceApplyChapterResult) {
+  const c = chapterList.find((x) => x.id === a.chapter_id)
+  const label = c ? `第${c.sort_order + 1}章 · ${c.title || '未命名'}` : `章节 ${a.chapter_id.slice(0, 8)}…`
+  if (a.skipped) return `${label}（未写入${a.reason ? `：${a.reason}` : ''}）`
+  return `${label}（${a.word_count ?? '-'} 字）`
 }
 
 export default function ReadingReviewPage() {
@@ -199,12 +207,13 @@ export default function ReadingReviewPage() {
       setCoherenceApplyRevisions([])
       setCoherenceApplyReportId(null)
       await loadChapters(projectId)
+      await loadHistory(projectId)
     } catch {
       message.error('写入失败')
     } finally {
       setCoherenceApplyCommitting(false)
     }
-  }, [coherenceApplyReportId, coherenceApplyRevisions, loadChapters, message, projectId])
+  }, [coherenceApplyReportId, coherenceApplyRevisions, loadChapters, loadHistory, message, projectId])
 
   useEffect(() => {
     if (!projectId) return
@@ -385,6 +394,30 @@ export default function ReadingReviewPage() {
   const compareRows = historyRows.filter((row) => compareIds.includes(row.id))
   const compareA = compareRows[0]
   const compareB = compareRows[1]
+
+  const applyTimeline = useMemo(() => {
+    type Row = {
+      appliedAt: string
+      reportId: string
+      reportName: string
+      applied: CoherenceApplyChapterResult[]
+    }
+    const rows: Row[] = []
+    for (const r of historyRows) {
+      for (const ev of r.apply_events ?? []) {
+        if (ev?.applied_at && Array.isArray(ev.applied)) {
+          rows.push({
+            appliedAt: ev.applied_at,
+            reportId: r.id,
+            reportName: r.name,
+            applied: ev.applied,
+          })
+        }
+      }
+    }
+    rows.sort((a, b) => new Date(b.appliedAt).getTime() - new Date(a.appliedAt).getTime())
+    return rows
+  }, [historyRows])
   const selectedCoherenceChapterNos = chapters
     .filter((c) => selectedCoherenceChapters.includes(c.id))
     .map((c) => c.sort_order + 1)
@@ -680,6 +713,36 @@ export default function ReadingReviewPage() {
             label: '历史记录',
             children: (
               <Card>
+                <Card
+                  size="small"
+                  style={{ marginBottom: 16 }}
+                  title="改正文写入记录（按评测落库，可回顾每次「写入数据库」）"
+                >
+                  {applyTimeline.length === 0 ? (
+                    <Typography.Text type="secondary">
+                      暂无记录。在下方报告中展开并点击「根据本评测改正文」→ 预览 →「写入数据库」后会在此按时间列出。
+                    </Typography.Text>
+                  ) : (
+                    <List
+                      size="small"
+                      dataSource={applyTimeline}
+                      renderItem={(item) => (
+                        <List.Item>
+                          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                            <Space wrap>
+                              <Tag color="green">{new Date(item.appliedAt).toLocaleString('zh-CN')}</Tag>
+                              <Typography.Text type="secondary">来源报告：</Typography.Text>
+                              <Typography.Text strong>{item.reportName}</Typography.Text>
+                            </Space>
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                              {item.applied.map((a) => formatApplyChapterLine(chapters, a)).join('；')}
+                            </Typography.Text>
+                          </Space>
+                        </List.Item>
+                      )}
+                    />
+                  )}
+                </Card>
                 {compareA && compareB ? (
                   <Card
                     size="small"
@@ -729,6 +792,12 @@ export default function ReadingReviewPage() {
                       dataIndex: 'created_at',
                       width: 220,
                     },
+                    {
+                      title: '改正文',
+                      width: 100,
+                      render: (_, row) =>
+                        row.apply_events?.length ? <Tag color="processing">{row.apply_events.length} 次</Tag> : '—',
+                    },
                   ]}
                   expandable={{
                     expandedRowRender: (row) => (
@@ -747,6 +816,26 @@ export default function ReadingReviewPage() {
                             按评测结论做最小幅度修改并预览，确认后再写入数据库（自动打修订前快照）。
                           </Typography.Text>
                         </Space>
+                        {(row.apply_events?.length ?? 0) > 0 ? (
+                          <Card size="small" title="本报告的改正文历史" type="inner">
+                            <List
+                              size="small"
+                              dataSource={row.apply_events}
+                              renderItem={(ev, idx) => (
+                                <List.Item>
+                                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                    <Typography.Text strong>
+                                      第 {idx + 1} 次写入 · {new Date(ev.applied_at).toLocaleString('zh-CN')}
+                                    </Typography.Text>
+                                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                      {(ev.applied ?? []).map((a) => formatApplyChapterLine(chapters, a)).join('；')}
+                                    </Typography.Text>
+                                  </Space>
+                                </List.Item>
+                              )}
+                            />
+                          </Card>
+                        ) : null}
                         <Typography.Text type="secondary">{row.result?.summary || '暂无总结'}</Typography.Text>
                         <List
                           size="small"

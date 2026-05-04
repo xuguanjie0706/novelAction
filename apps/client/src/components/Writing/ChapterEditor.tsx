@@ -11,10 +11,15 @@ import {
   BookOpen, Sparkles, X, Zap, Target, Users, Flag, GitBranch, RefreshCw,
   Maximize2, Minimize2, Clock, ChevronDown, ChevronRight, Anchor,
   Feather, PenLine, ListPlus, CheckCircle, Circle,
-  CheckSquare, TrendingUp, MapPin, Swords, Bot, Save, Trash2,
+  CheckSquare, TrendingUp, MapPin, Swords, Bot, Save, Trash2, ClipboardList,
 } from 'lucide-react'
 import clsx from 'clsx'
-import { autoCommitGeneratedChapterDebrief } from '../../utils/generatedChapterDebrief'
+import {
+  splitStreamedDraftText,
+  htmlToPlainForSplit,
+  plainTextBlocksToHtml,
+} from '../../utils/draftChapterIndexSplit'
+import ChapterIndexEditPanel from './ChapterIndexEditPanel'
 
 // ─── props ──────────────────────────────────────────────────────────────────
 interface Props {
@@ -141,8 +146,11 @@ const TOP_TOOL_BUTTON_ACTIVE =
   'border-novel-accent/35 bg-novel-panel text-novel-accent'
 const TOP_TOOL_ICON_BUTTON =
   'inline-flex h-8 w-8 items-center justify-center rounded-novel border border-red-100 bg-novel-card text-red-400 transition-novel hover:bg-red-50 hover:text-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50'
+/** 写作页主操作：保存（与次要工具按钮区分） */
 const TOP_TOOL_PRIMARY_BUTTON =
-  'inline-flex h-8 min-w-[72px] items-center justify-center gap-1.5 rounded-novel border border-novel-accent bg-novel-accent px-3 text-sm font-medium leading-none text-white transition-novel hover:bg-novel-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-novel-accent focus-visible:ring-offset-2'
+  'inline-flex h-9 min-w-[5.75rem] items-center justify-center gap-2 rounded-xl border-2 border-emerald-700/25 bg-emerald-600 px-4 text-sm font-semibold leading-none text-white shadow-md shadow-emerald-900/20 transition-novel hover:bg-emerald-500 hover:shadow-lg hover:border-emerald-600/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 active:scale-[0.98]'
+const TOP_TOOL_DEBRIEF_BUTTON_IDLE =
+  'border-amber-200 bg-amber-50/90 text-amber-900 hover:bg-amber-100 hover:border-amber-300'
 
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ChapterEditor({
@@ -161,7 +169,7 @@ export default function ChapterEditor({
 
   // ── 面板 UI 状态 ───────────────────────────────────────────────────
   const [contextOpen, setContextOpen]   = useState(!!outlineNode)
-  const [contextTab, setContextTab]     = useState<'plan' | 'scene' | 'debrief'>('plan')
+  const [contextTab, setContextTab]     = useState<'plan' | 'scene' | 'debrief' | 'chindex'>('plan')
   const [focusMode, setFocusMode]       = useState(false)
   const [statusOpen, setStatusOpen]     = useState(false)
   const statusRef = useRef<HTMLDivElement>(null)
@@ -200,6 +208,24 @@ export default function ChapterEditor({
   const [openForeshadows, setOpenForeshadows]   = useState<Foreshadow[]>([])
   const [currentChIndex, setCurrentChIndex]     = useState<ChapterIndex | null>(null)
 
+  /**
+   * 无 AI 快照：原文 = 可编辑 HTML；正文 = 只读预览（截去稿末索引块）。
+   * 有 manuscript_raw_snapshot：正文 = 可编辑叙事；原文 = 只读对照（模型全文含稿末）。
+   */
+  const [manuscriptView, setManuscriptView]     = useState<'source' | 'prose'>('source')
+  const [editorHtmlTick, setEditorHtmlTick]     = useState(0)
+
+  const hasManuscriptRawSnapshot = useMemo(
+    () => Boolean((chapter.manuscript_raw_snapshot || '').trim()),
+    [chapter.manuscript_raw_snapshot],
+  )
+
+  const rawSnapshotPreviewHtml = useMemo(() => {
+    const s = (chapter.manuscript_raw_snapshot || '').trim()
+    if (!s) return ''
+    return plainTextBlocksToHtml(s)
+  }, [chapter.manuscript_raw_snapshot])
+
   // 切换章节时重新拉取伏笔 + 情节档案
   useEffect(() => {
     if (!projectId) return
@@ -235,6 +261,7 @@ export default function ChapterEditor({
       saveTimer.current = setTimeout(() => autoSave(editor.getHTML()), 2000)
       const current = editor.storage.characterCount?.characters() ?? 0
       setSessionDelta(current - sessionStartWords.current)
+      setEditorHtmlTick((n) => n + 1)
     },
     onSelectionUpdate: ({ editor }) => {
       const { from, to } = editor.state.selection
@@ -248,6 +275,49 @@ export default function ChapterEditor({
       }
     },
   })
+
+  const prosePreviewHtml = useMemo(() => {
+    if (!editor || manuscriptView !== 'prose') return ''
+    const plain = htmlToPlainForSplit(editor.getHTML())
+    const { body } = splitStreamedDraftText(plain.trim())
+    return plainTextBlocksToHtml(body.trim())
+  }, [editor, editorHtmlTick, manuscriptView, chapter.id])
+
+  const manuscriptViewToggle = (
+    <div
+      className="flex items-center rounded-full border border-novel-border overflow-hidden text-[11px] shadow-sm bg-novel-card/95 backdrop-blur-sm"
+      title={
+        hasManuscriptRawSnapshot
+          ? '正文：编辑入库叙事；原文：模型最近一次返回全文（含稿末索引），仅对照'
+          : '无 AI 快照时：原文可编辑；正文为隐藏稿末索引块的只读预览'
+      }
+    >
+      <button
+        type="button"
+        onClick={() => setManuscriptView('source')}
+        className={clsx(
+          'px-3 py-1.5 font-medium transition-novel',
+          manuscriptView === 'source'
+            ? 'bg-novel-panel text-novel-accent'
+            : 'text-novel-ink-muted hover:text-novel-ink',
+        )}
+      >
+        原文
+      </button>
+      <button
+        type="button"
+        onClick={() => setManuscriptView('prose')}
+        className={clsx(
+          'px-3 py-1.5 font-medium border-l border-novel-border transition-novel',
+          manuscriptView === 'prose'
+            ? 'bg-novel-panel text-novel-accent'
+            : 'text-novel-ink-muted hover:text-novel-ink',
+        )}
+      >
+        正文
+      </button>
+    </div>
+  )
 
   // ─────────────────────────────────────────────────────────────────
   // Effects
@@ -269,7 +339,15 @@ export default function ChapterEditor({
     setAiSuggestedSlIds(new Set())
     setAiSuggestedAssetUpdates(null)
     debriefAutoLoadedChapterRef.current = null
+    setManuscriptView((chapter.manuscript_raw_snapshot || '').trim() ? 'prose' : 'source')
   }, [chapter.id])
+
+  /** 同章经队列写入/更新快照后，回到可编辑「正文」 */
+  useEffect(() => {
+    const s = (chapter.manuscript_raw_snapshot || '').trim()
+    if (!s) return
+    setManuscriptView('prose')
+  }, [chapter.manuscript_raw_snapshot])
 
   /** 同步大纲节点变化时自动展开 */
   useEffect(() => { setContextOpen(!!outlineNode) }, [outlineNode?.id])
@@ -898,7 +976,7 @@ export default function ChapterEditor({
             </button>
           )}
 
-          {/* 复盘 */}
+          {/* 复盘（暖色强调，与灰底工具区分） */}
           {!focusMode && (
             <button type="button"
               onClick={() => { setContextOpen(v => !(v && contextTab === 'debrief')); setContextTab('debrief') }}
@@ -906,8 +984,20 @@ export default function ChapterEditor({
               className={clsx(TOP_TOOL_BUTTON_BASE,
                 contextOpen && contextTab === 'debrief'
                   ? TOP_TOOL_BUTTON_ACTIVE
+                  : TOP_TOOL_DEBRIEF_BUTTON_IDLE)}>
+              <CheckSquare size={15} strokeWidth={2.25} className="shrink-0" />复盘
+            </button>
+          )}
+
+          {!focusMode && (
+            <button type="button"
+              onClick={() => { setContextOpen(v => !(v && contextTab === 'chindex')); setContextTab('chindex') }}
+              title="情节索引（核心事件、钩子、伏笔、连续性 — 可编辑保存）"
+              className={clsx(TOP_TOOL_BUTTON_BASE,
+                contextOpen && contextTab === 'chindex'
+                  ? TOP_TOOL_BUTTON_ACTIVE
                   : TOP_TOOL_BUTTON_IDLE)}>
-              <CheckSquare size={14} />复盘
+              <ClipboardList size={14} />索引
             </button>
           )}
 
@@ -930,10 +1020,11 @@ export default function ChapterEditor({
             {focusMode ? '退出专注' : '专注'}
           </button>
 
-          {/* 保存 */}
+          {/* 保存（与左侧工具组视觉分隔） */}
+          <div className="hidden sm:block h-6 w-px bg-novel-border shrink-0 mx-0.5" aria-hidden />
           <button type="button" onClick={manualSave}
             className={TOP_TOOL_PRIMARY_BUTTON}>
-            <Save size={14} />
+            <Save size={16} strokeWidth={2.25} className="shrink-0" />
             保存
           </button>
         </div>
@@ -950,8 +1041,50 @@ export default function ChapterEditor({
             'flex-1 overflow-auto',
             focusMode && 'flex justify-center',
           )}>
-            <div className={clsx(focusMode && 'w-full max-w-2xl')}>
-              <EditorContent editor={editor} className="h-full" />
+            <div className={clsx(focusMode && 'w-full max-w-2xl', 'relative w-full min-h-[50vh]')}>
+              <div className="sticky top-2 z-30 flex justify-end pointer-events-none px-4 sm:px-10 pt-1">
+                <div className="pointer-events-auto">{manuscriptViewToggle}</div>
+              </div>
+              {manuscriptView === 'prose' && !focusMode && (
+                <div className="rounded-novel border border-dashed border-amber-200/80 bg-amber-50/40 px-3 py-2 mx-4 sm:mx-10 mb-2 text-[11px] text-amber-900/90">
+                  {hasManuscriptRawSnapshot ? (
+                    <>
+                      正文视图：编辑入库叙事。切换「原文」可对照模型最近一次返回全文（含{' '}
+                      <code className="text-[10px] px-1">### ch_…</code> 稿末索引）。
+                    </>
+                  ) : (
+                    <>
+                      正文视图：只读预览叙事部分（稿末 <code className="text-[10px] px-1">### ch_…</code>{' '}
+                      索引块已隐藏）。编辑请切回「原文」。
+                    </>
+                  )}
+                </div>
+              )}
+              {manuscriptView === 'prose' && focusMode && (
+                <p className="text-[10px] text-center text-novel-ink-faint px-4 mb-2">
+                  {hasManuscriptRawSnapshot ? '叙事编辑 · 切「原文」对照模型全文' : '正文预览 · 切「原文」可编辑'}
+                </p>
+              )}
+              {manuscriptView === 'prose' ? (
+                hasManuscriptRawSnapshot ? (
+                  <EditorContent editor={editor} className="h-full" />
+                ) : (
+                  <div
+                    className="prose prose-lg max-w-readable w-full px-6 sm:px-10 pb-8 pt-2 mx-auto min-h-[55vh]"
+                    dangerouslySetInnerHTML={{ __html: prosePreviewHtml }}
+                  />
+                )
+              ) : null}
+              <div className={clsx(manuscriptView === 'prose' && 'hidden')}>
+                {hasManuscriptRawSnapshot ? (
+                  <div
+                    className="prose prose-lg max-w-readable w-full px-6 sm:px-10 pb-8 pt-2 mx-auto min-h-[55vh]"
+                    dangerouslySetInnerHTML={{ __html: rawSnapshotPreviewHtml }}
+                  />
+                ) : (
+                  <EditorContent editor={editor} className="h-full" />
+                )}
+              </div>
             </div>
           </div>
 
@@ -1147,20 +1280,22 @@ export default function ChapterEditor({
 
           {/* 专注模式浮动状态栏 */}
           {focusMode && (
-            <div className="flex justify-center pb-5 shrink-0 pointer-events-none">
-              <div className="flex items-center gap-4 bg-white/80 backdrop-blur border border-gray-200 rounded-full px-6 py-2 shadow-sm pointer-events-auto">
-                <span className="text-xs text-gray-400">{wordCount.toLocaleString()} 字</span>
+            <div className="flex justify-center pb-5 shrink-0 pointer-events-none px-3">
+              <div className="flex flex-wrap items-center justify-center gap-3 bg-white/90 backdrop-blur-md border border-gray-200/90 rounded-2xl px-4 py-2.5 shadow-md pointer-events-auto max-w-full">
+                <span className="text-xs text-gray-500 font-medium">{wordCount.toLocaleString()} 字</span>
                 {sessionDelta !== 0 && (
-                  <span className={clsx('text-xs font-medium', sessionDelta > 0 ? 'text-green-500' : 'text-red-400')}>
+                  <span className={clsx('text-xs font-semibold', sessionDelta > 0 ? 'text-green-600' : 'text-red-400')}>
                     {sessionDelta > 0 ? '+' : ''}{sessionDelta}
                   </span>
                 )}
+                <div className="hidden sm:block h-5 w-px bg-gray-200 shrink-0" aria-hidden />
                 <button type="button" onClick={manualSave}
-                  className="text-xs text-gray-500 hover:text-gray-800 transition-colors">
+                  className={`${TOP_TOOL_PRIMARY_BUTTON} h-8 min-w-[5rem] px-3 text-[13px]`}>
+                  <Save size={14} strokeWidth={2.25} className="shrink-0" />
                   保存
                 </button>
                 <button type="button" onClick={() => setFocusMode(false)}
-                  className="text-xs text-gray-400 hover:text-gray-600 transition-colors flex items-center gap-1">
+                  className="text-xs font-medium text-gray-500 hover:text-gray-800 transition-colors flex items-center gap-1 rounded-lg px-2 py-1 hover:bg-gray-100">
                   <Minimize2 size={11} />退出专注
                 </button>
               </div>
@@ -1170,7 +1305,10 @@ export default function ChapterEditor({
 
         {/* ══════════════════ 右侧上下文面板 ══════════════════════ */}
         {contextOpen && !focusMode && (
-          <div className="w-72 shrink-0 border-l border-novel-border bg-novel-panel flex flex-col overflow-hidden">
+          <div className={clsx(
+            'shrink-0 border-l border-novel-border bg-novel-panel flex flex-col overflow-hidden',
+            contextTab === 'chindex' ? 'w-[24rem]' : 'w-80',
+          )}>
 
             {/* Tab 导航头 */}
             <div className="flex items-center border-b border-novel-border bg-novel-card/80 shrink-0">
@@ -1179,6 +1317,7 @@ export default function ChapterEditor({
                   { key: 'plan',    label: '计划',  icon: <BookOpen size={11} /> },
                   { key: 'scene',   label: '场景',  icon: <Users size={11} /> },
                   { key: 'debrief', label: '复盘',  icon: <CheckSquare size={11} /> },
+                  { key: 'chindex', label: '索引',  icon: <ClipboardList size={11} /> },
                 ] as const
               ).map(tab => (
                 <button key={tab.key} type="button"
@@ -1341,6 +1480,18 @@ export default function ChapterEditor({
                   aiSummary={aiDebriefSummary}
                   onAutoDebrief={runAutoDebrief}
                   onSubmit={submitDebrief}
+                />
+              )}
+
+              {contextTab === 'chindex' && (
+                <ChapterIndexEditPanel
+                  projectId={projectId}
+                  chapter={chapter}
+                  index={currentChIndex}
+                  onSaved={setCurrentChIndex}
+                  onForeshadowsMayChange={() => {
+                    foreshadowsApi.list(projectId, 'open').then(r => setOpenForeshadows(r.data)).catch(() => {})
+                  }}
                 />
               )}
 
@@ -1874,28 +2025,43 @@ function DebriefPanel({
         </p>
       )}
 
-      {/* 操作按钮区 */}
-      <div className="flex gap-2">
-        {onAutoDebrief && (
+      {/* 操作按钮区：吸底 + 主按钮加粗阴影，长表单时仍易发现 */}
+      <div
+        className={clsx(
+          'sticky bottom-0 z-10 -mx-4 mt-2 border-t border-novel-border/90 bg-novel-panel/95 backdrop-blur-sm px-4 pb-4 pt-3 shadow-[0_-8px_24px_-4px_rgba(0,0,0,0.06)]',
+          hasAiSuggestions && 'ring-1 ring-inset ring-amber-200/80',
+        )}
+      >
+        <p className="text-[10px] text-novel-ink-faint mb-2 text-center">
+          {hasAiSuggestions ? '核对预填项后点击下方按钮写入数据库' : '填写或 AI 分析后，提交以同步人物 / 故事线 / 资产'}
+        </p>
+        <div className="flex gap-2">
+          {onAutoDebrief && (
+            <button
+              type="button"
+              onClick={() => onAutoDebrief(hasAiSuggestions)}
+              disabled={autoDebriefing || submitting || !chapter.content?.trim()}
+              className="flex items-center justify-center gap-1.5 text-xs py-2.5 px-3 border border-amber-300 text-amber-800 bg-amber-50 hover:bg-amber-100 rounded-xl font-semibold disabled:opacity-50 transition-novel shrink-0"
+            >
+              <Bot size={13} className={autoDebriefing ? 'animate-pulse' : ''} />
+              {autoDebriefing ? '分析中' : hasAiSuggestions ? '重新分析' : 'AI 分析'}
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => onAutoDebrief(hasAiSuggestions)}
-            disabled={autoDebriefing || submitting || !chapter.content?.trim()}
-            className="flex items-center justify-center gap-1.5 text-xs py-2 px-3 border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-novel font-medium disabled:opacity-50 transition-novel shrink-0"
+            onClick={() => onSubmit(buildSelectedAssetUpdates())}
+            disabled={submitting || autoDebriefing}
+            className={clsx(
+              'flex-1 flex items-center justify-center gap-2 min-h-[3rem] rounded-xl text-[15px] font-semibold text-white shadow-lg transition-all disabled:opacity-55 disabled:shadow-none active:scale-[0.99]',
+              hasAiSuggestions
+                ? 'bg-gradient-to-b from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 ring-2 ring-amber-300/70 shadow-amber-900/25'
+                : 'bg-novel-accent hover:bg-novel-accent-hover ring-2 ring-black/10 shadow-stone-900/20',
+            )}
           >
-            <Bot size={12} className={autoDebriefing ? 'animate-pulse' : ''} />
-            {autoDebriefing ? '分析中' : hasAiSuggestions ? '重新分析' : 'AI 分析'}
+            <CheckSquare size={18} strokeWidth={2.25} className={submitting ? 'animate-pulse' : ''} />
+            {submitting ? '提交中…' : hasAiSuggestions ? '确认并提交' : '提交复盘'}
           </button>
-        )}
-        <button
-          type="button"
-          onClick={() => onSubmit(buildSelectedAssetUpdates())}
-          disabled={submitting || autoDebriefing}
-          className="flex-1 flex items-center justify-center gap-2 text-sm py-2.5 bg-novel-accent hover:bg-novel-accent-hover text-white rounded-novel font-medium disabled:opacity-60 transition-novel"
-        >
-          <CheckSquare size={14} className={submitting ? 'animate-pulse' : ''} />
-          {submitting ? '提交中…' : hasAiSuggestions ? '确认并提交' : '提交复盘'}
-        </button>
+        </div>
       </div>
     </div>
   )

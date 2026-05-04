@@ -5,11 +5,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from pydantic import BaseModel, Field
 from typing import Optional, List, Literal
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 import json
 import re
 import hashlib
+
+from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 
 from app.database import get_db, SessionLocal
 from app.services.embedding_service import embed_chunk_async
@@ -1570,6 +1572,7 @@ def save_chapter_coherence_report(
         "model_profile": report.model_profile,
         "selected_chapter_ids": report.selected_chapter_ids,
         "result": report.result,
+        "apply_events": report.apply_events or [],
         "created_at": report.created_at,
     }
 
@@ -1599,6 +1602,7 @@ def list_chapter_coherence_reports(
             "model_profile": r.model_profile,
             "selected_chapter_ids": r.selected_chapter_ids or [],
             "result": r.result or {},
+            "apply_events": r.apply_events or [],
             "created_at": r.created_at,
         }
         for r in reports
@@ -1765,9 +1769,24 @@ def chapter_coherence_apply_commit(
         chapter.word_count = count_words(text)
         applied.append({"chapter_id": cid, "skipped": False, "word_count": chapter.word_count})
 
+    if applied:
+        events = list(report.apply_events) if report.apply_events else []
+        events.append(
+            {
+                "applied_at": datetime.now(timezone.utc).isoformat(),
+                "applied": applied,
+            }
+        )
+        report.apply_events = events
+
     db.commit()
+    db.refresh(report)
     normalize_chapter_sort_orders(db, project_id)
-    return {"report_id": str(req.report_id), "applied": applied}
+    return {
+        "report_id": str(req.report_id),
+        "applied": applied,
+        "apply_events": report.apply_events or [],
+    }
 
 
 # ── AI 对话（持久化 + 上下文感知）──────────────────────
@@ -2187,12 +2206,18 @@ async def draft_assist_stream(
 
     prev_tail = ""
     if prev_chapter and prev_chapter.content:
-        clean = _strip_tail_meta_lines(_plain_text(prev_chapter.content))
+        prev_plain = _plain_text(prev_chapter.content)
+        prev_body, _ = split_plain_manuscript_and_index_block(prev_plain)
+        base_prev = prev_body.strip() if prev_body.strip() else prev_plain
+        clean = _strip_tail_meta_lines(base_prev)
         prev_limit = 3000 if large_context else 400
         prev_tail = clean[-prev_limit:] if len(clean) > prev_limit else clean
 
-    # ── 当前章节正文（strip HTML）────────────────────
+    # ── 当前章节正文（strip HTML；业务库仅存叙事时不再带入稿末块）──
     existing_content = _plain_text(chapter.content)
+    narr_existing, _ = split_plain_manuscript_and_index_block(existing_content)
+    if narr_existing.strip():
+        existing_content = narr_existing.strip()
     continuity_context = _build_continuity_context(
         db=db,
         project_id=project_id,
@@ -2292,6 +2317,10 @@ async def draft_assist_stream(
                     or (outline_node.extra or {}).get("word_estimate")
                     or 2300
                 ),
+                stream_log_context={
+                    "project_id": str(project_id),
+                    "chapter_id": str(req.chapter_id),
+                },
             ):
                 yield f"data: {json.dumps({'text': chunk})}\n\n"
         except Exception as e:
@@ -3134,7 +3163,10 @@ async def auto_debrief(
     # strip HTML
     import re as _re
     plain_content = _re.sub(r"<[^>]+>", "", chapter.content or "")
-    content_hash = _chapter_debrief_content_hash(plain_content)
+    narrative_plain, _ = split_plain_manuscript_and_index_block(plain_content)
+    if not narrative_plain.strip():
+        narrative_plain = plain_content.strip()
+    content_hash = _chapter_debrief_content_hash(narrative_plain)
     current_llm_provider = str(req.llm_provider_id) if req.llm_provider_id else None
 
     cached = db.query(ChapterDebriefCache).filter(
@@ -3154,7 +3186,7 @@ async def auto_debrief(
         return payload
 
     result = await svc.auto_extract_debrief(
-        chapter_content=plain_content,
+        chapter_content=narrative_plain,
         chapter_title=chapter.title,
         chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
         character_states=character_states,

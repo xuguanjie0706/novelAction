@@ -260,6 +260,18 @@ def _ensure_llm_provider_columns() -> None:
         ))
 
 
+def _ensure_chapter_coherence_report_columns() -> None:
+    """为已有 chapter_coherence_reports 表补齐改正文写入记录字段。"""
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE chapter_coherence_reports "
+            "ADD COLUMN IF NOT EXISTS apply_events JSON NOT NULL DEFAULT '[]'::json"
+        ))
+        conn.execute(text(
+            "UPDATE chapter_coherence_reports SET apply_events = '[]'::json WHERE apply_events IS NULL"
+        ))
+
+
 # 自动建表（开发用，生产建议改用 Alembic）
 Base.metadata.create_all(bind=engine)
 _ensure_project_columns()
@@ -269,6 +281,7 @@ _ensure_character_relationship_columns()
 _ensure_foreshadow_columns()
 _ensure_memory_embedding_column()
 _ensure_llm_provider_columns()
+_ensure_chapter_coherence_report_columns()
 seed_llm_from_env_if_empty()
 
 app = FastAPI(

@@ -166,6 +166,22 @@ def _setting_blueprints_for_prompt() -> str:
     return json.dumps(GEMINI_SETTING_BLUEPRINTS, ensure_ascii=False, indent=2)
 
 
+def _book_length_constraints_for_prompt(target_words: int) -> str:
+    """写入 LLM：premise「类型与篇幅」必须与项目 target_words 一致，避免默认套用网文超长篇区间。"""
+    from app.services.outline_planning import words_to_plan
+
+    tw = max(1, int(target_words or 1_200_000))
+    plan = words_to_plan(tw)
+    approx_wan = round(tw / 10_000)
+    return (
+        f"【全书字数目标（硬性约束）】全书计划总字数为 {tw:,} 字（约 {approx_wan} 万字），"
+        f"按当前规划约 {plan['total_chapters']} 章、{plan['total_volumes']} 卷。\n"
+        "premise 中的「类型与篇幅」必须与上述总字数一致：用该字数规模（或与之等价的单一区间，且上下限均不得偏离该目标一个数量级）描述篇幅，"
+        "禁止写「三百万—五百万字」「数百万字」「千万字级」等与上述目标明显矛盾的常见超长篇口径；"
+        "若题材常见于超长篇，仍须按本项目既定总字数收敛叙事尺度（地图换代、支线数量与之匹配），不得暗示必须写到更高字数才能讲完。"
+    )
+
+
 def _setting_extra_with_defaults(item: dict) -> dict:
     extra = item.get("extra", {})
     if not isinstance(extra, dict):
@@ -199,6 +215,7 @@ def _single_shot_prompt(logline: str, premise: str = "", target_words: int = 1_2
 创意：{logline}
 立意与类型（作品基本面）：{premise[:2000] or '（未填写，请根据创意自动提炼作品定位、主题命题、核心矛盾与禁忌边界）'}
 【全书字数目标】{target_words:,}字，折合约{total_chapters_hint}章
+{_book_length_constraints_for_prompt(target_words)}
 
 返回一个 JSON 对象，顶层字段固定为：
 project, power_systems, factions, storylines, skills, items, characters, settings, outline, memory, relations。
@@ -210,7 +227,7 @@ project 字段结构：
   "title": "小说名称",
   "genre": "玄幻",
   "logline": "{logline}",
-  "premise": "立意与类型（含作品定位、主题命题、核心矛盾、禁忌边界，可落地，至少200字）",
+  "premise": "立意与类型（含作品定位、主题命题、核心矛盾、禁忌边界，可落地，至少200字）；其中「类型与篇幅」必须严格服从上方【全书字数目标（硬性约束）】",
   "world_overview": "世界观简述（300~500字）",
   "story_core": {{"drive": "故事驱动力", "conflict": "核心矛盾", "theme": "主题", "differentiation": "差异化"}}
 }}
@@ -418,14 +435,17 @@ class GenerationService:
 
     async def _gen_project(self, ctx: dict):
         system = "你是网络小说策划专家。根据创意生成项目基础信息，只返回JSON。"
+        tw = int(ctx.get("target_words") or 1_200_000)
+        length_block = _book_length_constraints_for_prompt(tw)
         prompt = f"""创意：{ctx['logline']}
 立意与类型：{ctx.get('premise')[:1500] if ctx.get('premise') else '（未填写，请自动提炼作品定位、主题命题、核心矛盾与禁忌边界）'}
+{length_block}
 
 返回JSON：
 {{
   "title": "小说名（2~6个汉字，有冲击力）",
   "genre": "玄幻",
-  "premise": "使用 markdown 二级标题输出完整《立意与类型（PREMISE）》，必须包含：作品定位、核心一句话、类型与篇幅、主题与命题、核心矛盾、主角概况、结局倾向、最坏会怎样（收束边界）、希望读者记住的一个画面、叙事视角与禁忌",
+  "premise": "使用 markdown 二级标题输出完整《立意与类型（PREMISE）》，必须包含：作品定位、核心一句话、类型与篇幅、主题与命题、核心矛盾、主角概况、结局倾向、最坏会怎样（收束边界）、希望读者记住的一个画面、叙事视角与禁忌；其中「类型与篇幅」必须严格服从上方【全书字数目标（硬性约束）】",
   "world_overview": "世界观简述，300~500字，包含力量体系、势力格局、社会规则",
   "story_core": {{
     "drive": "故事驱动力（成长/复仇/守护等）",
@@ -436,7 +456,7 @@ class GenerationService:
 }}
 要求：
 1) premise 不要空话，必须可直接作为作者创作基线
-2) premise 中必须给出清晰的目标读者、篇幅规模、禁忌边界
+2) premise 中必须给出清晰的目标读者、禁忌边界；「类型与篇幅」仅允许使用与【全书字数目标（硬性约束）】一致的规模表述
 3) theme / conflict 要与 premise 一致
 4) 只返回 JSON，不要解释文字。"""
 

@@ -15,6 +15,8 @@ class Chapter(Base):
 
     title = Column(String(300), nullable=False)
     content = Column(Text, default="")             # 正文（富文本 HTML / Markdown）
+    # 最近一次 AI 流式返回的完整纯文本（含稿末 ### ch_ 等），与 content 分离入库，便于对照
+    manuscript_raw_snapshot = Column(Text, nullable=True)
     word_count = Column(Integer, default=0)
     sort_order = Column(Integer, default=0)
     status = Column(String(20), default="draft")   # draft / writing / done / reviewed

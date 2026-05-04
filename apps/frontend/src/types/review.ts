@@ -125,12 +125,28 @@ export interface ChapterCoherenceResult {
   selected_chapter_ids?: string[]
 }
 
+/** 单次「根据评测改正文」写入结果中的一章 */
+export interface CoherenceApplyChapterResult {
+  chapter_id: string
+  skipped: boolean
+  word_count?: number
+  reason?: string
+}
+
+/** 一次写入数据库产生的改正文记录（可多次，对应多次预览提交） */
+export interface CoherenceApplyEventRecord {
+  applied_at: string
+  applied: CoherenceApplyChapterResult[]
+}
+
 export interface CoherenceReportRecord {
   id: string
   name: string
   model_profile: ModelProfile
   selected_chapter_ids: string[]
   result: ChapterCoherenceResult
+  /** 本评测报告关联的改正文写入历史 */
+  apply_events?: CoherenceApplyEventRecord[]
   created_at: string
 }
 

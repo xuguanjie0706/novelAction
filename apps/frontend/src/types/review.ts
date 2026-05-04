@@ -133,3 +133,18 @@ export interface CoherenceReportRecord {
   result: ChapterCoherenceResult
   created_at: string
 }
+
+export interface CoherenceApplyRevisionPreview {
+  chapter_id: string
+  chapter_title: string
+  unchanged: boolean
+  change_note: string
+  revised_content: string
+  previous_plain_preview: string
+  revised_plain_preview: string
+}
+
+export interface CoherenceApplyPreviewResponse {
+  report_id: string
+  revisions: CoherenceApplyRevisionPreview[]
+}

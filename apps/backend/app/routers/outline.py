@@ -126,7 +126,89 @@ def _format_previous_chapters_context(chapters: list[dict], max_items: int = 10)
     return "\n".join(lines)
 
 
-def _format_rolling_continuity_state(chapters: list[dict]) -> str:
+def _collect_protagonist_anchor_names(characters) -> list[str]:
+    """主角姓名 + 别名，用于境界归因扫描（去重保序）。"""
+    anchors: list[str] = []
+    for char in characters or []:
+        if getattr(char, "role", None) != "protagonist":
+            continue
+        name = getattr(char, "name", None)
+        if isinstance(name, str) and name.strip():
+            anchors.append(name.strip())
+        raw_aliases = getattr(char, "alias", None) or []
+        if isinstance(raw_aliases, list):
+            for a in raw_aliases:
+                if isinstance(a, str) and a.strip():
+                    anchors.append(a.strip())
+    return list(dict.fromkeys(anchors))
+
+
+def _protagonist_realm_attributed(
+    text: str,
+    realm_name: str,
+    protagonist_names: list[str],
+    *,
+    max_span: int = 56,
+) -> bool:
+    """
+    判断 text 中的 realm_name 是否应计作「主角境界描写」。
+    要求：与任一主角姓名/别名（或「主角」）同处一段短跨度内，且出现修为归因信号
+    （突破/晋升/以X境/从X境 等），避免「林烬遭遇灵王境强敌」把灵王境记成主角境界。
+    """
+    anchors = [n for n in protagonist_names if isinstance(n, str) and n.strip()]
+    if not anchors:
+        return True
+    anchors = list(dict.fromkeys([*anchors, "主角"]))
+    for pname in anchors:
+        p_start = 0
+        while True:
+            p = text.find(pname, p_start)
+            if p == -1:
+                break
+            r_start = 0
+            while True:
+                r = text.find(realm_name, r_start)
+                if r == -1:
+                    break
+                lo = min(p, r)
+                hi = max(p + len(pname), r + len(realm_name))
+                if hi - lo > max_span:
+                    r_start = r + 1
+                    continue
+                mid = text[lo:hi]
+                if any(v in mid for v in PROTAGONIST_REALM_ATTRIBUTION_VERBS):
+                    return True
+                if f"以{realm_name}" in mid or f"从{realm_name}" in mid:
+                    return True
+                r_start = r + 1
+            p_start = p + 1
+    return False
+
+
+def _extract_max_realm_from_chapters(
+    chapters: list[dict],
+    name_to_rank: dict[str, int],
+    protagonist_names: list[str] | None = None,
+) -> tuple[int | None, str | None]:
+    """从已生成章节列表中扫描 character_change，提取主角出现过的最高境界 rank 及对应名称。"""
+    max_rank: int | None = None
+    max_realm: str | None = None
+    rank_to_name = {v: k for k, v in name_to_rank.items()}
+    for chapter in chapters:
+        rank = _extract_protagonist_realm_rank(
+            chapter, name_to_rank, protagonist_names=protagonist_names
+        )
+        if rank is not None and (max_rank is None or rank > max_rank):
+            max_rank = rank
+            max_realm = rank_to_name.get(rank, str(rank))
+    return max_rank, max_realm
+
+
+def _format_rolling_continuity_state(
+    chapters: list[dict],
+    protagonist_max_rank: int | None = None,
+    protagonist_max_realm: str | None = None,
+) -> str:
     if not chapters:
         return ""
 
@@ -154,6 +236,13 @@ def _format_rolling_continuity_state(chapters: list[dict]) -> str:
         lines.append(f"未回收/待处理伏笔：{'；'.join(recent_foreshadows)}")
     if recent_events:
         lines.append(f"不得重复已发生的核心事件：{'；'.join(recent_events)}")
+    if protagonist_max_rank is not None:
+        realm_label = f"{protagonist_max_realm}（rank{protagonist_max_rank}）" if protagonist_max_realm else f"rank{protagonist_max_rank}"
+        lines.append(
+            f"【主角境界硬约束】已达最高境界：{realm_label}。"
+            "若本批出现境界回落，必须在 character_change 明确交代原因"
+            "（封印触发/重创透支/异界压制/反噬代价/主动隐匿之一），否则视为逻辑断层。"
+        )
     return "\n".join(lines)
 
 
@@ -430,6 +519,16 @@ REALM_REGRESSION_TRIGGER_WORDS: set[str] = {
     "封印", "燃烧寿元", "烧寿命", "夺舍",
 }
 
+# 与主角指代共现时：命中其一才认定该境界在写「主角修为」，避免把敌对/传闻中的
+# 高阶境界误算进 running_max，造成后续章节的假阳性「无解释境界倒退」。
+PROTAGONIST_REALM_ATTRIBUTION_VERBS: tuple[str, ...] = (
+    "突破", "晋升", "踏入", "达到", "晋入", "跨入", "迈入",
+    "升至", "已至", "臻至", "巩固", "稳固", "回落", "跌落", "退回",
+    "停留", "修为", "境界", "一举突破", "成功突破",
+    "惟有", "只有", "仍是", "还是", "下滑", "跌回", "降回",
+    "压制", "自封", "压住",
+)
+
 # 角色死亡 / 永久退场标记词；命中即视为该章节宣告该角色离场。
 CHARACTER_DEATH_MARKERS: set[str] = {
     "牺牲", "殒落", "陨落", "阵亡", "身死", "去世", "死亡",
@@ -611,20 +710,251 @@ def _detect_outline_terminology_issues(
 def _extract_protagonist_realm_rank(
     chapter: dict,
     name_to_rank: dict[str, int],
+    *,
+    protagonist_names: list[str] | None = None,
 ) -> int | None:
     """
     仅扫描 character_change 字段（描述「谁的认知/处境/关系发生变化」），
-    避免把对手境界误判为主角境界。返回该章节出现的最大 rank。
+    返回该章节中计作「主角修为」的境界里最大的 rank。
+
+    当传入 protagonist_names（非空）时，仅统计与主角姓名/「主角」共现且带修为归因
+    语境的境界名，避免敌对/传闻中的高阶境界抬高 running_max 导致假阳性回退告警。
+    未传或为空列表时保持旧行为：取文中出现的白名单境界最大 rank（兼容无人物卡的质检）。
     """
     text = str(chapter.get("character_change") or "")
     if not text or not name_to_rank:
         return None
+    use_attribution = bool(protagonist_names)
     found_rank: int | None = None
-    for name, rank in name_to_rank.items():
-        if name and name in text:
-            if found_rank is None or rank > found_rank:
-                found_rank = rank
+    for realm_name, rank in name_to_rank.items():
+        if not realm_name or realm_name not in text:
+            continue
+        if use_attribution and not _protagonist_realm_attributed(
+            text, realm_name, protagonist_names or [],
+        ):
+            continue
+        if found_rank is None or rank > found_rank:
+            found_rank = rank
     return found_rank
+
+
+def _realm_display_name_for_rank(rank: int, name_to_rank: dict[str, int]) -> str:
+    """同一 rank 可能对应全名与简写，优先展示带「境」的较长名称。"""
+    candidates = [n for n, r in name_to_rank.items() if r == rank]
+    if not candidates:
+        return f"rank{rank}"
+    with_jing = [n for n in candidates if isinstance(n, str) and n.endswith("境")]
+    pool = with_jing if with_jing else candidates
+    return max(pool, key=len)
+
+
+# 与 ai.chapter_debrief 写入保持一致（正文复盘提交时追加主角境界快照）
+DEBRIEF_REALM_MILESTONES_EXTRA_KEY = "debrief_realm_milestones"
+
+
+def _rank_for_realm_label(label: str, name_to_rank: dict[str, int]) -> int | None:
+    """从自由文本境界名解析 rank；优先精确匹配，其次命中子串的最长境界名。"""
+    if not label or not name_to_rank:
+        return None
+    s = label.strip()
+    if s in name_to_rank:
+        return name_to_rank[s]
+    best: int | None = None
+    best_len = 0
+    for name, r in name_to_rank.items():
+        if not isinstance(name, str) or not name:
+            continue
+        if name in s and len(name) >= best_len:
+            if best is None or r >= best:
+                best = r
+                best_len = len(name)
+    return best
+
+
+def merge_outline_and_debrief_realm_milestones(
+    outline_milestones: list[dict[str, Any]],
+    debrief_rows: list[dict[str, Any]],
+    name_to_rank: dict[str, int],
+) -> list[dict[str, Any]]:
+    """
+    合并大纲「人物变化」里程碑与正文复盘提交时记录的主角境界快照，
+    按章取各源中最高 rank，再全书扫一遍只保留「创新高」节点。
+    """
+    events: list[dict[str, Any]] = []
+    for m in outline_milestones:
+        events.append(
+            {
+                "chapter_number": int(m["chapter_number"]),
+                "chapter_title": str(m.get("chapter_title") or ""),
+                "realm_name": str(m.get("realm_name") or ""),
+                "realm_rank": int(m["realm_rank"]),
+                "character_change": str(m.get("character_change") or ""),
+                "source": "outline",
+            }
+        )
+    for d in debrief_rows:
+        if not isinstance(d, dict):
+            continue
+        ch = d.get("chapter_number")
+        if not isinstance(ch, int):
+            try:
+                ch = int(ch)
+            except (TypeError, ValueError):
+                continue
+        raw_name = str(d.get("realm_name") or "").strip()
+        rr = d.get("realm_rank")
+        if isinstance(rr, bool) or rr is None:
+            resolved = _rank_for_realm_label(raw_name, name_to_rank) if name_to_rank else None
+            rr = resolved if resolved is not None else 0
+        else:
+            try:
+                rr = int(rr)
+            except (TypeError, ValueError):
+                rr = _rank_for_realm_label(raw_name, name_to_rank) or 0
+        if rr <= 0 and not raw_name:
+            continue
+        if rr <= 0 and name_to_rank:
+            resolved = _rank_for_realm_label(raw_name, name_to_rank)
+            if resolved is not None:
+                rr = resolved
+        disp = raw_name
+        if name_to_rank and rr > 0:
+            disp = _realm_display_name_for_rank(rr, name_to_rank)
+        elif not disp and rr > 0:
+            disp = _realm_display_name_for_rank(rr, name_to_rank)
+        events.append(
+            {
+                "chapter_number": ch,
+                "chapter_title": str(d.get("chapter_title") or "")[:400],
+                "realm_name": disp or raw_name or f"rank{rr}",
+                "realm_rank": rr,
+                "character_change": "正文复盘 character_updates",
+                "source": "debrief",
+            }
+        )
+
+    if not events:
+        return []
+
+    by_ch: dict[int, list[dict[str, Any]]] = {}
+    for e in events:
+        ch = int(e["chapter_number"])
+        by_ch.setdefault(ch, []).append(e)
+
+    per_chapter: list[tuple[int, dict[str, Any], int]] = []
+    for ch in sorted(by_ch.keys()):
+        group = by_ch[ch]
+        best: dict[str, Any] | None = None
+        best_rank = -1
+        for e in group:
+            r = int(e.get("realm_rank") or 0)
+            if r > best_rank:
+                best_rank = r
+                best = dict(e)
+            elif r == best_rank and best is not None:
+                if e.get("source") == "debrief" and best.get("source") != "debrief":
+                    best = dict(e)
+        if best is not None:
+            per_chapter.append((ch, best, best_rank))
+
+    running = 0
+    prev_debrief_name = ""
+    merged: list[dict[str, Any]] = []
+    for ch, best, r in per_chapter:
+        nm = str(best.get("realm_name") or "").strip()
+        if name_to_rank:
+            if r <= running:
+                continue
+            running = r
+            merged.append(
+                {
+                    "chapter_number": ch,
+                    "chapter_title": best.get("chapter_title") or "",
+                    "realm_name": nm or _realm_display_name_for_rank(r, name_to_rank),
+                    "realm_rank": r,
+                    "character_change": str(best.get("character_change") or ""),
+                    "source": str(best.get("source") or "outline"),
+                }
+            )
+        else:
+            if r > running:
+                running = r
+                merged.append(
+                    {
+                        "chapter_number": ch,
+                        "chapter_title": best.get("chapter_title") or "",
+                        "realm_name": nm or f"rank{r}",
+                        "realm_rank": r,
+                        "character_change": str(best.get("character_change") or ""),
+                        "source": str(best.get("source") or "outline"),
+                    }
+                )
+            elif nm and nm != prev_debrief_name:
+                prev_debrief_name = nm
+                merged.append(
+                    {
+                        "chapter_number": ch,
+                        "chapter_title": best.get("chapter_title") or "",
+                        "realm_name": nm,
+                        "realm_rank": 0,
+                        "character_change": str(best.get("character_change") or ""),
+                        "source": str(best.get("source") or "outline"),
+                    }
+                )
+
+    return merged
+
+
+def build_protagonist_realm_timeline(
+    chapter_contexts: list[dict],
+    power_systems,
+    *,
+    protagonist_names: list[str] | None = None,
+) -> dict[str, Any]:
+    """
+    从章节计划的 character_change 聚合主角境界「创新高」节点（与战力曲线质检同源归因）。
+    数据源为已入库的大纲 chapter_plan；无力量体系 levels 时无法解析境界名。
+    """
+    name_to_rank, _, _ = _build_realm_rank_map(power_systems)
+    if not name_to_rank:
+        return {
+            "has_realm_whitelist": False,
+            "anchored": bool(protagonist_names),
+            "chapter_plans_scanned": 0,
+            "milestones": [],
+        }
+    anchors = [n for n in (protagonist_names or []) if isinstance(n, str) and n.strip()]
+    use_names: list[str] | None = anchors if anchors else None
+
+    sorted_chapters = sorted(
+        (c for c in chapter_contexts if isinstance(c.get("number"), int)),
+        key=lambda c: int(c["number"]),
+    )
+    running = 0
+    milestones: list[dict[str, Any]] = []
+    for ch in sorted_chapters:
+        rank = _extract_protagonist_realm_rank(ch, name_to_rank, protagonist_names=use_names)
+        if rank is None or rank <= running:
+            continue
+        running = rank
+        realm_label = _realm_display_name_for_rank(rank, name_to_rank)
+        cc = str(ch.get("character_change") or "")
+        milestones.append(
+            {
+                "chapter_number": int(ch["number"]),
+                "chapter_title": str(ch.get("title") or ""),
+                "realm_name": realm_label,
+                "realm_rank": rank,
+                "character_change": cc[:400],
+            }
+        )
+
+    return {
+        "has_realm_whitelist": True,
+        "anchored": bool(anchors),
+        "chapter_plans_scanned": len(sorted_chapters),
+        "milestones": milestones,
+    }
 
 
 def _detect_outline_power_curve_issues(
@@ -632,6 +962,7 @@ def _detect_outline_power_curve_issues(
     *,
     power_systems,
     scope: str = "volume",
+    protagonist_names: list[str] | None = None,
 ) -> list[dict]:
     """
     战力曲线确定性校验：
@@ -656,7 +987,9 @@ def _detect_outline_power_curve_issues(
     running_max = 0
     last_peak_chapter: int | None = None
     for chapter in sorted_chapters:
-        rank = _extract_protagonist_realm_rank(chapter, name_to_rank)
+        rank = _extract_protagonist_realm_rank(
+            chapter, name_to_rank, protagonist_names=protagonist_names,
+        )
         if rank is None:
             continue
         number = chapter["number"]
@@ -1240,6 +1573,7 @@ def _detect_outline_hard_rule_issues(
     """
     issues: list[dict] = []
     must_fix: set[int] = set()
+    protagonist_names = _collect_protagonist_anchor_names(characters)
 
     # Sub-check 1: exact mirrored core_event/character_change/end_hook (existing logic)
     signatures: dict[tuple[str, str, str], list[int]] = {}
@@ -1289,6 +1623,7 @@ def _detect_outline_hard_rule_issues(
         chapters,
         power_systems=power_systems,
         scope=scope,
+        protagonist_names=protagonist_names or None,
     )
     for issue in power_curve_issues:
         for number in issue.get("chapter_numbers", []) or []:
@@ -1308,7 +1643,7 @@ def _detect_outline_hard_rule_issues(
     issues.extend(death_issues)
 
     # Sub-check 5: theme alignment
-    protagonist_names = [
+    theme_protagonist_names = [
         getattr(char, "name", None) for char in (characters or [])
         if getattr(char, "role", None) == "protagonist" and getattr(char, "name", None)
     ]
@@ -1316,7 +1651,7 @@ def _detect_outline_hard_rule_issues(
         chapters,
         theme_statement=theme_statement,
         premise=premise,
-        protagonist_names=protagonist_names,
+        protagonist_names=theme_protagonist_names,
     )
     for issue in theme_issues:
         for number in issue.get("chapter_numbers", []) or []:
@@ -1665,6 +2000,73 @@ def get_outline_tree(project_id: str, db: Session = Depends(get_db)):
     return build_tree(nodes)
 
 
+class ProtagonistRealmMilestoneOut(BaseModel):
+    chapter_number: int
+    chapter_title: str
+    realm_name: str
+    realm_rank: int
+    character_change: str
+    source: str = "outline"  # outline | debrief
+
+
+class ProtagonistRealmTimelineOut(BaseModel):
+    """只读：大纲「人物变化」+ 正文复盘提交时写入的主角境界快照，合并为一条创新高时间轴。"""
+
+    protagonist_display_name: Optional[str] = None
+    protagonist_anchor_names: list[str] = []
+    has_realm_whitelist: bool
+    anchored: bool
+    chapter_plans_scanned: int
+    debrief_snapshots: int = 0
+    milestones: list[ProtagonistRealmMilestoneOut]
+    source: str = "outline+debrief"
+
+
+@router.get("/protagonist-realm-timeline", response_model=ProtagonistRealmTimelineOut)
+def get_protagonist_realm_timeline(project_id: str, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    nodes = db.query(OutlineNode).filter(
+        OutlineNode.project_id == project_id,
+        OutlineNode.node_type == "chapter_plan",
+    ).all()
+    chapters = [_outline_node_to_chapter_context(n) for n in nodes]
+
+    characters = db.query(Character).filter(Character.project_id == project_id).all()
+    power_systems = db.query(PowerSystem).filter(PowerSystem.project_id == project_id).all()
+    protagonist_names = _collect_protagonist_anchor_names(characters)
+    protagonist = next((c for c in characters if getattr(c, "role", None) == "protagonist"), None)
+
+    built = build_protagonist_realm_timeline(
+        chapters,
+        power_systems,
+        protagonist_names=protagonist_names or None,
+    )
+    name_to_rank, _, _ = _build_realm_rank_map(power_systems)
+    debrief_rows: list[Any] = []
+    if protagonist and isinstance(getattr(protagonist, "extra", None), dict):
+        raw_hist = protagonist.extra.get(DEBRIEF_REALM_MILESTONES_EXTRA_KEY)
+        if isinstance(raw_hist, list):
+            debrief_rows = [x for x in raw_hist if isinstance(x, dict)]
+
+    merged_raw = merge_outline_and_debrief_realm_milestones(
+        built["milestones"],
+        debrief_rows,
+        name_to_rank,
+    )
+    return ProtagonistRealmTimelineOut(
+        protagonist_display_name=getattr(protagonist, "name", None) if protagonist else None,
+        protagonist_anchor_names=protagonist_names,
+        has_realm_whitelist=built["has_realm_whitelist"],
+        anchored=built["anchored"],
+        chapter_plans_scanned=built["chapter_plans_scanned"],
+        debrief_snapshots=len(debrief_rows),
+        milestones=[ProtagonistRealmMilestoneOut(**m) for m in merged_raw],
+    )
+
+
 @router.post("/", response_model=OutlineNodeOut, status_code=201)
 def create_node(project_id: str, payload: OutlineNodeCreate, db: Session = Depends(get_db)):
     node = OutlineNode(project_id=project_id, **payload.model_dump())
@@ -1765,6 +2167,7 @@ async def ai_expand_outline(
     project = db.query(Project).filter(Project.id == project_id).first()
     settings = db.query(WorldSetting).filter(WorldSetting.project_id == project_id).all()
     characters = db.query(Character).filter(Character.project_id == project_id).all()
+    power_systems = db.query(PowerSystem).filter(PowerSystem.project_id == project_id).all()
 
     # 统计当前已有章节数（用于编号连续）
     existing_count = db.query(OutlineNode).filter(
@@ -1774,14 +2177,19 @@ async def ai_expand_outline(
 
     world_summary = " | ".join(f"{s.title}: {(s.content or '')[:80]}" for s in settings[:4])
 
+    # 境界白名单和 rank 映射
+    realm_whitelist = sorted(_collect_power_system_whitelist(power_systems))
+    name_to_rank, _, _ = _build_realm_rank_map(power_systems)
+
     def _build_char_summary(char_list: list) -> str:
-        """构建角色摘要，区分主线核心与配角层级，并声明「非全量」。"""
+        """构建角色摘要，区分主线核心与配角层级，补入境界信息。"""
         core = [c for c in char_list if (c.character_tier or "core") == "core"]
         supporting = [c for c in char_list if (c.character_tier or "core") != "core"]
         parts = ["以下为主线核心卡司（非全书全部人物，配角可按剧情需要引入）："]
         for c in core[:8]:
             parts.append(
-                f"[核心]{c.name}（{c.role}，{c.faction or '无阵营'}）{(c.personality or '')[:40]}"
+                f"[核心]{c.name}（{c.role}，境界:{c.current_realm or '未知'}/rank{c.realm_rank or '?'}，"
+                f"{c.faction or '无阵营'}）{(c.personality or '')[:40]}"
             )
         for c in supporting[:4]:
             parts.append(
@@ -1790,6 +2198,56 @@ async def ai_expand_outline(
         return " | ".join(parts)
 
     char_summary = _build_char_summary(characters)
+
+    # 加载前序已生成章节作为连续性上下文
+    context_limit = 24 if req.model_profile == "gemini" else 10
+    prior_chapters = _load_existing_chapter_context(db, project_id, limit=context_limit)
+
+    # 从前序章节提取主角已达最高境界
+    anchor_names = _collect_protagonist_anchor_names(characters)
+    prior_max_rank, prior_max_realm = _extract_max_realm_from_chapters(
+        prior_chapters,
+        name_to_rank,
+        protagonist_names=anchor_names or None,
+    )
+
+    # 构建主角当前状态字符串
+    protagonist = next((c for c in characters if c.role == "protagonist"), None)
+    if protagonist:
+        ps_realm = (
+            f"{prior_max_realm}（rank{prior_max_rank}）"
+            if prior_max_rank else f"{protagonist.current_realm or '未知'}"
+        )
+        protagonist_state = (
+            f"姓名：{protagonist.name} | "
+            f"当前境界（已达最高）：{ps_realm} | "
+            f"当前位置：{protagonist.current_location or '未知'} | "
+            f"当前状态：{protagonist.current_status or 'alive'}"
+        )
+    else:
+        protagonist_state = (
+            f"主角已达最高境界：{prior_max_realm}（rank{prior_max_rank}）"
+            if prior_max_rank else ""
+        )
+
+    # 全书卷线蓝图（供当前卷知晓全局走向）
+    root_volumes = db.query(OutlineNode).filter(
+        OutlineNode.project_id == project_id,
+        OutlineNode.parent_id.is_(None),
+        OutlineNode.node_type == "volume",
+    ).order_by(OutlineNode.sort_order).all()
+    global_outline_context = _format_global_outline_context([
+        (n, (n.extra or {}).get("planned_chapters", TARGET_CHAPTERS_PER_VOLUME)
+         if isinstance(n.extra, dict) else TARGET_CHAPTERS_PER_VOLUME)
+        for n in root_volumes
+    ])
+
+    previous_chapters_context = _format_previous_chapters_context(prior_chapters, max_items=context_limit)
+    continuity_state = _format_rolling_continuity_state(
+        prior_chapters,
+        protagonist_max_rank=prior_max_rank,
+        protagonist_max_realm=prior_max_realm,
+    )
 
     svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
     genre = (project.genre or "玄幻") if project else "玄幻"
@@ -1807,6 +2265,11 @@ async def ai_expand_outline(
                 character_summary=char_summary,
                 existing_chapters=existing_count,
                 chapter_count=req.chapter_count,
+                global_outline_context=global_outline_context,
+                previous_chapters_context=previous_chapters_context,
+                continuity_state=continuity_state,
+                realm_whitelist=realm_whitelist,
+                protagonist_state=protagonist_state,
             )
             err_msg = result.get("error") if isinstance(result, dict) else None
             chapters = result.get("chapters") if isinstance(result, dict) else None
@@ -2478,16 +2941,24 @@ async def ai_full_generate_outline(
 
     settings_list = db.query(WorldSetting).filter(WorldSetting.project_id == project_id).all()
     characters = db.query(Character).filter(Character.project_id == project_id).all()
+    power_systems = db.query(PowerSystem).filter(PowerSystem.project_id == project_id).all()
 
     world_summary = " | ".join(
         f"{s.title}: {(s.content or '')[:80]}" for s in settings_list[:4]
     )
+    # 人物摘要补入境界信息，供 AI 生成时参考
     char_summary = " | ".join(
-        f"{c.name}（{c.role}，{c.faction or ''}）{(c.personality or '')[:40]}"
-        for c in characters[:5]
+        f"{c.name}（{c.role}，境界:{c.current_realm or '未知'}/rank{c.realm_rank or '?'}，"
+        f"{c.faction or '无阵营'}）{(c.personality or '')[:40]}"
+        for c in characters[:6]
     )
     story_core = project.story_core if isinstance(project.story_core, dict) else {}
     theme_statement = (req.theme_statement or story_core.get("theme") or "").strip()
+
+    # 境界白名单（从 PowerSystem.levels 提取，供每批 expand_outline 注入）
+    realm_whitelist = sorted(_collect_power_system_whitelist(power_systems))
+    # 境界名→rank 映射，用于跨批次追踪主角最高境界
+    name_to_rank, _, _ = _build_realm_rank_map(power_systems)
 
     svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
 
@@ -2518,6 +2989,14 @@ async def ai_full_generate_outline(
         batch_error = False
         batch_error_messages: list[str] = []
 
+        # 跨批次追踪主角已达最高境界（从 prior_chapters 里先初始化）
+        anchor_names = _collect_protagonist_anchor_names(characters)
+        rolling_max_rank, rolling_max_realm = _extract_max_realm_from_chapters(
+            prior_chapters or [],
+            name_to_rank,
+            protagonist_names=anchor_names or None,
+        )
+
         for batch_idx, batch_count in enumerate(batches):
             batch_offset = chapter_offset + len(all_chapters)
             previous_context_limit = 24 if req.model_profile == "gemini" else 8
@@ -2526,7 +3005,11 @@ async def ai_full_generate_outline(
                 context_chapters,
                 max_items=previous_context_limit,
             )
-            continuity_state = _format_rolling_continuity_state(context_chapters)
+            continuity_state = _format_rolling_continuity_state(
+                context_chapters,
+                protagonist_max_rank=rolling_max_rank,
+                protagonist_max_realm=rolling_max_realm,
+            )
             batch_goal = _format_outline_batch_goal(
                 node_title=target_node.title,
                 batch_offset=batch_offset,
@@ -2534,6 +3017,24 @@ async def ai_full_generate_outline(
                 planned_chapters=planned_chapters,
                 node_generated_chapters=len(all_chapters),
             )
+            # 构建主角当前状态字符串（结合人物卡 + 滚动追踪到的最高境界）
+            protagonist = next((c for c in characters if c.role == "protagonist"), None)
+            if protagonist:
+                ps_realm = (
+                    f"{rolling_max_realm}（rank{rolling_max_rank}）"
+                    if rolling_max_rank else f"{protagonist.current_realm or '未知'}"
+                )
+                protagonist_state = (
+                    f"姓名：{protagonist.name} | "
+                    f"当前境界（已达最高）：{ps_realm} | "
+                    f"当前位置：{protagonist.current_location or '未知'} | "
+                    f"当前状态：{protagonist.current_status or 'alive'}"
+                )
+            else:
+                protagonist_state = (
+                    f"主角已达最高境界：{rolling_max_realm}（rank{rolling_max_rank}）"
+                    if rolling_max_rank else ""
+                )
             try:
                 result = await svc.expand_outline(
                     node_title=target_node.title,
@@ -2550,6 +3051,8 @@ async def ai_full_generate_outline(
                     previous_chapters_context=previous_chapters_context,
                     continuity_state=continuity_state,
                     batch_goal=batch_goal,
+                    realm_whitelist=realm_whitelist,
+                    protagonist_state=protagonist_state,
                 )
                 batch_chapters = [
                     _sanitize_generated_outline_chapter(ch, project.genre)
@@ -2563,6 +3066,15 @@ async def ai_full_generate_outline(
                     yield f"data: {json.dumps({'event': 'progress', 'step': step, 'total': total_steps, 'label': f'《{target_node.title}》第{batch_idx+1}批无有效章节：{str(detail)[:120]}', 'error': True}, ensure_ascii=False)}\n\n"
                 else:
                     all_chapters.extend(batch_chapters)
+                    # 每批完成后更新主角最高境界 rank，供下一批使用
+                    new_max_rank, new_max_realm = _extract_max_realm_from_chapters(
+                        batch_chapters,
+                        name_to_rank,
+                        protagonist_names=anchor_names or None,
+                    )
+                    if new_max_rank and (rolling_max_rank is None or new_max_rank > rolling_max_rank):
+                        rolling_max_rank = new_max_rank
+                        rolling_max_realm = new_max_realm
                     if len(batches) > 1:
                         yield f"data: {json.dumps({'event': 'progress', 'step': step, 'total': total_steps, 'label': f'《{target_node.title}》第{batch_idx+1}/{len(batches)}批完成（+{len(batch_chapters)} 章）'}, ensure_ascii=False)}\n\n"
             except Exception as e:

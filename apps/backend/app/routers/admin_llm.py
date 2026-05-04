@@ -4,6 +4,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -94,6 +95,7 @@ def _to_out(row: LlmProvider) -> LlmProviderOut:
         name=row.name,
         base_url=row.base_url,
         model_name=row.model_name,
+        provider_type=row.provider_type or "text",
         has_api_key=has_k,
         api_key_hint=hint,
         enabled=row.enabled,
@@ -135,6 +137,7 @@ def create_provider(payload: LlmProviderCreate, db: Session = Depends(get_db)):
         name=payload.name.strip(),
         base_url=payload.base_url.strip(),
         model_name=payload.model_name.strip(),
+        provider_type=payload.provider_type or "text",
         api_key=(payload.api_key.strip() if payload.api_key else None),
         enabled=payload.enabled,
         is_default=payload.is_default,
@@ -195,3 +198,72 @@ def set_default_provider(provider_id: UUID, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(row)
     return _to_out(row)
+
+
+class TestImageIn(BaseModel):
+    prompt: str = "A simple test image, minimal details"
+
+
+class TestImageOut(BaseModel):
+    data_url: Optional[str] = None
+    image_url: Optional[str] = None
+
+
+@router.post("/{provider_id}/test-image", response_model=TestImageOut)
+def test_image_provider(provider_id: UUID, payload: TestImageIn, db: Session = Depends(get_db)):
+    """
+    对已保存的图片类提供者发一次真实 images/generations 请求，验证联通与鉴权。
+    返回 data_url 或 image_url 可直接在前端预览。
+    """
+    row = db.query(LlmProvider).filter(LlmProvider.id == provider_id).first()
+    if not row:
+        raise HTTPException(404, "大模型配置不存在")
+    if (row.provider_type or "text") != "image":
+        raise HTTPException(400, "该提供者不是图片类型（provider_type != 'image'）")
+
+    from app.services.llm_config import normalize_openai_base_url
+    base = normalize_openai_base_url(row.base_url).rstrip("/")
+    url = f"{base}/images/generations"
+    key = (row.api_key or "").strip() or "not-required"
+
+    try:
+        with httpx.Client(timeout=120.0, follow_redirects=True) as client:
+            resp = client.post(
+                url,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={
+                    "model": row.model_name,
+                    "prompt": payload.prompt,
+                    "n": 1,
+                    "size": "1024x1024",
+                    "response_format": "b64_json",
+                },
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(504, "图片生成超时（>120s）")
+    except httpx.ConnectError as e:
+        raise HTTPException(502, f"无法连接网关：{e}")
+
+    if resp.status_code >= 400:
+        try:
+            err = resp.json()
+            detail = err.get("error", {}).get("message") or str(err)
+        except Exception:
+            detail = resp.text[:400]
+        raise HTTPException(resp.status_code, f"图片模型错误：{detail}")
+
+    try:
+        data = resp.json()
+    except Exception:
+        raise HTTPException(502, "非 JSON 响应")
+
+    items = data.get("data") or []
+    if not items:
+        raise HTTPException(502, "未返回图片数据")
+
+    item = items[0]
+    if b64 := item.get("b64_json"):
+        return TestImageOut(data_url=f"data:image/png;base64,{b64}")
+    if img_url := item.get("url"):
+        return TestImageOut(image_url=img_url)
+    raise HTTPException(502, "返回格式未知")

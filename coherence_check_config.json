@@ -1,0 +1,65 @@
+{
+  "prompts": {
+    "main_system_base": "你是资深网文编辑，专门执行跨章连贯性审查。严格返回 JSON，不要任何额外文字。",
+    "boundary_system": "你是专注于章节衔接的网文审稿编辑。只返回JSON。"
+  },
+  "context": {
+    "include_power_systems": true,
+    "include_characters": true,
+    "include_storylines": true,
+    "include_chapter_indexes": true,
+    "character_limit": 20,
+    "storyline_limit": 10
+  },
+  "sampling": {
+    "head_chars": 500,
+    "tail_chars": 600,
+    "head_chars_large_context": 600,
+    "tail_chars_large_context": 700,
+    "boundary_snippet_tail": 400,
+    "boundary_snippet_head": 400,
+    "boundary_deep_tail": 800,
+    "boundary_deep_head": 800
+  },
+  "evaluation_items": [
+    {
+      "id": "continuity_gap",
+      "title": "场景断层",
+      "instruction": "前章末尾的场景/冲突，在后章开头是否有合理承接或交代？",
+      "include_in_boundary_prompt": true
+    },
+    {
+      "id": "realm_jump",
+      "title": "境界跳跃",
+      "instruction": "对照境界体系等级表，检查每章内及章节间的境界描述，是否存在无突破过程的跨级跳变？",
+      "include_in_boundary_prompt": true
+    },
+    {
+      "id": "character_swap",
+      "title": "人物替换/消失",
+      "instruction": "同一场景或连续叙事中，是否存在角色在相邻章节间无故换人（姓名变更）或无故消失？",
+      "include_in_boundary_prompt": true
+    },
+    {
+      "id": "causality_missing",
+      "title": "因果缺失",
+      "instruction": "前章埋下的冲突（章末钩子），后章是否给出了结果或承接？",
+      "include_in_boundary_prompt": true
+    },
+    {
+      "id": "title_match",
+      "title": "标题-正文匹配",
+      "instruction": "各章标题与正文核心事件是否匹配？",
+      "include_in_boundary_prompt": false
+    }
+  ],
+  "followup": {
+    "enabled": true,
+    "always_first_n_boundaries": 3,
+    "severity_triggers": ["high", "critical"],
+    "risk_level_triggers": ["high"]
+  },
+  "output": {
+    "report_filename_template": "coherence_report_{project_slug}_ch{chapter_from}_{chapter_to}.json"
+  }
+}

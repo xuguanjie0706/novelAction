@@ -11,6 +11,8 @@ export interface LlmProvider {
   name: string
   base_url: string
   model_name: string
+  /** 'text' = 文本生成（默认）；'image' = 图片生成（/v1/images/generations） */
+  provider_type: 'text' | 'image'
   has_api_key: boolean
   api_key_hint: string | null
   enabled: boolean

@@ -1,12 +1,61 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
+
+
+def _server_from_x_forwarded_host(x_forwarded_host: str, scheme: str) -> tuple[str, int] | None:
+    """
+    解析 X-Forwarded-Host（Vite 代理 xfwd 时传入），用于修正 ASGI scope['server']，
+    避免 FastAPI 尾部斜杠 307 的 Location 指向后端直连地址（如 127.0.0.1:9000）导致前端跨域失败。
+    """
+    raw = x_forwarded_host.strip().split(",")[0].strip()
+    if not raw:
+        return None
+    default_port = 443 if scheme == "https" else 80
+    if "]:" in raw:
+        bracket_end = raw.index("]")
+        host = raw[1:bracket_end]
+        rest = raw[bracket_end + 1 :]
+        if rest.startswith(":") and rest[1:].isdigit():
+            return host, int(rest[1:])
+        return host, default_port
+    if raw.count(":") == 1:
+        host, port_s = raw.split(":", 1)
+        if port_s.isdigit():
+            return host, int(port_s)
+    idx = raw.rfind(":")
+    if idx > 0 and raw[idx + 1 :].isdigit():
+        return raw[:idx], int(raw[idx + 1 :])
+    return raw, default_port
+
+
+class ForwardedHostASGIMiddleware:
+    """信任反向代理传入的 X-Forwarded-Host，修正重定向 URL 的 host/port。"""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            for key, val in scope.get("headers") or []:
+                if key.lower() != b"x-forwarded-host":
+                    continue
+                parsed = _server_from_x_forwarded_host(
+                    val.decode("latin1"), scheme=scope.get("scheme") or "http"
+                )
+                if parsed:
+                    scope["server"] = parsed
+                break
+        await self.app(scope, receive, send)
 from app.config import settings
 from app.database import engine, Base
 from app.routers import projects, world_settings, characters, outline, chapters, chapter_indexes, ai, generate, admin_llm, llm_public, admin_llm_calls
 from app.routers import storylines, power_systems, skills, items, factions
 from app.routers import foreshadows, quality_debts
+from app.routers import cover as cover_router
 from app.services.llm_config import seed_llm_from_env_if_empty
+from app.services.cover_storage import ensure_cover_storage_dir, resolved_cover_storage_dir
 
 
 def _ensure_outline_node_columns() -> None:
@@ -203,6 +252,14 @@ def _ensure_memory_embedding_column() -> None:
             pass  # 旧版 pgvector 无 HNSW，退化到 IVFFlat 或顺序扫描均可接受
 
 
+def _ensure_llm_provider_columns() -> None:
+    """开发环境兼容迁移：为已有 llm_providers 表补齐 provider_type 列。"""
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE llm_providers ADD COLUMN IF NOT EXISTS provider_type VARCHAR(20) NOT NULL DEFAULT 'text'"
+        ))
+
+
 # 自动建表（开发用，生产建议改用 Alembic）
 Base.metadata.create_all(bind=engine)
 _ensure_project_columns()
@@ -211,6 +268,7 @@ _ensure_character_columns()
 _ensure_character_relationship_columns()
 _ensure_foreshadow_columns()
 _ensure_memory_embedding_column()
+_ensure_llm_provider_columns()
 seed_llm_from_env_if_empty()
 
 app = FastAPI(
@@ -228,6 +286,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(ForwardedHostASGIMiddleware)
 
 # 注册路由
 app.include_router(projects.router, prefix="/api/v1")
@@ -249,6 +308,14 @@ app.include_router(items.router, prefix="/api/v1")
 app.include_router(factions.router, prefix="/api/v1")
 app.include_router(foreshadows.router, prefix="/api/v1")
 app.include_router(quality_debts.router, prefix="/api/v1")
+app.include_router(cover_router.router, prefix="/api/v1")
+
+ensure_cover_storage_dir()
+app.mount(
+    "/api/v1/covers/files",
+    StaticFiles(directory=str(resolved_cover_storage_dir())),
+    name="novel_cover_files",
+)
 
 
 @app.get("/health")

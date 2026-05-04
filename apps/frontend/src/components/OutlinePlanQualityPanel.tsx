@@ -9,6 +9,13 @@ function statusColor(status: string | undefined) {
   return 'default'
 }
 
+const REPORT_STATUS_LABELS: Record<string, string> = {
+  pass: '通过',
+  fail: '未通过',
+  warning: '警告',
+  excellent: '优秀',
+}
+
 export default function OutlinePlanQualityPanel({ report, title }: { report: OutlinePlanQualityReport; title?: string }) {
   if (report.error) {
     return (
@@ -27,7 +34,11 @@ export default function OutlinePlanQualityPanel({ report, title }: { report: Out
         {report.overall_score != null && (
           <Typography.Text strong>总分：{String(report.overall_score)}</Typography.Text>
         )}
-        {report.status && <Tag color={statusColor(report.status)}>{report.status}</Tag>}
+        {report.status && (
+          <Tag color={statusColor(report.status)}>
+            {REPORT_STATUS_LABELS[(report.status || '').toLowerCase()] ?? report.status}
+          </Tag>
+        )}
         {report.scope && <Typography.Text type="secondary">范围：{report.scope}</Typography.Text>}
       </Space>
       {report.summary && <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{report.summary}</Typography.Paragraph>}

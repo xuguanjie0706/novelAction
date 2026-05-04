@@ -9,8 +9,12 @@ from app.services.outline_planning import (
     target_total_chapters,
 )
 import json
+import uuid
 
 from app.routers.outline import (
+    build_protagonist_realm_timeline,
+    merge_outline_and_debrief_realm_milestones,
+    _build_realm_rank_map,
     _apply_outline_patch_to_node,
     _detect_outline_embedding_duplicates,
     _detect_outline_hard_rule_issues,
@@ -310,6 +314,85 @@ def test_outline_quality_graph_scope_splits_volume_and_book_llm_nodes():
         "quality_check_volumes",
         "quality_check_book",
     ]
+
+
+def test_build_protagonist_realm_timeline_milestones_from_character_change():
+    ps = PowerSystem(
+        name="修真",
+        project_id=uuid.uuid4(),
+        levels=[
+            {"rank": 1, "name": "感灵境"},
+            {"rank": 2, "name": "拓纹境"},
+        ],
+    )
+    chapters = [
+        {"number": 1, "title": "开局", "character_change": "林烬以感灵境登记造册。"},
+        {"number": 2, "title": "日常", "character_change": "林烬巩固心境，未涉突破。"},
+        {"number": 10, "title": "突破", "character_change": "林烬一举突破至拓纹境圆满。"},
+    ]
+    out = build_protagonist_realm_timeline(chapters, [ps], protagonist_names=["林烬"])
+    assert out["has_realm_whitelist"] is True
+    assert out["chapter_plans_scanned"] == 3
+    assert len(out["milestones"]) == 2
+    assert out["milestones"][0]["chapter_number"] == 1
+    assert out["milestones"][0]["realm_rank"] == 1
+    assert "感灵境" in out["milestones"][0]["realm_name"]
+    assert out["milestones"][1]["chapter_number"] == 10
+    assert out["milestones"][1]["realm_rank"] == 2
+
+
+def test_build_protagonist_realm_timeline_empty_without_power_levels():
+    ps = PowerSystem(name="空体系", project_id=uuid.uuid4(), levels=[])
+    out = build_protagonist_realm_timeline(
+        [{"number": 1, "character_change": "林烬突破"}],
+        [ps],
+        protagonist_names=["林烬"],
+    )
+    assert out["has_realm_whitelist"] is False
+    assert out["milestones"] == []
+
+
+def test_merge_realm_timeline_combines_outline_and_debrief():
+    ps = PowerSystem(
+        name="修真",
+        project_id=uuid.uuid4(),
+        levels=[
+            {"rank": 1, "name": "感灵境"},
+            {"rank": 2, "name": "拓纹境"},
+            {"rank": 3, "name": "凝旋境"},
+        ],
+    )
+    name_to_rank, _, _ = _build_realm_rank_map([ps])
+    outline_ms = [
+        {
+            "chapter_number": 10,
+            "chapter_title": "卷末",
+            "realm_name": "拓纹境",
+            "realm_rank": 2,
+            "character_change": "林烬突破至拓纹境。",
+        },
+    ]
+    debrief = [
+        {
+            "chapter_number": 5,
+            "chapter_title": "第五章",
+            "realm_name": "感灵境",
+            "realm_rank": 1,
+            "source": "chapter_debrief",
+        },
+        {
+            "chapter_number": 12,
+            "chapter_title": "十二章",
+            "realm_name": "凝旋境",
+            "realm_rank": 3,
+            "source": "chapter_debrief",
+        },
+    ]
+    merged = merge_outline_and_debrief_realm_milestones(outline_ms, debrief, name_to_rank)
+    assert [m["chapter_number"] for m in merged] == [5, 10, 12]
+    assert merged[0]["source"] == "debrief"
+    assert merged[1]["source"] == "outline"
+    assert merged[2]["source"] == "debrief"
 
 
 def test_outline_quality_story_bible_collects_world_and_arc_constraints():
@@ -728,6 +811,47 @@ def test_hard_rule_power_curve_regression_allowed_with_trigger_word():
     regression_issues = [
         issue for issue in report["issues"]
         if issue["type"] == "continuity" and "境界倒退" in issue["description"]
+    ]
+    assert regression_issues == []
+
+
+def test_hard_rule_power_curve_no_false_positive_npc_realm_with_protagonist_card():
+    """已配置主角人物卡时，见闻/敌方的高阶境界不得抬高 running_max，避免第4/6/12章类假阳性。"""
+    system = _ling_wen_power_system()
+    lin = Character(name="林烬", role="protagonist")
+    chapters = [
+        {
+            "number": 4,
+            "title": "余波",
+            "core_event": "古战场残留灵压爆发。",
+            "character_change": "林烬亲历灵王境强者交手余波，愈发认清自身与顶尖梯队差距。",
+            "end_hook": "风沙里传来冷笑。",
+        },
+        {
+            "number": 6,
+            "title": "入门",
+            "core_event": "外门登记。",
+            "character_change": "林烬以感灵境身份登记造册，暂隐锋芒。",
+            "end_hook": "执事抬眼打量。",
+        },
+        {
+            "number": 12,
+            "title": "拓路",
+            "core_event": "夜路遇袭。",
+            "character_change": "林烬巩固拓纹境根基，刀意更凝练一分。",
+            "end_hook": "远处火光一闪。",
+        },
+    ]
+    report = _detect_outline_hard_rule_issues(
+        chapters,
+        power_systems=[system],
+        genre="玄幻",
+        scope="volume",
+        characters=[lin],
+    )
+    regression_issues = [
+        issue for issue in report["issues"]
+        if issue["type"] == "continuity" and "境界倒退" in issue.get("description", "")
     ]
     assert regression_issues == []
 

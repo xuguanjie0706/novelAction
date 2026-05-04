@@ -10,6 +10,8 @@ class LlmProviderBase(BaseModel):
     name: str = Field(..., max_length=200)
     base_url: str = Field(..., max_length=2000)
     model_name: str = Field(..., max_length=200)
+    # text = 文本生成（默认）；image = 图片生成（兼容 /v1/images/generations）
+    provider_type: str = Field("text", pattern=r"^(text|image)$")
     enabled: bool = True
     is_default: bool = False
     sort_order: int = 0
@@ -26,6 +28,7 @@ class LlmProviderUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=200)
     base_url: Optional[str] = Field(None, max_length=2000)
     model_name: Optional[str] = Field(None, max_length=200)
+    provider_type: Optional[str] = Field(None, pattern=r"^(text|image)$")
     api_key: Optional[str] = None
     """传 null 或不传表示不改；传空字符串表示清空密钥"""
     enabled: Optional[bool] = None
@@ -40,6 +43,7 @@ class LlmProviderOut(BaseModel):
     name: str
     base_url: str
     model_name: str
+    provider_type: str = "text"
     has_api_key: bool
     api_key_hint: Optional[str] = None
     enabled: bool

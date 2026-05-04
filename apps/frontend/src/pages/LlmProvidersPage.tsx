@@ -34,7 +34,8 @@ export default function LlmProvidersPage() {
     setLoading(true)
     try {
       const { data } = await http.get<LlmProvider[]>('/api/v1/admin/llm-providers/')
-      setRows(data)
+      // 只展示文本类提供者（图片类在「图片模型」菜单管理）
+      setRows(data.filter(r => !r.provider_type || r.provider_type === 'text'))
     } catch (e: unknown) {
       message.error('加载失败，请确认后端已启动且可访问 /api')
     } finally {
@@ -79,6 +80,7 @@ export default function LlmProvidersPage() {
         name: v.name.trim(),
         base_url: v.base_url.trim(),
         model_name: v.model_name.trim(),
+        provider_type: 'text',
         enabled: v.enabled,
         is_default: v.is_default,
         sort_order: v.sort_order ?? 0,

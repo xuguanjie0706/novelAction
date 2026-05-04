@@ -2,7 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
-from app.models import Chapter, ChapterIndex, ChapterVersion, MemoryChunk, QualityDebt
+from app.models import (
+    Chapter,
+    ChapterDebriefCache,
+    ChapterIndex,
+    ChapterVersion,
+    Foreshadow,
+    MemoryChunk,
+    QualityDebt,
+)
 from app.schemas import ChapterCreate, ChapterUpdate, ChapterOut, ChapterVersionOut
 
 router = APIRouter(prefix="/projects/{project_id}/chapters", tags=["chapters"])
@@ -19,7 +27,7 @@ def count_words(text: str) -> int:
 
 
 def delete_chapter_artifacts(db: Session, project_id: str, chapter_id: str) -> None:
-    """删除章节派生数据，避免重写/重建章节时读到旧记忆和旧索引。"""
+    """删除章节派生数据（记忆片段、章节索引、质检债）。删整章时由 delete_chapter 调用。"""
     db.query(MemoryChunk).filter(
         MemoryChunk.project_id == project_id,
         MemoryChunk.chapter_id == chapter_id,
@@ -32,6 +40,38 @@ def delete_chapter_artifacts(db: Session, project_id: str, chapter_id: str) -> N
         QualityDebt.project_id == project_id,
         QualityDebt.chapter_id == chapter_id,
     ).delete(synchronize_session=False)
+
+
+def clear_chapter_rewrite_derivatives(db: Session, project_id: str, chapter_id: str) -> None:
+    """
+    整章重写（replace_existing）开始前调用：清掉本章旧稿派生数据，避免与新正文、新复盘叠加矛盾。
+
+    - 记忆 / ChapterIndex / 质检债：同 delete_chapter_artifacts
+    - 自动复盘草稿缓存
+    - 在本章埋下的全局伏笔（旧稿线索）
+    - 在本章被标记「已回收」、但埋在其他章的伏笔：解除回收，改回 open，便于新稿重新对齐
+    """
+    delete_chapter_artifacts(db, project_id, chapter_id)
+    db.query(ChapterDebriefCache).filter(
+        ChapterDebriefCache.project_id == project_id,
+        ChapterDebriefCache.chapter_id == chapter_id,
+    ).delete(synchronize_session=False)
+    db.query(Foreshadow).filter(
+        Foreshadow.project_id == project_id,
+        Foreshadow.laid_chapter_id == chapter_id,
+    ).delete(synchronize_session=False)
+    for row in (
+        db.query(Foreshadow)
+        .filter(
+            Foreshadow.project_id == project_id,
+            Foreshadow.resolved_chapter_id == chapter_id,
+        )
+        .all()
+    ):
+        row.resolved_chapter_id = None
+        row.resolved_chapter_number = None
+        if row.status == "resolved":
+            row.status = "open"
 
 
 def normalize_chapter_sort_orders(db: Session, project_id: str) -> None:
@@ -50,6 +90,7 @@ def normalize_chapter_sort_orders(db: Session, project_id: str) -> None:
         db.commit()
 
 
+@router.get("", response_model=List[ChapterOut], include_in_schema=False)
 @router.get("/", response_model=List[ChapterOut])
 def list_chapters(project_id: str, db: Session = Depends(get_db)):
     normalize_chapter_sort_orders(db, project_id)
@@ -58,6 +99,7 @@ def list_chapters(project_id: str, db: Session = Depends(get_db)):
     ).order_by(Chapter.sort_order).all()
 
 
+@router.post("", response_model=ChapterOut, status_code=201, include_in_schema=False)
 @router.post("/", response_model=ChapterOut, status_code=201)
 def create_chapter(project_id: str, payload: ChapterCreate, db: Session = Depends(get_db)):
     normalize_chapter_sort_orders(db, project_id)
@@ -69,7 +111,7 @@ def create_chapter(project_id: str, payload: ChapterCreate, db: Session = Depend
     chapter = Chapter(
         project_id=project_id,
         word_count=count_words(payload.content),
-        **payload.model_dump(),
+        **payload.model_dump(exclude={"sort_order"}),
         sort_order=next_sort_order,
     )
     db.add(chapter)

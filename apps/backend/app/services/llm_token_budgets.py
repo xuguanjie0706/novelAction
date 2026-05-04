@@ -43,6 +43,14 @@ def max_tokens_coherence_check(large_context: bool) -> int:
     )
 
 
+def max_tokens_coherence_apply(large_context: bool) -> int:
+    return (
+        settings.GEMINI_COHERENCE_APPLY_MAX_TOKENS
+        if large_context
+        else settings.LOCAL_COHERENCE_APPLY_MAX_TOKENS
+    )
+
+
 def max_tokens_draft_stream(large_context: bool) -> int:
     return (
         settings.GEMINI_DRAFT_STREAM_MAX_TOKENS

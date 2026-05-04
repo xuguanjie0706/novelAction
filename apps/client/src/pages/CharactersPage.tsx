@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { Plus, Crown, User, Swords, Zap, BookOpen, Eye, Trash2, Heart, TrendingUp, FileText, Target, NotebookPen } from 'lucide-react'
-import { charactersApi } from '../api/client'
+import { charactersApi, outlineApi } from '../api/client'
 import { useAppStore } from '../store'
 import type { Character } from '../types'
 import clsx from 'clsx'
@@ -97,6 +97,27 @@ function InfoPanel({
   )
 }
 
+interface ProtagonistRealmMilestone {
+  chapter_number: number
+  chapter_title: string
+  realm_name: string
+  realm_rank: number
+  character_change: string
+  /** outline=大纲人物变化；debrief=正文复盘提交 character_updates */
+  source?: string
+}
+
+interface ProtagonistRealmTimelinePayload {
+  protagonist_display_name?: string | null
+  protagonist_anchor_names?: string[]
+  has_realm_whitelist: boolean
+  anchored: boolean
+  chapter_plans_scanned: number
+  debrief_snapshots?: number
+  milestones: ProtagonistRealmMilestone[]
+  source?: string
+}
+
 function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
   char: Character
   projectId: string
@@ -106,8 +127,27 @@ function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
   const [form, setForm] = useState<Character>({ ...char })
   const [saving, setSaving] = useState(false)
   const [detailTab, setDetailTab] = useState<DetailTab>('basic')
+  const [realmTimeline, setRealmTimeline] = useState<ProtagonistRealmTimelinePayload | null>(null)
+  const [realmTimelineLoading, setRealmTimelineLoading] = useState(false)
 
   useEffect(() => { setForm({ ...char }); setDetailTab('basic') }, [char.id])
+
+  useEffect(() => {
+    if (detailTab !== 'growth' || char.role !== 'protagonist') return
+    let cancelled = false
+    setRealmTimelineLoading(true)
+    outlineApi.protagonistRealmTimeline(projectId)
+      .then((res) => {
+        if (!cancelled) setRealmTimeline(res.data as ProtagonistRealmTimelinePayload)
+      })
+      .catch(() => {
+        if (!cancelled) setRealmTimeline(null)
+      })
+      .finally(() => {
+        if (!cancelled) setRealmTimelineLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [detailTab, char.role, char.id, projectId])
 
   const meta = ROLE_META[char.role as keyof typeof ROLE_META] ?? ROLE_META.supporting
   const statusM = STATUS_META[form.current_status] ?? STATUS_META.alive
@@ -326,6 +366,73 @@ function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
           {detailTab === 'growth' && (
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm space-y-4">
               <div className="text-sm font-semibold text-gray-700">人物弧线与成长</div>
+              {char.role === 'protagonist' && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="text-xs font-semibold text-slate-700">境界时间轴（只读）</div>
+                    <span className="text-[10px] text-slate-500 shrink-0 text-right">
+                      大纲「人物变化」+ 正文复盘 character_updates
+                      {typeof realmTimeline?.debrief_snapshots === 'number' && realmTimeline.debrief_snapshots > 0
+                        ? ` · 已存 ${realmTimeline.debrief_snapshots} 条复盘快照`
+                        : ''}
+                    </span>
+                  </div>
+                  {realmTimelineLoading && (
+                    <p className="text-xs text-slate-500">加载中…</p>
+                  )}
+                  {!realmTimelineLoading && realmTimeline
+                    && (realmTimeline.milestones?.length ?? 0) === 0
+                    && realmTimeline.chapter_plans_scanned === 0
+                    && (realmTimeline.debrief_snapshots ?? 0) === 0 && (
+                    <p className={clsx(
+                      'text-xs',
+                      realmTimeline.has_realm_whitelist ? 'text-slate-600' : 'text-amber-700',
+                    )}>
+                      {realmTimeline.has_realm_whitelist
+                        ? '尚无大纲章节计划，也未提交过带境界的主角复盘；写作保存复盘后会自动累积此处。'
+                        : '尚未配置力量体系 levels，且尚无正文复盘境界快照；配置体系或提交复盘后可在此查看。'}
+                    </p>
+                  )}
+                  {!realmTimelineLoading && realmTimeline && !realmTimeline.has_realm_whitelist
+                    && (realmTimeline.milestones?.length ?? 0) > 0 && (
+                    <p className="text-xs text-slate-600">未配置 levels 时，rank 主要依赖复盘填写或境界名子串匹配，建议补全力量体系以便与大纲对齐。</p>
+                  )}
+                  {!realmTimelineLoading && realmTimeline?.has_realm_whitelist && realmTimeline.chapter_plans_scanned > 0 && realmTimeline.milestones.length === 0 && (
+                    <p className="text-xs text-slate-600">
+                      已扫描 {realmTimeline.chapter_plans_scanned} 个章节计划，未解析到带主角归因的境界提升（请在大纲「人物变化」中写明突破/晋升等，且与主角姓名共现）。
+                    </p>
+                  )}
+                  {!realmTimelineLoading && (realmTimeline?.milestones?.length ?? 0) > 0 && (
+                    <ul className="space-y-2 max-h-56 overflow-y-auto">
+                      {realmTimeline!.milestones.map((m, i) => (
+                        <li key={`${m.chapter_number}-${m.realm_rank}-${i}`} className="text-xs border border-slate-200 rounded-md bg-white p-2.5">
+                          <div className="font-medium text-slate-800 flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span>
+                              第{m.chapter_number}章
+                              {m.chapter_title ? `《${m.chapter_title}》` : ''}
+                              <span className="text-violet-700 ml-1">→ {m.realm_name}</span>
+                              <span className="text-slate-400 font-normal ml-1">(rank {m.realm_rank})</span>
+                            </span>
+                            {(m.source === 'debrief' || m.source === 'outline') && (
+                              <span className={clsx(
+                                'text-[10px] px-1.5 py-0.5 rounded border font-medium',
+                                m.source === 'debrief'
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : 'bg-slate-100 text-slate-600 border-slate-200',
+                              )}>
+                                {m.source === 'debrief' ? '复盘' : '大纲'}
+                              </span>
+                            )}
+                          </div>
+                          {m.character_change ? (
+                            <p className="text-slate-500 mt-1 line-clamp-2">{m.character_change}</p>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
               <Field label="人物弧线（整体描述）">
                 <TArea value={form.arc ?? ''} onChange={f('arc')} rows={3} placeholder="从开始到结局，这个人物会经历怎样的转变？" />
               </Field>

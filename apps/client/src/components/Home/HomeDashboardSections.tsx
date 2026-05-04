@@ -126,16 +126,17 @@ export function QuickActionsGrid({ onAction }: { onAction: (actionId: string) =>
   )
 }
 
-export function RecentEdits({ edits, onOpen }: { edits: RecentEdit[]; onOpen: (project?: Project) => void }) {
+export function RecentEdits({ edits, onOpen, onViewAll }: { edits: RecentEdit[]; onOpen: (project?: Project) => void; onViewAll?: () => void }) {
   return (
     <section id="recent-projects" className="mt-9">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-bold text-gray-950">最近编辑</h2>
         <button
           type="button"
+          onClick={onViewAll}
           className="rounded-lg px-2 py-1 text-sm text-gray-500 transition-colors hover:bg-gray-50 hover:text-gray-900"
         >
-          查看全部
+          查看书架 →
         </button>
       </div>
 

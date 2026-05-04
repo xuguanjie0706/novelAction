@@ -7,6 +7,7 @@ import {
   Col,
   Empty,
   List,
+  Modal,
   Row,
   Select,
   Space,
@@ -22,6 +23,8 @@ import { http } from '../api/http'
 import type { LlmOverview } from '../types/llm'
 import type {
   ChapterCoherenceResult,
+  CoherenceApplyPreviewResponse,
+  CoherenceApplyRevisionPreview,
   CoherenceReportRecord,
   ModelProfile,
   QualityReport,
@@ -77,6 +80,11 @@ export default function ReadingReviewPage() {
 
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyRows, setHistoryRows] = useState<CoherenceReportRecord[]>([])
+  const [coherenceApplyModalOpen, setCoherenceApplyModalOpen] = useState(false)
+  const [coherenceApplyReportId, setCoherenceApplyReportId] = useState<string | null>(null)
+  const [coherenceApplyRevisions, setCoherenceApplyRevisions] = useState<CoherenceApplyRevisionPreview[]>([])
+  const [coherenceApplyLoadingId, setCoherenceApplyLoadingId] = useState<string | null>(null)
+  const [coherenceApplyCommitting, setCoherenceApplyCommitting] = useState(false)
   const [compareIds, setCompareIds] = useState<string[]>([])
 
   const loadProjects = useCallback(async () => {
@@ -147,6 +155,56 @@ export default function ReadingReviewPage() {
     ? selectedModelOption.replace('provider:', '')
     : undefined
   const modelProfile: ModelProfile = selectedProviderId ? 'gemini' : 'local'
+
+  const runCoherenceApplyPreview = useCallback(
+    async (row: CoherenceReportRecord) => {
+      if (!projectId) return
+      setCoherenceApplyLoadingId(row.id)
+      try {
+        const { data } = await http.post<CoherenceApplyPreviewResponse>(
+          `/api/v1/projects/${projectId}/ai/chapter-coherence-apply/preview`,
+          {
+            report_id: row.id,
+            model_profile: modelProfile,
+            llm_provider_id: selectedProviderId,
+          },
+        )
+        setCoherenceApplyReportId(data.report_id)
+        setCoherenceApplyRevisions(data.revisions ?? [])
+        setCoherenceApplyModalOpen(true)
+      } catch {
+        message.error('修订预览生成失败')
+      } finally {
+        setCoherenceApplyLoadingId(null)
+      }
+    },
+    [message, modelProfile, projectId, selectedProviderId],
+  )
+
+  const commitCoherenceApply = useCallback(async () => {
+    if (!projectId || !coherenceApplyReportId) return
+    const payload = coherenceApplyRevisions.filter((r) => !r.unchanged && r.revised_content.trim())
+    if (payload.length === 0) {
+      message.warning('预览中无可写入的修订')
+      return
+    }
+    setCoherenceApplyCommitting(true)
+    try {
+      await http.post(`/api/v1/projects/${projectId}/ai/chapter-coherence-apply/commit`, {
+        report_id: coherenceApplyReportId,
+        revisions: payload.map((r) => ({ chapter_id: r.chapter_id, revised_content: r.revised_content })),
+      })
+      message.success('已写入正文')
+      setCoherenceApplyModalOpen(false)
+      setCoherenceApplyRevisions([])
+      setCoherenceApplyReportId(null)
+      await loadChapters(projectId)
+    } catch {
+      message.error('写入失败')
+    } finally {
+      setCoherenceApplyCommitting(false)
+    }
+  }, [coherenceApplyReportId, coherenceApplyRevisions, loadChapters, message, projectId])
 
   useEffect(() => {
     if (!projectId) return
@@ -675,6 +733,20 @@ export default function ReadingReviewPage() {
                   expandable={{
                     expandedRowRender: (row) => (
                       <Space direction="vertical" style={{ width: '100%' }}>
+                        <Space wrap>
+                          <Button
+                            type="primary"
+                            size="small"
+                            loading={coherenceApplyLoadingId === row.id}
+                            disabled={!!row.result?.error}
+                            onClick={() => void runCoherenceApplyPreview(row)}
+                          >
+                            根据本评测改正文
+                          </Button>
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            按评测结论做最小幅度修改并预览，确认后再写入数据库（自动打修订前快照）。
+                          </Typography.Text>
+                        </Space>
                         <Typography.Text type="secondary">{row.result?.summary || '暂无总结'}</Typography.Text>
                         <List
                           size="small"
@@ -693,6 +765,76 @@ export default function ReadingReviewPage() {
           },
         ]}
       />
+      <Modal
+        title="连贯性修订预览"
+        open={coherenceApplyModalOpen}
+        onCancel={() => {
+          setCoherenceApplyModalOpen(false)
+          setCoherenceApplyRevisions([])
+          setCoherenceApplyReportId(null)
+        }}
+        width={720}
+        footer={[
+          <Button
+            key="cancel"
+            onClick={() => {
+              setCoherenceApplyModalOpen(false)
+              setCoherenceApplyRevisions([])
+              setCoherenceApplyReportId(null)
+            }}
+          >
+            取消
+          </Button>,
+          <Button
+            key="ok"
+            type="primary"
+            loading={coherenceApplyCommitting}
+            disabled={coherenceApplyRevisions.every((r) => r.unchanged || !r.revised_content.trim())}
+            onClick={() => void commitCoherenceApply()}
+          >
+            写入数据库
+          </Button>,
+        ]}
+      >
+        <List
+          size="small"
+          dataSource={coherenceApplyRevisions}
+          locale={{ emptyText: '暂无预览数据' }}
+          renderItem={(item) => (
+            <List.Item>
+              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                <Space wrap>
+                  <Typography.Text strong>{item.chapter_title || item.chapter_id}</Typography.Text>
+                  <Tag color={item.unchanged ? 'default' : 'orange'}>{item.unchanged ? '未改动' : '有修订'}</Tag>
+                </Space>
+                {item.change_note ? (
+                  <Typography.Text type="secondary">{item.change_note}</Typography.Text>
+                ) : null}
+                {!item.unchanged ? (
+                  <Row gutter={8}>
+                    <Col span={12}>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        修前摘要
+                      </Typography.Text>
+                      <div style={{ fontSize: 12, maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+                        {item.previous_plain_preview}
+                      </div>
+                    </Col>
+                    <Col span={12}>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        修后摘要
+                      </Typography.Text>
+                      <div style={{ fontSize: 12, maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+                        {item.revised_plain_preview}
+                      </div>
+                    </Col>
+                  </Row>
+                ) : null}
+              </Space>
+            </List.Item>
+          )}
+        />
+      </Modal>
     </Space>
   )
 }

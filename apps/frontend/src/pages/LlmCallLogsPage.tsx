@@ -26,6 +26,7 @@ export default function LlmCallLogsPage() {
     const m: Record<string, string> = {
       quality_check: '章节质检：检查剧情、人物一致性与设定冲突',
       chapter_coherence_check: '多章节连贯性检测：检查标题匹配与章节衔接',
+      chapter_coherence_apply: '连贯性评测修订：按评测结论最小幅度改正文',
       suggest_stream: 'AI 写作建议：流式生成优化建议',
       extract_memory: '记忆提取：从章节抽取可复用记忆点',
       expand_outline: '大纲展开：把卷/节点展开成章节计划',

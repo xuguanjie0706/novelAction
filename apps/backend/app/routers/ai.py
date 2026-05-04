@@ -15,6 +15,7 @@ from app.database import get_db, SessionLocal
 from app.services.embedding_service import embed_chunk_async
 from app.models import (
     Chapter,
+    ChapterVersion,
     MemoryChunk,
     Project,
     WorldSetting,
@@ -1210,6 +1211,22 @@ class SaveChapterCoherenceReportRequest(BaseModel):
     result: dict
 
 
+class ChapterCoherenceApplyPreviewRequest(BaseModel):
+    report_id: UUID
+    model_profile: Literal["local", "gemini"] = "local"
+    llm_provider_id: Optional[UUID] = None
+
+
+class CoherenceApplyRevisionItem(BaseModel):
+    chapter_id: UUID
+    revised_content: str
+
+
+class ChapterCoherenceApplyCommitRequest(BaseModel):
+    report_id: UUID
+    revisions: List[CoherenceApplyRevisionItem]
+
+
 # ── 质检 ──────────────────────────────────────────────
 @router.post("/quality-check")
 async def quality_check(
@@ -1588,6 +1605,171 @@ def list_chapter_coherence_reports(
     ]
 
 
+_MAX_COHERENCE_APPLY_CHAPTERS = 12
+
+
+@router.post("/chapter-coherence-apply/preview")
+async def chapter_coherence_apply_preview(
+    project_id: str,
+    req: ChapterCoherenceApplyPreviewRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    根据已保存的连贯性评测记录，调用模型生成「最小幅度」正文修订预览（不写库）。
+    远程 Gemini 建议一次处理多章；本地模型按章顺序调用。
+    """
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    report = (
+        db.query(ChapterCoherenceReport)
+        .filter(
+            ChapterCoherenceReport.id == req.report_id,
+            ChapterCoherenceReport.project_id == project_id,
+        )
+        .first()
+    )
+    if not report:
+        raise HTTPException(404, "评测记录不存在或不属于当前项目")
+
+    result = report.result if isinstance(report.result, dict) else {}
+    if result.get("error"):
+        raise HTTPException(400, "该评测记录解析失败，无法用于修订正文")
+
+    raw_ids = report.selected_chapter_ids or []
+    if len(raw_ids) < 2:
+        raise HTTPException(400, "该评测记录章节数不足")
+    if len(raw_ids) > _MAX_COHERENCE_APPLY_CHAPTERS:
+        raise HTTPException(
+            400,
+            f"一次最多修订 {_MAX_COHERENCE_APPLY_CHAPTERS} 章，请拆分评测记录后再试",
+        )
+
+    chapters = (
+        db.query(Chapter)
+        .filter(Chapter.project_id == project_id, Chapter.id.in_(raw_ids))
+        .all()
+    )
+    if len(chapters) != len(set(raw_ids)):
+        raise HTTPException(400, "记录中的章节已不存在或不属于本项目，无法修订")
+
+    order = {str(cid): i for i, cid in enumerate(raw_ids)}
+    chapters = sorted(chapters, key=lambda c: order.get(str(c.id), 9999))
+
+    payload = [
+        {
+            "id": str(c.id),
+            "sort_order": c.sort_order,
+            "title": c.title,
+            "content": c.content or "",
+        }
+        for c in chapters
+    ]
+
+    svc = AIService(
+        "gemini" if req.model_profile == "gemini" else "default",
+        db=db,
+        llm_provider_id=req.llm_provider_id,
+    )
+    try:
+        rows = await svc.apply_coherence_revisions(
+            project_title=project.title,
+            coherence=result,
+            chapters=payload,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(503, str(e)) from e
+
+    out = []
+    for row in rows:
+        cid = row.get("chapter_id")
+        ch = next((c for c in chapters if str(c.id) == str(cid)), None)
+        title = ch.title if ch else ""
+        unchanged = bool(row.get("unchanged"))
+        revised = (row.get("revised_content") or "").strip()
+        orig = (ch.content or "") if ch else ""
+        out.append(
+            {
+                "chapter_id": str(cid),
+                "chapter_title": title,
+                "unchanged": unchanged or not revised,
+                "change_note": row.get("change_note") or "",
+                "revised_content": "" if unchanged or not revised else revised,
+                "previous_plain_preview": _plain_text(orig)[:320],
+                "revised_plain_preview": _plain_text(revised if revised else orig)[:320],
+            }
+        )
+
+    return {
+        "report_id": str(report.id),
+        "revisions": out,
+    }
+
+
+@router.post("/chapter-coherence-apply/commit")
+def chapter_coherence_apply_commit(
+    project_id: str,
+    req: ChapterCoherenceApplyCommitRequest,
+    db: Session = Depends(get_db),
+):
+    """将预览阶段返回的修订写入章节正文（每条须有非空 revised_content）。"""
+    from app.routers.chapters import count_words, normalize_chapter_sort_orders
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    report = (
+        db.query(ChapterCoherenceReport)
+        .filter(
+            ChapterCoherenceReport.id == req.report_id,
+            ChapterCoherenceReport.project_id == project_id,
+        )
+        .first()
+    )
+    if not report:
+        raise HTTPException(404, "评测记录不存在或不属于当前项目")
+
+    allowed = {str(x) for x in (report.selected_chapter_ids or [])}
+    applied = []
+    for item in req.revisions:
+        cid = str(item.chapter_id)
+        if cid not in allowed:
+            raise HTTPException(400, f"章节 {cid} 不在该评测记录所选范围内")
+        text = (item.revised_content or "").strip()
+        if not text:
+            continue
+        chapter = (
+            db.query(Chapter)
+            .filter(Chapter.id == cid, Chapter.project_id == project_id)
+            .first()
+        )
+        if not chapter:
+            raise HTTPException(404, f"章节不存在: {cid}")
+        if (chapter.content or "").strip() == text:
+            applied.append({"chapter_id": cid, "skipped": True, "reason": "与当前正文相同"})
+            continue
+
+        snap = ChapterVersion(
+            chapter_id=chapter.id,
+            content=chapter.content,
+            word_count=chapter.word_count,
+            note="连贯性评测修订前快照",
+            is_auto=True,
+        )
+        db.add(snap)
+        chapter.content = text
+        chapter.word_count = count_words(text)
+        applied.append({"chapter_id": cid, "skipped": False, "word_count": chapter.word_count})
+
+    db.commit()
+    normalize_chapter_sort_orders(db, project_id)
+    return {"report_id": str(req.report_id), "applied": applied}
+
+
 # ── AI 对话（持久化 + 上下文感知）──────────────────────
 def _chat_context_label(context_type: str, chapter: Optional[Chapter] = None) -> str:
     if context_type == "outline":
@@ -1861,6 +2043,13 @@ async def draft_assist_stream(
     if not chapter:
         raise HTTPException(404, "Chapter not found")
 
+    if req.replace_existing:
+        from app.routers.chapters import clear_chapter_rewrite_derivatives
+
+        clear_chapter_rewrite_derivatives(db, project_id, req.chapter_id)
+        db.commit()
+        db.refresh(chapter)
+
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "Project not found")
@@ -2022,6 +2211,9 @@ async def draft_assist_stream(
         outline_node=outline_node,
         large_context=large_context,
     )
+    plot_dossier_context = _build_plot_dossier_context(
+        db, project_id, chapter, large_context=large_context
+    )
     quality_debt_context = _build_quality_debt_context(
         _pending_quality_debts_for_chapter(
             db=db,
@@ -2094,6 +2286,7 @@ async def draft_assist_stream(
                 chapter_index_context=chapter_index_context,
                 quality_debt_context=quality_debt_context,
                 writing_brief_context=writing_brief_context,
+                plot_dossier_context=plot_dossier_context,
                 word_target=int(
                     (outline_node.expected_words if outline_node and outline_node.expected_words else None)
                     or (outline_node.extra or {}).get("word_estimate")
@@ -2607,6 +2800,33 @@ def chapter_debrief(
             char.current_realm = cu.current_realm.strip()[:100]
         if cu.realm_rank is not None:
             char.realm_rank = cu.realm_rank
+
+        # 主角境界快照供「境界时间轴」只读聚合（提交后 debrief 缓存会删除，故落 extra）
+        if getattr(char, "role", None) == "protagonist" and (
+            cu.current_realm is not None or cu.realm_rank is not None
+        ):
+            realm_label = (
+                (cu.current_realm.strip()[:100] if isinstance(cu.current_realm, str) else "")
+                or (char.current_realm or "").strip()[:100]
+            )
+            rank_snap = cu.realm_rank if cu.realm_rank is not None else char.realm_rank
+            if realm_label or rank_snap is not None:
+                chapter_num = display_chapter_number(chapter.title, chapter.sort_order)
+                extra = dict(char.extra) if isinstance(char.extra, dict) else {}
+                hist = [h for h in (extra.get("debrief_realm_milestones") or []) if isinstance(h, dict)]
+                hist = [h for h in hist if int(h.get("chapter_number") or -1) != chapter_num]
+                hist.append(
+                    {
+                        "chapter_number": chapter_num,
+                        "chapter_title": (chapter.title or "")[:300],
+                        "realm_name": realm_label,
+                        "realm_rank": rank_snap,
+                        "source": "chapter_debrief",
+                    }
+                )
+                hist.sort(key=lambda h: int(h.get("chapter_number") or 0))
+                extra["debrief_realm_milestones"] = hist
+                char.extra = extra
         if cu.current_location is not None:
             char.current_location = cu.current_location.strip()[:200]
         if cu.current_status is not None:

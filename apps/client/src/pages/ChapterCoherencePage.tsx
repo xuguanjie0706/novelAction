@@ -36,6 +36,16 @@ interface CoherenceReportHistoryItem {
   created_at: string
 }
 
+interface CoherenceApplyRevisionRow {
+  chapter_id: string
+  chapter_title: string
+  unchanged: boolean
+  change_note: string
+  revised_content: string
+  previous_plain_preview: string
+  revised_plain_preview: string
+}
+
 export default function ChapterCoherencePage() {
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedProjectId, setSelectedProjectId] = useState('')
@@ -49,6 +59,12 @@ export default function ChapterCoherencePage() {
   const [report, setReport] = useState<CoherenceReport | null>(null)
   const [history, setHistory] = useState<CoherenceReportHistoryItem[]>([])
   const [loadingHistory, setLoadingHistory] = useState(false)
+
+  const [applyDialogOpen, setApplyDialogOpen] = useState(false)
+  const [applyReportId, setApplyReportId] = useState<string | null>(null)
+  const [applyPreviewRows, setApplyPreviewRows] = useState<CoherenceApplyRevisionRow[]>([])
+  const [applyPreviewLoading, setApplyPreviewLoading] = useState(false)
+  const [applyCommitLoading, setApplyCommitLoading] = useState(false)
 
   useEffect(() => {
     setLoadingProjects(true)
@@ -152,6 +168,68 @@ export default function ChapterCoherencePage() {
     await persistReport(report)
   }
 
+  const openApplyPreview = async (reportId: string) => {
+    if (!selectedProjectId) return toast.error('请先选择小说')
+    setApplyPreviewLoading(true)
+    setApplyReportId(reportId)
+    try {
+      const res = await aiApi.chapterCoherenceApplyPreview(selectedProjectId, {
+        report_id: reportId,
+        model_profile: modelProfile,
+      })
+      const rows = (res.data as { revisions?: CoherenceApplyRevisionRow[] }).revisions ?? []
+      setApplyPreviewRows(rows)
+      setApplyDialogOpen(true)
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+      const msg =
+        typeof detail === 'string'
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((d: { msg?: string }) => d?.msg).filter(Boolean).join('；') || '修订预览失败'
+            : '修订预览失败'
+      toast.error(msg)
+      setApplyReportId(null)
+    } finally {
+      setApplyPreviewLoading(false)
+    }
+  }
+
+  const commitApplyRevisions = async () => {
+    if (!selectedProjectId || !applyReportId) return
+    const payload = applyPreviewRows.filter(r => !r.unchanged && r.revised_content.trim())
+    if (payload.length === 0) {
+      toast.error('预览中无可写入的修订（可能模型判定均无需改动）')
+      return
+    }
+    if (
+      !window.confirm(
+        `将把 ${payload.length} 章的修订写入正文，并在每章自动保存一条修订前快照。是否继续？`
+      )
+    ) {
+      return
+    }
+    setApplyCommitLoading(true)
+    try {
+      await aiApi.chapterCoherenceApplyCommit(selectedProjectId, {
+        report_id: applyReportId,
+        revisions: payload.map(r => ({ chapter_id: r.chapter_id, revised_content: r.revised_content })),
+      })
+      toast.success('已写入正文')
+      setApplyDialogOpen(false)
+      setApplyPreviewRows([])
+      setApplyReportId(null)
+      const chRes = await chaptersApi.list(selectedProjectId)
+      setChapters(chRes.data as Chapter[])
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+      const msg = typeof detail === 'string' ? detail : '写入失败'
+      toast.error(msg)
+    } finally {
+      setApplyCommitLoading(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#f8fafc] px-5 py-6 sm:px-8">
       <div className="mx-auto max-w-6xl space-y-5">
@@ -202,6 +280,9 @@ export default function ChapterCoherencePage() {
                 <option value="gemini">远程模型（Gemini）</option>
               </select>
             </div>
+            <p className="mt-2 text-xs leading-relaxed text-gray-500">
+              根据历史评测修订多章正文时，章节较多建议选「远程模型」一次批量处理；本地模型将逐章调用。
+            </p>
 
             <button
               type="button"
@@ -337,29 +418,118 @@ export default function ChapterCoherencePage() {
               )}
               <div className="space-y-2">
                 {history.map(item => (
-                  <button
+                  <div
                     key={item.id}
-                    type="button"
-                    onClick={() => setReport(item.result)}
-                    className="w-full rounded-lg border border-gray-100 px-3 py-2 text-left hover:bg-gray-50"
+                    className="flex gap-2 rounded-lg border border-gray-100 p-2 hover:bg-gray-50"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="truncate text-sm font-medium text-gray-800">{item.name}</div>
-                      <div className="shrink-0 text-xs text-gray-500">
-                        {new Date(item.created_at).toLocaleString('zh-CN')}
+                    <button
+                      type="button"
+                      onClick={() => setReport(item.result)}
+                      className="min-w-0 flex-1 rounded-md px-2 py-1 text-left"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="truncate text-sm font-medium text-gray-800">{item.name}</div>
+                        <div className="shrink-0 text-xs text-gray-500">
+                          {new Date(item.created_at).toLocaleString('zh-CN')}
+                        </div>
                       </div>
-                    </div>
-                    <div className="mt-1 text-xs text-gray-500">
-                      {item.model_profile === 'gemini' ? '远程模型' : '本地模型'} ·
-                      {' '} {item.selected_chapter_ids.length} 章 ·
-                      {' '} 综合分 {item.result?.overall_score ?? '-'}
-                    </div>
-                  </button>
+                      <div className="mt-1 text-xs text-gray-500">
+                        {item.model_profile === 'gemini' ? '远程模型' : '本地模型'} ·
+                        {' '}
+                        {item.selected_chapter_ids.length} 章 · 综合分 {item.result?.overall_score ?? '-'}
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={applyPreviewLoading || !!item.result?.error}
+                      title={item.result?.error ? '该记录解析失败，无法用于修订' : '按本评测结论最小幅度改正文'}
+                      onClick={() => void openApplyPreview(item.id)}
+                      className="shrink-0 self-center rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {applyPreviewLoading && applyReportId === item.id ? '生成中…' : '按评测改正文'}
+                    </button>
+                  </div>
                 ))}
               </div>
             </div>
           </div>
         </section>
+
+        {applyDialogOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div
+              className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="coherence-apply-title"
+            >
+              <div className="border-b border-gray-100 px-4 py-3">
+                <h2 id="coherence-apply-title" className="text-base font-semibold text-gray-900">
+                  根据评测修订正文（预览）
+                </h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  仅应用模型在预览中给出的修订稿，不会整章重写；写入前会为每章自动保存修订前快照。
+                </p>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+                <div className="space-y-3">
+                  {applyPreviewRows.map(row => (
+                    <div key={row.chapter_id} className="rounded-lg border border-gray-100 p-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-medium text-gray-800">{row.chapter_title || row.chapter_id}</span>
+                        {row.unchanged ? (
+                          <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600">未改动</span>
+                        ) : (
+                          <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-900">有修订</span>
+                        )}
+                      </div>
+                      {row.change_note && (
+                        <p className="mt-2 text-xs text-gray-600">{row.change_note}</p>
+                      )}
+                      {!row.unchanged && (
+                        <div className="mt-2 grid gap-2 text-xs text-gray-600 sm:grid-cols-2">
+                          <div>
+                            <div className="font-medium text-gray-700">修前摘要</div>
+                            <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-2">
+                              {row.previous_plain_preview}
+                            </pre>
+                          </div>
+                          <div>
+                            <div className="font-medium text-gray-700">修后摘要</div>
+                            <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded bg-amber-50/50 p-2">
+                              {row.revised_plain_preview}
+                            </pre>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 border-t border-gray-100 px-4 py-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setApplyDialogOpen(false)
+                    setApplyPreviewRows([])
+                    setApplyReportId(null)
+                  }}
+                  className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  disabled={applyCommitLoading || applyPreviewRows.every(r => r.unchanged || !r.revised_content.trim())}
+                  onClick={() => void commitApplyRevisions()}
+                  className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 disabled:cursor-not-allowed disabled:bg-gray-300"
+                >
+                  {applyCommitLoading ? '写入中…' : '写入数据库'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

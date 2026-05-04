@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AdminLayout from './layouts/AdminLayout'
 import LlmCallLogsPage from './pages/LlmCallLogsPage'
 import LlmProvidersPage from './pages/LlmProvidersPage'
+import ImageProvidersPage from './pages/ImageProvidersPage'
 import NovelManagementPage from './pages/NovelManagementPage'
 import ReadingReviewPage from './pages/ReadingReviewPage'
 
@@ -17,6 +18,7 @@ export default function App() {
               <Route index element={<Navigate to="/novels" replace />} />
               <Route path="novels" element={<NovelManagementPage />} />
               <Route path="llm" element={<LlmProvidersPage />} />
+              <Route path="image-providers" element={<ImageProvidersPage />} />
               <Route path="llm-calls" element={<LlmCallLogsPage />} />
               <Route path="reading-review" element={<ReadingReviewPage />} />
             </Route>

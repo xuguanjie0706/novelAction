@@ -13,6 +13,7 @@ apps/client/.env
 apps/backend/.venv/
 apps/backend/__pycache__/
 apps/backend/**/*.pyc
+apps/backend/data/covers/*.webp
 
 # Node（任意路径下的依赖目录，勿用仅根目录的 /node_modules/）
 node_modules/

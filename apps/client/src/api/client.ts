@@ -69,6 +69,34 @@ export const projectsApi = {
   delete: (id: string) => api.delete(`/projects/${id}`),
 }
 
+// ── Cover Generation ──────────────────────────────────
+export const coverApi = {
+  /** 获取所有已启用的图片类提供者（provider_type='image'） */
+  imageProviders: () => api.get('/cover/image-providers'),
+  /** 调用图片模型生成封面；默认返回压缩落盘的 cover_url */
+  generate: (projectId: string, data: {
+    llm_provider_id: string
+    prompt: string
+    size?: string
+    quality?: string
+    store_compressed?: boolean
+  }) => api.post(`/projects/${projectId}/cover/generate`, data),
+  /** multipart：字段名 file，服务端压缩为 WebP 落盘 */
+  upload: (projectId: string, file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return api.post(`/projects/${projectId}/cover/upload`, fd, {
+      transformRequest: [
+        (data, headers) => {
+          const h = headers as Record<string, unknown> | undefined
+          if (h && typeof h === 'object') delete h['Content-Type']
+          return data
+        },
+      ],
+    })
+  },
+}
+
 // ── World Settings ────────────────────────────────────
 export const settingsApi = {
   list: (pid: string) => api.get(`/projects/${pid}/settings/`),
@@ -157,6 +185,9 @@ export const qualityDebtsApi = {
 // ── Outline ───────────────────────────────────────────
 export const outlineApi = {
   getTree: (pid: string) => api.get(`/projects/${pid}/outline/`),
+  /** 只读：从大纲章节计划「人物变化」聚合主角境界新高节点 */
+  protagonistRealmTimeline: (pid: string) =>
+    api.get(`/projects/${pid}/outline/protagonist-realm-timeline`),
   create: (pid: string, data: any) => api.post(`/projects/${pid}/outline/`, data),
   update: (pid: string, id: string, data: any) => api.patch(`/projects/${pid}/outline/${id}`, data),
   delete: (pid: string, id: string) => api.delete(`/projects/${pid}/outline/${id}`),
@@ -296,4 +327,21 @@ export const aiApi = {
 
   listChapterCoherenceReports: (pid: string, limit = 20) =>
     api.get(`/projects/${pid}/ai/chapter-coherence-reports?limit=${limit}`),
+
+  chapterCoherenceApplyPreview: (
+    pid: string,
+    data: {
+      report_id: string
+      model_profile?: 'local' | 'gemini'
+      llm_provider_id?: string
+    }
+  ) => api.post(`/projects/${pid}/ai/chapter-coherence-apply/preview`, data),
+
+  chapterCoherenceApplyCommit: (
+    pid: string,
+    data: {
+      report_id: string
+      revisions: Array<{ chapter_id: string; revised_content: string }>
+    }
+  ) => api.post(`/projects/${pid}/ai/chapter-coherence-apply/commit`, data),
 }

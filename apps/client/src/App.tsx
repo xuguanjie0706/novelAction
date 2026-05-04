@@ -2,6 +2,8 @@ import React, { useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import ProjectsPage from './pages/ProjectsPage'
+import BookshelfPage from './pages/BookshelfPage'
+import ProjectDetailPage from './pages/ProjectDetailPage'
 import AppLayout from './components/Layout/AppLayout'
 import ProjectCachedViews from './pages/ProjectCachedViews'
 import ChapterCoherencePage from './pages/ChapterCoherencePage'
@@ -28,6 +30,8 @@ export default function App() {
       <Toaster position="top-right" toastOptions={{ duration: 3000 }} />
       <Routes>
         <Route path="/" element={<ProjectsPage />} />
+        <Route path="/bookshelf" element={<BookshelfPage />} />
+        <Route path="/bookshelf/:projectId" element={<ProjectDetailPage />} />
         <Route path="/coherence-check" element={<ChapterCoherencePage />} />
         <Route path="/project/:projectId" element={<><ProjectLoader /><AppLayout /></>}>
           <Route index element={<Navigate to="outline" replace />} />

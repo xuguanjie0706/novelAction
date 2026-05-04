@@ -13,6 +13,37 @@ import type {
 } from '../types/review'
 import { OutlineQualityManagementSection } from '../components/OutlinePlanQualityPanel'
 
+/** 复盘记忆类型（API 英文枚举 → 展示文案） */
+const MEMORY_TYPE_LABELS: Record<string, string> = {
+  event: '事件',
+  character_state: '人物状态',
+  foreshadow: '伏笔',
+  setting: '设定',
+  conflict: '冲突',
+}
+
+/** 章节质检维度键名 → 中文（与 ReadingReviewPage 一致） */
+const QUALITY_DIMENSION_LABELS: Record<string, string> = {
+  plot: '情节推进',
+  character: '人物一致',
+  setting_consistency: '设定一致',
+  pacing: '节奏控制',
+  hooks: '悬念钩子',
+  outline_alignment: '大纲匹配度',
+}
+
+const CHAPTER_STATUS_LABELS: Record<string, string> = {
+  published: '已发布',
+  draft: '草稿',
+  archived: '已归档',
+}
+
+const FORESHADOW_STATUS_LABELS: Record<string, string> = {
+  open: '待回收',
+  resolved: '已回收',
+  dropped: '已废弃',
+}
+
 function htmlToPlainText(input: string | undefined) {
   if (!input) return ''
   return input
@@ -340,7 +371,9 @@ export default function NovelManagementPage() {
                 <Space wrap>
                   <Tag color="blue">字数：{selectedChapter.word_count ?? chapterText.length}</Tag>
                   <Tag color={selectedChapter.status === 'published' ? 'green' : 'default'}>
-                    状态：{selectedChapter.status || 'draft'}
+                    状态：
+                    {CHAPTER_STATUS_LABELS[selectedChapter.status || 'draft'] ??
+                      (selectedChapter.status || '草稿')}
                   </Tag>
                   <Tag>
                     更新时间：{selectedChapter.updated_at ? new Date(selectedChapter.updated_at).toLocaleString() : '未知'}
@@ -353,7 +386,7 @@ export default function NovelManagementPage() {
               <Row gutter={16} style={{ flex: 1, minHeight: 0 }}>
                 <Col span={12} style={{ minHeight: 0 }}>
                   <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                    <Card loading={chapterDetailLoading} title="复盘记录（Memory）" bodyStyle={{ maxHeight: 220, overflowY: 'auto' }}>
+                    <Card loading={chapterDetailLoading} title="复盘记录" bodyStyle={{ maxHeight: 220, overflowY: 'auto' }}>
                       {chapterMemories.length === 0 ? (
                         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无复盘记录" />
                       ) : (
@@ -364,7 +397,9 @@ export default function NovelManagementPage() {
                             <List.Item>
                               <Space direction="vertical" size={2} style={{ width: '100%' }}>
                                 <Space>
-                                  <Tag color="purple">{item.memory_type}</Tag>
+                                  <Tag color="purple">
+                                    {MEMORY_TYPE_LABELS[item.memory_type] ?? item.memory_type}
+                                  </Tag>
                                   <Typography.Text strong>{item.title || '未命名复盘'}</Typography.Text>
                                 </Space>
                                 <Typography.Text type="secondary">{item.content}</Typography.Text>
@@ -383,7 +418,7 @@ export default function NovelManagementPage() {
                           <Space wrap>
                             {Object.entries(selectedChapterQuality.dimensions || {}).map(([key, dim]) => (
                               <Tag key={key} color={dim.status === 'fail' ? 'red' : dim.status === 'warning' ? 'orange' : 'blue'}>
-                                {key}: {dim.score}
+                                {QUALITY_DIMENSION_LABELS[key] ?? key}：{dim.score}
                               </Tag>
                             ))}
                           </Space>
@@ -395,7 +430,7 @@ export default function NovelManagementPage() {
                 </Col>
                 <Col span={12} style={{ minHeight: 0 }}>
                   <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                    <Card loading={chapterDetailLoading} title="情节档案（Chapter Index）" bodyStyle={{ maxHeight: 220, overflowY: 'auto' }}>
+                    <Card loading={chapterDetailLoading} title="情节档案" bodyStyle={{ maxHeight: 220, overflowY: 'auto' }}>
                       {!chapterIndex ? (
                         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无情节档案" />
                       ) : (
@@ -428,7 +463,7 @@ export default function NovelManagementPage() {
                                 <Space direction="vertical" size={2} style={{ width: '100%' }}>
                                   <Space>
                                     <Tag color={phase === '埋设' ? 'blue' : 'green'}>{phase}</Tag>
-                                    <Tag>{item.status}</Tag>
+                                    <Tag>{FORESHADOW_STATUS_LABELS[item.status] ?? item.status}</Tag>
                                     <Typography.Text strong>{item.title}</Typography.Text>
                                   </Space>
                                   <Typography.Text type="secondary">{item.description || '—'}</Typography.Text>

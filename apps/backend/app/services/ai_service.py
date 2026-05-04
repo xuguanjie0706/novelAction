@@ -16,6 +16,7 @@ from app.services.llm_config import normalize_openai_base_url, resolve_gemini_co
 from app.services.llm_token_budgets import (
     max_tokens_auto_debrief,
     max_tokens_chapter_quality_check,
+    max_tokens_coherence_apply,
     max_tokens_coherence_check,
     max_tokens_draft_stream,
     max_tokens_expand_outline,
@@ -374,6 +375,196 @@ class AIService:
                 "raw_response": response,
             }
 
+    def _slim_coherence_for_apply(self, coherence: dict) -> dict:
+        keys = (
+            "title_match_score",
+            "continuity_score",
+            "overall_score",
+            "chapter_evaluations",
+            "cross_chapter_issues",
+            "suggestions",
+            "summary",
+        )
+        out = {k: coherence.get(k) for k in keys if k in coherence}
+        return out if isinstance(coherence, dict) else {}
+
+    def _parse_coherence_apply_json(self, response: str) -> dict:
+        text = (response or "").strip()
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        if "```" in text:
+            fence = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
+            if fence:
+                text = fence.group(1).strip()
+        start = text.find("{")
+        if start != -1:
+            text = text[start:]
+        return json.loads(text)
+
+    async def apply_coherence_revisions(
+        self,
+        *,
+        project_title: str,
+        coherence: dict,
+        chapters: List[dict],
+    ) -> List[dict]:
+        """
+        根据连贯性评测结论，对所选章节正文做最小幅度修订（非整章重写）。
+        Gemini：一次批量；本地：逐章调用以控制上下文。
+        """
+        if not chapters:
+            return []
+
+        large = self._large_context_enabled()
+        slim = self._slim_coherence_for_apply(coherence or {})
+        coherence_json = json.dumps(slim, ensure_ascii=False)
+        coherence_json = self._clip_context(coherence_json, 10000, 56000)
+
+        system = (
+            "你是资深网文编辑，只根据给定的「连贯性评测」结论修订正文。"
+            "必须严格返回 JSON，不要输出任何 JSON 以外的文字。"
+        )
+
+        if large:
+            blocks = []
+            for idx, ch in enumerate(chapters, start=1):
+                cid = str(ch.get("id", ""))
+                title = ch.get("title") or "未命名"
+                body = ch.get("content") or ""
+                body = self._clip_context(body, 16000, 48000)
+                blocks.append(
+                    f"### 第{idx}章\n章节ID={cid}\n标题：{title}\n正文：\n{body if body else '（空）'}"
+                )
+            joined = "\n\n".join(blocks)
+            prompt = f"""小说：{project_title}
+
+【连贯性评测结果】（JSON）
+{coherence_json}
+
+【待处理章节正文】（按顺序，与评测所选章节一致）
+{joined}
+
+任务：
+1. 仅针对评测中的跨章问题、章节点评、修改建议做**最小必要**改动；禁止更换主线、禁止整章重写。
+2. 未指出的问题一律不动；能不改的句子保持原样（含原有 HTML 标签结构；若原文无标签则保持纯文本）。
+3. 输出 JSON，结构如下（chapter_revisions 条数与顺序必须与输入章节一致）：
+{{
+  "chapter_revisions": [
+    {{
+      "chapter_id": "与输入完全一致",
+      "unchanged": true,
+      "revised_content": "",
+      "change_note": "未改动"
+    }}
+  ]
+}}
+若某章需要修改：unchanged 为 false，revised_content 为该章**完整**修后正文；若无需修改：unchanged 为 true 且 revised_content 为空字符串。"""
+
+            response = await self._call_ai(
+                system,
+                prompt,
+                max_tokens=max_tokens_coherence_apply(True),
+                context={"operation": "chapter_coherence_apply"},
+            )
+            try:
+                data = self._parse_coherence_apply_json(response)
+            except Exception:
+                raise ValueError("模型返回的修订 JSON 无法解析") from None
+            rows = data.get("chapter_revisions") or data.get("revisions")
+            if not isinstance(rows, list):
+                raise ValueError("修订结果缺少 chapter_revisions 数组")
+            by_id = {str(r.get("chapter_id", "")): r for r in rows if isinstance(r, dict)}
+            merged: List[dict] = []
+            for ch in chapters:
+                cid = str(ch.get("id", ""))
+                row = by_id.get(cid) or {}
+                unchanged = bool(row.get("unchanged", True))
+                revised = (row.get("revised_content") or "").strip()
+                if not unchanged and not revised:
+                    unchanged = True
+                note = str(row.get("change_note") or "").strip()[:200]
+                orig = ch.get("content") or ""
+                if unchanged or not revised:
+                    merged.append(
+                        {
+                            "chapter_id": cid,
+                            "unchanged": True,
+                            "revised_content": "",
+                            "change_note": note or "未改动",
+                        }
+                    )
+                else:
+                    merged.append(
+                        {
+                            "chapter_id": cid,
+                            "unchanged": False,
+                            "revised_content": revised,
+                            "change_note": note or "已修订",
+                        }
+                    )
+            return merged
+
+        merged_seq: List[dict] = []
+        for i, ch in enumerate(chapters):
+            cid = str(ch.get("id", ""))
+            title = ch.get("title") or "未命名"
+            body = ch.get("content") or ""
+            prev_plain = self._plain_text(chapters[i - 1].get("content")) if i > 0 else ""
+            next_plain = self._plain_text(chapters[i + 1].get("content")) if i + 1 < len(chapters) else ""
+            prev_tail = self._clip_context(prev_plain[-1200:], 1200, 1200, from_end=True) if prev_plain else ""
+            next_head = self._clip_context(next_plain[:800], 800, 800) if next_plain else ""
+
+            prompt = f"""小说：{project_title}
+
+【连贯性评测结果】（JSON）
+{coherence_json}
+
+【相邻上下文（纯文本摘录，仅供衔接判断）】
+上一章结尾：{prev_tail or "（无）"}
+下一章开头：{next_head or "（无）"}
+
+【当前待修订章节】
+章节ID：{cid}
+标题：{title}
+正文（请保持原有 HTML/标签结构；若无标签则保持纯文本）：
+{self._clip_context(body, 10000, 22000)}
+
+任务：只根据评测结论修订**本章节**；禁止整章重写；未涉及处保持原文。
+返回 JSON：
+{{
+  "chapter_id": "{cid}",
+  "unchanged": true,
+  "revised_content": "",
+  "change_note": "未改动"
+}}
+若需修改：unchanged=false，revised_content 填完整修后正文；否则 unchanged=true 且 revised_content 为空。"""
+
+            response = await self._call_ai(
+                system,
+                prompt,
+                max_tokens=max_tokens_coherence_apply(False),
+                context={"operation": "chapter_coherence_apply"},
+            )
+            try:
+                row = self._parse_coherence_apply_json(response)
+            except Exception:
+                raise ValueError(f"第 {i + 1} 章修订 JSON 无法解析") from None
+            if str(row.get("chapter_id", "")) != cid:
+                row["chapter_id"] = cid
+            unchanged = bool(row.get("unchanged", True))
+            revised = (row.get("revised_content") or "").strip()
+            if not unchanged and not revised:
+                unchanged = True
+            note = str(row.get("change_note") or "").strip()[:200]
+            merged_seq.append(
+                {
+                    "chapter_id": cid,
+                    "unchanged": unchanged or not revised,
+                    "revised_content": "" if unchanged or not revised else revised,
+                    "change_note": note or ("未改动" if unchanged else "已修订"),
+                }
+            )
+        return merged_seq
+
     # ── 流式建议 ──────────────────────────────────────
     async def suggest_stream(
         self,
@@ -499,6 +690,8 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         previous_chapters_context: str = "",
         continuity_state: str = "",
         batch_goal: str = "",
+        realm_whitelist: list[str] | None = None,   # 项目合法境界名白名单
+        protagonist_state: str = "",                 # 主角当前结构化状态（境界/位置/持有物）
     ) -> dict:
         """
         为选定的大纲节点（卷或旧篇）生成详细的子章节计划。
@@ -540,15 +733,36 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             f"\n【本批任务边界】\n{batch_goal[:800]}\n"
             if batch_goal else ""
         )
+        protagonist_state_context = (
+            f"\n【主角当前状态（结构化硬约束，优先级高于任何叙事摘要）】\n{protagonist_state}\n"
+            if protagonist_state else ""
+        )
+        # 境界白名单约束块
+        _TRADITIONAL_FORBIDDEN = [
+            "合体", "炼气", "筑基", "金丹", "元婴", "化神", "渡劫", "大乘",
+            "练气", "开光", "融合", "心动", "紫府", "婴变", "问鼎", "登仙",
+        ]
+        if realm_whitelist:
+            whitelist_str = "、".join(sorted(realm_whitelist))
+            forbidden_hits = "、".join(_TRADITIONAL_FORBIDDEN)
+            realm_constraint_block = (
+                f"\n【境界体系强约束 — 必须严格遵守，违反即破坏世界观】\n"
+                f"本项目专属境界白名单（character_change 中描述境界突破/状态，只能使用这些术语）：\n"
+                f"{whitelist_str}\n"
+                f"绝对禁止使用以下传统修真术语（来自其他IP，与本项目境界体系冲突）：\n"
+                f"{forbidden_hits}\n"
+                f"若需描述突破，从白名单中取词；若找不到合适词，用「主角修为提升」代替，不得自造术语。\n"
+            )
+        else:
+            realm_constraint_block = ""
         prompt = f"""小说：《{project_title}》（{genre}）
 当前节点：{node_type == 'volume' and '卷' or '旧篇'}《{node_title}》
 节点概述：{node_summary or '（未填写）'}
 
 世界观摘要：{world_summary[:400]}
-主要人物（主线核心卡司，非全书全部人物——配角可按剧情需要随时引入）：{character_summary[:400]}
+主要人物（主线核心卡司，非全书全部人物——配角可按剧情需要随时引入）：{character_summary[:500]}
 全书立意：{theme_statement[:300] or '（未填写；请从创意和人物中提炼一条贯穿全书的价值命题）'}
-{global_context}{previous_context}{continuity_context}{batch_goal_context}
-
+{realm_constraint_block}{protagonist_state_context}{global_context}{previous_context}{continuity_context}{batch_goal_context}
 请为本{node_type == 'volume' and '卷' or '旧篇'}生成 {chapter_count} 个章节计划，章节编号从第{start_num}章开始。
 {_genre_guardrail_text(genre)}
 
@@ -910,6 +1124,8 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         chapter_index_context: str = "",
         quality_debt_context: str = "",
         writing_brief_context: str = "",
+        # 线索页「伏笔管理」+ 章节索引情节档案（与质检同源），独立预算避免被连续性账本截断
+        plot_dossier_context: str = "",
         # 本章字数目标（来自 OutlineNode.expected_words）
         word_target: int = 2300,
     ) -> AsyncGenerator[str, None]:
@@ -973,13 +1189,19 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             if prev_chapter_tail else "（这是第一章，无前情）"
         )
         continuity_part = (
-            f"\n【连续性账本 / 不得违背】\n{self._clip_context(continuity_context, 1200, 20000)}\n"
+            f"\n【连续性账本 / 不得违背】\n{self._clip_context(continuity_context, 2000, 24000)}\n"
             if continuity_context
             else ""
         )
         chapter_index_part = (
             f"\n【章节速查索引】\n{self._clip_context(chapter_index_context, 1600, 20000)}\n"
             if chapter_index_context
+            else ""
+        )
+        plot_dossier_part = (
+            f"\n【情节档案 / 伏笔管理表与故事线】\n"
+            f"{self._clip_context(plot_dossier_context, 2200, 30000)}\n"
+            if plot_dossier_context
             else ""
         )
         quality_debt_part = (
@@ -1043,6 +1265,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 {prev_part}
 {continuity_part}
 {chapter_index_part}
+{plot_dossier_part}
 {quality_debt_part}
 
 【本章大纲计划】
@@ -1093,7 +1316,13 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         ]
         sl_text = "\n".join(sl_lines) or "（无故事线数据）"
 
-        system = "你是网络小说助手，从章节内容中提取人物状态、故事线、伏笔、信息来源和结构化资产变化，只返回JSON，不要任何解释。"
+        system = (
+            "你是网络小说助手，从章节内容中提取人物状态、故事线、伏笔、信息来源和结构化资产变化，只返回JSON，不要任何解释。"
+            "语言：除 JSON 键名、以及各字段说明中要求使用的英文枚举值（如 alive/dead、open、planned/active/climax/resolved/dropped、"
+            "low/medium/high、item_type/rarity 等）外，所有人类可读的自然语言字符串必须使用简体中文——含 memory_updates 的 title/content/tags、"
+            "storyline_updates.beat、chapter_index 全部文案（含 story_day）、asset_updates 与 new_characters 中的描述字段、summary 等。"
+            "不得用英文撰写剧情摘要、伏笔说明或章末钩子；专有名词（人名、功法、法宝、地名）与正文用字保持一致。"
+        )
 
         prompt = f"""章节{chapter_number}《{chapter_title}》正文（前2500字）：
 {chapter_content[:2500]}
@@ -1127,6 +1356,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
 - sealed
 - transformed
 禁止输出任何附加说明，例如 "alive（受伤）"、"dead-被刺杀"、"active"。
+再次强调：除上述英文枚举与 JSON 键名外，一律简体中文；story_day 用中文表述故事内时间（如「第8日」「首日·夜至晨」），勿用 Day 1 式英文。
 
 返回JSON（严格遵守字段名）：
 {{
@@ -1262,7 +1492,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
     }}
   ],
   "chapter_index": {{
-    "story_day": "故事内时间，如 Day 8；未知则为空字符串",
+    "story_day": "故事内时间（简体中文），如「第8日」「首日（夜→晨）」；未知则为空字符串",
     "core_events": ["本章实际发生的核心事件1", "核心事件2"],
     "first_appearances": [{{"character_id": "可为空", "name": "首次出场人物名"}}],
     "actual_foreshadows_laid": [{{"description": "实际写进正文的新伏笔", "status": "open"}}],
@@ -1454,7 +1684,11 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                     raise last_error
                 raise RuntimeError("LLM 调用失败：未获得响应")
 
-            content = resp.choices[0].message.content or ""
+            choices = getattr(resp, "choices", None) or []
+            if not choices:
+                raise RuntimeError("LLM 返回空 choices，无法读取正文")
+            msg = getattr(choices[0], "message", None)
+            content = (getattr(msg, "content", None) or "") if msg is not None else ""
             usage_obj = getattr(resp, "usage", None)
             usage = {
                 "prompt_tokens": getattr(usage_obj, "prompt_tokens", None),
@@ -1518,7 +1752,11 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                 stream=True,
             )
             async for chunk in stream:
-                delta = chunk.choices[0].delta.content
+                ch_list = getattr(chunk, "choices", None) or []
+                if not ch_list:
+                    continue
+                delta_obj = getattr(ch_list[0], "delta", None)
+                delta = getattr(delta_obj, "content", None) if delta_obj is not None else None
                 if delta:
                     output_chunks.append(delta)
                     yield delta

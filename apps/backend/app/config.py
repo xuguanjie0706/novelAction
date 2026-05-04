@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     GEMINI_OUTLINE_QUALITY_MAX_TOKENS: int = 8192
     GEMINI_CHAPTER_QUALITY_MAX_TOKENS: int = 8192
     GEMINI_COHERENCE_CHECK_MAX_TOKENS: int = 8192
+    # 根据连贯性评测结果最小幅度修订正文（多章一次输出，需较大上限）
+    GEMINI_COHERENCE_APPLY_MAX_TOKENS: int = 32768
     GEMINI_DRAFT_STREAM_MAX_TOKENS: int = 8192
     GEMINI_PLAN_STRUCTURE_MAX_TOKENS: int = 8192
     GEMINI_SUGGEST_STREAM_MAX_TOKENS: int = 4096
@@ -39,6 +41,8 @@ class Settings(BaseSettings):
     LOCAL_OUTLINE_QUALITY_MAX_TOKENS: int = 4096
     LOCAL_CHAPTER_QUALITY_MAX_TOKENS: int = 2048
     LOCAL_COHERENCE_CHECK_MAX_TOKENS: int = 2200
+    # 本地模型按章顺序修订，单章输出上限
+    LOCAL_COHERENCE_APPLY_MAX_TOKENS: int = 16384
     LOCAL_DRAFT_STREAM_MAX_TOKENS: int = 4096
     LOCAL_PLAN_STRUCTURE_MAX_TOKENS: int = 2048
     LOCAL_SUGGEST_STREAM_MAX_TOKENS: int = 2048
@@ -51,6 +55,11 @@ class Settings(BaseSettings):
 
     EMBEDDING_MODEL: str = "nomic-embed-text"         # Ollama 本地 embedding 模型
     EMBEDDING_DIM: int = 768                          # nomic-embed-text 输出 768 维
+
+    # 封面落盘（相对路径相对于进程 cwd；留空则使用后端目录下 data/covers）
+    COVER_STORAGE_DIR: str = ""
+    COVER_MAX_EDGE: int = 1024
+    COVER_WEBP_QUALITY: int = 82
 
     # App
     SECRET_KEY: str = "change-me-in-production"

@@ -18,6 +18,9 @@ class LlmProvider(Base):
     api_key = Column(Text, nullable=True)
     model_name = Column(String(200), nullable=False)
 
+    # text = 文本生成（默认）；image = 图片生成（DALL-E / Flux 等兼容 /v1/images/generations）
+    provider_type = Column(String(20), default="text", nullable=False, server_default="text")
+
     enabled = Column(Boolean, default=True, nullable=False)
     is_default = Column(Boolean, default=False, nullable=False)
     sort_order = Column(Integer, default=0, nullable=False)

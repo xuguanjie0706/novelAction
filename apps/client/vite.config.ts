@@ -11,6 +11,8 @@ export default defineConfig({
       '/api': {
         target: apiTarget,
         changeOrigin: true,
+        /** 传入 X-Forwarded-Host，配合后端 ForwardedHostASGIMiddleware，避免 307 Location 指向直连后端地址 */
+        xfwd: true,
         ws: true,
       },
     },

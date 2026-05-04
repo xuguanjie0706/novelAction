@@ -18,6 +18,7 @@ import { HOME_WORD_GOAL } from '../../data/homeMock'
 interface HomeSidebarProps {
   todayWords: number
   onNavigate: (target: string) => void
+  activeId?: string
 }
 
 const NAV_ITEMS = [
@@ -32,7 +33,7 @@ const NAV_ITEMS = [
   { id: 'trash', label: '回收站', icon: Trash2 },
 ]
 
-export default function HomeSidebar({ todayWords, onNavigate }: HomeSidebarProps) {
+export default function HomeSidebar({ todayWords, onNavigate, activeId = 'home' }: HomeSidebarProps) {
   const progress = Math.min(100, Math.round((todayWords / HOME_WORD_GOAL) * 100))
 
   return (
@@ -55,12 +56,12 @@ export default function HomeSidebar({ todayWords, onNavigate }: HomeSidebarProps
             onClick={() => onNavigate(id)}
             className={clsx(
               'flex h-[52px] w-full items-center gap-4 rounded-lg px-4 text-left text-[15px] font-medium transition-colors',
-              id === 'home'
+              id === activeId
                 ? 'bg-amber-50 text-amber-500 shadow-[0_12px_32px_rgba(245,158,11,0.12)]'
                 : 'text-gray-600 hover:bg-gray-50 hover:text-gray-950'
             )}
           >
-            <Icon size={21} className={id === 'home' ? 'text-amber-500' : 'text-gray-500'} />
+            <Icon size={21} className={id === activeId ? 'text-amber-500' : 'text-gray-500'} />
             <span>{label}</span>
           </button>
         ))}

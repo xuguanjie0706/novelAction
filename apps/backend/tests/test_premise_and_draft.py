@@ -964,7 +964,7 @@ async def test_draft_prompt_includes_premise_and_full_chapter_target():
     assert chunks == ["正文"]
     assert "【立意与类型 / PREMISE】" in captured["prompt"]
     assert "目标读者：番茄男频" in captured["prompt"]
-    assert "2200-2400字" in captured["prompt"]
+    assert "完整初稿" in captured["prompt"] and "2300" in captured["prompt"]
     assert "约600字" not in captured["prompt"]
     assert captured["max_tokens"] >= 4096
 
@@ -1132,11 +1132,48 @@ async def test_draft_prompt_includes_quality_debt_context():
 
 
 @pytest.mark.asyncio
+async def test_draft_prompt_includes_plot_dossier_context():
+    captured = {}
+
+    async def fake_stream(system: str, prompt: str, max_tokens: int = 4096, context=None):
+        captured["prompt"] = prompt
+        yield "正文"
+
+    svc = AIService()
+    svc._stream_ai = fake_stream
+
+    dossier = (
+        "伏笔档案（含已回收/未回收）：\n"
+        "- F-001、黑雾来源、状态=open、说明=与魂殿有关"
+    )
+    async for _ in svc.draft_assist_stream(
+        chapter_title="第14章：追索",
+        outline_hook="追查黑雾",
+        outline_summary="主角沿线索追问",
+        outline_conflict="信息不足仍要行动",
+        outline_highlight="指向旧案卷宗",
+        outline_foreshadow="",
+        prev_chapter_tail="",
+        world_summary="",
+        character_summary="主角",
+        memory_summary="",
+        existing_content="",
+        plot_dossier_context=dossier,
+    ):
+        pass
+
+    assert "【情节档案 / 伏笔管理表与故事线】" in captured["prompt"]
+    assert "F-001" in captured["prompt"]
+    assert "黑雾来源" in captured["prompt"]
+
+
+@pytest.mark.asyncio
 async def test_auto_debrief_extracts_memory_updates_for_foreshadow_and_information_source():
     captured = {}
 
     async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
         captured["prompt"] = prompt
+        assert "简体中文" in system
         return """
         {
           "character_updates": [
@@ -1207,13 +1244,15 @@ async def test_auto_debrief_extracts_chapter_index():
     async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
         assert "章节索引" in prompt
         assert "章末钩子强度" in prompt
+        assert "简体中文" in system
+        assert "勿用 Day" in prompt
         return """
         {
           "character_updates": [],
           "storyline_updates": [],
           "memory_updates": [],
           "chapter_index": {
-            "story_day": "Day 8",
+            "story_day": "第8日",
             "core_events": ["萧炎稳定六段斗之气", "丹虚子说明昨夜黑雾来源"],
             "first_appearances": [{"character_id": "", "name": "丹虚子"}],
             "actual_foreshadows_laid": [{"description": "黑雾与魂殿有关", "status": "open"}],
@@ -1237,7 +1276,7 @@ async def test_auto_debrief_extracts_chapter_index():
         storylines=[],
     )
 
-    assert result["chapter_index"]["story_day"] == "Day 8"
+    assert result["chapter_index"]["story_day"] == "第8日"
     assert result["chapter_index"]["hook_strength"] == 4
     assert result["chapter_index"]["actual_foreshadows_laid"][0]["status"] == "open"
 
@@ -1248,6 +1287,7 @@ async def test_auto_debrief_extracts_asset_updates_without_replacing_memory():
 
     async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
         captured["prompt"] = prompt
+        assert "简体中文" in system
         return """
         {
           "character_updates": [],

@@ -105,12 +105,8 @@ export async function autoCommitGeneratedChapterDebrief(
       tags: Array.isArray(update.tags) ? update.tags.slice(0, 8) : [],
     }))
 
-  const hasChapterIndex = Boolean(data.chapter_index && Object.keys(data.chapter_index).length > 0)
-  const hasAssetUpdates = Boolean(data.asset_updates && Object.values(data.asset_updates).some(value => Array.isArray(value) && value.length > 0))
-
-  if (characterUpdates.length === 0 && storylineUpdates.length === 0 && memoryUpdates.length === 0 && !hasChapterIndex && !hasAssetUpdates && !data.summary) {
-    return { characterCount: 0, storylineCount: 0, memoryCount: 0, assetCreatedCount: 0, assetUpdatedCount: 0, chapterIndexSaved: false }
-  }
+  // 连续续写链路中必须调用 chapter-debrief：即使 AI 未抽出结构化增量，也要落库并清掉 debrief 缓存，
+  // 否则下一章 draft 仍读旧人物/记忆；此前此处直接 return 会跳过整次提交。
 
   const commitRes = await aiApi.chapterDebrief(projectId, {
     chapter_id: chapterId,
@@ -122,7 +118,8 @@ export async function autoCommitGeneratedChapterDebrief(
     notes: data.summary ? `AI生成自动复盘：${data.summary}` : undefined,
   })
 
-  const assetStats = commitRes.data?.asset_updates || {}
+  const d = commitRes.data as Record<string, unknown> | undefined
+  const assetStats = (d?.asset_updates as Record<string, unknown>) || {}
   const assetCreatedCount = Number(assetStats.created_items || 0)
     + Number(assetStats.created_skills || 0)
     + Number(assetStats.created_factions || 0)
@@ -130,13 +127,17 @@ export async function autoCommitGeneratedChapterDebrief(
     + Number(assetStats.updated_skills || 0)
     + Number(assetStats.updated_factions || 0)
 
+  const updatedChars = Array.isArray(d?.updated_characters) ? d.updated_characters.length : characterUpdates.length
+  const updatedSls = Array.isArray(d?.updated_storylines) ? d.updated_storylines.length : storylineUpdates.length
+  const addedMems = Array.isArray(d?.added_memories) ? d.added_memories.length : memoryUpdates.length
+
   return {
-    characterCount: characterUpdates.length,
-    storylineCount: storylineUpdates.length,
-    memoryCount: memoryUpdates.length,
+    characterCount: updatedChars,
+    storylineCount: updatedSls,
+    memoryCount: addedMems,
     assetCreatedCount,
     assetUpdatedCount,
-    chapterIndexSaved: !!commitRes.data?.chapter_index_saved,
-    chapterIndexError: commitRes.data?.chapter_index_error,
+    chapterIndexSaved: !!d?.chapter_index_saved,
+    chapterIndexError: d?.chapter_index_error as string | undefined,
   }
 }

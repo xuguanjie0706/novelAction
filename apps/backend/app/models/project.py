@@ -18,7 +18,8 @@ class Project(Base):
     story_core = Column(JSON, default=dict)        # 故事核: {drive, conflict, theme, ...}
     status = Column(String(20), default="drafting") # drafting/writing/completed
     target_words = Column(Integer, default=1200000)  # 目标字数（整数）
-    cover_url = Column(String(500))
+    # 可为外链或 data URL（AI 封面 base64 很长，不能用 String(500)）
+    cover_url = Column(Text)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())

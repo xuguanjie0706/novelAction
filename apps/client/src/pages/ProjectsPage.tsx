@@ -110,7 +110,7 @@ export default function ProjectsPage() {
   const handleSidebarNavigate = (target: string) => {
     const targetMap: Record<string, () => void> = {
       home: () => window.scrollTo({ top: 0, behavior: 'smooth' }),
-      projects: () => document.getElementById('recent-projects')?.scrollIntoView({ behavior: 'smooth' }),
+      projects: () => navigate('/bookshelf'),
       write: () => navigateFirstProject('write'),
       memory: () => navigateFirstProject('memory'),
       characters: () => navigateFirstProject('characters'),
@@ -182,6 +182,7 @@ export default function ProjectsPage() {
                 <RecentEdits
                   edits={recentEdits}
                   onOpen={project => openProject(project, 'write')}
+                  onViewAll={() => navigate('/bookshelf')}
                 />
               </section>
 

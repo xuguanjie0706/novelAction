@@ -690,10 +690,12 @@ async function runContinueChapters(
       } catch (e: any) {
         pushProgress({
           step: phaseStep('debrief'),
-          label: `自动复盘失败，可稍后手动提交：${e?.message || '未知错误'}`,
+          label: `自动复盘失败，已中止连续续写（避免下一章在旧状态下生成）：${e?.message || '未知错误'}`,
           done: true,
           error: true,
         })
+        onError(`复盘失败，已中止续写链：${stepLabel}。${e?.message || '未知错误'}`)
+        return
       }
 
       pushProgress({ step: phaseStep('memory'), label: '正在刷新记忆库…', done: false, error: false })

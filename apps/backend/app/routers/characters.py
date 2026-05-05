@@ -167,6 +167,45 @@ def get_character_changelog(
     )
 
 
+@router.delete("/{character_id}/changelog/{log_id}", status_code=204)
+def delete_character_changelog_entry(
+    project_id: str,
+    character_id: str,
+    log_id: str,
+    db: Session = Depends(get_db),
+):
+    """删除单条变更记录。"""
+    entry = db.query(CharacterChangeLog).filter(
+        CharacterChangeLog.id == log_id,
+        CharacterChangeLog.character_id == character_id,
+        CharacterChangeLog.project_id == project_id,
+    ).first()
+    if not entry:
+        raise HTTPException(404, "Changelog entry not found")
+    db.delete(entry)
+    db.commit()
+
+
+@router.delete("/{character_id}/changelog", status_code=204)
+def clear_character_changelog(
+    project_id: str,
+    character_id: str,
+    db: Session = Depends(get_db),
+):
+    """清空某人物的全部变更记录。"""
+    char = db.query(Character).filter(
+        Character.id == character_id,
+        Character.project_id == project_id,
+    ).first()
+    if not char:
+        raise HTTPException(404, "Character not found")
+    db.query(CharacterChangeLog).filter(
+        CharacterChangeLog.project_id   == project_id,
+        CharacterChangeLog.character_id == character_id,
+    ).delete(synchronize_session=False)
+    db.commit()
+
+
 # --- 关系图 ---
 @router.get("/relationships/all", response_model=List[RelationshipOut])
 def list_relationships(project_id: str, db: Session = Depends(get_db)):

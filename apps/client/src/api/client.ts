@@ -67,6 +67,7 @@ export const projectsApi = {
   get: (id: string) => api.get(`/projects/${id}`),
   update: (id: string, data: any) => api.patch(`/projects/${id}`, data),
   delete: (id: string) => api.delete(`/projects/${id}`),
+  resetWriting: (id: string) => api.post(`/projects/${id}/reset-writing`),
 }
 
 // ── Cover Generation ──────────────────────────────────
@@ -114,6 +115,8 @@ export const charactersApi = {
   listRelationships: (pid: string) => api.get(`/projects/${pid}/characters/relationships/all`),
   createRelationship: (pid: string, data: any) => api.post(`/projects/${pid}/characters/relationships`, data),
   getChangelog: (pid: string, cid: string) => api.get(`/projects/${pid}/characters/${cid}/changelog`),
+  deleteChangelogEntry: (pid: string, cid: string, logId: string) => api.delete(`/projects/${pid}/characters/${cid}/changelog/${logId}`),
+  clearChangelog: (pid: string, cid: string) => api.delete(`/projects/${pid}/characters/${cid}/changelog`),
 }
 
 // ── StoryLines ────────────────────────────────────────

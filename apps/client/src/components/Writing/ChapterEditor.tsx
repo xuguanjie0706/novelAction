@@ -64,6 +64,16 @@ type AutoDebriefResponse = {
   }>
   new_characters?: NewCharacterSuggestion[]
   asset_updates?: Record<string, unknown>
+  chapter_index?: {
+    story_day?: string
+    core_events?: Array<Record<string, unknown> | string>
+    first_appearances?: Array<Record<string, unknown>>
+    actual_foreshadows_laid?: Array<Record<string, unknown>>
+    actual_foreshadows_resolved?: Array<Record<string, unknown>>
+    ending_hook?: string
+    hook_strength?: number
+    continuity_notes?: Array<Record<string, unknown> | string>
+  }
   summary?: string
   error?: string
   cached?: boolean
@@ -221,6 +231,7 @@ export default function ChapterEditor({
   const [aiDebriefSummary, setAiDebriefSummary]       = useState('')
   const [aiSuggestedAssetUpdates, setAiSuggestedAssetUpdates] = useState<Record<string, unknown> | null>(null)
   const [aiNewCharacters, setAiNewCharacters] = useState<NewCharacterSuggestion[]>([])
+  const [aiChapterIndex, setAiChapterIndex] = useState<AutoDebriefResponse['chapter_index'] | null>(null)
 
   // ── 底部伏笔面板 ───────────────────────────────────────────────────
   const [bottomPanelOpen, setBottomPanelOpen]   = useState(false)
@@ -704,6 +715,7 @@ export default function ChapterEditor({
     setAiSuggestedCharIds(suggestedCharIds)
     setAiSuggestedSlIds(suggestedSlIds)
     setAiSuggestedAssetUpdates(data.asset_updates || null)
+    setAiChapterIndex(data.chapter_index || null)
     setAiDebriefSummary(data.summary || '')
     const validNewChars = (data.new_characters || []).filter(nc => typeof nc.name === 'string' && nc.name.trim())
     setAiNewCharacters(validNewChars)
@@ -802,7 +814,18 @@ export default function ChapterEditor({
       && Object.values(effectiveAssetUpdates).some(value => Array.isArray(value) && value.length > 0),
     )
 
-    if (characterUpdates.length === 0 && storylineUpdates.length === 0 && !debriefNotes && !hasAssetUpdates) {
+    const hasChapterIndex = Boolean(
+      aiChapterIndex
+      && (
+        (aiChapterIndex.actual_foreshadows_laid?.length ?? 0) > 0
+        || (aiChapterIndex.actual_foreshadows_resolved?.length ?? 0) > 0
+        || aiChapterIndex.story_day
+        || (aiChapterIndex.core_events?.length ?? 0) > 0
+        || aiChapterIndex.ending_hook
+      ),
+    )
+
+    if (characterUpdates.length === 0 && storylineUpdates.length === 0 && !debriefNotes && !hasAssetUpdates && !hasChapterIndex) {
       toast('没有需要提交的更新', { icon: 'ℹ️' })
       return
     }
@@ -815,6 +838,7 @@ export default function ChapterEditor({
         storyline_updates: storylineUpdates as any,
         asset_updates: hasAssetUpdates ? effectiveAssetUpdates || undefined : undefined,
         new_characters: aiNewCharacters.length > 0 ? aiNewCharacters as any : undefined,
+        chapter_index: aiChapterIndex || undefined,
         notes: debriefNotes || undefined,
       })
       toast.success(res.data.message)
@@ -834,6 +858,7 @@ export default function ChapterEditor({
       setCharUpdates({})
       setStorylineBeats({})
       setAiSuggestedAssetUpdates(null)
+      setAiChapterIndex(null)
       setAiNewCharacters([])
       setDebriefNotes('')
     } catch {

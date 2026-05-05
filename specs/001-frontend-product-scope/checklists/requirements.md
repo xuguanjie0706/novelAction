@@ -38,3 +38,5 @@
 - **边界**：「范围边界」「假设」「依赖」已限定本规格不覆盖创作端细节与商业条款。
 
 **结论**：清单项全部通过，可进入 `/speckit.plan` 或按需 `/speckit.clarify`。
+
+**2026-05-05 更新**：已完成 `/speckit.clarify` 五问闭环，结论已写入 `spec.md` 的 `## Clarifications` 及对应需求/假设/成功标准；规格仍无 `[NEEDS CLARIFICATION]` 残留。

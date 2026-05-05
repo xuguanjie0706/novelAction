@@ -1,0 +1,576 @@
+from datetime import datetime, timezone
+from typing import List, Optional
+from uuid import UUID, uuid4
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+
+from app.database import get_db, SessionLocal
+from app.models import (
+    Chapter,
+    ChapterDebriefCache,
+    ChapterDebriefUndo,
+    ChapterIndex,
+    Character,
+    CharacterChangeLog,
+    MemoryChunk,
+    StoryLine,
+)
+from app.services.ai_service import AIService
+from app.services.embedding_service import embed_chunk_async
+from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
+from app.utils.chapter_numbering import display_chapter_number
+from app.routers.ai.debrief_assets import apply_asset_updates
+from app.routers.ai.foreshadow import sync_chapter_index_foreshadows
+from app.routers.ai.normalization import normalize_character_status, normalize_storyline_status
+from app.routers.ai.schemas import AutoDebriefRequest, ChapterDebriefRequest
+from app.routers.ai.text_utils import chapter_debrief_content_hash, plain_text, truncate
+
+router = APIRouter()
+
+
+@router.post("/chapter-debrief")
+def chapter_debrief(
+    project_id: str,
+    req: ChapterDebriefRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    章节写完后的「复盘提交」：批量更新人物状态、故事线进展。
+    前端在写作页右侧面板提交，避免「写了文章但数据库状态停留在第1章」的空架子问题。
+    """
+    chapter = db.query(Chapter).filter(
+        Chapter.id == req.chapter_id, Chapter.project_id == project_id
+    ).first()
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+
+    updated_chars: List[str] = []
+    updated_storylines: List[str] = []
+    added_memories: List[str] = []
+    _new_memory_chunks: List[MemoryChunk] = []
+    chapter_index_saved = False
+    chapter_index_error: Optional[str] = None
+    synced_foreshadows = {"created": 0, "updated": 0, "resolved": 0}
+    asset_stats = {
+        "created_items": 0,
+        "updated_items": 0,
+        "created_skills": 0,
+        "updated_skills": 0,
+        "created_factions": 0,
+        "updated_factions": 0,
+    }
+
+    existing_undo = db.query(ChapterDebriefUndo).filter(
+        ChapterDebriefUndo.chapter_id == req.chapter_id
+    ).first()
+    if not existing_undo:
+        char_ids_to_snap = {str(cu.character_id) for cu in req.character_updates if cu.character_id}
+        sl_ids_to_snap = {str(su.storyline_id) for su in req.storyline_updates if su.storyline_id}
+
+        char_states_snap = []
+        for cid in char_ids_to_snap:
+            try:
+                cid_uuid = UUID(cid)
+            except Exception:
+                continue
+            c = db.query(Character).filter(
+                Character.id == cid_uuid, Character.project_id == project_id
+            ).first()
+            if c:
+                char_states_snap.append({
+                    "character_id": cid,
+                    "current_realm": c.current_realm,
+                    "current_location": c.current_location,
+                    "current_status": c.current_status,
+                    "realm_rank": c.realm_rank,
+                })
+
+        sl_statuses_snap = []
+        for sid in sl_ids_to_snap:
+            try:
+                sid_uuid = UUID(sid)
+            except Exception:
+                continue
+            sl = db.query(StoryLine).filter(
+                StoryLine.id == sid_uuid, StoryLine.project_id == project_id
+            ).first()
+            if sl:
+                sl_statuses_snap.append({
+                    "storyline_id": sid,
+                    "status": sl.status,
+                })
+
+        undo_row = ChapterDebriefUndo(
+            project_id=project_id,
+            chapter_id=req.chapter_id,
+            char_states=char_states_snap,
+            storyline_statuses=sl_statuses_snap,
+        )
+        db.add(undo_row)
+
+    for cu in req.character_updates:
+        try:
+            _ = UUID(str(cu.character_id))
+        except Exception:
+            continue
+
+        char = db.query(Character).filter(
+            Character.id == cu.character_id,
+            Character.project_id == project_id,
+        ).first()
+        if not char:
+            continue
+
+        _before_realm = char.current_realm
+        _before_status = char.current_status
+        _before_location = char.current_location
+
+        if cu.current_realm is not None:
+            char.current_realm = cu.current_realm.strip()[:100]
+        if cu.realm_rank is not None:
+            char.realm_rank = cu.realm_rank
+
+        if getattr(char, "role", None) == "protagonist" and (
+            cu.current_realm is not None or cu.realm_rank is not None
+        ):
+            realm_label = (
+                (cu.current_realm.strip()[:100] if isinstance(cu.current_realm, str) else "")
+                or (char.current_realm or "").strip()[:100]
+            )
+            rank_snap = cu.realm_rank if cu.realm_rank is not None else char.realm_rank
+            if realm_label or rank_snap is not None:
+                chapter_num = display_chapter_number(chapter.title, chapter.sort_order)
+                extra = dict(char.extra) if isinstance(char.extra, dict) else {}
+                hist = [h for h in (extra.get("debrief_realm_milestones") or []) if isinstance(h, dict)]
+                hist = [h for h in hist if int(h.get("chapter_number") or -1) != chapter_num]
+                hist.append(
+                    {
+                        "chapter_number": chapter_num,
+                        "chapter_id": str(req.chapter_id),
+                        "chapter_title": (chapter.title or "")[:300],
+                        "realm_name": realm_label,
+                        "realm_rank": rank_snap,
+                        "source": "chapter_debrief",
+                    }
+                )
+                hist.sort(key=lambda h: int(h.get("chapter_number") or 0))
+                extra["debrief_realm_milestones"] = hist
+                char.extra = extra
+        if cu.current_location is not None:
+            char.current_location = cu.current_location.strip()[:200]
+        if cu.current_status is not None:
+            normalized_status = normalize_character_status(cu.current_status)
+            if normalized_status:
+                char.current_status = normalized_status
+
+        _added_skill_name = None
+        if cu.add_skill:
+            skills = list(char.known_skills or [])
+            skill_with_source = {**cu.add_skill, "from_chapter_id": str(req.chapter_id)}
+            existing_ids = {s.get("skill_id") for s in skills if isinstance(s, dict)}
+            if cu.add_skill.get("skill_id") in existing_ids:
+                skills = [
+                    {**s, "mastery": cu.add_skill.get("mastery", s.get("mastery")),
+                     "from_chapter_id": str(req.chapter_id)}
+                    if isinstance(s, dict) and s.get("skill_id") == cu.add_skill.get("skill_id")
+                    else s
+                    for s in skills
+                ]
+            else:
+                skills.append(skill_with_source)
+                _added_skill_name = cu.add_skill.get("skill_name") or cu.add_skill.get("add_skill_name")
+            char.known_skills = skills
+
+        _added_item_name = None
+        if cu.add_item:
+            items = list(char.owned_items or [])
+            existing_item_ids = {i.get("item_id") for i in items if isinstance(i, dict)}
+            if cu.add_item.get("item_id") not in existing_item_ids:
+                item_with_source = {**cu.add_item, "from_chapter_id": str(req.chapter_id)}
+                items.append(item_with_source)
+                _added_item_name = cu.add_item.get("item_name") or cu.add_item.get("add_item_name")
+            char.owned_items = items
+
+        _removed_item_name = None
+        if cu.remove_item_id:
+            _removed = next(
+                (i for i in (char.owned_items or [])
+                 if isinstance(i, dict) and i.get("item_id") == cu.remove_item_id),
+                None,
+            )
+            _removed_item_name = (_removed or {}).get("item_name") if _removed else None
+            char.owned_items = [
+                i for i in (char.owned_items or [])
+                if not (isinstance(i, dict) and i.get("item_id") == cu.remove_item_id)
+            ]
+
+        _audit_changes = []
+        if cu.current_realm is not None and str(_before_realm or "") != str(char.current_realm or ""):
+            _audit_changes.append({"field": "current_realm", "label": "境界",
+                                    "before": _before_realm, "after": char.current_realm})
+        if cu.current_status is not None and str(_before_status or "") != str(char.current_status or ""):
+            _audit_changes.append({"field": "current_status", "label": "状态",
+                                    "before": _before_status, "after": char.current_status})
+        if cu.current_location is not None and str(_before_location or "") != str(char.current_location or ""):
+            _audit_changes.append({"field": "current_location", "label": "位置",
+                                    "before": _before_location, "after": char.current_location})
+        if _added_skill_name:
+            _audit_changes.append({"field": "skill_gained", "label": "习得技能",
+                                    "before": None, "after": _added_skill_name})
+        if _added_item_name:
+            _audit_changes.append({"field": "item_gained", "label": "获得道具",
+                                    "before": None, "after": _added_item_name})
+        if _removed_item_name:
+            _audit_changes.append({"field": "item_lost", "label": "失去道具",
+                                    "before": _removed_item_name, "after": None})
+
+        if _audit_changes:
+            _chapter_num_str = str(display_chapter_number(chapter.title, chapter.sort_order))
+            _summary_parts = []
+            for c in _audit_changes:
+                if c["before"] and c["after"]:
+                    _summary_parts.append(f"{c['label']} {c['before']}→{c['after']}")
+                elif c["after"]:
+                    _summary_parts.append(f"{c['label']}：{c['after']}")
+                elif c["before"]:
+                    _summary_parts.append(f"失去{c['label']}：{c['before']}")
+            db.add(CharacterChangeLog(
+                project_id=project_id,
+                character_id=char.id,
+                character_name=char.name,
+                chapter_id=req.chapter_id,
+                chapter_number=_chapter_num_str,
+                chapter_title=chapter.title or "",
+                source="debrief",
+                summary="、".join(_summary_parts),
+                changes=_audit_changes,
+            ))
+
+        updated_chars.append(char.name)
+
+    for su in req.storyline_updates:
+        storyline_uuid = None
+        if su.storyline_id:
+            try:
+                storyline_uuid = UUID(str(su.storyline_id))
+            except Exception:
+                storyline_uuid = None
+
+        if storyline_uuid:
+            sl = db.query(StoryLine).filter(
+                StoryLine.id == storyline_uuid,
+                StoryLine.project_id == project_id,
+            ).first()
+        elif su.storyline_name:
+            sl = db.query(StoryLine).filter(
+                StoryLine.name == su.storyline_name,
+                StoryLine.project_id == project_id,
+            ).first()
+        else:
+            continue
+
+        if not sl:
+            continue
+
+        if su.status is not None:
+            normalized_storyline_status = normalize_storyline_status(su.status)
+            if normalized_storyline_status:
+                sl.status = normalized_storyline_status
+        if su.append_beat:
+            beats = list(sl.key_beats or [])
+            beats.append({
+                "chapter": display_chapter_number(chapter.title, chapter.sort_order),
+                "chapter_title": chapter.title,
+                "beat": su.append_beat,
+                "chapter_id": str(req.chapter_id),
+            })
+            sl.key_beats = beats
+
+        updated_storylines.append(sl.name)
+
+    for mu in req.memory_updates:
+        content = (mu.content or "").strip()
+        if not content:
+            continue
+        memory = MemoryChunk(
+            project_id=project_id,
+            chapter_id=req.chapter_id,
+            chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
+            memory_type=mu.memory_type,
+            title=(mu.title or mu.memory_type).strip()[:200],
+            content=content,
+            tags=mu.tags[:8],
+        )
+        db.add(memory)
+        _new_memory_chunks.append(memory)
+        added_memories.append(memory.title or memory.memory_type)
+
+    if req.asset_updates:
+        asset_stats = apply_asset_updates(
+            db=db,
+            project_id=project_id,
+            chapter=chapter,
+            asset_updates=req.asset_updates,
+        )
+
+    if req.chapter_index:
+        try:
+            with db.begin_nested():
+                hook_strength = max(1, min(5, req.chapter_index.hook_strength or 1))
+                index = db.query(ChapterIndex).filter(
+                    ChapterIndex.project_id == project_id,
+                    ChapterIndex.chapter_id == req.chapter_id,
+                ).first()
+                data = req.chapter_index.model_dump()
+                data["hook_strength"] = hook_strength
+                data["chapter_number"] = display_chapter_number(chapter.title, chapter.sort_order)
+                if data.get("story_day"):
+                    data["story_day"] = truncate(str(data["story_day"]), 100)
+                if index:
+                    for field, value in data.items():
+                        setattr(index, field, value)
+                else:
+                    index = ChapterIndex(
+                        project_id=project_id,
+                        chapter_id=req.chapter_id,
+                        **data,
+                    )
+                    db.add(index)
+                chapter_index_saved = True
+                synced_foreshadows = sync_chapter_index_foreshadows(
+                    db,
+                    project_id,
+                    chapter,
+                    req.chapter_index,
+                )
+        except SQLAlchemyError as exc:
+            chapter_index_error = exc.__class__.__name__
+
+    added_new_characters: List[str] = []
+    if req.new_characters:
+        existing_names = {
+            c.name for c in db.query(Character.name).filter(
+                Character.project_id == project_id
+            ).all()
+        }
+        chapter_num = display_chapter_number(chapter.title, chapter.sort_order)
+        _VALID_TIERS = {"core", "arc", "plot", "background"}
+        _ARC_SCOPE_TO_TIER = {
+            "single_chapter": "plot",
+            "mini_arc": "arc",
+            "long_arc": "core",
+        }
+        for nc in req.new_characters:
+            stored_name = truncate((nc.name or "").strip(), 100)
+            if not stored_name or stored_name in existing_names:
+                continue
+            tier = nc.character_tier if nc.character_tier in _VALID_TIERS else None
+            if tier is None:
+                tier = _ARC_SCOPE_TO_TIER.get(nc.arc_scope or "", "arc")
+            new_char_id = uuid4()
+            new_char = Character(
+                id=new_char_id,
+                project_id=project_id,
+                name=stored_name,
+                role=truncate(nc.role or "supporting", 20),
+                character_tier=tier,
+                gender=truncate(nc.gender, 20) if nc.gender else None,
+                age=truncate(nc.age, 50) if nc.age else None,
+                faction=truncate(nc.faction, 100) if nc.faction else None,
+                personality=nc.personality,
+                motivation=nc.motivation,
+                background=nc.background,
+                current_realm=truncate(nc.current_realm, 100) if nc.current_realm else None,
+                current_status=normalize_character_status(nc.current_status) or "alive",
+                current_location=truncate(nc.current_location, 200) if nc.current_location else None,
+                author_notes=nc.author_notes,
+                extra={"first_appearance_chapter": chapter_num, "arc_scope": nc.arc_scope},
+            )
+            db.add(new_char)
+
+            _tier_labels = {
+                "core": "核心长线", "arc": "弧线支柱",
+                "plot": "剧情推手", "background": "背景填充",
+            }
+            db.add(CharacterChangeLog(
+                project_id=project_id,
+                character_id=new_char_id,
+                character_name=new_char.name,
+                chapter_id=req.chapter_id,
+                chapter_number=str(chapter_num),
+                chapter_title=chapter.title or "",
+                source="debrief",
+                summary=f"首次登场 · {_tier_labels.get(tier, tier)}",
+                changes=[{
+                    "field": "created",
+                    "label": "首次入库",
+                    "before": None,
+                    "after": _tier_labels.get(tier, tier),
+                }],
+            ))
+
+            existing_names.add(stored_name)
+            added_new_characters.append(stored_name)
+
+    if req.notes:
+        memory = MemoryChunk(
+            project_id=project_id,
+            chapter_id=req.chapter_id,
+            chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
+            memory_type="event",
+            title="章节复盘备注",
+            content=req.notes.strip(),
+            tags=["复盘备注"],
+        )
+        db.add(memory)
+        _new_memory_chunks.append(memory)
+        added_memories.append(memory.title)
+
+    db.query(ChapterDebriefCache).filter(
+        ChapterDebriefCache.project_id == project_id,
+        ChapterDebriefCache.chapter_id == chapter.id,
+    ).delete(synchronize_session=False)
+
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        hint = str(getattr(exc, "orig", None) or exc)
+        hint = hint[:500] if hint else exc.__class__.__name__
+        raise HTTPException(400, f"章节复盘提交失败：{hint}") from exc
+
+    for mc in _new_memory_chunks:
+        embed_text = f"{mc.title or ''}\n{mc.content}".strip()
+        embed_chunk_async(mc.id, embed_text, SessionLocal)
+
+    new_char_suffix = f"、新配角入库 {len(added_new_characters)} 个（{', '.join(added_new_characters)}）" if added_new_characters else ""
+    return {
+        "ok": True,
+        "updated_characters": updated_chars,
+        "updated_storylines": updated_storylines,
+        "added_memories": added_memories,
+        "added_new_characters": added_new_characters,
+        "chapter_index_saved": chapter_index_saved,
+        "chapter_index_error": chapter_index_error,
+        "synced_foreshadows": synced_foreshadows,
+        "asset_updates": asset_stats,
+        "message": (
+            f"已更新 {len(updated_chars)} 个人物状态、{len(updated_storylines)} 条故事线、"
+            f"{len(added_memories)} 条记忆、章节索引={'已写入' if chapter_index_saved else '未更新'}、"
+            f"伏笔管理新增{synced_foreshadows['created']}条/更新{synced_foreshadows['updated']}条/"
+            f"回收{synced_foreshadows['resolved']}条、资产新增"
+            f"{asset_stats['created_items'] + asset_stats['created_skills'] + asset_stats['created_factions']}条/"
+            f"更新{asset_stats['updated_items'] + asset_stats['updated_skills'] + asset_stats['updated_factions']}条"
+            f"{new_char_suffix}"
+        ),
+    }
+
+
+@router.post("/auto-debrief")
+async def auto_debrief(
+    project_id: str,
+    req: AutoDebriefRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    AI 读取章节正文，对照当前人物状态和故事线，
+    提取本章发生的状态变化建议。结果仅供前端预填，
+    不直接写库——需用户确认后调用 /chapter-debrief 提交。
+    """
+    chapter = db.query(Chapter).filter(
+        Chapter.id == req.chapter_id, Chapter.project_id == project_id
+    ).first()
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+
+    if not (chapter.content or "").strip():
+        return {
+            "character_updates": [],
+            "storyline_updates": [],
+            "summary": "章节内容为空，无法分析",
+        }
+
+    characters = db.query(Character).filter(
+        Character.project_id == project_id
+    ).all()
+    character_states = [
+        {
+            "id": str(c.id),
+            "name": c.name,
+            "current_realm": c.current_realm or "",
+            "current_location": c.current_location or "",
+            "current_status": c.current_status or "alive",
+        }
+        for c in characters
+    ]
+
+    storylines = db.query(StoryLine).filter(
+        StoryLine.project_id == project_id,
+        StoryLine.status.in_(["planned", "active", "climax"])
+    ).all()
+    storylines_data = [
+        {
+            "id": str(s.id),
+            "name": s.name,
+            "line_type": s.line_type,
+            "status": s.status,
+            "core_conflict": s.core_conflict or s.description or "",
+        }
+        for s in storylines
+    ]
+
+    svc = AIService(
+        "gemini" if req.model_profile == "gemini" else "default",
+        db=db,
+        llm_provider_id=req.llm_provider_id,
+    )
+
+    plain_content = plain_text(chapter.content or "")
+    narrative_plain, _ = split_plain_manuscript_and_index_block(plain_content)
+    if not narrative_plain.strip():
+        narrative_plain = plain_content.strip()
+    content_hash = chapter_debrief_content_hash(narrative_plain)
+    current_llm_provider = str(req.llm_provider_id) if req.llm_provider_id else None
+
+    cached = db.query(ChapterDebriefCache).filter(
+        ChapterDebriefCache.project_id == project_id,
+        ChapterDebriefCache.chapter_id == chapter.id,
+    ).first()
+    if (
+        cached
+        and not req.force_refresh
+        and cached.content_hash == content_hash
+        and cached.model_profile == req.model_profile
+        and (cached.llm_provider_id or None) == current_llm_provider
+        and isinstance(cached.payload, dict)
+    ):
+        payload = dict(cached.payload)
+        payload["cached"] = True
+        return payload
+
+    result = await svc.auto_extract_debrief(
+        chapter_content=narrative_plain,
+        chapter_title=chapter.title,
+        chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
+        character_states=character_states,
+        storylines=storylines_data,
+    )
+    if isinstance(result, dict) and not result.get("error"):
+        if not cached:
+            cached = ChapterDebriefCache(
+                project_id=project_id,
+                chapter_id=chapter.id,
+            )
+            db.add(cached)
+        cached.content_hash = content_hash
+        cached.model_profile = req.model_profile
+        cached.llm_provider_id = current_llm_provider
+        cached.payload = result
+        try:
+            db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+    result["cached"] = False
+    return result

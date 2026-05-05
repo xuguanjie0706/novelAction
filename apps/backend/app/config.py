@@ -58,6 +58,8 @@ class Settings(BaseSettings):
 
     # 封面落盘（相对路径相对于进程 cwd；留空则使用后端目录下 data/covers）
     COVER_STORAGE_DIR: str = ""
+    # 封面生成失败时的调试包（meta + 原始 b64 等）；留空则使用 data/covers/debug
+    COVER_DEBUG_DIR: str = ""
     COVER_MAX_EDGE: int = 1024
     COVER_WEBP_QUALITY: int = 82
 

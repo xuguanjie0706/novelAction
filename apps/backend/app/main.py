@@ -50,7 +50,7 @@ class ForwardedHostASGIMiddleware:
         await self.app(scope, receive, send)
 from app.config import settings
 from app.database import engine, Base
-from app.routers import projects, world_settings, characters, outline, chapters, chapter_indexes, ai, generate, admin_llm, llm_public, admin_llm_calls
+from app.routers import projects, world_settings, characters, outline, chapters, chapter_indexes, ai, generate, admin_llm, llm_public, admin_llm_calls, admin_cover_image_calls
 from app.routers import storylines, power_systems, skills, items, factions
 from app.routers import foreshadows, quality_debts
 from app.routers import cover as cover_router
@@ -316,6 +316,7 @@ app.include_router(ai.router, prefix="/api/v1")
 app.include_router(generate.router, prefix="/api/v1")
 app.include_router(admin_llm.router, prefix="/api/v1")
 app.include_router(admin_llm_calls.router, prefix="/api/v1")
+app.include_router(admin_cover_image_calls.router, prefix="/api/v1")
 app.include_router(llm_public.router, prefix="/api/v1")
 # 新增模块路由
 app.include_router(storylines.router, prefix="/api/v1")

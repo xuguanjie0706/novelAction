@@ -5,6 +5,7 @@ import AdminLayout from './layouts/AdminLayout'
 import LlmCallLogsPage from './pages/LlmCallLogsPage'
 import LlmProvidersPage from './pages/LlmProvidersPage'
 import ImageProvidersPage from './pages/ImageProvidersPage'
+import CoverImageCallLogsPage from './pages/CoverImageCallLogsPage'
 import DebriefListPage from './pages/DebriefListPage'
 import NovelManagementPage from './pages/NovelManagementPage'
 import ReadingReviewPage from './pages/ReadingReviewPage'
@@ -21,6 +22,7 @@ export default function App() {
               <Route path="debriefs" element={<DebriefListPage />} />
               <Route path="llm" element={<LlmProvidersPage />} />
               <Route path="image-providers" element={<ImageProvidersPage />} />
+              <Route path="cover-image-calls" element={<CoverImageCallLogsPage />} />
               <Route path="llm-calls" element={<LlmCallLogsPage />} />
               <Route path="reading-review" element={<ReadingReviewPage />} />
             </Route>

@@ -14,6 +14,8 @@ apps/backend/.venv/
 apps/backend/__pycache__/
 apps/backend/**/*.pyc
 apps/backend/data/covers/*.webp
+# 封面生成失败调试包（含原始 base64，体积大）
+apps/backend/data/covers/debug/
 
 # Node（任意路径下的依赖目录，勿用仅根目录的 /node_modules/）
 node_modules/

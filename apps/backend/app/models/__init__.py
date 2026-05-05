@@ -21,6 +21,7 @@ from app.models.chapter_debrief_undo import ChapterDebriefUndo
 from app.models.outline_revision import OutlineRevision
 from app.models.quality_debt import QualityDebt
 from app.models.character_change_log import CharacterChangeLog
+from app.models.cover_image_call_log import CoverImageCallLog
 
 __all__ = [
     "Project",
@@ -45,4 +46,5 @@ __all__ = [
     "OutlineRevision",
     "QualityDebt",
     "CharacterChangeLog",
+    "CoverImageCallLog",
 ]

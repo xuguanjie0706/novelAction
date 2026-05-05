@@ -4,6 +4,7 @@ import {
   CheckSquareOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
+  FileImageOutlined,
   PictureOutlined,
   ReadOutlined,
 } from '@ant-design/icons'
@@ -24,6 +25,7 @@ export default function AdminLayout() {
     if (loc.pathname.startsWith('/debriefs')) return ['/debriefs']
     if (loc.pathname.startsWith('/reading-review')) return ['/reading-review']
     if (loc.pathname.startsWith('/llm-calls')) return ['/llm-calls']
+    if (loc.pathname.startsWith('/cover-image-calls')) return ['/cover-image-calls']
     if (loc.pathname.startsWith('/image-providers')) return ['/image-providers']
     if (loc.pathname.startsWith('/llm')) return ['/llm']
     return ['/novels']
@@ -74,6 +76,12 @@ export default function AdminLayout() {
               icon: <PictureOutlined />,
               label: '图片模型',
               onClick: () => navigate('/image-providers'),
+            },
+            {
+              key: '/cover-image-calls',
+              icon: <FileImageOutlined />,
+              label: '封面生成记录',
+              onClick: () => navigate('/cover-image-calls'),
             },
             {
               key: '/llm-calls',

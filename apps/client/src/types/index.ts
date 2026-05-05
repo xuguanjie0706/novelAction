@@ -34,6 +34,8 @@ export interface Character {
   name: string
   alias: string[]
   role: 'protagonist' | 'supporting' | 'antagonist' | 'neutral'
+  /** 叙事层级：core=核心长线 / arc=弧线支柱 / plot=剧情推手 / background=背景填充 */
+  character_tier: 'core' | 'arc' | 'plot' | 'background'
   gender?: string
   age?: string
   avatar_url?: string
@@ -270,6 +272,10 @@ export interface ChapterVersion {
   created_at: string
 }
 
+export interface ChapterVersionDetail extends ChapterVersion {
+  content: string
+}
+
 // ── Memory ────────────────────────────────────────────
 export interface MemoryChunk {
   id: string
@@ -466,4 +472,26 @@ export interface LlmOverview {
   } | null
   remote_source: 'database' | 'env' | 'none'
   remote_providers: RemoteProviderBrief[]
+}
+
+// ── CharacterChangeLog ────────────────────────────────
+export interface ChangeItem {
+  field:  string
+  label:  string
+  before: string | null
+  after:  string | null
+}
+
+export interface CharacterChangeLog {
+  id:             string
+  project_id:     string
+  character_id:   string
+  character_name: string
+  chapter_id:     string | null
+  chapter_number: string | null
+  chapter_title:  string | null
+  source:         'debrief' | 'manual' | 'bootstrap'
+  summary:        string | null
+  changes:        ChangeItem[]
+  created_at:     string
 }

@@ -113,6 +113,7 @@ export const charactersApi = {
   delete: (pid: string, id: string) => api.delete(`/projects/${pid}/characters/${id}`),
   listRelationships: (pid: string) => api.get(`/projects/${pid}/characters/relationships/all`),
   createRelationship: (pid: string, data: any) => api.post(`/projects/${pid}/characters/relationships`, data),
+  getChangelog: (pid: string, cid: string) => api.get(`/projects/${pid}/characters/${cid}/changelog`),
 }
 
 // ── StoryLines ────────────────────────────────────────
@@ -219,8 +220,16 @@ export const chaptersApi = {
   get: (pid: string, id: string) => api.get(`/projects/${pid}/chapters/${id}`),
   update: (pid: string, id: string, data: any) => api.patch(`/projects/${pid}/chapters/${id}`, data),
   delete: (pid: string, id: string) => api.delete(`/projects/${pid}/chapters/${id}`),
-  snapshot: (pid: string, id: string, note = '') => api.post(`/projects/${pid}/chapters/${id}/snapshot?note=${note}`),
+  snapshot: (pid: string, id: string, note = '', isAuto = false) => {
+    const q = new URLSearchParams()
+    if (note) q.set('note', note)
+    if (isAuto) q.set('is_auto', 'true')
+    const qs = q.toString()
+    return api.post(`/projects/${pid}/chapters/${id}/snapshot${qs ? `?${qs}` : ''}`)
+  },
   listVersions: (pid: string, id: string) => api.get(`/projects/${pid}/chapters/${id}/versions`),
+  getVersion: (pid: string, chapterId: string, versionId: string) =>
+    api.get(`/projects/${pid}/chapters/${chapterId}/versions/${versionId}`),
 }
 
 // ── Bootstrap（一句话生成）────────────────────────────

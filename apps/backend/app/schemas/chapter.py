@@ -49,3 +49,11 @@ class ChapterVersionOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ChapterVersionDetailOut(ChapterVersionOut):
+    """单条版本详情（含正文 HTML），用于历史预览与恢复"""
+    content: str
+
+    class Config:
+        from_attributes = True

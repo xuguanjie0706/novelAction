@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Crown, User, Swords, Zap, BookOpen, Eye, Trash2, Heart, TrendingUp, FileText, Target, NotebookPen, Search, Users } from 'lucide-react'
+import { Plus, Crown, User, Swords, Zap, BookOpen, Eye, Trash2, Heart, TrendingUp, FileText, Target, NotebookPen, Search, Users, History } from 'lucide-react'
 import { charactersApi, outlineApi } from '../api/client'
 import { useAppStore } from '../store'
-import type { Character } from '../types'
+import type { Character, CharacterChangeLog } from '../types'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 
@@ -15,6 +15,20 @@ const ROLE_META = {
   antagonist:  { label: '反派', color: 'bg-red-100 text-red-700 border-red-200',        Icon: Swords },
   neutral:     { label: '中立', color: 'bg-gray-100 text-gray-700 border-gray-200',     Icon: User  },
 } as const
+
+/**
+ * 叙事层级（character_tier）
+ * core        = 核心长线：贯穿全书，长期驱动主线/支线
+ * arc         = 弧线支柱：某卷/某段主导剧情，随弧线完结淡出
+ * plot        = 剧情推手：短期内推进特定剧情节点后退场
+ * background  = 背景填充：增加世界厚度，无强情节绑定
+ */
+const TIER_META: Record<string, { label: string; short: string; color: string; dot: string; desc: string }> = {
+  core:       { label: '核心长线', short: '长线', color: 'bg-violet-100 text-violet-700 border-violet-300', dot: 'bg-violet-500', desc: '贯穿全书，长期驱动主线' },
+  arc:        { label: '弧线支柱', short: '弧线', color: 'bg-blue-100 text-blue-700 border-blue-300',       dot: 'bg-blue-500',   desc: '某卷/某段主导剧情，随弧线完结淡出' },
+  plot:       { label: '剧情推手', short: '短期', color: 'bg-orange-100 text-orange-700 border-orange-300', dot: 'bg-orange-400', desc: '短期推进剧情节点后退场' },
+  background: { label: '背景填充', short: '背景', color: 'bg-gray-100 text-gray-500 border-gray-300',       dot: 'bg-gray-400',   desc: '增加世界厚度，无强情节绑定' },
+}
 
 const STATUS_META: Record<string, { label: string; dot: string }> = {
   alive:       { label: '存活', dot: 'bg-green-500' },
@@ -51,7 +65,7 @@ function TArea({ value, onChange, rows = 3, placeholder }: { value: string; onCh
 
 // ── 人物详情 ──────────────────────────────────────────────
 
-type DetailTab = 'basic' | 'appearance' | 'power' | 'depth' | 'growth'
+type DetailTab = 'basic' | 'appearance' | 'power' | 'depth' | 'growth' | 'changelog'
 
 const DETAIL_TABS: { key: DetailTab; label: string; icon: React.ElementType }[] = [
   { key: 'basic',      label: '基础',     icon: User },
@@ -59,6 +73,7 @@ const DETAIL_TABS: { key: DetailTab; label: string; icon: React.ElementType }[] 
   { key: 'power',      label: '实力体系', icon: Zap },
   { key: 'depth',      label: '深度性格', icon: Heart },
   { key: 'growth',     label: '成长轨迹', icon: TrendingUp },
+  { key: 'changelog',  label: '变更记录', icon: History },
 ]
 
 function CharacterTag({ children, tone = 'amber' }: { children: React.ReactNode; tone?: 'amber' | 'green' | 'red' }) {
@@ -129,8 +144,21 @@ function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
   const [detailTab, setDetailTab] = useState<DetailTab>('basic')
   const [realmTimeline, setRealmTimeline] = useState<ProtagonistRealmTimelinePayload | null>(null)
   const [realmTimelineLoading, setRealmTimelineLoading] = useState(false)
+  const [changelog, setChangelog] = useState<CharacterChangeLog[]>([])
+  const [changelogLoading, setChangelogLoading] = useState(false)
 
   useEffect(() => { setForm({ ...char }); setDetailTab('basic') }, [char.id])
+
+  useEffect(() => {
+    if (detailTab !== 'changelog') return
+    let cancelled = false
+    setChangelogLoading(true)
+    charactersApi.getChangelog(projectId, char.id)
+      .then(res => { if (!cancelled) setChangelog(res.data) })
+      .catch(() => { if (!cancelled) setChangelog([]) })
+      .finally(() => { if (!cancelled) setChangelogLoading(false) })
+    return () => { cancelled = true }
+  }, [detailTab, char.id, projectId])
 
   useEffect(() => {
     if (detailTab !== 'growth' || char.role !== 'protagonist') return
@@ -221,7 +249,7 @@ function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
 
       {/* 子Tab */}
       <div className="shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm mt-5 px-8">
-        <div className="grid grid-cols-5">
+        <div className="grid grid-cols-6">
           {DETAIL_TABS.map(({ key, label, icon: Icon }) => (
             <button key={key} onClick={() => setDetailTab(key)}
               className={clsx('relative flex items-center justify-center gap-3 py-5 text-lg font-semibold transition-colors',
@@ -249,6 +277,29 @@ function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
                   <Field label="性别"><TInput value={form.gender ?? ''} onChange={f('gender')} /></Field>
                   <Field label="年龄"><TInput value={form.age ?? ''} onChange={f('age')} /></Field>
                 </div>
+                <Field label="叙事层级">
+                  <div className="grid grid-cols-2 gap-2">
+                    {(Object.entries(TIER_META) as [string, typeof TIER_META[string]][]).map(([key, tm]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setForm(p => ({ ...p, character_tier: key as any }))}
+                        className={clsx(
+                          'flex items-start gap-2.5 px-3 py-2.5 rounded-xl border text-left transition-all',
+                          (form.character_tier ?? 'core') === key
+                            ? tm.color + ' shadow-sm ring-1 ring-current/30'
+                            : 'bg-gray-50 text-gray-400 border-gray-200 hover:border-gray-300',
+                        )}
+                      >
+                        <span className={clsx('w-2 h-2 rounded-full shrink-0 mt-1', tm.dot)} />
+                        <div>
+                          <div className="text-xs font-semibold leading-tight">{tm.label}</div>
+                          <div className="text-[10px] leading-tight mt-0.5 opacity-70">{tm.desc}</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </Field>
                 <div className="grid grid-cols-2 gap-5">
                   <Field label="所属势力"><TInput value={form.faction ?? ''} onChange={f('faction')} /></Field>
                   <Field label="势力职位"><TInput value={form.faction_rank ?? ''} onChange={f('faction_rank')} placeholder="如：内门首席弟子" /></Field>
@@ -479,6 +530,140 @@ function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
               <SaveBtn />
             </div>
           )}
+
+          {detailTab === 'changelog' && (
+            <ChangelogTab logs={changelog} loading={changelogLoading} />
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── 变更记录 Tab ──────────────────────────────────────────
+
+const CHANGE_FIELD_STYLE: Record<string, { dot: string; pill: string; label?: string }> = {
+  current_realm:    { dot: 'bg-violet-500', pill: 'bg-violet-50 text-violet-700 border-violet-200' },
+  current_status:   { dot: 'bg-red-500',    pill: 'bg-red-50 text-red-700 border-red-200' },
+  current_location: { dot: 'bg-blue-500',   pill: 'bg-blue-50 text-blue-700 border-blue-200' },
+  skill_gained:     { dot: 'bg-emerald-500',pill: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  item_gained:      { dot: 'bg-amber-500',  pill: 'bg-amber-50 text-amber-700 border-amber-200' },
+  item_lost:        { dot: 'bg-orange-400', pill: 'bg-orange-50 text-orange-700 border-orange-200' },
+  created:          { dot: 'bg-orange-500', pill: 'bg-orange-50 text-orange-700 border-orange-200' },
+  character_tier:   { dot: 'bg-purple-400', pill: 'bg-purple-50 text-purple-700 border-purple-200' },
+  faction:          { dot: 'bg-cyan-500',   pill: 'bg-cyan-50 text-cyan-700 border-cyan-200' },
+  role:             { dot: 'bg-gray-400',   pill: 'bg-gray-50 text-gray-600 border-gray-200' },
+}
+
+const SOURCE_META: Record<string, { label: string; color: string }> = {
+  debrief:   { label: '复盘', color: 'bg-blue-100 text-blue-700' },
+  manual:    { label: '手动', color: 'bg-gray-100 text-gray-600' },
+  bootstrap: { label: '生成', color: 'bg-violet-100 text-violet-700' },
+}
+
+function ChangePill({ field, label, before, after }: {
+  field: string; label: string; before: string | null; after: string | null
+}) {
+  const style = CHANGE_FIELD_STYLE[field] ?? { dot: 'bg-gray-400', pill: 'bg-gray-50 text-gray-600 border-gray-200' }
+  let text = ''
+  if (field === 'created') {
+    text = `首次入库 · ${after ?? ''}`
+  } else if (before && after) {
+    text = `${label} ${before} → ${after}`
+  } else if (after) {
+    text = `${label}：${after}`
+  } else if (before) {
+    text = `失去${label}：${before}`
+  }
+  return (
+    <span className={clsx('inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border font-medium', style.pill)}>
+      <span className={clsx('w-1.5 h-1.5 rounded-full flex-shrink-0', style.dot)} />
+      {text}
+    </span>
+  )
+}
+
+function ChangelogTab({ logs, loading }: { logs: CharacterChangeLog[]; loading: boolean }) {
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16 text-gray-400 text-sm">
+        加载中…
+      </div>
+    )
+  }
+  if (logs.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-center text-gray-400">
+        <History size={32} className="mb-3 opacity-30" />
+        <p className="text-sm">暂无变更记录</p>
+        <p className="text-xs mt-1 text-gray-300">复盘提交或手动保存后会自动记录</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+      <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center gap-2">
+          <History size={16} className="text-gray-400" />
+          <span className="text-sm font-semibold text-gray-700">变更时间轴</span>
+        </div>
+        <span className="text-xs text-gray-400">{logs.length} 条记录</span>
+      </div>
+
+      <div className="relative">
+        {/* 竖线 */}
+        <div className="absolute left-3.5 top-2 bottom-2 w-px bg-gray-100" />
+
+        <div className="space-y-0">
+          {logs.map((log, idx) => {
+            const srcMeta = SOURCE_META[log.source] ?? SOURCE_META.manual
+            // 用第一个 change 的颜色作为时间轴节点色
+            const firstField = log.changes[0]?.field ?? 'created'
+            const dotColor = (CHANGE_FIELD_STYLE[firstField] ?? CHANGE_FIELD_STYLE.created).dot
+
+            return (
+              <div key={log.id} className="flex gap-4 pb-5 relative">
+                {/* 节点 */}
+                <div className="flex-shrink-0 w-7 flex justify-center pt-0.5">
+                  <div className={clsx('w-3 h-3 rounded-full border-2 border-white ring-1 ring-gray-200 relative z-10', dotColor)} />
+                </div>
+
+                {/* 内容 */}
+                <div className="flex-1 min-w-0 bg-gray-50 rounded-xl p-3.5 border border-gray-100">
+                  {/* 头部：章节 + 来源 */}
+                  <div className="flex items-center justify-between gap-2 mb-2.5">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {log.chapter_number && (
+                        <span className="text-xs font-semibold text-gray-700 truncate">
+                          {log.chapter_number}
+                          {log.chapter_title ? `《${log.chapter_title}》` : ''}
+                        </span>
+                      )}
+                      {!log.chapter_number && (
+                        <span className="text-xs font-semibold text-gray-500">无章节关联</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <span className={clsx('text-[10px] px-1.5 py-0.5 rounded font-medium', srcMeta.color)}>
+                        {srcMeta.label}
+                      </span>
+                      <span className="text-[10px] text-gray-300">
+                        {new Date(log.created_at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 变更 Pills */}
+                  <div className="flex flex-wrap gap-1.5">
+                    {log.changes.map((c, i) => (
+                      <ChangePill key={i} field={c.field} label={c.label} before={c.before} after={c.after} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )
+          })}
         </div>
       </div>
     </div>
@@ -489,6 +674,7 @@ function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
 
 type RoleFilter   = 'all' | 'protagonist' | 'supporting' | 'antagonist' | 'neutral'
 type StatusFilter = 'all' | 'alive' | 'dead' | 'missing' | 'sealed' | 'transformed'
+type TierFilter   = 'all' | 'core' | 'arc' | 'plot' | 'background'
 type GroupBy      = 'role' | 'faction'
 
 const ROLE_CHIPS: { key: RoleFilter; label: string }[] = [
@@ -506,6 +692,14 @@ const STATUS_CHIPS: { key: StatusFilter; label: string }[] = [
   { key: 'sealed',      label: '封印' },
 ]
 
+const TIER_CHIPS: { key: TierFilter; label: string }[] = [
+  { key: 'all',        label: '全部' },
+  { key: 'core',       label: '长线' },
+  { key: 'arc',        label: '弧线' },
+  { key: 'plot',       label: '短期' },
+  { key: 'background', label: '背景' },
+]
+
 export default function CharactersPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const { characters, setCharacters, upsertCharacter, removeCharacter } = useAppStore()
@@ -514,6 +708,7 @@ export default function CharactersPage() {
   const [searchQ, setSearchQ]           = useState('')
   const [roleFilter, setRoleFilter]     = useState<RoleFilter>('all')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [tierFilter, setTierFilter]     = useState<TierFilter>('all')
   const [groupBy, setGroupBy]           = useState<GroupBy>('role')
 
   useEffect(() => {
@@ -531,9 +726,10 @@ export default function CharactersPage() {
       if (q && !c.name.toLowerCase().includes(q) && !(c.faction ?? '').toLowerCase().includes(q)) return false
       if (roleFilter !== 'all' && c.role !== roleFilter) return false
       if (statusFilter !== 'all' && (c.current_status ?? 'alive') !== statusFilter) return false
+      if (tierFilter !== 'all' && (c.character_tier ?? 'core') !== tierFilter) return false
       return true
     })
-  }, [characters, searchQ, roleFilter, statusFilter])
+  }, [characters, searchQ, roleFilter, statusFilter, tierFilter])
 
   // ── 分组 ──────────────────────────────────────────────────
   const groups = useMemo(() => {
@@ -587,7 +783,7 @@ export default function CharactersPage() {
     toast.success('已删除')
   }
 
-  const hasFilter = searchQ.trim() !== '' || roleFilter !== 'all' || statusFilter !== 'all'
+  const hasFilter = searchQ.trim() !== '' || roleFilter !== 'all' || statusFilter !== 'all' || tierFilter !== 'all'
 
   return (
     <div className="flex h-full">
@@ -659,7 +855,7 @@ export default function CharactersPage() {
         </div>
 
         {/* 状态筛选 */}
-        <div className="px-3 pb-2 shrink-0">
+        <div className="px-3 pb-1 shrink-0">
           <div className="flex gap-1 flex-wrap">
             {STATUS_CHIPS.map(chip => (
               <button key={chip.key} onClick={() => setStatusFilter(chip.key)}
@@ -674,6 +870,30 @@ export default function CharactersPage() {
                 {chip.label}
               </button>
             ))}
+          </div>
+        </div>
+
+        {/* 叙事层级筛选 */}
+        <div className="px-3 pb-2 shrink-0">
+          <div className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mb-1">叙事层级</div>
+          <div className="flex gap-1 flex-wrap">
+            {TIER_CHIPS.map(chip => {
+              const tm = TIER_META[chip.key as string]
+              return (
+                <button key={chip.key} onClick={() => setTierFilter(chip.key)}
+                  className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-medium transition-colors',
+                    tierFilter === chip.key
+                      ? chip.key === 'all'
+                        ? 'bg-gray-700 text-white border-gray-700'
+                        : tm.color + ' shadow-sm'
+                      : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-400')}>
+                  {tm && chip.key !== 'all' && (
+                    <span className={clsx('inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle', tm.dot)} />
+                  )}
+                  {chip.label}
+                </button>
+              )
+            })}
           </div>
         </div>
 
@@ -710,10 +930,22 @@ export default function CharactersPage() {
                           <span className={clsx('shrink-0 text-[9px] px-1 rounded border', rm.color)}>{rm.label}</span>
                         )}
                       </div>
-                      <div className="text-[10px] text-gray-400 truncate">
-                        {groupBy === 'role'
-                          ? (c.current_realm ?? c.faction ?? c.current_location ?? c.gender ?? '')
-                          : (c.current_realm ?? c.faction_rank ?? c.gender ?? '')}
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        {/* 叙事层级 badge */}
+                        {(() => {
+                          const tier = c.character_tier ?? 'core'
+                          const tm = TIER_META[tier]
+                          return tm ? (
+                            <span className={clsx('shrink-0 text-[9px] px-1 py-px rounded border leading-tight font-medium', tm.color)}>
+                              {tm.short}
+                            </span>
+                          ) : null
+                        })()}
+                        <span className="text-[10px] text-gray-400 truncate">
+                          {groupBy === 'role'
+                            ? (c.current_realm ?? c.faction ?? c.current_location ?? c.gender ?? '')
+                            : (c.current_realm ?? c.faction_rank ?? c.gender ?? '')}
+                        </span>
                       </div>
                     </div>
                   </button>
@@ -724,7 +956,7 @@ export default function CharactersPage() {
             <div className="py-10 text-center">
               {characters.length === 0
                 ? <p className="text-xs text-gray-400 px-4">暂无人物，点击 + 创建</p>
-                : <p className="text-xs text-gray-400 px-4">无匹配人物<br /><button onClick={() => { setSearchQ(''); setRoleFilter('all'); setStatusFilter('all') }} className="mt-1 text-amber-500 hover:underline">清除筛选</button></p>
+                : <p className="text-xs text-gray-400 px-4">无匹配人物<br /><button onClick={() => { setSearchQ(''); setRoleFilter('all'); setStatusFilter('all'); setTierFilter('all') }} className="mt-1 text-amber-500 hover:underline">清除筛选</button></p>
               }
             </div>
           )}

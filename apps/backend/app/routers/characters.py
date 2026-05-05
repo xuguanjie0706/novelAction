@@ -1,12 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from app.database import get_db
-from app.models import Character, CharacterRelationship
+from app.models import Character, CharacterRelationship, CharacterChangeLog
 from app.schemas.character import (
     CharacterCreate, CharacterUpdate, CharacterOut,
     RelationshipCreate, RelationshipOut
 )
+from app.schemas.character_change_log import CharacterChangeLogOut
 
 router = APIRouter(prefix="/projects/{project_id}/characters", tags=["characters"])
 
@@ -40,6 +41,9 @@ def _normalize_character_defaults(char: Character) -> bool:
         changed = True
     if char.current_status is None:
         char.current_status = "alive"
+        changed = True
+    if char.character_tier is None:
+        char.character_tier = "core"
         changed = True
     return changed
 
@@ -78,6 +82,18 @@ def get_character(project_id: str, character_id: str, db: Session = Depends(get_
     return char
 
 
+# 手动编辑时需要追踪的字段及中文标签
+_TRACKED_FIELDS = {
+    "current_realm":    "境界",
+    "current_status":   "状态",
+    "current_location": "位置",
+    "character_tier":   "叙事层级",
+    "faction":          "所属势力",
+    "faction_rank":     "势力职位",
+    "role":             "角色类型",
+}
+
+
 @router.patch("/{character_id}", response_model=CharacterOut)
 def update_character(project_id: str, character_id: str, payload: CharacterUpdate, db: Session = Depends(get_db)):
     char = db.query(Character).filter(
@@ -85,9 +101,34 @@ def update_character(project_id: str, character_id: str, payload: CharacterUpdat
     ).first()
     if not char:
         raise HTTPException(404, "Character not found")
-    for field, value in payload.model_dump(exclude_none=True).items():
+
+    # 在修改前记录需要追踪的字段原值
+    updates = payload.model_dump(exclude_none=True)
+    changes = []
+    for field, label in _TRACKED_FIELDS.items():
+        if field in updates:
+            before_val = getattr(char, field, None)
+            after_val  = updates[field]
+            if str(before_val or "") != str(after_val or ""):
+                changes.append({"field": field, "label": label,
+                                 "before": before_val, "after": after_val})
+
+    for field, value in updates.items():
         setattr(char, field, value)
     _normalize_character_defaults(char)
+
+    # 有实质变更才写审计日志
+    if changes:
+        log = CharacterChangeLog(
+            project_id=project_id,
+            character_id=char.id,
+            character_name=char.name,
+            source="manual",
+            summary=f"手动编辑：{'、'.join(c['label'] for c in changes)}",
+            changes=changes,
+        )
+        db.add(log)
+
     db.commit()
     db.refresh(char)
     return char
@@ -102,6 +143,28 @@ def delete_character(project_id: str, character_id: str, db: Session = Depends(g
         raise HTTPException(404, "Character not found")
     db.delete(char)
     db.commit()
+
+
+# --- 变更审计日志 ---
+
+@router.get("/{character_id}/changelog", response_model=List[CharacterChangeLogOut])
+def get_character_changelog(
+    project_id: str,
+    character_id: str,
+    limit: int = Query(default=100, le=500),
+    db: Session = Depends(get_db),
+):
+    """获取某人物的全部变更记录，按时间倒序。"""
+    return (
+        db.query(CharacterChangeLog)
+        .filter(
+            CharacterChangeLog.project_id   == project_id,
+            CharacterChangeLog.character_id == character_id,
+        )
+        .order_by(CharacterChangeLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
 
 
 # --- 关系图 ---

@@ -1,17 +1,22 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List
 from app.database import get_db
 from app.models import (
+    CharacterChangeLog,
     Chapter,
     ChapterDebriefCache,
+    ChapterDebriefUndo,
     ChapterIndex,
     ChapterVersion,
+    Character,
     Foreshadow,
     MemoryChunk,
     QualityDebt,
+    StoryLine,
 )
-from app.schemas import ChapterCreate, ChapterUpdate, ChapterOut, ChapterVersionOut
+from app.schemas import ChapterCreate, ChapterUpdate, ChapterOut, ChapterVersionOut, ChapterVersionDetailOut
+from app.schemas.character_change_log import CharacterChangeLogOut
 
 router = APIRouter(prefix="/projects/{project_id}/chapters", tags=["chapters"])
 
@@ -44,13 +49,90 @@ def delete_chapter_artifacts(db: Session, project_id: str, chapter_id: str) -> N
 
 def clear_chapter_rewrite_derivatives(db: Session, project_id: str, chapter_id: str) -> None:
     """
-    整章重写（replace_existing）开始前调用：清掉本章旧稿派生数据，避免与新正文、新复盘叠加矛盾。
+    整章重写（replace_existing）或删章前调用：清掉本章旧稿派生数据，避免与新正文、新复盘叠加矛盾。
 
-    - 记忆 / ChapterIndex / 质检债：同 delete_chapter_artifacts
-    - 自动复盘草稿缓存
-    - 在本章埋下的全局伏笔（旧稿线索）
-    - 在本章被标记「已回收」、但埋在其他章的伏笔：解除回收，改回 open，便于新稿重新对齐
+    处理顺序：
+    1. 从 undo 快照回滚覆盖型字段（character realm/location/status/realm_rank、storyline status）
+    2. 按 chapter_id 精确清除追加型数据（storyline beats、character known_skills/owned_items）
+    3. 清除 realm_milestones 快照中本章记录
+    4. 清除记忆 / ChapterIndex / 质检债 / 复盘缓存 / 伏笔
+    5. 删除 undo 快照行
     """
+    # ── 1. 回滚覆盖型字段 ─────────────────────────��────
+    undo = db.query(ChapterDebriefUndo).filter(
+        ChapterDebriefUndo.chapter_id == chapter_id
+    ).first()
+    if undo:
+        for snap in (undo.char_states or []):
+            cid = snap.get("character_id")
+            if not cid:
+                continue
+            char = db.query(Character).filter(
+                Character.id == cid,
+                Character.project_id == project_id,
+            ).first()
+            if not char:
+                continue
+            if snap.get("current_realm") is not None:
+                char.current_realm = snap["current_realm"]
+            if snap.get("current_location") is not None:
+                char.current_location = snap["current_location"]
+            if snap.get("current_status") is not None:
+                char.current_status = snap["current_status"]
+            if snap.get("realm_rank") is not None:
+                char.realm_rank = snap["realm_rank"]
+
+        for snap in (undo.storyline_statuses or []):
+            sid = snap.get("storyline_id")
+            if not sid:
+                continue
+            sl = db.query(StoryLine).filter(
+                StoryLine.id == sid,
+                StoryLine.project_id == project_id,
+            ).first()
+            if sl and snap.get("status") is not None:
+                sl.status = snap["status"]
+
+    # ── 2. 清除追加型数据（beats / skills / items）────────
+    for sl in db.query(StoryLine).filter(StoryLine.project_id == project_id).all():
+        if sl.key_beats:
+            cleaned = [
+                b for b in sl.key_beats
+                if not (isinstance(b, dict) and b.get("chapter_id") == chapter_id)
+            ]
+            if len(cleaned) != len(sl.key_beats):
+                sl.key_beats = cleaned
+
+    for char in db.query(Character).filter(Character.project_id == project_id).all():
+        changed = False
+        if char.known_skills:
+            cleaned = [
+                s for s in char.known_skills
+                if not (isinstance(s, dict) and s.get("from_chapter_id") == chapter_id)
+            ]
+            if len(cleaned) != len(char.known_skills):
+                char.known_skills = cleaned
+                changed = True
+        if char.owned_items:
+            cleaned = [
+                i for i in char.owned_items
+                if not (isinstance(i, dict) and i.get("from_chapter_id") == chapter_id)
+            ]
+            if len(cleaned) != len(char.owned_items):
+                char.owned_items = cleaned
+                changed = True
+        # ── 3. 清除 realm_milestones 中本章记录 ────────
+        if isinstance(char.extra, dict) and char.extra.get("debrief_realm_milestones"):
+            milestones = char.extra["debrief_realm_milestones"]
+            cleaned_ms = [
+                m for m in milestones
+                if not (isinstance(m, dict) and m.get("chapter_id") == chapter_id)
+            ]
+            if len(cleaned_ms) != len(milestones):
+                char.extra = {**char.extra, "debrief_realm_milestones": cleaned_ms}
+                changed = True
+
+    # ── 4. 清除记忆 / ChapterIndex / 质检债 / 复盘缓存 / 伏笔 ──
     delete_chapter_artifacts(db, project_id, chapter_id)
     db.query(ChapterDebriefCache).filter(
         ChapterDebriefCache.project_id == project_id,
@@ -72,6 +154,10 @@ def clear_chapter_rewrite_derivatives(db: Session, project_id: str, chapter_id: 
         row.resolved_chapter_number = None
         if row.status == "resolved":
             row.status = "open"
+
+    # ── 5. 删除 undo 快照 ─────────────────────────────
+    if undo:
+        db.delete(undo)
 
 
 def normalize_chapter_sort_orders(db: Session, project_id: str) -> None:
@@ -137,7 +223,7 @@ def update_chapter(project_id: str, chapter_id: str, payload: ChapterUpdate, db:
     ).first()
     if not chapter:
         raise HTTPException(404, "Chapter not found")
-    data = payload.model_dump(exclude_none=True)
+    data = payload.model_dump(exclude_unset=True)
     if "content" in data:
         data["word_count"] = count_words(data["content"])
     for field, value in data.items():
@@ -188,6 +274,51 @@ def create_snapshot(
 
 @router.get("/{chapter_id}/versions", response_model=List[ChapterVersionOut])
 def list_versions(project_id: str, chapter_id: str, db: Session = Depends(get_db)):
+    chapter = db.query(Chapter).filter(
+        Chapter.id == chapter_id, Chapter.project_id == project_id
+    ).first()
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
     return db.query(ChapterVersion).filter(
         ChapterVersion.chapter_id == chapter_id
     ).order_by(ChapterVersion.created_at.desc()).all()
+
+
+@router.get("/{chapter_id}/versions/{version_id}", response_model=ChapterVersionDetailOut)
+def get_version(
+    project_id: str,
+    chapter_id: str,
+    version_id: str,
+    db: Session = Depends(get_db),
+):
+    chapter = db.query(Chapter).filter(
+        Chapter.id == chapter_id, Chapter.project_id == project_id
+    ).first()
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+    version = db.query(ChapterVersion).filter(
+        ChapterVersion.id == version_id,
+        ChapterVersion.chapter_id == chapter_id,
+    ).first()
+    if not version:
+        raise HTTPException(404, "Version not found")
+    return version
+
+
+
+@router.get("/{chapter_id}/changelog", response_model=List[CharacterChangeLogOut])
+def get_chapter_character_changelog(
+    project_id: str,
+    chapter_id: str,
+    db: Session = Depends(get_db),
+):
+    """获取某章节涉及的所有人物变更，用于复盘总览。"""
+    return (
+        db.query(CharacterChangeLog)
+        .filter(
+            CharacterChangeLog.project_id == project_id,
+            CharacterChangeLog.chapter_id == chapter_id,
+        )
+        .order_by(CharacterChangeLog.created_at.asc())
+        .all()
+    )

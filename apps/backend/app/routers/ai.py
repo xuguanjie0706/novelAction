@@ -22,6 +22,7 @@ from app.models import (
     Project,
     WorldSetting,
     Character,
+    CharacterChangeLog,
     ChapterIndex,
     OutlineNode,
     StoryLine,
@@ -32,6 +33,7 @@ from app.models import (
     Item,
     Skill,
     ChapterDebriefCache,
+    ChapterDebriefUndo,
     AiChatMessage,
     QualityDebt,
 )
@@ -2532,6 +2534,8 @@ class NewCharacterPayload(BaseModel):
     """auto_debrief 从正文识别出的新配角，由 chapter_debrief 写入 DB。"""
     name: str
     role: str = "supporting"
+    # 叙事层级：core=核心长线 / arc=弧线支柱 / plot=剧情推手 / background=背景填充
+    character_tier: Optional[str] = None
     gender: Optional[str] = None
     age: Optional[str] = None
     faction: Optional[str] = None
@@ -2541,7 +2545,7 @@ class NewCharacterPayload(BaseModel):
     current_realm: Optional[str] = None
     current_status: Optional[str] = "alive"
     current_location: Optional[str] = None
-    arc_scope: Optional[str] = "mini_arc"   # single_chapter / mini_arc / long_arc
+    arc_scope: Optional[str] = "mini_arc"   # single_chapter / mini_arc / long_arc（兼容旧字段，tier 优先）
     author_notes: Optional[str] = None
 
 
@@ -2695,7 +2699,7 @@ def _apply_asset_updates(
     }
 
     for data in asset_updates.new_items:
-        name = (data.name or "").strip()
+        name = _truncate((data.name or "").strip(), 100)
         if not name or data.tier == "C":
             continue
         owner = _find_character(db, project_id, data.current_owner_id, data.current_owner_name)
@@ -2706,8 +2710,8 @@ def _apply_asset_updates(
             item = Item(id=uuid4(), project_id=project_id, name=name)
             db.add(item)
             stats["created_items"] += 1
-        item.item_type = data.item_type or item.item_type
-        item.rarity = data.rarity or item.rarity
+        item.item_type = _truncate(data.item_type or item.item_type or "artifact", 20)
+        item.rarity = _truncate(data.rarity or item.rarity or "rare", 20)
         item.description = data.description or item.description
         item.origin = data.origin or item.origin
         item.effects = data.effects or item.effects
@@ -2715,7 +2719,7 @@ def _apply_asset_updates(
         item.current_owner_id = owner.id if owner else item.current_owner_id
         item.story_significance = data.story_significance or item.story_significance
         item.first_appearance_chapter = item.first_appearance_chapter or chapter_number
-        item.status = data.status or item.status
+        item.status = _truncate(data.status or item.status or "intact", 20)
         item.extra = _merge_extra(
             item.extra,
             asset_tier=data.tier,
@@ -2737,7 +2741,7 @@ def _apply_asset_updates(
         if not item:
             continue
         owner = _find_character(db, project_id, data.current_owner_id, data.current_owner_name)
-        item.status = data.status or item.status
+        item.status = _truncate(data.status or item.status or "intact", 20)
         item.effects = data.effects or item.effects
         item.limitations = data.limitations or item.limitations
         item.story_significance = data.story_significance or item.story_significance
@@ -2755,7 +2759,7 @@ def _apply_asset_updates(
         stats["updated_items"] += 1
 
     for data in asset_updates.new_skills:
-        name = (data.name or "").strip()
+        name = _truncate((data.name or "").strip(), 100)
         if not name or data.tier == "C":
             continue
         skill = _find_asset_by_id_or_name(db, Skill, project_id, None, name)
@@ -2765,10 +2769,13 @@ def _apply_asset_updates(
             skill = Skill(id=uuid4(), project_id=project_id, name=name)
             db.add(skill)
             stats["created_skills"] += 1
-        skill.skill_type = data.skill_type or skill.skill_type
-        skill.grade = data.grade or skill.grade
-        skill.source = data.source or skill.source
-        skill.level_required = data.level_required or skill.level_required
+        skill.skill_type = _truncate(data.skill_type or skill.skill_type or "combat", 20)
+        skill.grade = _truncate(data.grade or skill.grade or "earth", 20)
+        skill.source = _truncate(data.source or skill.source, 200) if (data.source or skill.source) else skill.source
+        skill.level_required = _truncate(
+            data.level_required or skill.level_required,
+            100,
+        ) if (data.level_required or skill.level_required) else skill.level_required
         skill.prerequisites = data.prerequisites or skill.prerequisites
         skill.description = data.description or skill.description
         skill.effects = data.effects or skill.effects
@@ -2812,7 +2819,7 @@ def _apply_asset_updates(
         stats["updated_skills"] += 1
 
     for data in asset_updates.new_factions:
-        name = (data.name or "").strip()
+        name = _truncate((data.name or "").strip(), 100)
         if not name or data.tier == "C":
             continue
         faction = _find_asset_by_id_or_name(db, Faction, project_id, None, name)
@@ -2822,14 +2829,20 @@ def _apply_asset_updates(
             faction = Faction(id=uuid4(), project_id=project_id, name=name)
             db.add(faction)
             stats["created_factions"] += 1
-        faction.faction_type = data.faction_type or faction.faction_type
-        faction.alignment = data.alignment or faction.alignment
+        faction.faction_type = _truncate(data.faction_type or faction.faction_type or "other", 20)
+        faction.alignment = _truncate(data.alignment or faction.alignment or "neutral", 20)
         faction.description = data.description or faction.description
         faction.territory = data.territory or faction.territory
-        faction.strength_level = data.strength_level or faction.strength_level
+        faction.strength_level = _truncate(
+            data.strength_level or faction.strength_level,
+            100,
+        ) if (data.strength_level or faction.strength_level) else faction.strength_level
         faction.goals = data.goals or faction.goals
         faction.resources = data.resources or faction.resources
-        faction.attitude_to_protagonist = data.attitude_to_protagonist or faction.attitude_to_protagonist
+        faction.attitude_to_protagonist = _truncate(
+            data.attitude_to_protagonist or faction.attitude_to_protagonist or "neutral",
+            20,
+        )
         faction.extra = _merge_extra(
             faction.extra,
             asset_tier=data.tier,
@@ -2841,10 +2854,13 @@ def _apply_asset_updates(
         faction = _find_asset_by_id_or_name(db, Faction, project_id, data.faction_id, data.faction_name)
         if not faction:
             continue
-        faction.alignment = data.alignment or faction.alignment
+        faction.alignment = _truncate(data.alignment or faction.alignment or "neutral", 20)
         faction.goals = data.goals or faction.goals
         faction.resources = data.resources or faction.resources
-        faction.attitude_to_protagonist = data.attitude_to_protagonist or faction.attitude_to_protagonist
+        faction.attitude_to_protagonist = _truncate(
+            data.attitude_to_protagonist or faction.attitude_to_protagonist or "neutral",
+            20,
+        )
         faction.extra = _merge_extra(faction.extra, last_update_note=data.event_note, last_update_chapter=chapter_number)
         stats["updated_factions"] += 1
 
@@ -2883,6 +2899,57 @@ def chapter_debrief(
         "updated_factions": 0,
     }
 
+    # ── 保存 undo 快照（首次提交时记录，重复提交不覆盖）────────────────
+    # 用于删章/重写时回滚覆盖型字段（realm/location/status/realm_rank/storyline.status）
+    existing_undo = db.query(ChapterDebriefUndo).filter(
+        ChapterDebriefUndo.chapter_id == req.chapter_id
+    ).first()
+    if not existing_undo:
+        char_ids_to_snap = {str(cu.character_id) for cu in req.character_updates if cu.character_id}
+        sl_ids_to_snap   = {str(su.storyline_id) for su in req.storyline_updates if su.storyline_id}
+
+        char_states_snap = []
+        for cid in char_ids_to_snap:
+            try:
+                cid_uuid = UUID(cid)
+            except Exception:
+                continue
+            c = db.query(Character).filter(
+                Character.id == cid_uuid, Character.project_id == project_id
+            ).first()
+            if c:
+                char_states_snap.append({
+                    "character_id": cid,
+                    "current_realm":    c.current_realm,
+                    "current_location": c.current_location,
+                    "current_status":   c.current_status,
+                    "realm_rank":       c.realm_rank,
+                })
+
+        sl_statuses_snap = []
+        for sid in sl_ids_to_snap:
+            try:
+                sid_uuid = UUID(sid)
+            except Exception:
+                continue
+            sl = db.query(StoryLine).filter(
+                StoryLine.id == sid_uuid, StoryLine.project_id == project_id
+            ).first()
+            if sl:
+                sl_statuses_snap.append({
+                    "storyline_id": sid,
+                    "status": sl.status,
+                })
+
+        undo_row = ChapterDebriefUndo(
+            project_id=project_id,
+            chapter_id=req.chapter_id,
+            char_states=char_states_snap,
+            storyline_statuses=sl_statuses_snap,
+        )
+        db.add(undo_row)
+        # 不单独 commit，随后续操作一起提交
+
     # ── 更新人物状态 ──────────────────────────────────
     for cu in req.character_updates:
         try:
@@ -2897,6 +2964,11 @@ def chapter_debrief(
         ).first()
         if not char:
             continue
+
+        # ── 审计：记录 before 快照 ──────────────────────
+        _before_realm    = char.current_realm
+        _before_status   = char.current_status
+        _before_location = char.current_location
 
         if cu.current_realm is not None:
             char.current_realm = cu.current_realm.strip()[:100]
@@ -2920,6 +2992,7 @@ def chapter_debrief(
                 hist.append(
                     {
                         "chapter_number": chapter_num,
+                        "chapter_id": str(req.chapter_id),
                         "chapter_title": (chapter.title or "")[:300],
                         "realm_name": realm_label,
                         "realm_rank": rank_snap,
@@ -2937,39 +3010,91 @@ def chapter_debrief(
                 char.current_status = normalized_status
 
         # 追加新技能
+        _added_skill_name = None
         if cu.add_skill:
             skills = list(char.known_skills or [])
-            # 防止重复（相同 skill_id 则更新 mastery）
-            existing_ids = {
-                s.get("skill_id") for s in skills if isinstance(s, dict)
-            }
+            skill_with_source = {**cu.add_skill, "from_chapter_id": str(req.chapter_id)}
+            existing_ids = {s.get("skill_id") for s in skills if isinstance(s, dict)}
             if cu.add_skill.get("skill_id") in existing_ids:
                 skills = [
-                    {**s, "mastery": cu.add_skill.get("mastery", s.get("mastery"))}
+                    {**s, "mastery": cu.add_skill.get("mastery", s.get("mastery")),
+                     "from_chapter_id": str(req.chapter_id)}
                     if isinstance(s, dict) and s.get("skill_id") == cu.add_skill.get("skill_id")
                     else s
                     for s in skills
                 ]
             else:
-                skills.append(cu.add_skill)
+                skills.append(skill_with_source)
+                _added_skill_name = cu.add_skill.get("skill_name") or cu.add_skill.get("add_skill_name")
             char.known_skills = skills
 
         # 追加新道具
+        _added_item_name = None
         if cu.add_item:
             items = list(char.owned_items or [])
-            existing_item_ids = {
-                i.get("item_id") for i in items if isinstance(i, dict)
-            }
+            existing_item_ids = {i.get("item_id") for i in items if isinstance(i, dict)}
             if cu.add_item.get("item_id") not in existing_item_ids:
-                items.append(cu.add_item)
+                item_with_source = {**cu.add_item, "from_chapter_id": str(req.chapter_id)}
+                items.append(item_with_source)
+                _added_item_name = cu.add_item.get("item_name") or cu.add_item.get("add_item_name")
             char.owned_items = items
 
         # 移除道具
+        _removed_item_name = None
         if cu.remove_item_id:
+            _removed = next(
+                (i for i in (char.owned_items or [])
+                 if isinstance(i, dict) and i.get("item_id") == cu.remove_item_id),
+                None,
+            )
+            _removed_item_name = (_removed or {}).get("item_name") if _removed else None
             char.owned_items = [
                 i for i in (char.owned_items or [])
                 if not (isinstance(i, dict) and i.get("item_id") == cu.remove_item_id)
             ]
+
+        # ── 审计：收集 after，写入 changelog ─────────
+        _audit_changes = []
+        if cu.current_realm is not None and str(_before_realm or "") != str(char.current_realm or ""):
+            _audit_changes.append({"field": "current_realm", "label": "境界",
+                                    "before": _before_realm, "after": char.current_realm})
+        if cu.current_status is not None and str(_before_status or "") != str(char.current_status or ""):
+            _audit_changes.append({"field": "current_status", "label": "状态",
+                                    "before": _before_status, "after": char.current_status})
+        if cu.current_location is not None and str(_before_location or "") != str(char.current_location or ""):
+            _audit_changes.append({"field": "current_location", "label": "位置",
+                                    "before": _before_location, "after": char.current_location})
+        if _added_skill_name:
+            _audit_changes.append({"field": "skill_gained", "label": "习得技能",
+                                    "before": None, "after": _added_skill_name})
+        if _added_item_name:
+            _audit_changes.append({"field": "item_gained", "label": "获得道具",
+                                    "before": None, "after": _added_item_name})
+        if _removed_item_name:
+            _audit_changes.append({"field": "item_lost", "label": "失去道具",
+                                    "before": _removed_item_name, "after": None})
+
+        if _audit_changes:
+            _chapter_num_str = str(display_chapter_number(chapter.title, chapter.sort_order))
+            _summary_parts = []
+            for c in _audit_changes:
+                if c["before"] and c["after"]:
+                    _summary_parts.append(f"{c['label']} {c['before']}→{c['after']}")
+                elif c["after"]:
+                    _summary_parts.append(f"{c['label']}：{c['after']}")
+                elif c["before"]:
+                    _summary_parts.append(f"失去{c['label']}：{c['before']}")
+            db.add(CharacterChangeLog(
+                project_id=project_id,
+                character_id=char.id,
+                character_name=char.name,
+                chapter_id=req.chapter_id,
+                chapter_number=_chapter_num_str,
+                chapter_title=chapter.title or "",
+                source="debrief",
+                summary="、".join(_summary_parts),
+                changes=_audit_changes,
+            ))
 
         updated_chars.append(char.name)
 
@@ -3009,6 +3134,7 @@ def chapter_debrief(
                 "chapter": display_chapter_number(chapter.title, chapter.sort_order),
                 "chapter_title": chapter.title,
                 "beat": su.append_beat,
+                "chapter_id": str(req.chapter_id),  # 用于删章/重写时精确清除
             })
             sl.key_beats = beats
 
@@ -3053,6 +3179,8 @@ def chapter_debrief(
                 data = req.chapter_index.model_dump()
                 data["hook_strength"] = hook_strength
                 data["chapter_number"] = display_chapter_number(chapter.title, chapter.sort_order)
+                if data.get("story_day"):
+                    data["story_day"] = _truncate(str(data["story_day"]), 100)
                 if index:
                     for field, value in data.items():
                         setattr(index, field, value)
@@ -3082,30 +3210,66 @@ def chapter_debrief(
             ).all()
         }
         chapter_num = display_chapter_number(chapter.title, chapter.sort_order)
+        _VALID_TIERS = {"core", "arc", "plot", "background"}
+        _ARC_SCOPE_TO_TIER = {
+            "single_chapter": "plot",
+            "mini_arc":       "arc",
+            "long_arc":       "core",
+        }
         for nc in req.new_characters:
-            if not nc.name or nc.name in existing_names:
+            stored_name = _truncate((nc.name or "").strip(), 100)
+            if not stored_name or stored_name in existing_names:
                 continue  # 跳过重名
-            tier = "emergent" if nc.arc_scope == "single_chapter" else "supporting"
+            # character_tier 优先；AI 未返回时从 arc_scope 推断；最终兜底 arc
+            tier = nc.character_tier if nc.character_tier in _VALID_TIERS else None
+            if tier is None:
+                tier = _ARC_SCOPE_TO_TIER.get(nc.arc_scope or "", "arc")
+            # 须显式分配 id：否则 flush 前 new_char.id 为 None，审计日志外键会违反 NOT NULL
+            new_char_id = uuid4()
             new_char = Character(
+                id=new_char_id,
                 project_id=project_id,
-                name=nc.name,
-                role=nc.role or "supporting",
+                name=stored_name,
+                role=_truncate(nc.role or "supporting", 20),
                 character_tier=tier,
-                gender=nc.gender,
-                age=nc.age,
-                faction=nc.faction,
+                gender=_truncate(nc.gender, 20) if nc.gender else None,
+                age=_truncate(nc.age, 50) if nc.age else None,
+                faction=_truncate(nc.faction, 100) if nc.faction else None,
                 personality=nc.personality,
                 motivation=nc.motivation,
                 background=nc.background,
-                current_realm=nc.current_realm,
-                current_status=nc.current_status or "alive",
-                current_location=nc.current_location,
+                current_realm=_truncate(nc.current_realm, 100) if nc.current_realm else None,
+                current_status=_normalize_character_status(nc.current_status) or "alive",
+                current_location=_truncate(nc.current_location, 200) if nc.current_location else None,
                 author_notes=nc.author_notes,
                 extra={"first_appearance_chapter": chapter_num, "arc_scope": nc.arc_scope},
             )
             db.add(new_char)
-            existing_names.add(nc.name)
-            added_new_characters.append(nc.name)
+
+            # 审计：首次登场条目
+            _tier_labels = {
+                "core": "核心长线", "arc": "弧线支柱",
+                "plot": "剧情推手", "background": "背景填充",
+            }
+            db.add(CharacterChangeLog(
+                project_id=project_id,
+                character_id=new_char_id,
+                character_name=new_char.name,
+                chapter_id=req.chapter_id,
+                chapter_number=str(chapter_num),
+                chapter_title=chapter.title or "",
+                source="debrief",
+                summary=f"首次登场 · {_tier_labels.get(tier, tier)}",
+                changes=[{
+                    "field": "created",
+                    "label": "首次入库",
+                    "before": None,
+                    "after": _tier_labels.get(tier, tier),
+                }],
+            ))
+
+            existing_names.add(stored_name)
+            added_new_characters.append(stored_name)
 
     # ── 保存作者备注到章节 ────────────────────────────
     if req.notes:
@@ -3131,7 +3295,9 @@ def chapter_debrief(
         db.commit()
     except SQLAlchemyError as exc:
         db.rollback()
-        raise HTTPException(400, f"章节复盘提交失败：{exc.__class__.__name__}")
+        hint = str(getattr(exc, "orig", None) or exc)
+        hint = hint[:500] if hint else exc.__class__.__name__
+        raise HTTPException(400, f"章节复盘提交失败：{hint}") from exc
 
     # 异步向量化新增记忆（不阻塞响应）
     for mc in _new_memory_chunks:

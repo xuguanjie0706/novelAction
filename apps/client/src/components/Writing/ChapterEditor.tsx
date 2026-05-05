@@ -5,11 +5,11 @@ import CharacterCount from '@tiptap/extension-character-count'
 import Placeholder from '@tiptap/extension-placeholder'
 import { chaptersApi, aiApi, storylinesApi, foreshadowsApi, chapterIndexesApi, charactersApi } from '../../api/client'
 import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload, llmProviderIdFromRoute } from '../../store'
-import type { Chapter, Character, OutlineNode, StoryLine, Foreshadow, ChapterIndex } from '../../types'
+import type { Chapter, Character, OutlineNode, StoryLine, Foreshadow, ChapterIndex, ChapterVersion, ChapterVersionDetail } from '../../types'
 import toast from 'react-hot-toast'
 import {
   BookOpen, Sparkles, X, Zap, Target, Users, Flag, GitBranch, RefreshCw,
-  Maximize2, Minimize2, Clock, ChevronDown, ChevronRight, Anchor,
+  Maximize2, Minimize2, Clock, ChevronDown, ChevronRight, Anchor, History,
   Feather, PenLine, ListPlus, CheckCircle, Circle,
   CheckSquare, TrendingUp, MapPin, Swords, Bot, Save, Trash2, ClipboardList, UserPlus,
 } from 'lucide-react'
@@ -227,6 +227,12 @@ export default function ChapterEditor({
   const [openForeshadows, setOpenForeshadows]   = useState<Foreshadow[]>([])
   const [currentChIndex, setCurrentChIndex]     = useState<ChapterIndex | null>(null)
 
+  const [historyOpen, setHistoryOpen]           = useState(false)
+  const [versionsList, setVersionsList]         = useState<ChapterVersion[]>([])
+  const [versionsLoading, setVersionsLoading]  = useState(false)
+  const [historyPreview, setHistoryPreview]     = useState<ChapterVersionDetail | null>(null)
+  const [historyPreviewLoading, setHistoryPreviewLoading] = useState(false)
+
   /**
    * 无 AI 快照：原文 = 可编辑 HTML；正文 = 只读预览（截去稿末索引块）。
    * 有 manuscript_raw_snapshot：正文 = 可编辑叙事；原文 = 只读对照（模型全文含稿末）。
@@ -360,6 +366,9 @@ export default function ChapterEditor({
     setAiNewCharacters([])
     debriefAutoLoadedChapterRef.current = null
     setManuscriptView((chapter.manuscript_raw_snapshot || '').trim() ? 'prose' : 'source')
+    setHistoryOpen(false)
+    setVersionsList([])
+    setHistoryPreview(null)
   }, [chapter.id])
 
   /** 同章经队列写入/更新快照后，回到可编辑「正文」 */
@@ -529,7 +538,7 @@ export default function ChapterEditor({
       return
     }
     if (opts?.replaceExisting) {
-      if (!window.confirm('「重新生成本章」将按大纲重写当前正文。建议先手动保存快照。确定继续？')) return
+      if (!window.confirm('「重新生成本章」将按大纲替换当前正文；若有旧稿会在保存前自动留版本快照。确定继续？')) return
       const route = useAppStore.getState().aiBackendRoute
       addGenTask({
         type: 'rewrite_chapter',
@@ -750,9 +759,10 @@ export default function ChapterEditor({
     if (!hasHtmlTextContent(chapter.content)) return
     if (debriefAutoLoadedChapterRef.current === chapter.id) return
     if (autoDebriefing || debriefSubmitting) return
-    // 队列已自动提交复盘，无需重复 AI 分析
+    // 队列已自动提交复盘，无需重复 AI 分析，但需告知用户
     if (queueCommittedDebriefIds.has(chapter.id)) {
       debriefAutoLoadedChapterRef.current = chapter.id
+      toast('此章复盘已由队列自动完成', { icon: '✅' })
       return
     }
     debriefAutoLoadedChapterRef.current = chapter.id
@@ -819,7 +829,8 @@ export default function ChapterEditor({
       if (refreshedCharsRes) {
         refreshedCharsRes.data.forEach((c: any) => useAppStore.getState().upsertCharacter(c))
       }
-      // 清空表单
+      // 清空表单，重置 autoLoad 标记，使用户再次进入 tab 时能读取缓存结果
+      debriefAutoLoadedChapterRef.current = null
       setCharUpdates({})
       setStorylineBeats({})
       setAiSuggestedAssetUpdates(null)
@@ -857,6 +868,56 @@ export default function ChapterEditor({
       toast.error('清理章节失败')
     } finally {
       setCleaningChapter(false)
+    }
+  }
+
+  const openChapterHistory = async () => {
+    setHistoryOpen(true)
+    setVersionsLoading(true)
+    setHistoryPreview(null)
+    try {
+      const r = await chaptersApi.listVersions(projectId, chapter.id)
+      setVersionsList(r.data as ChapterVersion[])
+    } catch {
+      setVersionsList([])
+      toast.error('无法加载版本列表')
+    } finally {
+      setVersionsLoading(false)
+    }
+  }
+
+  const loadHistoryPreview = async (versionId: string) => {
+    setHistoryPreviewLoading(true)
+    try {
+      const r = await chaptersApi.getVersion(projectId, chapter.id, versionId)
+      setHistoryPreview(r.data as ChapterVersionDetail)
+    } catch {
+      toast.error('加载该版本正文失败')
+    } finally {
+      setHistoryPreviewLoading(false)
+    }
+  }
+
+  const restoreHistoryVersion = async () => {
+    if (!historyPreview || !editor) return
+    if (!window.confirm('将用此历史版本替换当前正文（会先自动备份当前稿）。确定？')) return
+    try {
+      const plain = (chapter.content || '').replace(/<[^>]+>/g, '').trim()
+      if (plain.length >= 1) {
+        await chaptersApi.snapshot(projectId, chapter.id, '恢复历史版本前备份', true)
+      }
+      const res = await chaptersApi.update(projectId, chapter.id, {
+        content: historyPreview.content,
+        manuscript_raw_snapshot: null,
+      })
+      upsertChapter(res.data)
+      editor.commands.setContent(historyPreview.content)
+      setManuscriptView('source')
+      toast.success('已恢复为所选历史版本')
+      setHistoryOpen(false)
+      setHistoryPreview(null)
+    } catch {
+      toast.error('恢复失败')
     }
   }
 
@@ -1032,6 +1093,15 @@ export default function ChapterEditor({
                   ? TOP_TOOL_BUTTON_ACTIVE
                   : TOP_TOOL_BUTTON_IDLE)}>
               <ClipboardList size={14} />索引
+            </button>
+          )}
+
+          {!focusMode && (
+            <button type="button"
+              onClick={() => void openChapterHistory()}
+              title="正文版本历史：查看、对比此前保存或 AI 覆盖前的快照"
+              className={clsx(TOP_TOOL_BUTTON_BASE, TOP_TOOL_BUTTON_IDLE)}>
+              <History size={14} />版本
             </button>
           )}
 
@@ -1328,6 +1398,10 @@ export default function ChapterEditor({
                   <Save size={14} strokeWidth={2.25} className="shrink-0" />
                   保存
                 </button>
+                <button type="button" onClick={() => void openChapterHistory()}
+                  className="text-xs font-medium text-gray-600 hover:text-gray-900 flex items-center gap-1 rounded-lg px-2 py-1 border border-gray-200 bg-white hover:bg-gray-50">
+                  <History size={12} />版本
+                </button>
                 <button type="button" onClick={() => setFocusMode(false)}
                   className="text-xs font-medium text-gray-500 hover:text-gray-800 transition-colors flex items-center gap-1 rounded-lg px-2 py-1 hover:bg-gray-100">
                   <Minimize2 size={11} />退出专注
@@ -1534,6 +1608,95 @@ export default function ChapterEditor({
           </div>
         )}
       </div>
+
+      {historyOpen && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/50 backdrop-blur-[2px]"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="chapter-history-title"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setHistoryOpen(false) }}
+        >
+          <div
+            className="w-full max-w-4xl max-h-[min(90vh,720px)] flex flex-col rounded-2xl border border-novel-border bg-novel-card shadow-2xl overflow-hidden"
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-novel-border bg-novel-panel shrink-0">
+              <h3 id="chapter-history-title" className="text-sm font-semibold text-novel-ink flex items-center gap-2">
+                <History size={16} className="text-novel-accent" />
+                正文版本历史
+              </h3>
+              <button type="button" onClick={() => setHistoryOpen(false)}
+                className="p-1.5 rounded-lg text-novel-ink-faint hover:text-novel-ink hover:bg-novel-shell transition-novel">
+                <X size={16} />
+              </button>
+            </div>
+            <p className="text-[11px] text-novel-ink-faint px-4 py-2 border-b border-novel-border/80 bg-novel-shell/40">
+              含「手动保存」与 AI 续写/重写覆盖前的自动备份。点选一条可预览；恢复会先备份当前正文再替换。
+            </p>
+            <div className="flex flex-1 min-h-0">
+              <div className="w-[13.5rem] shrink-0 border-r border-novel-border overflow-auto bg-novel-shell/30">
+                {versionsLoading ? (
+                  <p className="text-xs text-novel-ink-faint p-3">加载中…</p>
+                ) : versionsList.length === 0 ? (
+                  <p className="text-xs text-novel-ink-faint p-3">暂无历史版本<br /><span className="text-[10px]">保存本章或经 AI 改写后会自动生成</span></p>
+                ) : (
+                  <ul className="p-2 space-y-1">
+                    {versionsList.map(v => (
+                      <li key={v.id}>
+                        <button type="button"
+                          onClick={() => void loadHistoryPreview(v.id)}
+                          className={clsx(
+                            'w-full text-left rounded-lg px-2.5 py-2 text-[11px] transition-novel border',
+                            historyPreview?.id === v.id
+                              ? 'border-novel-accent bg-novel-panel text-novel-accent'
+                              : 'border-transparent hover:bg-novel-card text-novel-ink',
+                          )}>
+                          <div className="font-medium truncate">
+                            {new Date(v.created_at).toLocaleString('zh-CN', {
+                              month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                            })}
+                          </div>
+                          <div className="text-[10px] text-novel-ink-faint truncate mt-0.5">
+                            {v.is_auto ? '自动' : '手动'}
+                            {v.note ? ` · ${v.note}` : ''}
+                            {typeof v.word_count === 'number' ? ` · ${v.word_count} 字` : ''}
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-white">
+                {historyPreviewLoading && (
+                  <div className="flex-1 flex items-center justify-center text-sm text-novel-ink-faint">加载正文…</div>
+                )}
+                {!historyPreviewLoading && !historyPreview && (
+                  <div className="flex-1 flex items-center justify-center text-sm text-novel-ink-faint px-6 text-center">
+                    在左侧选择一条版本以预览 HTML 正文
+                  </div>
+                )}
+                {!historyPreviewLoading && historyPreview && (
+                  <>
+                    <div className="shrink-0 px-3 py-2 border-b border-gray-100 flex flex-wrap items-center gap-2">
+                      <button type="button" onClick={() => void restoreHistoryVersion()}
+                        className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-500">
+                        恢复此版本到编辑器
+                      </button>
+                      <span className="text-[10px] text-gray-400">当前为只读预览</span>
+                    </div>
+                    <div
+                      className="flex-1 overflow-auto prose prose-sm max-w-none px-4 py-3 text-novel-ink"
+                      dangerouslySetInnerHTML={{ __html: historyPreview.content || '<p>（空）</p>' }}
+                    />
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

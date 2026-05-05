@@ -25,6 +25,17 @@ const SUB_TABS: { key: SubTab; label: string; icon: React.ElementType; color: st
 //  通用工具
 // ─────────────────────────────────────────────────────────
 
+/** 后端/模型偶发把本应是字符串的字段写成 { description: string }，不能直接当 React 子节点渲染 */
+function stringFromLoose(v: unknown): string {
+  if (v == null) return ''
+  if (typeof v === 'string') return v
+  if (typeof v === 'object' && 'description' in (v as object)) {
+    const d = (v as { description?: unknown }).description
+    return typeof d === 'string' ? d : ''
+  }
+  return ''
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
@@ -74,10 +85,83 @@ function SaveBtn({ saving, onClick }: { saving: boolean; onClick: () => void }) 
     <button
       onClick={onClick}
       disabled={saving}
-      className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+      className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-sm rounded-lg transition-colors font-medium shadow-sm"
     >
-      {saving ? '保存中...' : '保存'}
+      {saving ? '保存中…' : '保存'}
     </button>
+  )
+}
+
+/** 芯片式分类选择器，替代 <select> 下拉 */
+function ChipSelect({ value, onChange, options }: {
+  value: string
+  onChange: (v: string) => void
+  options: { value: string; label: string; color?: string; icon?: string }[]
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {options.map(opt => (
+        <button key={opt.value} type="button" onClick={() => onChange(opt.value)}
+          className={clsx(
+            'text-xs px-2.5 py-1 rounded-lg border font-medium transition-all',
+            value === opt.value
+              ? (opt.color ?? 'bg-amber-100 text-amber-700 border-amber-300 shadow-sm')
+              : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300 hover:text-gray-600'
+          )}>
+          {opt.icon && <span className="mr-1">{opt.icon}</span>}
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** 带标题栏的分区卡片 */
+function Section({ title, icon, children, accent }: {
+  title: string
+  icon?: React.ReactNode
+  children: React.ReactNode
+  accent?: string
+}) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+      <div className={clsx('px-4 py-2 border-b border-gray-100 flex items-center gap-2', accent ?? 'bg-gray-50/60')}>
+        {icon && <span className="text-gray-400 flex items-center">{icon}</span>}
+        <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-widest">{title}</span>
+      </div>
+      <div className="p-4 space-y-3.5">
+        {children}
+      </div>
+    </div>
+  )
+}
+
+/** 编辑页顶部标题栏：名称大字 + 操作按钮 */
+function EditorHeader({ name, subtitle, badge, onDelete, saving, onSave }: {
+  name: string
+  subtitle?: string
+  badge?: React.ReactNode
+  onDelete: () => void
+  saving: boolean
+  onSave: () => void
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 pb-2">
+      <div className="min-w-0">
+        <h2 className="text-xl font-bold text-gray-900 leading-tight truncate">{name || '未命名'}</h2>
+        {subtitle && <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>}
+        {badge && <div className="mt-1.5 flex flex-wrap gap-1">{badge}</div>}
+      </div>
+      <div className="flex items-center gap-2 shrink-0 mt-0.5">
+        <button onClick={onSave} disabled={saving}
+          className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-xs rounded-lg transition-colors font-medium shadow-sm">
+          {saving ? '保存中…' : '保存'}
+        </button>
+        <button onClick={onDelete} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+          <Trash2 size={14} />
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -181,26 +265,33 @@ function StoryLinesTab({ projectId }: { projectId: string }) {
       {/* 右栏 */}
       <div className="flex-1 overflow-auto bg-[#FAF8F4]">
         {selected ? (
-          <div className="max-w-2xl mx-auto p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-gray-900">编辑故事线</h2>
-              <button onClick={() => handleDelete(selected.id)} className="text-gray-400 hover:text-red-500 transition-colors">
-                <Trash2 size={16} />
-              </button>
-            </div>
-            <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm space-y-4">
-              <Field label="名称"><TextInput value={form.name ?? ''} onChange={f('name')} /></Field>
-              <div className="grid grid-cols-2 gap-4">
-                <Field label="类型">
-                  <Select value={form.line_type ?? 'sub'} onChange={f('line_type')}
-                    options={Object.entries(LINE_TYPE_META).map(([k, v]) => ({ value: k, label: v.label }))} />
-                </Field>
-                <Field label="状态">
-                  <Select value={form.status ?? 'planned'} onChange={f('status')}
-                    options={Object.entries(STATUS_META).map(([k, v]) => ({ value: k, label: v.label }))} />
-                </Field>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+          <div className="max-w-2xl mx-auto p-6 space-y-3">
+            <EditorHeader
+              name={form.name ?? selected.name}
+              badge={<>
+                <span className={clsx('text-xs px-2 py-0.5 rounded-full border font-medium', LINE_TYPE_META[form.line_type ?? 'sub']?.color)}>
+                  {LINE_TYPE_META[form.line_type ?? 'sub']?.label}
+                </span>
+                <span className="flex items-center gap-1 text-xs text-gray-500">
+                  <span className={clsx('w-2 h-2 rounded-full', STATUS_META[form.status ?? 'planned']?.dot)} />
+                  {STATUS_META[form.status ?? 'planned']?.label}
+                </span>
+              </>}
+              onDelete={() => handleDelete(selected.id)}
+              saving={saving} onSave={handleSave}
+            />
+
+            <Section title="基本设定" icon={<GitBranch size={12} />}>
+              <Field label="故事线名称"><TextInput value={form.name ?? ''} onChange={f('name')} /></Field>
+              <Field label="线型">
+                <ChipSelect value={form.line_type ?? 'sub'} onChange={f('line_type')}
+                  options={Object.entries(LINE_TYPE_META).map(([k, v]) => ({ value: k, label: v.label, color: v.color }))} />
+              </Field>
+              <Field label="状态">
+                <ChipSelect value={form.status ?? 'planned'} onChange={f('status')}
+                  options={Object.entries(STATUS_META).map(([k, v]) => ({ value: k, label: v.label }))} />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
                 <Field label="起始章节">
                   <input type="number" value={form.start_chapter ?? ''} onChange={e => setForm(p => ({ ...p, start_chapter: Number(e.target.value) || undefined }))}
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-400" />
@@ -210,11 +301,13 @@ function StoryLinesTab({ projectId }: { projectId: string }) {
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-400" />
                 </Field>
               </div>
-              <Field label="故事线简述"><TextArea value={form.description ?? ''} onChange={f('description')} rows={3} /></Field>
-              <Field label="核心矛盾"><TextArea value={form.core_conflict ?? ''} onChange={f('core_conflict')} rows={3} placeholder="这条线的核心冲突是什么？" /></Field>
+            </Section>
+
+            <Section title="内容详情" icon={<ChevronRight size={12} />}>
+              <Field label="故事线简述"><TextArea value={form.description ?? ''} onChange={f('description')} rows={3} placeholder="这条线讲什么故事？" /></Field>
+              <Field label="核心矛盾"><TextArea value={form.core_conflict ?? ''} onChange={f('core_conflict')} rows={3} placeholder="核心冲突是什么？" /></Field>
               <Field label="解决方向"><TextArea value={form.resolution_direction ?? ''} onChange={f('resolution_direction')} rows={2} placeholder="预计如何收尾？" /></Field>
-              <SaveBtn saving={saving} onClick={handleSave} />
-            </div>
+            </Section>
           </div>
         ) : (
           <div className="flex items-center justify-center h-full">
@@ -321,13 +414,13 @@ function PowerSystemTab({ projectId }: { projectId: string }) {
     const val = (abilityInputs[idx] ?? '').trim()
     if (!val) return
     const lv = (form.levels ?? [])[idx]
-    const abilities = [...(lv?.abilities ?? []), val]
+    const abilities = [...(lv?.abilities ?? []).map(a => stringFromLoose(a)).filter(Boolean), val]
     updateLevel(idx, 'abilities', abilities)
     setAbilityInputs(p => ({ ...p, [idx]: '' }))
   }
   const removeAbility = (idx: number, aIdx: number) => {
     const lv = (form.levels ?? [])[idx]
-    const abilities = (lv?.abilities ?? []).filter((_: string, i: number) => i !== aIdx)
+    const abilities = (lv?.abilities ?? []).filter((_, i: number) => i !== aIdx)
     updateLevel(idx, 'abilities', abilities)
   }
   const updateSubLevelCount = (idx: number, raw: string) => {
@@ -367,25 +460,33 @@ function PowerSystemTab({ projectId }: { projectId: string }) {
 
       <div className="flex-1 overflow-auto bg-[#FAF8F4]">
         {selected ? (
-          <div className="max-w-3xl mx-auto p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-gray-900">编辑境界体系</h2>
-              <button onClick={() => handleDelete(selected.id)} className="text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={16} /></button>
-            </div>
+          <div className="max-w-3xl mx-auto p-6 space-y-3">
+            <EditorHeader
+              name={form.name ?? selected.name}
+              subtitle={SYSTEM_TYPE_META[form.system_type ?? 'cultivation']}
+              badge={<span className="text-xs px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200 font-medium">
+                {(form.levels ?? []).length} 个境界层级
+              </span>}
+              onDelete={() => handleDelete(selected.id)}
+              saving={saving} onSave={handleSave}
+            />
 
-            <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+            <Section title="体系基础" icon={<Zap size={12} />}>
+              <div className="grid grid-cols-2 gap-3">
                 <Field label="体系名称"><TextInput value={form.name ?? ''} onChange={f('name')} /></Field>
-                <Field label="类型">
-                  <Select value={form.system_type ?? 'cultivation'} onChange={f('system_type')}
+                <Field label="修炼类型">
+                  <ChipSelect value={form.system_type ?? 'cultivation'} onChange={f('system_type')}
                     options={Object.entries(SYSTEM_TYPE_META).map(([k, v]) => ({ value: k, label: v }))} />
                 </Field>
               </div>
               <Field label="体系简介"><TextArea value={form.description ?? ''} onChange={f('description')} rows={2} /></Field>
+            </Section>
+
+            <Section title="修炼规则" icon={<ChevronRight size={12} />}>
               <Field label="修炼方式"><TextArea value={form.cultivation_method ?? ''} onChange={f('cultivation_method')} rows={2} placeholder="如何修炼？靠什么提升？" /></Field>
               <Field label="突破条件"><TextArea value={form.breakthrough_condition ?? ''} onChange={f('breakthrough_condition')} rows={2} placeholder="通用的境界突破条件" /></Field>
               <Field label="特殊规则"><TextArea value={form.special_rules ?? ''} onChange={f('special_rules')} rows={2} placeholder="天才/废柴判定、禁忌、特殊法则等" /></Field>
-            </div>
+            </Section>
 
             {/* 境界列表 */}
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm">
@@ -418,26 +519,30 @@ function PowerSystemTab({ projectId }: { projectId: string }) {
                         <button onClick={() => removeLevel(idx)} className="text-gray-300 hover:text-red-400 shrink-0 ml-1"><Trash2 size={13} /></button>
                       </div>
                       {/* 描述 */}
-                      <textarea value={lv.description ?? ''} onChange={e => updateLevel(idx, 'description', e.target.value)}
+                      <textarea value={stringFromLoose(lv.description)} onChange={e => updateLevel(idx, 'description', e.target.value)}
                         rows={1} placeholder="境界描述（身体变化、修炼特征）"
                         className="w-full text-xs text-gray-500 border-0 bg-transparent focus:outline-none resize-none p-0 leading-relaxed" />
                       {/* 突破条件 */}
-                      <input value={lv.requirements ?? ''} onChange={e => updateLevel(idx, 'requirements', e.target.value)}
+                      <input value={stringFromLoose(lv.requirements)} onChange={e => updateLevel(idx, 'requirements', e.target.value)}
                         className="w-full text-xs text-gray-500 border-0 bg-transparent focus:outline-none p-0"
                         placeholder="⬆ 突破至此境界的条件（如：气旋凝聚、能量液化）" />
                       {/* 章节区间 */}
-                      <input value={lv.approximate_chapter ?? ''} onChange={e => updateLevel(idx, 'approximate_chapter', e.target.value)}
+                      <input value={stringFromLoose(lv.approximate_chapter)} onChange={e => updateLevel(idx, 'approximate_chapter', e.target.value)}
                         className="w-full text-xs text-gray-400 border-0 bg-transparent focus:outline-none p-0"
                         placeholder="📖 对应故事章节区间（如：第1-50章）" />
                       {/* 解锁能力 chips */}
                       <div className="pt-1">
                         <div className="flex flex-wrap gap-1 mb-1.5">
-                          {(lv.abilities ?? []).map((ab: string, aIdx: number) => (
-                            <span key={aIdx} className="flex items-center gap-1 text-xs px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full border border-amber-200">
-                              {ab}
-                              <button onClick={() => removeAbility(idx, aIdx)} className="text-amber-400 hover:text-amber-700 text-xs leading-none">×</button>
-                            </span>
-                          ))}
+                          {(lv.abilities ?? []).map((ab: unknown, aIdx: number) => {
+                            const label = stringFromLoose(ab)
+                            if (!label) return null
+                            return (
+                              <span key={aIdx} className="flex items-center gap-1 text-xs px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full border border-amber-200">
+                                {label}
+                                <button onClick={() => removeAbility(idx, aIdx)} className="text-amber-400 hover:text-amber-700 text-xs leading-none">×</button>
+                              </span>
+                            )
+                          })}
                           {(lv.abilities ?? []).length === 0 && (
                             <span className="text-xs text-amber-400 italic">暂无特殊能力解锁</span>
                           )}
@@ -467,7 +572,6 @@ function PowerSystemTab({ projectId }: { projectId: string }) {
               </div>
             </div>
 
-            <SaveBtn saving={saving} onClick={handleSave} />
           </div>
         ) : (
           <div className="flex items-center justify-center h-full">
@@ -632,7 +736,9 @@ function SkillsTab({ projectId }: { projectId: string }) {
                   </div>
                   <div className="flex gap-1 mt-0.5 items-center">
                     <span className={clsx('text-[10px] px-1 py-0.5 rounded border', tm?.color)}>{tm?.label}</span>
-                    {s.level_required && <span className="text-[10px] text-gray-400 truncate">{s.level_required}</span>}
+                    {stringFromLoose(s.level_required) && (
+                      <span className="text-[10px] text-gray-400 truncate">{stringFromLoose(s.level_required)}</span>
+                    )}
                   </div>
                 </div>
               </button>
@@ -649,41 +755,55 @@ function SkillsTab({ projectId }: { projectId: string }) {
       </div>
 
       <div className="flex-1 overflow-auto bg-[#FAF8F4]">
-        {selected ? (
-          <div className="max-w-2xl mx-auto p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-gray-900">编辑功法技能</h2>
-              <button onClick={() => handleDelete(selected.id)} className="text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={16} /></button>
-            </div>
-            <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm space-y-4">
-              <Field label="名称"><TextInput value={form.name ?? ''} onChange={f('name')} /></Field>
-              <div className="grid grid-cols-2 gap-4">
+        {selected ? (() => {
+          const tm = SKILL_TYPE_META[form.skill_type ?? 'combat']
+          const gm = GRADE_META[form.grade ?? 'earth']
+          return (
+            <div className="max-w-2xl mx-auto p-6 space-y-3">
+              <EditorHeader
+                name={form.name ?? selected.name}
+                badge={<>
+                  <span className={clsx('text-xs px-2 py-0.5 rounded-full border font-medium', tm?.color)}>{tm?.label}</span>
+                  <span className={clsx('text-xs px-2 py-0.5 rounded-full border border-gray-200 font-medium', gm?.color)}>{gm?.label}</span>
+                </>}
+                onDelete={() => handleDelete(selected.id)}
+                saving={saving} onSave={handleSave}
+              />
+
+              <Section title="基本信息" icon={<Sword size={12} />}>
+                <Field label="名称"><TextInput value={form.name ?? ''} onChange={f('name')} /></Field>
                 <Field label="类型">
-                  <Select value={form.skill_type ?? 'combat'} onChange={f('skill_type')}
-                    options={Object.entries(SKILL_TYPE_META).map(([k, v]) => ({ value: k, label: v.label }))} />
+                  <ChipSelect value={form.skill_type ?? 'combat'} onChange={f('skill_type')}
+                    options={Object.entries(SKILL_TYPE_META).map(([k, v]) => ({ value: k, label: v.label, color: v.color }))} />
                 </Field>
                 <Field label="品阶">
-                  <Select value={form.grade ?? 'earth'} onChange={f('grade')}
+                  <ChipSelect value={form.grade ?? 'earth'} onChange={f('grade')}
                     options={Object.entries(GRADE_META).map(([k, v]) => ({ value: k, label: v.label }))} />
                 </Field>
-              </div>
-              <Field label="来源"><TextInput value={form.source ?? ''} onChange={f('source')} placeholder="如：上古秘典、师门传承" /></Field>
-              <Field label="修炼要求（境界）"><TextInput value={form.level_required ?? ''} onChange={f('level_required')} placeholder="如：斗者三星以上" /></Field>
-              <Field label="前置条件"><TextArea value={form.prerequisites ?? ''} onChange={f('prerequisites')} rows={2} placeholder="其他前置条件" /></Field>
-              <Field label="功法/技能描述"><TextArea value={form.description ?? ''} onChange={f('description')} rows={3} /></Field>
-              <Field label="使用效果"><TextArea value={form.effects ?? ''} onChange={f('effects')} rows={3} /></Field>
-              <Field label="限制与副作用"><TextArea value={form.limitations ?? ''} onChange={f('limitations')} rows={2} placeholder="消耗、反噬、使用限制" /></Field>
-              <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="来源"><TextInput value={form.source ?? ''} onChange={f('source')} placeholder="如：上古秘典" /></Field>
+                  <Field label="修炼境界要求"><TextInput value={form.level_required ?? ''} onChange={f('level_required')} placeholder="如：斗者三星以上" /></Field>
+                </div>
                 <Field label="首次登场章节">
                   <input type="number" value={form.first_appearance_chapter ?? ''}
                     onChange={e => setForm(p => ({ ...p, first_appearance_chapter: Number(e.target.value) || undefined }))}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-400" />
+                    placeholder="章节数"
+                    className="w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-400" />
                 </Field>
-              </div>
-              <SaveBtn saving={saving} onClick={handleSave} />
+              </Section>
+
+              <Section title="功法描述" icon={<ChevronRight size={12} />}>
+                <Field label="功法 / 技能描述"><TextArea value={form.description ?? ''} onChange={f('description')} rows={3} /></Field>
+                <Field label="前置条件"><TextArea value={form.prerequisites ?? ''} onChange={f('prerequisites')} rows={2} placeholder="其他前置条件" /></Field>
+              </Section>
+
+              <Section title="战斗效果" icon={<Zap size={12} />} accent="bg-blue-50/60">
+                <Field label="使用效果"><TextArea value={form.effects ?? ''} onChange={f('effects')} rows={3} /></Field>
+                <Field label="限制与副作用"><TextArea value={form.limitations ?? ''} onChange={f('limitations')} rows={2} placeholder="消耗、反噬、使用限制" /></Field>
+              </Section>
             </div>
-          </div>
-        ) : (
+          )
+        })() : (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <Sword size={40} className="text-gray-200 mx-auto mb-3" />
@@ -878,42 +998,60 @@ function ItemsTab({ projectId }: { projectId: string }) {
       </div>
 
       <div className="flex-1 overflow-auto bg-[#FAF8F4]">
-        {selected ? (
-          <div className="max-w-2xl mx-auto p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-gray-900">编辑道具法宝</h2>
-              <button onClick={() => handleDelete(selected.id)} className="text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={16} /></button>
-            </div>
-            <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm space-y-4">
-              <Field label="名称"><TextInput value={form.name ?? ''} onChange={f('name')} /></Field>
-              <div className="grid grid-cols-3 gap-3">
+        {selected ? (() => {
+          const tm = ITEM_TYPE_META[form.item_type ?? 'artifact']
+          const rm = RARITY_META[form.rarity ?? 'rare']
+          return (
+            <div className="max-w-2xl mx-auto p-6 space-y-3">
+              <EditorHeader
+                name={form.name ?? selected.name}
+                badge={<>
+                  <span className="text-base">{tm?.icon}</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full border border-gray-200 text-gray-600 font-medium">{tm?.label}</span>
+                  <span className={clsx('text-xs px-2 py-0.5 rounded-full border border-gray-200 font-medium', rm?.color)}>{rm?.label}</span>
+                </>}
+                onDelete={() => handleDelete(selected.id)}
+                saving={saving} onSave={handleSave}
+              />
+
+              <Section title="分类属性" icon={<Package size={12} />}>
+                <Field label="名称"><TextInput value={form.name ?? ''} onChange={f('name')} /></Field>
                 <Field label="类型">
-                  <Select value={form.item_type ?? 'artifact'} onChange={f('item_type')}
+                  <ChipSelect value={form.item_type ?? 'artifact'} onChange={f('item_type')}
                     options={Object.entries(ITEM_TYPE_META).map(([k, v]) => ({ value: k, label: `${v.icon} ${v.label}` }))} />
                 </Field>
                 <Field label="稀有度">
-                  <Select value={form.rarity ?? 'rare'} onChange={f('rarity')}
+                  <ChipSelect value={form.rarity ?? 'rare'} onChange={f('rarity')}
                     options={Object.entries(RARITY_META).map(([k, v]) => ({ value: k, label: v.label }))} />
                 </Field>
                 <Field label="状态">
-                  <Select value={form.status ?? 'intact'} onChange={f('status')}
+                  <ChipSelect value={form.status ?? 'intact'} onChange={f('status')}
                     options={Object.entries(ITEM_STATUS_META).map(([k, v]) => ({ value: k, label: v.label }))} />
                 </Field>
-              </div>
-              <Field label="道具描述"><TextArea value={form.description ?? ''} onChange={f('description')} rows={3} /></Field>
-              <Field label="来历"><TextArea value={form.origin ?? ''} onChange={f('origin')} rows={2} placeholder="如何诞生/从何而来" /></Field>
-              <Field label="能力效果"><TextArea value={form.effects ?? ''} onChange={f('effects')} rows={3} /></Field>
-              <Field label="使用限制"><TextArea value={form.limitations ?? ''} onChange={f('limitations')} rows={2} /></Field>
-              <Field label="在故事中的意义"><TextArea value={form.story_significance ?? ''} onChange={f('story_significance')} rows={2} placeholder="这件道具对剧情的作用/象征意义" /></Field>
-              <Field label="首次登场章节">
-                <input type="number" value={form.first_appearance_chapter ?? ''}
-                  onChange={e => setForm(p => ({ ...p, first_appearance_chapter: Number(e.target.value) || undefined }))}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-400" />
-              </Field>
-              <SaveBtn saving={saving} onClick={handleSave} />
+                <Field label="首次登场章节">
+                  <input type="number" value={form.first_appearance_chapter ?? ''}
+                    onChange={e => setForm(p => ({ ...p, first_appearance_chapter: Number(e.target.value) || undefined }))}
+                    placeholder="章节数"
+                    className="w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-amber-400" />
+                </Field>
+              </Section>
+
+              <Section title="道具详情" icon={<ChevronRight size={12} />}>
+                <Field label="道具描述"><TextArea value={form.description ?? ''} onChange={f('description')} rows={3} /></Field>
+                <Field label="来历"><TextArea value={form.origin ?? ''} onChange={f('origin')} rows={2} placeholder="如何诞生 / 从何而来" /></Field>
+              </Section>
+
+              <Section title="能力与限制" icon={<Zap size={12} />} accent="bg-emerald-50/60">
+                <Field label="能力效果"><TextArea value={form.effects ?? ''} onChange={f('effects')} rows={3} /></Field>
+                <Field label="使用限制"><TextArea value={form.limitations ?? ''} onChange={f('limitations')} rows={2} placeholder="消耗、代价、使用条件" /></Field>
+              </Section>
+
+              <Section title="剧情价值" icon={<GitBranch size={12} />} accent="bg-amber-50/60">
+                <Field label="在故事中的意义"><TextArea value={form.story_significance ?? ''} onChange={f('story_significance')} rows={3} placeholder="这件道具对剧情的作用 / 象征意义" /></Field>
+              </Section>
             </div>
-          </div>
-        ) : (
+          )
+        })() : (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <Package size={40} className="text-gray-200 mx-auto mb-3" />
@@ -961,6 +1099,8 @@ function FactionsTab({ projectId }: { projectId: string }) {
   const [selected, setSelected] = useState<Faction | null>(null)
   const [form, setForm] = useState<Partial<Faction>>({})
   const [saving, setSaving] = useState(false)
+  const [searchQ, setSearchQ]               = useState('')
+  const [filterAlignment, setFilterAlignment] = useState('')
 
   useEffect(() => {
     factionsApi.list(projectId).then(r => {
@@ -996,77 +1136,150 @@ function FactionsTab({ projectId }: { projectId: string }) {
 
   const f = (key: keyof Faction) => (v: string) => setForm(prev => ({ ...prev, [key]: v }))
 
+  const filtered = useMemo(() => {
+    const q = searchQ.trim().toLowerCase()
+    return factions.filter(s => {
+      if (q && !s.name.toLowerCase().includes(q) && !(s.description ?? '').toLowerCase().includes(q)) return false
+      if (filterAlignment && s.alignment !== filterAlignment) return false
+      return true
+    })
+  }, [factions, searchQ, filterAlignment])
+
+  const hasFilter = searchQ.trim() !== '' || filterAlignment !== ''
+
   return (
     <div className="flex h-full">
-      <div className="w-56 border-r border-gray-100 bg-white flex flex-col shrink-0">
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100">
+      {/* 左栏 */}
+      <div className="w-60 border-r border-gray-100 bg-white flex flex-col shrink-0">
+        {/* 顶栏 */}
+        <div className="flex items-center justify-between px-3 py-2.5 border-b border-gray-100 shrink-0">
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">势力组织</span>
-          <button onClick={handleCreate} className="text-amber-500 hover:text-amber-600"><Plus size={16} /></button>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400">{hasFilter ? `${filtered.length}/` : ''}{factions.length}</span>
+            <button onClick={handleCreate} className="text-amber-500 hover:text-amber-600"><Plus size={16} /></button>
+          </div>
         </div>
-        <div className="flex-1 overflow-auto py-2">
-          {factions.map(s => {
+        {/* 搜索 */}
+        <div className="px-3 pt-2.5 pb-1.5 shrink-0">
+          <div className="relative">
+            <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="搜索势力名称…"
+              className="w-full pl-7 pr-6 py-1.5 text-xs border border-gray-200 rounded-lg bg-gray-50 focus:outline-none focus:ring-1 focus:ring-amber-400 focus:bg-white transition-colors" />
+            {searchQ && <button onClick={() => setSearchQ('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 text-xs">✕</button>}
+          </div>
+        </div>
+        {/* 阵营筛选 */}
+        <div className="px-3 pb-2 shrink-0">
+          <p className="text-[9px] text-gray-400 mb-1 uppercase tracking-wide">阵营</p>
+          <div className="flex flex-wrap gap-1">
+            <button onClick={() => setFilterAlignment('')}
+              className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-medium transition-colors',
+                filterAlignment === '' ? 'bg-gray-700 text-white border-gray-700' : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-400')}>
+              全部
+            </button>
+            {Object.entries(ALIGNMENT_META).map(([k, v]) => (
+              <button key={k} onClick={() => setFilterAlignment(filterAlignment === k ? '' : k)}
+                className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-medium transition-colors',
+                  filterAlignment === k ? v.color : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-400')}>
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {/* 列表 */}
+        <div className="flex-1 overflow-auto border-t border-gray-100">
+          {filtered.length > 0 ? filtered.map(s => {
             const tm = FACTION_TYPE_META[s.faction_type]
             const am = ALIGNMENT_META[s.alignment]
             const activePeriod = s.extra?.active_period as string ?? ''
             const pm = ACTIVE_PERIOD_META[activePeriod] ?? ACTIVE_PERIOD_META['']
             return (
               <button key={s.id} onClick={() => selectItem(s)}
-                className={clsx('w-full flex items-start gap-3 px-4 py-2.5 text-left transition-colors border-l-2',
+                className={clsx('w-full flex items-start gap-2 px-3 py-2.5 text-left transition-colors border-l-2',
                   selected?.id === s.id ? 'bg-amber-50 border-l-amber-400' : 'border-l-transparent hover:bg-gray-50')}>
-                <span className="text-xl leading-none mt-0.5 shrink-0">{tm?.icon}</span>
-                <div className="min-w-0 w-full">
-                  <div className="text-sm font-medium text-gray-800 truncate">{s.name}</div>
-                  <div className="flex items-center gap-1.5 mt-0.5">
-                    <span className={clsx('text-xs px-1.5 py-0.5 rounded border', am?.color)}>{am?.label}</span>
-                    {activePeriod && <span className={clsx('text-xs font-medium', pm.color)}>{pm.label}</span>}
+                <span className="text-base leading-none mt-0.5 shrink-0">{tm?.icon}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-medium text-gray-800 truncate">{s.name}</div>
+                  <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                    <span className={clsx('text-[10px] px-1 py-0.5 rounded border', am?.color)}>{am?.label}</span>
+                    {activePeriod && <span className={clsx('text-[10px] font-medium', pm.color)}>{pm.label}</span>}
                   </div>
                 </div>
               </button>
             )
-          })}
-          {factions.length === 0 && <p className="text-xs text-gray-400 text-center py-8">暂无势力</p>}
+          }) : (
+            <div className="py-10 text-center">
+              {factions.length === 0
+                ? <p className="text-xs text-gray-400 px-4">暂无势力，点击 + 创建</p>
+                : <p className="text-xs text-gray-400 px-4">无匹配结果<br /><button onClick={() => { setSearchQ(''); setFilterAlignment('') }} className="mt-1 text-amber-500 hover:underline">清除筛选</button></p>
+              }
+            </div>
+          )}
         </div>
       </div>
 
+      {/* 右栏 */}
       <div className="flex-1 overflow-auto bg-[#FAF8F4]">
-        {selected ? (
-          <div className="max-w-2xl mx-auto p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-gray-900">编辑势力</h2>
-              <button onClick={() => handleDelete(selected.id)} className="text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={16} /></button>
-            </div>
-            <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm space-y-4">
-              <Field label="名称"><TextInput value={form.name ?? ''} onChange={f('name')} /></Field>
-              <div className="grid grid-cols-3 gap-3">
+        {selected ? (() => {
+          const tm = FACTION_TYPE_META[form.faction_type ?? 'sect']
+          const am = ALIGNMENT_META[form.alignment ?? 'neutral']
+          const activePeriod = (form.extra?.active_period as string) ?? ''
+          const pm = ACTIVE_PERIOD_META[activePeriod] ?? ACTIVE_PERIOD_META['']
+          return (
+            <div className="max-w-2xl mx-auto p-6 space-y-3">
+              <EditorHeader
+                name={form.name ?? selected.name}
+                badge={<>
+                  <span className="text-base">{tm?.icon}</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full border border-gray-200 text-gray-600 font-medium">{tm?.label}</span>
+                  <span className={clsx('text-xs px-2 py-0.5 rounded-full border font-medium', am?.color)}>{am?.label}</span>
+                  {activePeriod && (
+                    <span className={clsx('text-xs px-2 py-0.5 rounded-full border border-gray-200 font-medium', pm.color)}>{pm.label}</span>
+                  )}
+                </>}
+                onDelete={() => handleDelete(selected.id)}
+                saving={saving} onSave={handleSave}
+              />
+
+              <Section title="基本信息" icon={<Shield size={12} />}>
+                <Field label="势力名称"><TextInput value={form.name ?? ''} onChange={f('name')} /></Field>
                 <Field label="类型">
-                  <Select value={form.faction_type ?? 'sect'} onChange={f('faction_type')}
-                    options={Object.entries(FACTION_TYPE_META).map(([k, v]) => ({ value: k, label: `${v.icon} ${v.label}` }))} />
+                  <ChipSelect value={form.faction_type ?? 'sect'} onChange={f('faction_type')}
+                    options={Object.entries(FACTION_TYPE_META).map(([k, v]) => ({ value: k, label: v.label, icon: v.icon }))} />
                 </Field>
-                <Field label="阵营">
-                  <Select value={form.alignment ?? 'neutral'} onChange={f('alignment')}
-                    options={Object.entries(ALIGNMENT_META).map(([k, v]) => ({ value: k, label: v.label }))} />
+                <Field label="阵营立场">
+                  <ChipSelect value={form.alignment ?? 'neutral'} onChange={f('alignment')}
+                    options={Object.entries(ALIGNMENT_META).map(([k, v]) => ({ value: k, label: v.label, color: v.color }))} />
                 </Field>
                 <Field label="活跃阶段">
-                  <Select
-                    value={(form.extra?.active_period as string) ?? ''}
+                  <ChipSelect
+                    value={activePeriod}
                     onChange={v => setForm(p => ({ ...p, extra: { ...(p.extra ?? {}), active_period: v } }))}
                     options={Object.entries(ACTIVE_PERIOD_META).filter(([k]) => k !== '').map(([k, v]) => ({ value: k, label: v.label }))} />
                 </Field>
-              </div>
-              <Field label="势力描述"><TextArea value={form.description ?? ''} onChange={f('description')} rows={3} /></Field>
-              <div className="grid grid-cols-2 gap-4">
-                <Field label="实力级别"><TextInput value={form.strength_level ?? ''} onChange={f('strength_level')} placeholder="如：顶级宗门" /></Field>
-                <Field label="成员规模"><TextInput value={form.member_count ?? ''} onChange={f('member_count')} placeholder="如：数万弟子" /></Field>
-              </div>
-              <Field label="领地/活动范围"><TextArea value={form.territory ?? ''} onChange={f('territory')} rows={2} /></Field>
-              <Field label="目标图谋"><TextArea value={form.goals ?? ''} onChange={f('goals')} rows={2} /></Field>
-              <Field label="势力资源"><TextArea value={form.resources ?? ''} onChange={f('resources')} rows={2} /></Field>
-              <Field label="历史背景"><TextArea value={form.history ?? ''} onChange={f('history')} rows={3} /></Field>
-              <Field label="内部秘密（作者视角）"><TextArea value={form.secrets ?? ''} onChange={f('secrets')} rows={2} placeholder="读者暂时不知道的隐藏信息" /></Field>
-              <SaveBtn saving={saving} onClick={handleSave} />
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="实力级别"><TextInput value={form.strength_level ?? ''} onChange={f('strength_level')} placeholder="如：顶级宗门" /></Field>
+                  <Field label="成员规模"><TextInput value={form.member_count ?? ''} onChange={f('member_count')} placeholder="如：数万弟子" /></Field>
+                </div>
+              </Section>
+
+              <Section title="描述与领地" icon={<ChevronRight size={12} />}>
+                <Field label="势力简述"><TextArea value={form.description ?? ''} onChange={f('description')} rows={3} placeholder="这个势力是什么？有什么特点？" /></Field>
+                <Field label="领地 / 活动范围"><TextArea value={form.territory ?? ''} onChange={f('territory')} rows={2} placeholder="控制的地域或主要活动区域" /></Field>
+              </Section>
+
+              <Section title="目标与资源" icon={<Zap size={12} />} accent="bg-emerald-50/60">
+                <Field label="目标图谋"><TextArea value={form.goals ?? ''} onChange={f('goals')} rows={2} placeholder="这个势力想要什么？" /></Field>
+                <Field label="势力资源"><TextArea value={form.resources ?? ''} onChange={f('resources')} rows={2} placeholder="拥有哪些独特资源、底牌、人才" /></Field>
+              </Section>
+
+              <Section title="历史与秘密" icon={<GitBranch size={12} />} accent="bg-amber-50/60">
+                <Field label="历史背景"><TextArea value={form.history ?? ''} onChange={f('history')} rows={3} placeholder="势力的起源与重要历史事件" /></Field>
+                <Field label="内部秘密（作者视角）"><TextArea value={form.secrets ?? ''} onChange={f('secrets')} rows={2} placeholder="读者暂时不知道的隐藏信息" /></Field>
+              </Section>
             </div>
-          </div>
-        ) : (
+          )
+        })() : (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <Shield size={40} className="text-gray-200 mx-auto mb-3" />

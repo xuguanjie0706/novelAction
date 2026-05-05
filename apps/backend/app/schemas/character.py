@@ -8,6 +8,8 @@ class CharacterCreate(BaseModel):
     name: str
     alias: List[str] = []
     role: str = "supporting"
+    # 叙事层级：core=核心长线 / arc=弧线支柱 / plot=剧情推手 / background=背景填充
+    character_tier: str = "core"
     gender: Optional[str] = None
     age: Optional[str] = None
     avatar_url: Optional[str] = None
@@ -65,6 +67,7 @@ class CharacterUpdate(BaseModel):
     name: Optional[str] = None
     alias: Optional[List[str]] = None
     role: Optional[str] = None
+    character_tier: Optional[str] = None
     gender: Optional[str] = None
     age: Optional[str] = None
     avatar_url: Optional[str] = None
@@ -114,6 +117,7 @@ class CharacterOut(BaseModel):
     name: str
     alias: List[str]
     role: str
+    character_tier: str = "core"   # 旧数据 NULL 时用默认值，避免序列化报错
     gender: Optional[str]
     age: Optional[str]
     avatar_url: Optional[str]

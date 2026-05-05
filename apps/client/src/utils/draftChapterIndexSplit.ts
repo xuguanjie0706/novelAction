@@ -71,11 +71,24 @@ function numberedListItems(lines: string[]): string[] {
   return out.filter(Boolean)
 }
 
+/** 去掉行首 Markdown/中文列表前缀，避免「- F-013」按 F 切分时留下单独的 "-" 行 */
+function stripForeshadowLinePrefix(s: string): string {
+  return s
+    .replace(/^\d+[\.．、]\s+/, '')
+    .replace(/^[-*•]\s*/, '')
+    .trim()
+}
+
 function splitForeshadowPieces(s: string): string[] {
   const t = s.trim()
   if (!t || /^无[。]?$/i.test(t)) return []
-  const parts = t.split(/(?=F[-_ ]?\d+)/i).map((x) => x.trim()).filter(Boolean)
-  return parts.length ? parts : [t]
+  const parts = t
+    .split(/(?=F[-_ ]?\d+)/i)
+    .map((x) => stripForeshadowLinePrefix(x))
+    .filter(Boolean)
+  if (parts.length) return parts
+  const single = stripForeshadowLinePrefix(t)
+  return single ? [single] : []
 }
 
 /**

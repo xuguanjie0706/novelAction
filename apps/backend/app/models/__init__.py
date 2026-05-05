@@ -17,8 +17,10 @@ from app.models.chapter_coherence_report import ChapterCoherenceReport
 from app.models.foreshadow import Foreshadow
 from app.models.llm_call_log import LlmCallLog
 from app.models.chapter_debrief_cache import ChapterDebriefCache
+from app.models.chapter_debrief_undo import ChapterDebriefUndo
 from app.models.outline_revision import OutlineRevision
 from app.models.quality_debt import QualityDebt
+from app.models.character_change_log import CharacterChangeLog
 
 __all__ = [
     "Project",
@@ -39,6 +41,8 @@ __all__ = [
     "Foreshadow",
     "LlmCallLog",
     "ChapterDebriefCache",
+    "ChapterDebriefUndo",
     "OutlineRevision",
     "QualityDebt",
+    "CharacterChangeLog",
 ]

@@ -252,8 +252,15 @@ items 每个元素字段：
 name, item_type, rarity, description, origin, effects, limitations, story_significance, current_owner, status。
 
 characters 每个元素字段：
-name, role, gender, age, faction, personality, background, motivation, arc, current_realm,
+name, role, character_tier, gender, age, faction, personality, background, motivation, arc, current_realm,
 speech_style, values, fear, secrets, strengths, weaknesses, special_traits。
+role 只能是: protagonist / supporting / antagonist
+character_tier 代表该人物在全书中的叙事层级，只能是以下4个值之一：
+core=核心长线（贯穿全书，驱动主线，如主角/主反派/固定伙伴）；
+arc=弧线支柱（某卷/某段主导剧情，随弧线结束淡出）；
+plot=剧情推手（短期推进特定情节后退场）；
+background=背景填充（丰富世界氛围，无强情节绑定）。
+请根据每个人物实际定位严格判断，不要全部填 core。
 
 settings 每个元素字段：
 title, content, tags, extra。
@@ -1025,6 +1032,7 @@ status 只能是: planned / active
 [
   {{
     "name": "姓名", "role": "protagonist",
+    "character_tier": "core",
     "gender": "男", "age": "17", "faction": "所属势力",
     "personality": "性格（2句话）",
     "background": "背景经历（3句话）",
@@ -1040,20 +1048,30 @@ status 只能是: planned / active
     "special_traits": ["特殊能力或标志性特征"]
   }}
 ]
-role 只能是: protagonist / supporting / antagonist"""
+role 只能是: protagonist / supporting / antagonist
+character_tier 代表该人物在全书中的叙事层级，只能是以下4个值之一：
+- core       = 核心长线：贯穿全书始终，长期驱动主线或重要支线（主角、主要反派、全书固定伙伴）
+- arc        = 弧线支柱：在某卷或某段剧情中主导走向，随该弧线完结后淡出或阵亡
+- plot       = 剧情推手：短期出现以推进特定情节节点，之后退场
+- background = 背景填充：丰富世界厚度与氛围，无强情节绑定
+请根据每个人物在故事中的实际定位严格判断，不要全部填 core。"""
 
         raw = await self._call_with_retry(system, prompt)
         data = _parse_json(raw)
         if not isinstance(data, list):
             data = data.get("characters", [])
 
+        _VALID_TIERS = {"core", "arc", "plot", "background"}
         results = []
         for item in data:
+            tier = item.get("character_tier", "core")
+            if tier not in _VALID_TIERS:
+                tier = "core"
             c = Character(
                 project_id=project.id,
                 name=item.get("name", "未命名"),
                 role=item.get("role", "supporting"),
-                character_tier="core",          # Bootstrap 生成的均为主线核心卡司
+                character_tier=tier,
                 gender=item.get("gender"),
                 age=item.get("age"),
                 faction=item.get("faction"),
@@ -1386,13 +1404,17 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
                 extra=_setting_extra_with_defaults(s),
             ))
 
+        _VALID_TIERS = {"core", "arc", "plot", "background"}
         char_map = {}
         for c in data.get("characters", []):
+            _tier = c.get("character_tier", "core")
+            if _tier not in _VALID_TIERS:
+                _tier = "core"
             char = Character(
                 project_id=project.id,
                 name=c.get("name", "未命名"),
                 role=c.get("role", "supporting"),
-                character_tier="core",          # single_shot Bootstrap 生成的均为主线核心卡司
+                character_tier=_tier,
                 gender=c.get("gender"),
                 age=c.get("age"),
                 faction=c.get("faction"),

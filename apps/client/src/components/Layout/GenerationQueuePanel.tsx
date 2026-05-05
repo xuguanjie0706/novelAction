@@ -25,6 +25,7 @@ import {
   commitOutlineExpand,
 } from '../../utils/outlineAiExpand'
 import { autoCommitGeneratedChapterDebrief } from '../../utils/generatedChapterDebrief'
+import { formatApiError } from '../../utils/apiError'
 import {
   splitStreamedDraftText,
   parseChapterIndexMarkdown,
@@ -85,7 +86,7 @@ async function runFullGenerate(
     })
   } catch (e: any) {
     if (e?.name === 'AbortError') return false
-    onError(e?.message || '网络请求失败')
+    onError(formatApiError(e) || '网络请求失败')
     return false
   }
 
@@ -163,7 +164,7 @@ async function runFullGenerate(
     return false
   } catch (e: any) {
     if (e?.name === 'AbortError') return false
-    wrapError(e?.message || '流读取异常')
+    wrapError(formatApiError(e) || '流读取异常')
     return false
   }
 }
@@ -392,7 +393,7 @@ async function runOutlineQualityCheck(
     pushProgress({
       step: 'outline-quality',
       progressKey: 'outline-quality-book',
-      label: `全书大纲质检失败，可稍后重试：${e?.message || '未知错误'}`,
+      label: `全书大纲质检失败，可稍后重试：${formatApiError(e)}`,
       done: true,
       error: true,
       outlineQualityScope: 'book',
@@ -560,7 +561,7 @@ async function runOutlineRepair(
     pushProgress({
       step: 'outline-repair',
       progressKey: 'outline-repair-error',
-      label: `大纲修复失败：${e?.message || '未知错误'}`,
+      label: `大纲修复失败：${formatApiError(e)}`,
       done: true,
       error: true,
     })
@@ -607,7 +608,7 @@ async function runBatchExpand(
         onComplete(`已取消（已成功 ${successCount}/${nodes.length} 个节点）`)
         return
       }
-      pushProgress({ step: i + 1, label: `✗ ${stepLabel} 失败：${e?.message || '未知'}`, done: true, error: true })
+      pushProgress({ step: i + 1, label: `✗ ${stepLabel} 失败：${formatApiError(e)}`, done: true, error: true })
     }
   }
 
@@ -648,7 +649,7 @@ async function runContinueChapters(
       const chapterRes = await chaptersApi.get(projectId, chapterId)
       chapter = chapterRes.data
     } catch (e: any) {
-      pushProgress({ step: i + 1, label: `读取第 ${i + 1} 章失败：${e?.message || '未知错误'}`, done: true, error: true })
+      pushProgress({ step: i + 1, label: `读取第 ${i + 1} 章失败：${formatApiError(e)}`, done: true, error: true })
       onError(`读取章节失败，已完成 ${successCount}/${chapterIds.length} 章`)
       return
     }
@@ -705,6 +706,14 @@ async function runContinueChapters(
       pushProgress({ step: phaseStep('draft'), label: `✓ 正文生成完成 ${stepLabel}`, done: true, error: false })
       pushProgress({ step: phaseStep('save'), label: `正在保存叙事正文 ${stepLabel}…`, done: false, error: false })
 
+      try {
+        if ((chapter.content || '').trim()) {
+          await chaptersApi.snapshot(projectId, chapterId, 'AI续写追加前自动备份', true)
+        }
+      } catch {
+        /* 快照失败不阻断保存 */
+      }
+
       const appendedHtml = plainTextDraftToHtml(draftBody.trim())
       const nextContent = `${chapter.content || ''}${chapter.content ? '\n' : ''}${appendedHtml}`
       const manuscript_raw_snapshot = manuscriptRawSnapshotForContinue(chapter.content, accumulated.trim())
@@ -727,7 +736,7 @@ async function runContinueChapters(
         } catch (e: any) {
           pushProgress({
             step: phaseStep('index'),
-            label: `索引解析入库失败：${e?.message || '未知错误'}`,
+            label: `索引解析入库失败：${formatApiError(e)}`,
             done: true,
             error: true,
           })
@@ -753,7 +762,7 @@ async function runContinueChapters(
       } catch (e: any) {
         pushProgress({
           step: phaseStep('quality'),
-          label: `质检失败，可稍后手动检查：${e?.message || '未知错误'}`,
+          label: `质检失败，可稍后手动检查：${formatApiError(e)}`,
           done: true,
           error: true,
         })
@@ -780,11 +789,11 @@ async function runContinueChapters(
       } catch (e: any) {
         pushProgress({
           step: phaseStep('debrief'),
-          label: `自动复盘失败，已中止连续续写（避免下一章在旧状态下生成）：${e?.message || '未知错误'}`,
+          label: `自动复盘失败，已中止连续续写（避免下一章在旧状态下生成）：${formatApiError(e)}`,
           done: true,
           error: true,
         })
-        onError(`复盘失败，已中止续写链：${stepLabel}。${e?.message || '未知错误'}`)
+        onError(`复盘失败，已中止续写链：${stepLabel}。${formatApiError(e)}`)
         return
       }
 
@@ -796,7 +805,7 @@ async function runContinueChapters(
       } catch (e: any) {
         pushProgress({
           step: phaseStep('memory'),
-          label: `记忆库刷新失败：${e?.message || '未知错误'}`,
+          label: `记忆库刷新失败：${formatApiError(e)}`,
           done: true,
           error: true,
         })
@@ -809,7 +818,7 @@ async function runContinueChapters(
         onComplete(`已取消（已完成 ${successCount}/${chapterIds.length} 章）`)
         return
       }
-      pushProgress({ step: i + 1, label: `✗ ${stepLabel} 失败：${e?.message || '未知错误'}`, done: true, error: true })
+      pushProgress({ step: i + 1, label: `✗ ${stepLabel} 失败：${formatApiError(e)}`, done: true, error: true })
       onError(`续写中断：${stepLabel} 失败，已完成 ${successCount}/${chapterIds.length} 章`)
       return
     }
@@ -847,7 +856,7 @@ async function runRewriteChapter(
     const chapterRes = await chaptersApi.get(projectId, chapterId)
     chapter = chapterRes.data
   } catch (e: any) {
-    onError(`读取章节失败：${e?.message || '未知错误'}`)
+    onError(`读取章节失败：${formatApiError(e)}`)
     return
   }
 
@@ -898,6 +907,13 @@ async function runRewriteChapter(
     if (!draftBody.trim()) throw new Error('未收到叙事正文（可能只有索引块）')
 
     pushProgress({ step: 'draft', label: `✓ 《${chapter.title}》重写完成，正在保存…`, done: true, error: false })
+    try {
+      if ((chapter.content || '').trim()) {
+        await chaptersApi.snapshot(projectId, chapterId, 'AI重写正文前自动备份', true)
+      }
+    } catch {
+      /* 快照失败不阻断保存 */
+    }
     const updateRes = await chaptersApi.update(projectId, chapterId, {
       content: plainTextDraftToHtml(draftBody.trim()),
       manuscript_raw_snapshot: accumulated.trim(),
@@ -917,7 +933,7 @@ async function runRewriteChapter(
       } catch (e: any) {
         pushProgress({
           step: 'index',
-          label: `索引解析入库失败：${e?.message || '未知错误'}`,
+          label: `索引解析入库失败：${formatApiError(e)}`,
           done: true,
           error: true,
         })
@@ -943,7 +959,7 @@ async function runRewriteChapter(
     } catch (e: any) {
       pushProgress({
         step: 'quality',
-        label: `质检失败，可稍后手动检查：${e?.message || '未知错误'}`,
+        label: `质检失败，可稍后手动检查：${formatApiError(e)}`,
         done: true,
         error: true,
       })
@@ -970,7 +986,7 @@ async function runRewriteChapter(
     } catch (e: any) {
       pushProgress({
         step: 'debrief',
-        label: `自动复盘失败，可稍后在复盘面板手动提交：${e?.message || '未知错误'}`,
+        label: `自动复盘失败，可稍后在复盘面板手动提交：${formatApiError(e)}`,
         done: true,
         error: true,
       })
@@ -984,7 +1000,7 @@ async function runRewriteChapter(
     } catch (e: any) {
       pushProgress({
         step: 'memory',
-        label: `记忆库刷新失败：${e?.message || '未知错误'}`,
+        label: `记忆库刷新失败：${formatApiError(e)}`,
         done: true,
         error: true,
       })
@@ -996,8 +1012,8 @@ async function runRewriteChapter(
       onComplete('已取消')
       return
     }
-    pushProgress({ step: 'error', label: `重写失败：${e?.message || '未知错误'}`, done: true, error: true })
-    onError(`重写失败：${e?.message || '未知错误'}`)
+    pushProgress({ step: 'error', label: `重写失败：${formatApiError(e)}`, done: true, error: true })
+    onError(`重写失败：${formatApiError(e)}`)
   }
 }
 

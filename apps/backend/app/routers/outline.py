@@ -24,6 +24,10 @@ from app.models import (
 from app.models.chapter import Chapter
 from app.schemas import OutlineNodeCreate, OutlineNodeUpdate, OutlineNodeOut
 from app.services.ai_service import AIService
+from app.services.xuanhuan_lexicon import (
+    MODERN_BLACKLIST_FOR_XUANHUAN,
+    is_xuanhuan_like_genre as _is_xuanhuan_like_genre,
+)
 from app.services.outline_planning import (
     TARGET_CHAPTERS_PER_VOLUME,
     TARGET_WORDS_PER_CHAPTER,
@@ -63,11 +67,6 @@ def build_tree(nodes: List[OutlineNode]) -> List[OutlineNodeOut]:
 
 def _clean_outline_text(value: object, limit: int = 120) -> str:
     return " ".join(str(value or "").split())[:limit]
-
-
-def _is_xuanhuan_like_genre(genre: str | None) -> bool:
-    raw = (genre or "").strip()
-    return any(tag in raw for tag in ("玄幻", "仙侠", "古风", "武侠"))
 
 
 def _sanitize_xuanhuan_outline_text(text: str) -> str:
@@ -501,14 +500,6 @@ TRADITIONAL_CULTIVATION_BLACKLIST: set[str] = {
     "搬血", "洞天", "化灵", "铸神",
     # 武道
     "宗师境", "大宗师", "武圣", "武神",
-}
-
-# 玄幻/仙侠题材下的现代/科幻词汇黑名单。
-MODERN_BLACKLIST_FOR_XUANHUAN: set[str] = {
-    "AI", "人工智能", "芯片", "量子", "基因实验室", "克隆体",
-    "电脑", "服务器", "处理器", "代码块",
-    "宇宙飞船", "星舰", "机甲", "机器人",
-    "激光炮", "等离子", "纳米机器人",
 }
 
 # 在 character_change 中出现这些词时，视为已交代境界跌落/重伤的合理代价，跳过回退告警。

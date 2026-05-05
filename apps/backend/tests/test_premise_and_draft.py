@@ -110,6 +110,8 @@ async def test_expand_outline_adds_xuanhuan_genre_guardrails():
     assert "禁止现代科幻词汇与设定漂移" in prompt
     assert "首席工程师" in prompt
     assert "如需表达复杂遗迹或中枢，请改写为阵法中枢" in prompt
+    assert "【现代/科幻用语黑名单" in prompt
+    assert "服务器" in prompt and "备份体" in prompt
 
 
 @pytest.mark.asyncio
@@ -1053,6 +1055,40 @@ async def test_draft_prompt_includes_premise_and_full_chapter_target():
     assert "完整初稿" in captured["prompt"] and "2300" in captured["prompt"]
     assert "约600字" not in captured["prompt"]
     assert captured["max_tokens"] >= 4096
+
+
+@pytest.mark.asyncio
+async def test_draft_system_includes_xuanhuan_genre_guardrails():
+    """玄幻正文起草须与章纲扩写一致，注入禁现代/科幻词护栏。"""
+    captured = {}
+
+    async def fake_stream(system: str, prompt: str, max_tokens: int = 4096, context=None):
+        captured["system"] = system
+        yield "正文"
+
+    svc = AIService()
+    svc._stream_ai = fake_stream
+
+    async for _ in svc.draft_assist_stream(
+        chapter_title="第1章",
+        outline_hook="",
+        outline_summary="",
+        outline_conflict="",
+        outline_highlight="",
+        outline_foreshadow="",
+        prev_chapter_tail="",
+        world_summary="",
+        character_summary="",
+        memory_summary="",
+        existing_content="",
+        genre="玄幻",
+    ):
+        pass
+
+    assert "【类型硬约束】" in captured["system"]
+    assert "禁止现代科幻词汇" in captured["system"]
+    assert "【现代/科幻用语黑名单" in captured["system"]
+    assert "服务器" in captured["system"] and "备份体" in captured["system"]
 
 
 @pytest.mark.asyncio

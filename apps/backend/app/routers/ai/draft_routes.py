@@ -328,6 +328,7 @@ async def draft_assist_stream(
                 phase=phase_value,
                 positioning=positioning_value,
                 stream_log_context=stream_log_ctx,
+                genre=project.genre or "",
             ):
                 yield f"data: {json.dumps({'text': chunk})}\n\n"
         except Exception as e:

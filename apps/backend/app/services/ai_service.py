@@ -30,7 +30,30 @@ from app.services.llm_token_budgets import (
     max_tokens_suggest_stream,
 )
 from app.services.llm_call_log import log_llm_call
+from app.services.xuanhuan_lexicon import (
+    format_modern_blacklist_for_prompt,
+    is_xuanhuan_like_genre,
+)
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
+
+
+def genre_guardrail_text(raw_genre: str) -> str:
+    """
+    章纲扩写与正文起草共用：按作品类型约束语汇，避免玄幻正文漂移出现现代/科幻套话。
+    """
+    genre_text = (raw_genre or "").strip()
+    if is_xuanhuan_like_genre(genre_text):
+        base = (
+            "【类型硬约束】\n"
+            "当前题材为东方玄幻/仙侠/古风体系。禁止现代科幻词汇与设定漂移。\n"
+            "严禁出现或暗示以下表达：首席工程师、机械改造/半机械人、飞船/战舰、AI/人工智能、芯片、量子、基因实验室、星际文明、控制台、程序上传。\n"
+            "如需表达复杂遗迹或中枢，请改写为阵法中枢、古禁制、神纹、天机枢纽、血祭法坛、傀儡机关等东方玄幻语汇。"
+        )
+        return f"{base}\n\n{format_modern_blacklist_for_prompt()}"
+    return (
+        "【类型一致性】\n"
+        "保持题材语汇与世界观风格稳定，不得突然引入与当前题材冲突的现代科技设定。"
+    )
 
 
 class AIService:
@@ -736,20 +759,6 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         为选定的大纲节点（卷或旧篇）生成详细的子章节计划。
         返回「五要素」格式：开篇钩子/核心事件/人物变化/伏笔管理/章末钩子。
         """
-        def _genre_guardrail_text(raw_genre: str) -> str:
-            genre_text = (raw_genre or "").strip()
-            if any(tag in genre_text for tag in ["玄幻", "仙侠", "古风", "武侠"]):
-                return (
-                    "【类型硬约束】\n"
-                    "当前题材为东方玄幻/仙侠/古风体系。禁止现代科幻词汇与设定漂移。\n"
-                    "严禁出现或暗示以下表达：首席工程师、机械改造/半机械人、飞船/战舰、AI/人工智能、芯片、量子、基因实验室、星际文明、控制台、程序上传。\n"
-                    "如需表达复杂遗迹或中枢，请改写为阵法中枢、古禁制、神纹、天机枢纽、血祭法坛、傀儡机关等东方玄幻语汇。"
-                )
-            return (
-                "【类型一致性】\n"
-                "保持题材语汇与世界观风格稳定，不得突然引入与当前题材冲突的现代科技设定。"
-            )
-
         system = """你是拥有30年经验的网络小说策划，深刻理解网文追读机制。
 你的大纲必须让每一章都有存在的理由，特别是「章末钩子」——
 那是让读者无法放下手机的最后一句话的设计意图。
@@ -813,7 +822,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 全书立意：{theme_statement[:300] or '（未填写；请从创意和人物中提炼一条贯穿全书的价值命题）'}
 {realm_constraint_block}{protagonist_state_context}{global_context}{prior_plot_block}{prior_ledger_block}{previous_context}{continuity_context}{batch_goal_context}
 请为本{node_type == 'volume' and '卷' or '旧篇'}生成 {chapter_count} 个章节计划，章节编号从第{start_num}章开始。
-{_genre_guardrail_text(genre)}
+{genre_guardrail_text(genre)}
 
 每章使用「作家五要素」格式，返回 JSON：
 {{
@@ -1193,6 +1202,8 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         positioning: Optional[dict] = None,
         # 写入 llm_call_logs.context，便于对账（含模型完整原文 output_payload.text）
         stream_log_context: dict | None = None,
+        # 作品类型（如 Project.genre）；玄幻/仙侠等会注入「禁现代科幻词」正文护栏
+        genre: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
@@ -1305,6 +1316,10 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 - 严禁解释性旁白连续 3 句以上（让事件本身说话）
 - 严禁滥用"突然"作为段落起点
 - 严禁出现 AI 自指词（"作为一个 AI""根据您的要求""我来为您"）"""
+
+        genre_gr = genre_guardrail_text(genre)
+        if genre_gr.strip():
+            system = system + "\n\n" + genre_gr
 
         if positioning_brief:
             system = system + "\n\n" + positioning_brief

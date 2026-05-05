@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.services.ai_service import AIService
+from app.services.genre_kit import get_genre_kit, normalize_genre, render_kit_for_prompt
 from app.models import (
     Project, WorldSetting, Character, CharacterRelationship,
     OutlineNode, MemoryChunk, PowerSystem, StoryLine,
@@ -45,6 +46,19 @@ def _parse_json(text: str):
     )
     text = text[start:]
     return json.loads(text)
+
+
+def _get_genre_kit_block(ctx: dict) -> str:
+    """返回 genre_kit 的 prompt 注入块，若 ctx 中已有则直接使用"""
+    kit_prompt = ctx.get("genre_kit_prompt")
+    if kit_prompt:
+        return f"\n{kit_prompt}\n"
+    # 兜底：如果 ctx 里还没有（早期步骤），尝试从 genre 生成
+    genre = ctx.get("genre")
+    if genre:
+        from app.services.genre_kit import get_genre_guardrail
+        return "\n" + get_genre_guardrail(genre) + "\n"
+    return ""
 
 
 def _coerce_power_system_rank(value, levels: list, default: int | None) -> int | None:
@@ -627,6 +641,9 @@ class GenerationService:
         ctx["world_overview"] = project.world_overview
         ctx["story_core"] = story_core
         ctx["premise"] = project.premise or ctx.get("premise") or ""
+        # 流派分流：加载 genre_kit 作为全局约束，后续所有步骤都读它
+        ctx["genre_kit"] = get_genre_kit(project.genre)
+        ctx["genre_kit_prompt"] = render_kit_for_prompt(ctx["genre_kit"])
 
         return project, ctx
 
@@ -1219,7 +1236,14 @@ status 只能是: planned / active
     "motivation": "核心动机",
     "arc": "人物弧线（从X到Y的成长）",
     "current_realm": "当前境界（或能力层级）",
-    "speech_style": "说话风格",
+    "speech_style": "说话风格（自由文本，一句话）",
+    "speech_kit": {
+      "signature_words": ["最常说的1-3个标志性词语/口头禅"],
+      "sentence_length_pref": "短句/中句/长句偏好",
+      "taboo_words": ["绝对不会说的词或句式"],
+      "sample_dialogues": ["5-8句典型台词，体现说话习惯"],
+      "inner_monologue_style": "内心独白风格（克制/细腻/直白/诗化等）"
+    },
     "values": "价值观",
     "fear": "最恐惧的东西——必须具体，且这个恐惧在故事中会被迫直面",
     "secrets": "不愿公开的秘密——必须具体，且这个秘密暴露后会引发实质性后果",
@@ -1273,6 +1297,7 @@ debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对�
                 arc=item.get("arc"),
                 current_realm=item.get("current_realm"),
                 speech_style=item.get("speech_style"),
+                speech_kit=item.get("speech_kit") or {},
                 values=item.get("values"),
                 fear=item.get("fear"),
                 secrets=item.get("secrets"),
@@ -1327,11 +1352,12 @@ debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对�
                 + json.dumps(positioning, ensure_ascii=False)
                 + "\n"
             )
+        kit_block = _get_genre_kit_block(ctx)
 
         prompt = f"""小说：《{ctx['project_title']}》主角：{ctx['protagonist']}
 创意：{ctx['logline']}
 立意与类型：{ctx.get('premise', '')[:700] or '（未填写）'}
-设定摘要：{ctx['settings_summary']}{storyline_hint}{positioning_block}
+设定摘要：{ctx['settings_summary']}{storyline_hint}{positioning_block}{kit_block}
 
 主线核心角色（固定卡司，非全书全部人物）：{', '.join(ctx.get('char_names', []))}
 ⚠️ 以上只是主线人物。每卷 summary/conflict 允许并鼓励提及未命名配角（如"某城守将""地下情报商""宗门长老"等职能角色），章节细化时会按需正式创建他们。

@@ -271,3 +271,52 @@ async def pre_write_warning(
         character_states=character_states,
     )
     return result
+
+
+# ═══════════════════════════════════════════════════════════════
+# P1-6：读者模拟器 — 让 AI 扮演 5 类典型读者给出章评
+# ═══════════════════════════════════════════════════════════════
+
+class ReaderSimulatorRequest(BaseModel):
+    chapter_id: str
+    model_profile: Literal["local", "gemini"] = "local"
+    llm_provider_id: Optional[UUID] = None
+
+
+@router.post("/reader-simulator")
+async def reader_simulator(
+    project_id: str,
+    req: ReaderSimulatorRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    读者模拟器：让 AI 同时扮演 5 类典型网文读者，对刚写完的章节给出：
+    - 追新型：爽点是否足够？会不会继续追？
+    - 考据党：设定/逻辑是否严谨？
+    - CP 党：感情线是否甜/虐到位？
+    - 爽文党：打脸/升级/装逼是否解气？
+    - 剧情党：钩子与反转是否抓人？
+    每类返回：评分(1-10) + 一段章评 + “会不会追下一章”的判断。
+    """
+    chapter = db.query(Chapter).filter(
+        Chapter.id == req.chapter_id, Chapter.project_id == project_id
+    ).first()
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+
+    plain = plain_text(chapter.content or "")
+    narrative, _ = split_plain_manuscript_and_index_block(plain)
+    if not narrative.strip():
+        narrative = plain
+
+    svc = AIService(
+        "gemini" if req.model_profile == "gemini" else "default",
+        db=db,
+        llm_provider_id=req.llm_provider_id,
+    )
+    result = await svc.reader_simulator(
+        chapter_title=chapter.title,
+        chapter_content=narrative[:8000],
+        genre=project.genre or "玄幻",
+    )
+    return result

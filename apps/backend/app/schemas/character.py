@@ -32,6 +32,7 @@ class CharacterCreate(BaseModel):
     # 性格
     personality: Optional[str] = None
     speech_style: Optional[str] = None
+    speech_kit: Optional[dict] = None  # 结构化语风指纹
     values: Optional[str] = None
 
     # 背景

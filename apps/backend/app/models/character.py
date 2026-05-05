@@ -42,7 +42,8 @@ class Character(Base):
 
     # ── 性格与说话风格 ────────────────────────────────────────
     personality = Column(Text)                       # 性格特点
-    speech_style = Column(Text)                      # 说话风格/口头禅/语气习惯
+    speech_style = Column(Text)                      # 说话风格/口头禅/语气习惯（自由文本，兼容旧数据）
+    speech_kit = Column(JSON, default=dict)          # 结构化语风指纹：{signature_words, sentence_length_pref, taboo_words, sample_dialogues:[5-8句], inner_monologue_style, recent_evolution_notes}
     values = Column(Text)                            # 价值观、信念、底线
 
     # ── 背景故事 ──────────────────────────────────────────────

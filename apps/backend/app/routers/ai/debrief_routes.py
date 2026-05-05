@@ -16,6 +16,8 @@ from app.models import (
     Character,
     CharacterChangeLog,
     MemoryChunk,
+    OutlineNode,
+    ReaderPromise,
     StoryLine,
 )
 from app.services.ai_service import AIService
@@ -484,6 +486,110 @@ def chapter_debrief(
         embed_text = f"{mc.title or ''}\n{mc.content}".strip()
         embed_chunk_async(mc.id, embed_text, SessionLocal)
 
+    # 复盘闭环：应用 next_chapter_directives 到未来 OutlineNode.extra
+    directives_applied = 0
+    if req.next_chapter_directives:
+        for d in req.next_chapter_directives:
+            try:
+                target_id = d.get("outline_node_id")
+                patch = d.get("patch") or {}
+                if not patch:
+                    continue
+                node = None
+                if target_id:
+                    try:
+                        node = db.query(OutlineNode).filter(
+                            OutlineNode.id == UUID(str(target_id)),
+                            OutlineNode.project_id == project_id
+                        ).first()
+                    except Exception:
+                        node = None
+                if not node:
+                    # 自动匹配下一章（按 sort_order 找当前章之后的第一个未写节点）
+                    current_sort = chapter.sort_order or 0
+                    node = db.query(OutlineNode).filter(
+                        OutlineNode.project_id == project_id,
+                        OutlineNode.sort_order > current_sort,
+                        OutlineNode.status != "done"
+                    ).order_by(OutlineNode.sort_order.asc()).first()
+                if node:
+                    extra = dict(node.extra or {})
+                    prev = extra.get("directives_from_prev") or []
+                    prev.append({
+                        "from_chapter_id": str(req.chapter_id),
+                        "from_chapter_title": chapter.title,
+                        "patch": patch,
+                        "reason": d.get("reason", ""),
+                        "applied_at": "now"
+                    })
+                    extra["directives_from_prev"] = prev[-5:]  # 只保留最近5条，避免无限膨胀
+                    node.extra = extra
+                    directives_applied += 1
+            except Exception:
+                continue
+
+    # P1-4：人物语风指纹沉淀（speech_kit_updates）
+    speech_kit_updated_count = 0
+    if req.speech_kit_updates:
+        for sku in req.speech_kit_updates:
+            try:
+                cid = sku.get("character_id")
+                if not cid:
+                    continue
+                char = db.query(Character).filter(
+                    Character.id == UUID(str(cid)),
+                    Character.project_id == project_id
+                ).first()
+                if not char:
+                    continue
+                kit = dict(char.speech_kit or {})
+                # 合并 signature_words
+                old_words = set(kit.get("signature_words") or [])
+                new_words = [w.strip() for w in (sku.get("new_signature_words") or []) if w.strip()]
+                kit["signature_words"] = list(old_words | set(new_words))[:8]
+                # 合并 sample_dialogues
+                old_dialogues = kit.get("sample_dialogues") or []
+                new_dialogues = [d.strip() for d in (sku.get("new_sample_dialogues") or []) if d.strip()]
+                merged_dialogues = (old_dialogues + new_dialogues)[-8:]  # 最多保留8句
+                kit["sample_dialogues"] = merged_dialogues
+                # evolution_notes
+                if sku.get("evolution_note"):
+                    notes = kit.get("recent_evolution_notes") or []
+                    notes.append({
+                        "chapter_id": str(req.chapter_id),
+                        "chapter_title": chapter.title,
+                        "note": sku["evolution_note"][:200]
+                    })
+                    kit["recent_evolution_notes"] = notes[-5:]
+                char.speech_kit = kit
+                speech_kit_updated_count += 1
+            except Exception:
+                continue
+
+    # P1-5：读者期待管理（new_reader_promises → ReaderPromise）
+    promises_created = 0
+    if req.new_reader_promises:
+        for p in req.new_reader_promises:
+            try:
+                text = (p.get("promise_text") or "").strip()
+                if not text:
+                    continue
+                rp = ReaderPromise(
+                    project_id=project_id,
+                    promise_text=text[:500],
+                    promise_type=p.get("promise_type", "chapter_ending"),
+                    source_chapter_id=req.chapter_id,
+                    source_chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
+                    expected_chapter_window=int(p.get("expected_within_chapters") or 3),
+                    priority=int(p.get("priority") or 3),
+                    audience_aware=int(p.get("audience_aware") or 3),
+                    status="open",
+                )
+                db.add(rp)
+                promises_created += 1
+            except Exception:
+                continue
+
     return {
         "ok": True,
         "updated_characters": updated_chars,
@@ -494,6 +600,9 @@ def chapter_debrief(
         "chapter_index_error": chapter_index_error,
         "synced_foreshadows": synced_foreshadows,
         "asset_updates": asset_stats,
+        "directives_applied": directives_applied,
+        "speech_kit_updated_count": speech_kit_updated_count,
+        "promises_created": promises_created,
         "message": result_message,
     }
 

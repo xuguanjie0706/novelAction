@@ -251,6 +251,12 @@ class ChapterDebriefRequest(BaseModel):
     notes: Optional[str] = None           # 作者备注，存到 chapter
     #: 落库审计：队列自动复盘 / Tab 手动提交（缺省按 manual_tab 记）
     apply_source: Optional[Literal["queue_auto", "manual_tab"]] = None
+    #: 复盘闭环：下一章要做的 patch 指令（由 auto_debrief 建议，前端可编辑后提交）
+    next_chapter_directives: List[dict] = []  # [{outline_node_id, patch: {...}, reason}]
+    #: 人物语风指纹沉淀：本章新出现的口头禅/台词样本，合并进 Character.speech_kit
+    speech_kit_updates: List[dict] = []  # [{character_id, new_signature_words, new_sample_dialogues, evolution_note}]
+    #: 读者期待管理：本章新做出的承诺（章末预告、卷末预告、名字暗示等）
+    new_reader_promises: List[dict] = []  # [{promise_text, promise_type, expected_within_chapters, priority}]
 
 
 class AutoDebriefRequest(BaseModel):

@@ -31,6 +31,7 @@ from app.services.llm_token_budgets import (
     max_tokens_suggest_stream,
 )
 from app.services.llm_call_log import log_llm_call
+from app.services.genre_kit import get_genre_guardrail, normalize_genre
 from app.services.xuanhuan_lexicon import (
     format_modern_blacklist_for_prompt,
     is_xuanhuan_like_genre,
@@ -40,21 +41,15 @@ from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 
 def genre_guardrail_text(raw_genre: str) -> str:
     """
-    章纲扩写与正文起草共用：按作品类型约束语汇，避免玄幻正文漂移出现现代/科幻套话。
+    章纲扩写与正文起草共用：按作品类型注入完整 genre_kit（开局节拍、爽点、配角配额、钩子谱、对白基调、禁忌反例、读者期待）。
+    玄幻/仙侠额外追加现代词黑名单。
     """
+    kit_text = get_genre_guardrail(raw_genre)
     genre_text = (raw_genre or "").strip()
     if is_xuanhuan_like_genre(genre_text):
-        base = (
-            "【类型硬约束】\n"
-            "当前题材为东方玄幻/仙侠/古风体系。禁止现代科幻词汇与设定漂移。\n"
-            "严禁出现或暗示以下表达：首席工程师、机械改造/半机械人、飞船/战舰、AI/人工智能、芯片、量子、基因实验室、星际文明、控制台、程序上传。\n"
-            "如需表达复杂遗迹或中枢，请改写为阵法中枢、古禁制、神纹、天机枢纽、血祭法坛、傀儡机关等东方玄幻语汇。"
-        )
-        return f"{base}\n\n{format_modern_blacklist_for_prompt()}"
-    return (
-        "【类型一致性】\n"
-        "保持题材语汇与世界观风格稳定，不得突然引入与当前题材冲突的现代科技设定。"
-    )
+        modern = format_modern_blacklist_for_prompt()
+        return f"{kit_text}\n\n【现代/科幻用语黑名单（玄幻/仙侠专用）】\n{modern}"
+    return kit_text
 
 
 class AIService:
@@ -1383,6 +1378,8 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         stream_log_context: dict | None = None,
         # 作品类型（如 Project.genre）；玄幻/仙侠等会注入「禁现代科幻词」正文护栏
         genre: str = "",
+        # 复盘闭环：来自上一章复盘的 next_chapter_directives，高优先级注入
+        prev_directives: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
@@ -1517,6 +1514,8 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
             system = system + "\n\n" + positioning_brief
         if phase_brief:
             system = system + "\n\n" + phase_brief
+        if prev_directives.strip():
+            system = system + "\n\n【上一章复盘闭环指令（最高优先级，必须先满足再写正文）】\n" + prev_directives.strip()
 
         # 根据大纲 word_target 动态计算续写字数
         full_target = max(1500, int(word_target or 2300))
@@ -1900,7 +1899,39 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
   }},
   "highlight_quote": "本章最有截图/转发价值的1句原文（可以是狠话/反转/让人背脊发凉的细节/让读者想@好友的句子）；全章无亮句则填空字符串",
   "subscribe_intent_score": 8,
-  "summary": "本章整体复盘总结（一句话）"
+  "summary": "本章整体复盘总结（一句话）",
+  "speech_kit_updates": [
+    {
+      "character_id": "人物id",
+      "character_name": "人物名",
+      "new_signature_words": ["本章新出现的标志性词语"],
+      "new_sample_dialogues": ["本章新出现的典型台词（1-3句）"],
+      "evolution_note": "本章人物说话风格/心理有何细微演变"
+    }
+  ],
+  "new_reader_promises": [
+    {
+      "promise_text": "对读者的承诺原文或提炼（例：下一章林凡将面对天劫）",
+      "promise_type": "chapter_ending / volume_ending / name_implication / chapter_comment_consensus",
+      "expected_within_chapters": 1,
+      "priority": 5,
+      "audience_aware": 4
+    }
+  ],
+  "next_chapter_directives": [
+    {
+      "outline_node_id": "目标下一章 OutlineNode 的 id（若本章已知下一章 id 则填，否则留空字符串，由系统自动匹配下一章）",
+      "patch": {
+        "add_foreshadow": "若本章埋了新伏笔但未在 chapter_index 完全覆盖，建议在下一章回收或发展，描述一句",
+        "force_pov": "下一章建议强制使用哪位角色 POV（角色名），用于避免全知视角或配角失语",
+        "increase_screen_time_for": ["角色id列表，本章戏份不足的角色，下一章必须补"],
+        "must_resolve_promise_in_next_N_chapters": 2,
+        "adjust_pacing": "fast / normal / slow（本章节奏拖了则 fast，本章太赶则 slow）",
+        "reader_expectation_note": "读者当前最期待/最怕看到什么，本章应如何照顾情绪曲线"
+      },
+      "reason": "为什么要做这个 patch 的编辑逻辑（简短一句）"
+    }
+  ]
 }}"""
 
         response = await self._call_ai(

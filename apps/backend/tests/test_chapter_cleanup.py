@@ -11,6 +11,10 @@ class FakeQuery:
         self.calls.append(("filter", self.model, len(conditions)))
         return self
 
+    def update(self, values, synchronize_session=False):
+        self.calls.append(("update", self.model, values))
+        return 1
+
     def delete(self, synchronize_session=False):
         self.calls.append(("delete", self.model, synchronize_session))
         return 1
@@ -31,4 +35,16 @@ def test_delete_chapter_artifacts_removes_memory_and_chapter_index():
     delete_chapter_artifacts(db, "project-id", "chapter-id")
 
     deleted_models = [call[1] for call in db.calls if call[0] == "delete"]
-    assert deleted_models == [MemoryChunk, ChapterIndex, QualityDebt]
+    assert deleted_models == [MemoryChunk, ChapterIndex]
+    updated = [call[1] for call in db.calls if call[0] == "update"]
+    assert updated == [QualityDebt, QualityDebt]
+
+
+def test_delete_chapter_artifacts_can_preserve_quality_debts():
+    db = FakeDb()
+
+    delete_chapter_artifacts(db, "project-id", "chapter-id", with_quality_debts=False)
+
+    deleted_models = [call[1] for call in db.calls if call[0] == "delete"]
+    assert deleted_models == [MemoryChunk, ChapterIndex]
+    assert QualityDebt not in deleted_models

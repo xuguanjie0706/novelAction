@@ -73,7 +73,7 @@ def reset_writing_progress(project_id: str, db: Session = Depends(get_db)):
     """
     重置写作进度：保留大纲/世界观/境界体系/势力，清除：
     - 所有章节正文及版本
-    - 记忆库 / 伏笔 / 章节索引 / 复盘缓存 / undo / 质检债 / 连贯性报告 / AI对话
+    - 记忆库 / 伏笔 / 章节索引 / 复盘缓存 / undo / 质检债（待处理→已修复并解除章节关联，不物理删）/ 连贯性报告 / AI对话
     - 技能 / 道具（Bootstrap 可重新生成）
     - 人物写作状态（境界/位置/已学技能/持有道具/成长阶段，基础档案保留）
     - 人物变更日志
@@ -86,6 +86,15 @@ def reset_writing_progress(project_id: str, db: Session = Depends(get_db)):
     pid = project_id
     stats: dict = {}
 
+    # ── 0. 质检债：不物理删除，待处理标为已修复并解除章节外键（随后会删章节）────────
+    stats["quality_debts_pending_resolved"] = db.query(QualityDebt).filter(
+        QualityDebt.project_id == pid,
+        QualityDebt.status == "pending",
+    ).update({"status": "resolved"}, synchronize_session=False)
+    stats["quality_debts_detached"] = db.query(QualityDebt).filter(
+        QualityDebt.project_id == pid,
+    ).update({"chapter_id": None}, synchronize_session=False)
+
     # ── 1. 章节 & 版本 ────────────────────────────────────
     stats["chapters"] = db.query(Chapter).filter(Chapter.project_id == pid).delete(synchronize_session=False)
     # ChapterVersion 级联删除（依赖 Chapter FK），但为防止无级联配置，显式清
@@ -97,7 +106,6 @@ def reset_writing_progress(project_id: str, db: Session = Depends(get_db)):
     stats["chapter_indexes"] = db.query(ChapterIndex).filter(ChapterIndex.project_id == pid).delete(synchronize_session=False)
     stats["debrief_caches"] = db.query(ChapterDebriefCache).filter(ChapterDebriefCache.project_id == pid).delete(synchronize_session=False)
     stats["debrief_undos"] = db.query(ChapterDebriefUndo).filter(ChapterDebriefUndo.project_id == pid).delete(synchronize_session=False)
-    stats["quality_debts"] = db.query(QualityDebt).filter(QualityDebt.project_id == pid).delete(synchronize_session=False)
     stats["coherence_reports"] = db.query(ChapterCoherenceReport).filter(ChapterCoherenceReport.project_id == pid).delete(synchronize_session=False)
     stats["ai_messages"] = db.query(AiChatMessage).filter(AiChatMessage.project_id == pid).delete(synchronize_session=False)
     stats["char_change_logs"] = db.query(CharacterChangeLog).filter(CharacterChangeLog.project_id == pid).delete(synchronize_session=False)

@@ -8,6 +8,12 @@ from app.models import Chapter, Foreshadow
 from app.routers.ai.schemas import ChapterIndexPayload
 from app.utils.chapter_numbering import display_chapter_number
 
+# 中文与 F 之间没有空格时，`\b` 词边界不成立，会导致「回收F-003」类文本漏提编号。
+_F_CODE_IN_PROSE_RE = re.compile(
+    r"(?<![A-Za-z0-9_])F[-_ ]?(\d{1,4})(?![0-9])",
+    flags=re.IGNORECASE,
+)
+
 
 def existing_foreshadow_codes(db: Session, project_id: str) -> set[str]:
     rows = db.query(Foreshadow.code).filter(Foreshadow.project_id == project_id).all()
@@ -53,7 +59,7 @@ def foreshadow_payload_from_index_item(item: dict, default_status: str = "open")
         return None
 
     code = None
-    code_match = re.search(r"\bF[-_ ]?(\d{1,4})\b", text, flags=re.IGNORECASE)
+    code_match = _F_CODE_IN_PROSE_RE.search(text)
     if code_match:
         code = f"F-{int(code_match.group(1)):03d}"
 
@@ -106,21 +112,38 @@ def foreshadow_payload_from_index_item(item: dict, default_status: str = "open")
     }
 
 
+def _normalize_f_code(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    m = _F_CODE_IN_PROSE_RE.search(str(raw).strip())
+    return f"F-{int(m.group(1)):03d}" if m else None
+
+
 def pick_open_foreshadow_for_resolve(open_rows: list[Foreshadow], payload: dict) -> Optional[Foreshadow]:
     """在无 F 编号时，将复盘条目与仍为 open 的全局伏笔对齐（跨章回收）。"""
     if not open_rows or not payload:
         return None
+    desc = (payload.get("description") or "").strip()
+    blob = " ".join(
+        x for x in (desc, (payload.get("title") or "").strip()) if x
+    )
+    if blob:
+        want = _normalize_f_code(blob)
+        if want:
+            for f in open_rows:
+                got = _normalize_f_code(f.code)
+                if got and got == want:
+                    return f
     title = (payload.get("title") or "").strip()
     if title:
         for f in open_rows:
             if (f.title or "").strip() == title:
                 return f
-    desc = (payload.get("description") or "").strip()
     if not desc:
         return None
     for f in open_rows:
         ft = (f.title or "").strip()
-        if len(ft) >= 6 and ft in desc:
+        if len(ft) >= 4 and ft in desc:
             return f
         fd = (f.description or "").strip()
         if len(fd) >= 12 and fd[:120] in desc:

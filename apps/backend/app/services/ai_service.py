@@ -27,6 +27,7 @@ from app.services.llm_token_budgets import (
     max_tokens_extract_memory,
     max_tokens_outline_quality_check,
     max_tokens_plan_full_structure,
+    max_tokens_quality_micro_patch,
     max_tokens_suggest_stream,
 )
 from app.services.llm_call_log import log_llm_call
@@ -320,6 +321,105 @@ class AIService:
                 "overall_score": 0,
                 "raw_response": response,
                 "error": "Failed to parse AI response"
+            }
+
+    def _micro_patch_narrative_window(self, body: str) -> str:
+        """长章截断供本地模型；长上下文线路尽量给足正文。"""
+        large = self._large_context_enabled()
+        if large:
+            return self._clip_context(body, 800, 120000)
+        max_total = 16000
+        if len(body) <= max_total:
+            return body
+        return (
+            body[:12000]
+            + "\n\n……（中略：中间已省略；若问题仅出现在后段且无法唯一定位，请将 original_excerpt、"
+            "replacement_excerpt 置空并在 rationale 写 need_tail）……\n\n"
+            + body[-4000:]
+        )
+
+    async def quality_debt_micro_patch(
+        self,
+        narrative_body: str,
+        chapter_title: str,
+        debt_summary: str,
+        suggested_fix: str,
+        author_notes: str,
+    ) -> dict:
+        """
+        针对单条质量债务，让模型给出「原文连续摘录 → 替换文」；
+        由路由在**完整叙事正文**上校验唯一匹配后做字符串级替换。
+        """
+        window = self._micro_patch_narrative_window(narrative_body)
+        sf = (suggested_fix or "").strip()
+        an = (author_notes or "").strip()
+        system = "你是网络小说正文编辑，只输出可机读的局部替换 JSON，不要任何多余文字。"
+        prompt = f"""章节标题：{chapter_title}
+全章叙事正文长度：{len(narrative_body)} 字（以下为正文窗口，可能含「中略」省略标记）
+
+【正文窗口】
+{window}
+
+【待消除的质量债务】
+{debt_summary}
+
+【建议修正方向】
+{sf or "（未给出；请结合问题自行给出最小改写）"}
+
+【作者备注】
+{an or "（无）"}
+
+规则：
+1. 找出与上述问题直接相关、且必须修改才能消除债务的**最小连续片段**（可含换行；从窗口中肉眼可抄录）。
+2. `original_excerpt` 必须从上面【正文窗口】里**原样复制**（勿改写标点），长度约 15～500 字为宜。
+3. 该片段在**整章完整叙事正文**（不仅是窗口）中应**恰好出现 1 次**。若你判断会出现多次、或需改多处、或窗口中无法定位，则将 original_excerpt、replacement_excerpt 都设为 ""，并在 rationale 写明原因（如 duplicate_span / need_multi_edit / need_tail）。
+4. `replacement_excerpt` 为替换后的文字，人称/时态/语体与上下文一致；禁止借机扩写无关新剧情。
+
+仅输出一个 JSON 对象：
+{{
+  "original_excerpt": "",
+  "replacement_excerpt": "",
+  "rationale": ""
+}}"""
+        large = self._large_context_enabled()
+        try:
+            response = await self._call_ai(
+                system,
+                prompt,
+                max_tokens=max_tokens_quality_micro_patch(large),
+                context={"operation": "quality_debt_micro_patch", "chapter_title": chapter_title},
+                task="quality.micro_patch",
+            )
+        except Exception as e:
+            return {
+                "error": str(e),
+                "original_excerpt": "",
+                "replacement_excerpt": "",
+                "rationale": "upstream_error",
+            }
+        try:
+            text = response.strip()
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            if "```" in text:
+                fence = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
+                if fence:
+                    text = fence.group(1).strip()
+            start = text.find("{")
+            if start != -1:
+                text = text[start:]
+            data = json.loads(text)
+            return {
+                "original_excerpt": str(data.get("original_excerpt") or "").strip(),
+                "replacement_excerpt": str(data.get("replacement_excerpt") or "").strip(),
+                "rationale": str(data.get("rationale") or "").strip(),
+            }
+        except Exception as e:
+            return {
+                "error": str(e),
+                "original_excerpt": "",
+                "replacement_excerpt": "",
+                "rationale": "parse_error",
+                "raw": response[:800] if isinstance(response, str) else "",
             }
 
     # ── 多章节连贯性检测 ────────────────────────────────

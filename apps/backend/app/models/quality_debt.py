@@ -16,7 +16,8 @@ class QualityDebt(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
-    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=False)
+    # 删章或「解除绑定」时置空；source_chapter_number 仍保留来源章号
+    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)
 
     source_chapter_number = Column(Integer, nullable=False)
     issue_type = Column(String(80), nullable=False)
@@ -24,6 +25,7 @@ class QualityDebt(Base):
     status = Column(String(20), nullable=False, default="pending")
     summary = Column(Text, nullable=False)
     suggested_fix = Column(Text)
+    author_notes = Column(Text)  # 作者手动修复说明（不覆盖质检 suggested_fix）
     fingerprint = Column(String(64), nullable=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -1,15 +1,22 @@
 import React, { useEffect, useState, useCallback } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import {
   Plus, Loader2, Trash2, CheckCircle, XCircle, Circle,
   ChevronDown, ChevronRight, BookMarked, ClipboardList,
-  AlertTriangle, Star, Anchor,
+  AlertTriangle, Star, Anchor, Wand2, ExternalLink, Save,
 } from 'lucide-react'
-import { foreshadowsApi, chapterIndexesApi, qualityDebtsApi } from '../api/client'
+import { foreshadowsApi, chapterIndexesApi, qualityDebtsApi, chaptersApi, aiApi } from '../api/client'
 import type { Foreshadow, ChapterIndex, QualityDebt } from '../types'
-import { useAppStore } from '../store'
+import { useAppStore, modelProfileFromRoute, llmProviderIdFromRoute } from '../store'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
+import {
+  splitStreamedDraftText,
+  parseChapterIndexMarkdown,
+  fallbackChapterIndexFromRawMarkdown,
+  htmlToPlainForSplit,
+} from '../utils/draftChapterIndexSplit'
+import { accumulateDraftAssistStream, plainTextDraftToHtml } from '../utils/draftAssistSse'
 
 // ── 工具 ─────────────────────────────────────────────────────────────────────
 const CHAPTER_NUM_PREFIX = /^\s*第\s*0*(\d+)\s*章/
@@ -20,6 +27,14 @@ function displayChapterNumber(title?: string, sortOrder?: number): number {
   if (m) return Math.max(1, Number(m[1]))
   const so = Number.isFinite(sortOrder as number) ? Number(sortOrder) : 0
   return Math.max(1, so + 1)
+}
+
+function manuscriptRawSnapshotForContinue(chapterContentHtml: string, accumulatedPlain: string): string {
+  const prev = htmlToPlainForSplit(chapterContentHtml || '').trim()
+  const acc = accumulatedPlain.trim()
+  if (!prev) return acc
+  if (!acc) return prev
+  return `${prev}\n\n${acc}`
 }
 
 const STATUS_LABEL: Record<string, string> = { open: '未回收', resolved: '已回收', dropped: '已放弃' }
@@ -420,12 +435,37 @@ function ChapterIndexCard({ index, chapterTitle }: { index: ChapterIndex; chapte
 function QualityDebtCard({
   debt,
   chapterTitle,
+  isAiFixing,
   onStatusChange,
+  onSaveAuthorNotes,
+  onAiFix,
+  onOpenWrite,
 }: {
   debt: QualityDebt
   chapterTitle?: string
+  isAiFixing: boolean
   onStatusChange: (status: QualityDebt['status']) => void
+  onSaveAuthorNotes: (id: string, notes: string) => Promise<void>
+  onAiFix: (debt: QualityDebt, mode: 'micro' | 'rewrite' | 'continue') => Promise<void>
+  onOpenWrite: (debt: QualityDebt) => void
 }) {
+  const [notesDraft, setNotesDraft] = useState(debt.author_notes ?? '')
+  const [savingNotes, setSavingNotes] = useState(false)
+  const [fixMode, setFixMode] = useState<'micro' | 'rewrite' | 'continue'>('micro')
+
+  useEffect(() => {
+    setNotesDraft(debt.author_notes ?? '')
+  }, [debt.id, debt.author_notes])
+
+  const saveNotes = async () => {
+    setSavingNotes(true)
+    try {
+      await onSaveAuthorNotes(debt.id, notesDraft)
+    } finally {
+      setSavingNotes(false)
+    }
+  }
+
   return (
     <div className="rounded-xl border border-gray-100 bg-white p-3 shadow-sm space-y-2">
       <div className="flex items-start justify-between gap-3">
@@ -466,7 +506,65 @@ function QualityDebtCard({
         </p>
       )}
 
-      <div className="flex items-center gap-2 pt-1">
+      <div className="space-y-1.5 rounded-lg border border-amber-100 bg-amber-50/40 px-2 py-2">
+        <div className="text-[10px] font-medium text-amber-800">手动修复</div>
+        <textarea
+          value={notesDraft}
+          onChange={e => setNotesDraft(e.target.value)}
+          placeholder="记录你打算怎么改、改了哪里（可选，会一并交给定向 AI 修复）"
+          rows={2}
+          className="w-full text-xs border border-amber-100 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-amber-300 bg-white"
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void saveNotes()}
+            disabled={savingNotes}
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg border border-amber-200 text-amber-900 hover:bg-amber-100/80 disabled:opacity-50"
+          >
+            {savingNotes ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+            保存备注
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpenWrite(debt)}
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg border border-gray-200 text-gray-700 hover:bg-white"
+          >
+            <ExternalLink size={12} />去写作页改稿
+          </button>
+        </div>
+      </div>
+
+      {debt.status === 'pending' && (
+        <div className="space-y-1.5 rounded-lg border border-violet-100 bg-violet-50/30 px-2 py-2">
+          <div className="text-[10px] font-medium text-violet-800">AI 修复（定向注入本条债务）</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={fixMode}
+              onChange={e => setFixMode(e.target.value as 'micro' | 'rewrite' | 'continue')}
+              className="text-xs border border-violet-100 rounded-lg px-2 py-1 bg-white max-w-[220px]"
+            >
+              <option value="micro">局部微调（摘录替换，改动最小）</option>
+              <option value="rewrite">整章重写</option>
+              <option value="continue">续写追加（文末补改）</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => void onAiFix(debt, fixMode)}
+              disabled={isAiFixing}
+              className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+            >
+              {isAiFixing ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+              {isAiFixing ? '生成中…' : 'AI 修复本章'}
+            </button>
+          </div>
+          <p className="text-[10px] text-violet-700/90 leading-relaxed">
+            「局部微调」由模型标出一段原文并替换，适合句式/事实级问题；若提示无法唯一定位或失败，请改选整章重写。流式模式会尝试解析稿末索引。
+          </p>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 pt-1 flex-wrap">
         <button
           type="button"
           onClick={() => onStatusChange('resolved')}
@@ -503,12 +601,14 @@ type TabKey = 'foreshadow' | 'plotarchive' | 'qualitydebt'
 
 export default function CluesPage() {
   const { projectId } = useParams<{ projectId: string }>()
-  const { chapters } = useAppStore()
+  const navigate = useNavigate()
+  const { chapters, upsertChapter, aiBackendRoute } = useAppStore()
 
   const [activeTab, setActiveTab] = useState<TabKey>('foreshadow')
   const [foreshadows, setForeshadows] = useState<Foreshadow[]>([])
   const [chapterIndexes, setChapterIndexes] = useState<ChapterIndex[]>([])
   const [qualityDebts, setQualityDebts] = useState<QualityDebt[]>([])
+  const [aiFixingDebtId, setAiFixingDebtId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -589,6 +689,137 @@ export default function CluesPage() {
       toast.success('质量债务已更新')
     } catch {
       toast.error('更新失败')
+    }
+  }
+
+  const handleSaveDebtAuthorNotes = async (id: string, notes: string) => {
+    if (!projectId) return
+    try {
+      const trimmed = notes.trim()
+      const res = await qualityDebtsApi.update(projectId, id, {
+        author_notes: trimmed.length ? trimmed : '',
+      })
+      setQualityDebts(prev => prev.map(d => d.id === id ? res.data : d))
+      toast.success('备注已保存')
+    } catch {
+      toast.error('保存失败')
+    }
+  }
+
+  const openWriteForDebt = useCallback(
+    (debt: QualityDebt) => {
+      if (!projectId) return
+      const cid =
+        debt.chapter_id
+        || chapters.find(c => displayChapterNumber(c.title, c.sort_order) === debt.source_chapter_number)?.id
+      if (!cid) {
+        toast.error('找不到对应章节（可能已删章），请从目录进入写作页')
+        return
+      }
+      navigate(`/project/${projectId}/write?chapter=${cid}`)
+    },
+    [projectId, chapters, navigate],
+  )
+
+  const handleAiFixDebt = async (debt: QualityDebt, mode: 'micro' | 'rewrite' | 'continue') => {
+    if (!projectId) return
+    const modelProfile = modelProfileFromRoute(aiBackendRoute)
+    const llmProviderId = llmProviderIdFromRoute(aiBackendRoute)
+    setAiFixingDebtId(debt.id)
+    try {
+      if (mode === 'micro') {
+        const res = await aiApi.qualityDebtMicroFix(projectId, {
+          quality_debt_id: debt.id,
+          model_profile: modelProfile,
+          ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
+        })
+        upsertChapter(res.data.chapter)
+        setQualityDebts(prev => prev.map(d => (d.id === debt.id ? { ...d, status: 'resolved' as const } : d)))
+        const why = (res.data.rationale || '').trim()
+        toast.success(
+          why.length > 0
+            ? `局部微调已应用：${why.length > 100 ? `${why.slice(0, 100)}…` : why}`
+            : '局部微调已应用，该债务已标为已修复',
+        )
+        return
+      }
+
+      const replaceExisting = mode === 'rewrite'
+      const chapterId =
+        debt.chapter_id
+        || chapters.find(c => displayChapterNumber(c.title, c.sort_order) === debt.source_chapter_number)?.id
+      if (!chapterId) {
+        toast.error('无法定位章节，请确认该章仍在目录中')
+        return
+      }
+      const chapterRes = await chaptersApi.get(projectId, chapterId)
+      const chapter = chapterRes.data
+      if ((chapter.content || '').trim()) {
+        try {
+          await chaptersApi.snapshot(projectId, chapterId, 'AI质量债务修复前自动备份', true)
+        } catch {
+          /* 快照失败不阻断 */
+        }
+      }
+      const res = await fetch(`/api/v1/projects/${projectId}/ai/draft-assist/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chapter_id: chapterId,
+          model_profile: modelProfile,
+          ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
+          user_prompt: null,
+          replace_existing: replaceExisting,
+          focus_quality_debt_id: debt.id,
+        }),
+      })
+      const accumulated = await accumulateDraftAssistStream(res)
+      if (!accumulated.trim()) throw new Error('未收到正文内容')
+      const { body: draftBody, indexMarkdown } = splitStreamedDraftText(accumulated.trim())
+      if (!draftBody.trim()) throw new Error('未收到叙事正文（可能只有索引块）')
+      const html = plainTextDraftToHtml(draftBody.trim())
+      let nextContent: string
+      let manuscript_raw_snapshot: string | undefined
+      if (replaceExisting) {
+        nextContent = html
+        manuscript_raw_snapshot = accumulated.trim()
+      } else {
+        nextContent = `${chapter.content || ''}${chapter.content ? '\n' : ''}${html}`
+        manuscript_raw_snapshot = manuscriptRawSnapshotForContinue(chapter.content || '', accumulated.trim())
+      }
+      const updateRes = await chaptersApi.update(projectId, chapterId, {
+        content: nextContent,
+        manuscript_raw_snapshot,
+      })
+      upsertChapter(updateRes.data)
+      if (indexMarkdown) {
+        try {
+          const parsed = parseChapterIndexMarkdown(indexMarkdown)
+          const chapter_index = parsed ?? fallbackChapterIndexFromRawMarkdown(indexMarkdown)
+          await aiApi.chapterDebrief(projectId, { chapter_id: chapterId, chapter_index })
+        } catch {
+          toast.error('稿末索引写入失败，可在写作页手动复盘')
+        }
+      }
+      try {
+        const u = await qualityDebtsApi.update(projectId, debt.id, { status: 'resolved' })
+        setQualityDebts(prev => prev.map(d => (d.id === debt.id ? u.data : d)))
+      } catch {
+        /* 正文已保存；债务状态可手动标记 */
+      }
+      toast.success('AI 修复稿已保存，该债务已标为已修复')
+    } catch (e: unknown) {
+      const ax = e as { response?: { data?: { detail?: unknown } } }
+      const d = ax.response?.data?.detail
+      let msg = 'AI 修复失败'
+      if (typeof d === 'string') msg = d
+      else if (d && typeof d === 'object' && d !== null && 'message' in d) {
+        const o = d as { message?: string; rationale?: string }
+        msg = [o.message, o.rationale].filter(Boolean).join(' — ') || msg
+      } else if (e instanceof Error) msg = e.message
+      toast.error(msg)
+    } finally {
+      setAiFixingDebtId(null)
     }
   }
 
@@ -759,7 +990,11 @@ export default function CluesPage() {
                     key={debt.id}
                     debt={debt}
                     chapterTitle={chapterTitleByDisplayNumber(debt.source_chapter_number)}
+                    isAiFixing={aiFixingDebtId === debt.id}
                     onStatusChange={status => handleQualityDebtStatus(debt.id, status)}
+                    onSaveAuthorNotes={handleSaveDebtAuthorNotes}
+                    onAiFix={handleAiFixDebt}
+                    onOpenWrite={openWriteForDebt}
                   />
                 ))}
             </div>

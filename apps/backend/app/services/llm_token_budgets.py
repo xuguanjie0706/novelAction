@@ -35,6 +35,11 @@ def max_tokens_chapter_quality_check(large_context: bool) -> int:
     )
 
 
+def max_tokens_quality_micro_patch(large_context: bool) -> int:
+    """质量债务局部替换：输出较短 JSON + 替换段。"""
+    return 4096 if large_context else 2200
+
+
 def max_tokens_coherence_check(large_context: bool) -> int:
     return (
         settings.GEMINI_COHERENCE_CHECK_MAX_TOKENS

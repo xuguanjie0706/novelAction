@@ -1,6 +1,6 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
-import type { AiChatMessage, LlmOverview } from '../types'
+import type { AiChatMessage, Chapter, LlmOverview } from '../types'
 import {
   extractUsage,
   finishLlmCall,
@@ -181,7 +181,7 @@ export const chapterIndexesApi = {
 // ── Quality Debts ─────────────────────────────────────
 export const qualityDebtsApi = {
   list: (pid: string, status?: string) =>
-    api.get(`/projects/${pid}/quality-debts/${status ? `?status=${status}` : ''}`),
+    api.get(`/projects/${pid}/quality-debts${status ? `?status=${encodeURIComponent(status)}` : ''}`),
   update: (pid: string, id: string, data: any) =>
     api.patch(`/projects/${pid}/quality-debts/${id}`, data),
 }
@@ -250,6 +250,20 @@ export const llmApi = {
 
 export const aiApi = {
   qualityCheck: (pid: string, data: any) => api.post(`/projects/${pid}/ai/quality-check`, data),
+  /** 质量债务：模型给出原文摘录→替换文，服务端唯一匹配后写回（微调，非整章流式） */
+  qualityDebtMicroFix: (
+    pid: string,
+    data: {
+      quality_debt_id: string
+      model_profile?: 'local' | 'gemini'
+      llm_provider_id?: string
+    },
+  ) => api.post<{
+    chapter: Chapter
+    rationale?: string
+    original_excerpt?: string
+    replacement_excerpt?: string
+  }>(`/projects/${pid}/ai/quality-debt-micro-fix`, data),
   listChatMessages: (
     pid: string,
     params: { context_type: 'outline' | 'writing' | 'general'; chapter_id?: string },

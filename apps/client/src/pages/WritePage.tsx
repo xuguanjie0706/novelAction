@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Plus, Loader2, RefreshCw, ChevronRight, ChevronDown, PenLine, FileText, BookOpen,
 } from 'lucide-react'
@@ -49,6 +49,7 @@ function sortRootNodesForWriteSidebar(nodes: OutlineNode[]): OutlineNode[] {
 export default function WritePage() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const {
     chapters, setChapters, upsertChapter,
     activeChapterId, setActiveChapterId,
@@ -87,6 +88,14 @@ export default function WritePage() {
   }, [projectId])
 
   useEffect(() => { loadData() }, [loadData])
+
+  /** 线索页「去写作」等入口：?chapter=<uuid> 打开指定章 */
+  useEffect(() => {
+    const cid = searchParams.get('chapter')
+    if (!cid || loadState !== 'ready') return
+    const exists = chapters.some(c => c.id === cid)
+    if (exists) setActiveChapterId(cid)
+  }, [searchParams, loadState, chapters, setActiveChapterId])
 
   const chapterByNodeId = useMemo(() => {
     const m = new Map<string, Chapter>()

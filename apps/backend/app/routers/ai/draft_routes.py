@@ -6,7 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Chapter, Character, MemoryChunk, OutlineNode, Project, StoryLine, WorldSetting
+from app.models import Chapter, Character, MemoryChunk, OutlineNode, Project, QualityDebt, StoryLine, WorldSetting
 from app.services.ai_service import AIService
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 from app.utils.chapter_numbering import display_chapter_number
@@ -17,7 +17,11 @@ from app.routers.ai.context import (
     build_writing_brief_context,
     format_world_setting_context,
 )
-from app.routers.ai.quality_debt import build_quality_debt_context, pending_quality_debts_for_chapter
+from app.routers.ai.quality_debt import (
+    build_quality_debt_context,
+    pending_quality_debts_for_chapter,
+    resolve_chapter_for_quality_debt,
+)
 from app.routers.ai.schemas import DraftAssistRequest
 from app.routers.ai.text_utils import plain_text, strip_tail_meta_lines, truncate
 
@@ -259,7 +263,40 @@ async def draft_assist_stream(
     outline_power_milestone_str = outline_node.power_milestone or "" if outline_node else ""
     outline_emotional_tone_str = outline_node.emotional_tone or "" if outline_node else ""
     premise_str = project.premise or ""
-    user_prompt_str = req.user_prompt or ""
+    user_prompt_str = (req.user_prompt or "").strip()
+    if req.focus_quality_debt_id:
+        debt = (
+            db.query(QualityDebt)
+            .filter(
+                QualityDebt.project_id == project_id,
+                QualityDebt.id == req.focus_quality_debt_id,
+            )
+            .first()
+        )
+        if not debt:
+            raise HTTPException(404, "Quality debt not found")
+        exp_ch = resolve_chapter_for_quality_debt(db, project_id, debt)
+        if not exp_ch or str(exp_ch.id) != str(req.chapter_id):
+            raise HTTPException(
+                400,
+                "该质量债务与当前章节不匹配，请打开来源章的写作页后再发起 AI 修复",
+            )
+        if debt.status != "pending":
+            raise HTTPException(400, "仅「待处理」状态的质量债务可使用定向 AI 修复")
+        focus_block = (
+            "\n\n【本轮首要任务：消除下列单条质量债务】\n"
+            f"类型：{debt.issue_type}｜严重度：{debt.severity}\n"
+            f"问题：{debt.summary}\n"
+        )
+        if debt.suggested_fix:
+            focus_block += f"建议修正方向：{debt.suggested_fix}\n"
+        if debt.author_notes:
+            focus_block += f"作者备注（手动修复要点）：{debt.author_notes}\n"
+        focus_block += (
+            "写作要求：在叙事正文中落实修改，避免口号式敷衍；保持本章大纲节拍与人物口吻；"
+            "若整章重写，须保留章末追读钩子。"
+        )
+        user_prompt_str = (user_prompt_str + focus_block).strip()
     stream_log_ctx = {"project_id": str(project_id), "chapter_id": str(req.chapter_id)}
 
     # ── 卷阶段（phase）解析 ─────────────────────────────────────────────

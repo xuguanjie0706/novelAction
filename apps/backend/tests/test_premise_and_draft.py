@@ -636,6 +636,19 @@ def test_foreshadow_payload_parses_develop_marker():
     }
 
 
+def test_foreshadow_payload_parses_f_code_immediately_after_cjk():
+    """中文与 F 之间无空格时须仍能识别编号（旧版 \\b 会漏匹配，导致无法关联回收）。"""
+    payload = _foreshadow_payload_from_index_item(
+        {
+            "description": "回收F-003：地下祭坛主事者身份揭晓",
+            "status": "resolved",
+        },
+        default_status="resolved",
+    )
+    assert payload["code"] == "F-003"
+    assert "地下祭坛" in (payload.get("description") or "")
+
+
 def test_sync_chapter_index_foreshadows_creates_global_record():
     class EmptyQuery:
         def filter(self, *args):

@@ -173,6 +173,25 @@ def _ensure_project_columns() -> None:
             conn.execute(text(ddl))
 
 
+def _ensure_quality_debt_author_notes() -> None:
+    """为 quality_debts 表补齐作者手动修复备注列。"""
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE quality_debts ADD COLUMN IF NOT EXISTS author_notes TEXT"
+        ))
+
+
+def _ensure_quality_debt_chapter_id_nullable() -> None:
+    """允许 chapter_id 置空，删章或归档债务时不硬删行。"""
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE quality_debts ALTER COLUMN chapter_id DROP NOT NULL"
+            ))
+    except Exception:
+        pass  # SQLite 等方言差异或已 nullable
+
+
 def _ensure_foreshadow_columns() -> None:
     """
     开发环境兼容迁移：为已有 foreshadows 表补齐计划动作字段。
@@ -305,6 +324,8 @@ _ensure_outline_node_columns()
 _ensure_character_columns()
 _ensure_character_relationship_columns()
 _ensure_foreshadow_columns()
+_ensure_quality_debt_author_notes()
+_ensure_quality_debt_chapter_id_nullable()
 _ensure_memory_embedding_column()
 _ensure_llm_provider_columns()
 _ensure_chapter_coherence_report_columns()

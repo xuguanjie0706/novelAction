@@ -393,13 +393,16 @@ export interface ChapterIndex {
 export interface QualityDebt {
   id: string
   project_id: string
-  chapter_id: string
+  /** 删章或归档后可能为空，仍可用 source_chapter_number 定位 */
+  chapter_id?: string | null
   source_chapter_number: number
   issue_type: string
   severity: 'critical' | 'high' | 'medium' | 'low' | string
   status: 'pending' | 'resolved' | 'dismissed'
   summary: string
   suggested_fix?: string
+  /** 作者手动记录的修复说明，会一并注入定向 AI 修复提示词 */
+  author_notes?: string
   created_at: string
   updated_at?: string
 }

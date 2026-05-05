@@ -9,6 +9,27 @@ from app.routers.ai.text_utils import extract_patch_text, truncate
 from app.utils.chapter_numbering import display_chapter_number
 
 
+def resolve_chapter_for_quality_debt(
+    db: Session, project_id: str, debt: QualityDebt
+) -> Optional[Chapter]:
+    """chapter_id 为空时按 source_chapter_number 回退查找章节。"""
+    if debt.chapter_id:
+        return (
+            db.query(Chapter)
+            .filter(Chapter.id == debt.chapter_id, Chapter.project_id == project_id)
+            .first()
+        )
+    for ch in (
+        db.query(Chapter)
+        .filter(Chapter.project_id == project_id)
+        .order_by(Chapter.sort_order, Chapter.created_at)
+        .all()
+    ):
+        if display_chapter_number(ch.title, ch.sort_order) == debt.source_chapter_number:
+            return ch
+    return None
+
+
 def quality_debt_fingerprint(project_id: str, chapter_id: str, issue_type: str, summary: str) -> str:
     raw = f"{project_id}|{chapter_id}|{issue_type}|{summary.strip()[:240]}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()

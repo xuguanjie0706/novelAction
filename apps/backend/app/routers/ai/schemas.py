@@ -79,6 +79,8 @@ class DraftAssistRequest(BaseModel):
     user_prompt: Optional[str] = None
     """为 True 时按「整章重写」生成，不把长正文当作续写衔接"""
     replace_existing: bool = False
+    """若指定，则在 user_prompt 中注入该条待处理质量债务的定向修复指令（须与 chapter_id 对应章一致）"""
+    focus_quality_debt_id: Optional[UUID] = None
 
 
 class CharacterUpdate(BaseModel):

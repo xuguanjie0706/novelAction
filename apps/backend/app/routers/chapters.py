@@ -29,6 +29,19 @@ from app.schemas.character_change_log import CharacterChangeLogOut
 router = APIRouter(prefix="/projects/{project_id}/chapters", tags=["chapters"])
 
 
+def resolve_quality_debts_detaching_chapter(db: Session, project_id: str, chapter_id: str) -> None:
+    """不硬删质量债务：待处理标为已修复，并解除 chapter_id 以便删除章节行。"""
+    db.query(QualityDebt).filter(
+        QualityDebt.project_id == project_id,
+        QualityDebt.chapter_id == chapter_id,
+        QualityDebt.status == "pending",
+    ).update({"status": "resolved"}, synchronize_session=False)
+    db.query(QualityDebt).filter(
+        QualityDebt.project_id == project_id,
+        QualityDebt.chapter_id == chapter_id,
+    ).update({"chapter_id": None}, synchronize_session=False)
+
+
 def count_words(text: str) -> int:
     """简易中文字数统计（去 HTML 标签）"""
     import re
@@ -39,8 +52,18 @@ def count_words(text: str) -> int:
     return chinese + english
 
 
-def delete_chapter_artifacts(db: Session, project_id: str, chapter_id: str) -> None:
-    """删除章节派生数据（记忆片段、章节索引、质检债）。删整章时由 delete_chapter 调用。"""
+def delete_chapter_artifacts(
+    db: Session,
+    project_id: str,
+    chapter_id: str,
+    *,
+    with_quality_debts: bool = True,
+) -> None:
+    """删除章节派生数据（记忆片段、章节索引、可选质检债）。
+
+    `with_quality_debts=False` 用于「改稿/重写」清缓存：不碰质量债务行。
+    `with_quality_debts=True`：将本章关联债务标为已修复并解除 chapter_id（不删行）。
+    """
     db.query(MemoryChunk).filter(
         MemoryChunk.project_id == project_id,
         MemoryChunk.chapter_id == chapter_id,
@@ -49,10 +72,8 @@ def delete_chapter_artifacts(db: Session, project_id: str, chapter_id: str) -> N
         ChapterIndex.project_id == project_id,
         ChapterIndex.chapter_id == chapter_id,
     ).delete(synchronize_session=False)
-    db.query(QualityDebt).filter(
-        QualityDebt.project_id == project_id,
-        QualityDebt.chapter_id == chapter_id,
-    ).delete(synchronize_session=False)
+    if with_quality_debts:
+        resolve_quality_debts_detaching_chapter(db, project_id, chapter_id)
 
 
 def clear_chapter_rewrite_derivatives(db: Session, project_id: str, chapter_id: str) -> None:
@@ -63,7 +84,7 @@ def clear_chapter_rewrite_derivatives(db: Session, project_id: str, chapter_id: 
     1. 从 undo 快照回滚覆盖型字段（character realm/location/status/realm_rank、storyline status）
     2. 按 chapter_id 精确清除追加型数据（storyline beats、character known_skills/owned_items）
     3. 清除 realm_milestones 快照中本章记录
-    4. 清除记忆 / ChapterIndex / 质检债 / 复盘缓存 / 伏笔
+    4. 清除记忆 / ChapterIndex / 复盘缓存 / 伏笔（不删质量债务行）
     5. 删除 undo 快照行
     """
     # ── 1. 回滚覆盖型字段 ─────────────────────────��────
@@ -140,8 +161,8 @@ def clear_chapter_rewrite_derivatives(db: Session, project_id: str, chapter_id: 
                 char.extra = {**char.extra, "debrief_realm_milestones": cleaned_ms}
                 changed = True
 
-    # ── 4. 清除记忆 / ChapterIndex / 质检债 / 复盘缓存 / 伏笔 ──
-    delete_chapter_artifacts(db, project_id, chapter_id)
+    # ── 4. 清除记忆 / ChapterIndex / 复盘缓存 / 伏笔（不碰质量债务，见 delete_chapter_artifacts）──
+    delete_chapter_artifacts(db, project_id, chapter_id, with_quality_debts=False)
     db.query(ChapterDebriefCache).filter(
         ChapterDebriefCache.project_id == project_id,
         ChapterDebriefCache.chapter_id == chapter_id,
@@ -288,8 +309,9 @@ def delete_chapter(project_id: str, chapter_id: str, db: Session = Depends(get_d
     ).first()
     if not chapter:
         raise HTTPException(404, "Chapter not found")
-    # 含复盘缓存、本章伏笔与 resolved 外键等，避免删 chapters 行时触发 FK 约束（仅删记忆/index/债不够）
+    # 含复盘缓存、本章伏笔与 resolved 外键等；质量债务改为已修复并解除 chapter_id，不硬删
     clear_chapter_rewrite_derivatives(db, project_id, chapter_id)
+    resolve_quality_debts_detaching_chapter(db, project_id, chapter_id)
     db.delete(chapter)
     db.commit()
     normalize_chapter_sort_orders(db, project_id)

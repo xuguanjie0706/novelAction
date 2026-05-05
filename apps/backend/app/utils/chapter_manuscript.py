@@ -38,3 +38,32 @@ def split_plain_manuscript_and_index_block(plain: str) -> tuple[str, str | None]
     if not index_block:
         return t.strip(), None
     return body, index_block
+
+
+def html_to_plain_for_revision(html: str | None) -> str:
+    """
+    与客户端 `htmlToPlainForSplit` 对齐：段落边界用换行还原，便于在纯文本域做摘录级替换。
+    """
+    if not (html or "").strip():
+        return ""
+    t = html
+    t = re.sub(r"</p\s*>", "\n\n", t, flags=re.I)
+    t = re.sub(r"<br\s*/?>", "\n", t, flags=re.I)
+    t = re.sub(r"</div\s*>", "\n", t, flags=re.I)
+    t = re.sub(r"</h[1-6]\s*>", "\n\n", t, flags=re.I)
+    t = re.sub(r"<[^>]+>", "", t)
+    t = t.replace("\u00a0", " ")
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+
+def plain_text_blocks_to_html(plain: str) -> str:
+    """与客户端 `plainTextBlocksToHtml` 一致：双换行分段 → <p>。"""
+    blocks = [b.strip() for b in re.split(r"\n{2,}", plain) if b.strip()]
+    if not blocks:
+        return "<p></p>"
+
+    def esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+
+    return "".join(f"<p>{esc(b)}</p>" for b in blocks)

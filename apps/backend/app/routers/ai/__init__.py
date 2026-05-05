@@ -17,6 +17,7 @@ from app.routers.ai import (  # noqa: E402
     debrief_routes,
     draft_routes,
     memory_routes,
+    quality_debt_fix_routes,
     quality_routes,
 )
 
@@ -26,6 +27,7 @@ router.include_router(chat_routes.router)
 router.include_router(memory_routes.router)
 router.include_router(draft_routes.router)
 router.include_router(debrief_routes.router)
+router.include_router(quality_debt_fix_routes.router)
 
 # --- 兼容旧单文件 `ai.py` 的导入（测试等） ---
 from app.routers.ai.context import (  # noqa: E402

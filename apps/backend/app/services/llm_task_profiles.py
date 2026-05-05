@@ -103,6 +103,7 @@ TASK_PROFILES: dict[str, dict] = {
     "outline.expand": {"temperature": 0.7, "top_p": 0.9},
     "outline.character_gap": {"temperature": 0.55, "top_p": 0.9},
     # ── 质检 / 一致性（要稳定 JSON 与可比较打分）────────────────
+    "quality.micro_patch": {"temperature": 0.15, "top_p": 0.75},
     "quality.check": {
         "temperature": 0.2,
         "top_p": 0.8,

@@ -276,6 +276,28 @@ def _ensure_chapter_coherence_report_columns() -> None:
         ))
 
 
+def _ensure_cover_image_call_logs_columns() -> None:
+    """
+    旧库只跑过首条 cover 迁移、未跑 result_cover_url 迁移时，ORM 读表会缺列 500。
+    create_all 也不会给已存在表加列，此处与 outline/character 一致做 IF NOT EXISTS 补齐。
+    """
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = current_schema() AND table_name = 'cover_image_call_logs'"
+            )
+        ).fetchone()
+        if not row:
+            return
+        conn.execute(
+            text(
+                "ALTER TABLE cover_image_call_logs "
+                "ADD COLUMN IF NOT EXISTS result_cover_url TEXT"
+            )
+        )
+
+
 # 自动建表（开发用，生产建议改用 Alembic）
 Base.metadata.create_all(bind=engine)
 _ensure_project_columns()
@@ -286,6 +308,7 @@ _ensure_foreshadow_columns()
 _ensure_memory_embedding_column()
 _ensure_llm_provider_columns()
 _ensure_chapter_coherence_report_columns()
+_ensure_cover_image_call_logs_columns()
 seed_llm_from_env_if_empty()
 
 app = FastAPI(

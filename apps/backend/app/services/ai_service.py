@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.services.llm_config import normalize_openai_base_url, resolve_gemini_connection
+from app.services.llm_task_profiles import resolve_task_profile
 from app.services.llm_token_budgets import (
     max_tokens_auto_debrief,
     max_tokens_chapter_quality_check,
@@ -259,6 +260,7 @@ class AIService:
                 prompt,
                 max_tokens=max_tokens_chapter_quality_check(large_context),
                 context={"operation": "quality_check", "chapter_title": chapter_title, "attempt": 1},
+                task="quality.check",
             )
         except Exception as first_exc:
             try:
@@ -267,6 +269,7 @@ class AIService:
                     prompt + "\n\n请重新质检一次：若第一次思路有偏差，以情节档案与当前章节正文为最高优先级。",
                     max_tokens=max_tokens_chapter_quality_check(large_context),
                     context={"operation": "quality_check", "chapter_title": chapter_title, "attempt": 2},
+                    task="quality.check",
                 )
             except Exception as second_exc:
                 return {
@@ -376,6 +379,7 @@ class AIService:
             prompt,
             max_tokens=max_tokens_coherence_check(large_context),
             context={"operation": "chapter_coherence_check"},
+            task="quality.coherence_check",
         )
         try:
             import re
@@ -492,6 +496,7 @@ class AIService:
                 prompt,
                 max_tokens=max_tokens_coherence_apply(True),
                 context={"operation": "chapter_coherence_apply"},
+                task="quality.coherence_apply",
             )
             try:
                 data = self._parse_coherence_apply_json(response)
@@ -571,6 +576,7 @@ class AIService:
                 prompt,
                 max_tokens=max_tokens_coherence_apply(False),
                 context={"operation": "chapter_coherence_apply"},
+                task="quality.coherence_apply",
             )
             try:
                 row = self._parse_coherence_apply_json(response)
@@ -612,6 +618,7 @@ class AIService:
             prompt,
             max_tokens=max_tokens_suggest_stream(self.profile),
             context={"operation": "suggest_stream"},
+            task="suggest.stream",
         ):
             yield chunk
 
@@ -656,6 +663,7 @@ class AIService:
             prompt,
             max_tokens=max_tokens_suggest_stream(self.profile),
             context={"operation": "chat_stream"},
+            task="suggest.stream",
         ):
             yield chunk
 
@@ -690,6 +698,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             prompt,
             max_tokens=max_tokens_extract_memory(self.profile),
             context={"operation": "extract_memory", "chapter_title": chapter_title},
+            task="debrief.extract_memory",
         )
         try:
             text = response.strip()
@@ -840,7 +849,13 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 9. 若提供了「前几卷伏笔台账」：本卷各章 foreshadow 字段须点名埋/收，优先处理台账中高优先级仍未回收条目，并与章纲五要素一致"""
 
         max_tok = max_tokens_expand_outline(self.profile)
-        response = await self._call_ai(system, prompt, max_tokens=max_tok, context={"operation": "expand_outline", "node_title": node_title})
+        response = await self._call_ai(
+            system,
+            prompt,
+            max_tokens=max_tok,
+            context={"operation": "expand_outline", "node_title": node_title},
+            task="outline.expand",
+        )
         try:
             import re
             text = response.strip()
@@ -950,6 +965,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             prompt,
             max_tokens=max_tokens_outline_quality_check(self.profile),
             context={"operation": "outline_quality_check", "scope": scope, "node_title": node_title},
+            task="quality.outline_check",
         )
         try:
             text = response.strip()
@@ -1038,6 +1054,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             prompt,
             max_tokens=max_tokens_outline_quality_check(self.profile),
             context={"operation": "outline_repair_plan", "scope": scope},
+            task="outline.full_structure",
         )
         try:
             text = response.strip()
@@ -1075,8 +1092,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         from app.services.outline_planning import words_to_plan
         tw_plan = words_to_plan(target_words)
         total_chapters_hint = tw_plan["total_chapters"]
-        vol_min = max(3, tw_plan["total_volumes"] - 1)
-        vol_max = tw_plan["total_volumes"] + 1
+        n_volumes = tw_plan["total_volumes"]
 
         system = "你是资深网络小说策划，擅长根据故事特质规划最合适的卷章结构。严格返回JSON，不要任何额外文字。"
         prompt = f"""小说：《{project_title}》（{genre}）
@@ -1085,11 +1101,11 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 世界观：{world_summary[:300] or '（未填写）'}
 主要人物：{character_summary[:200] or '（未填写）'}
 
-【字数目标】全书目标：{target_words:,}字，折合约{total_chapters_hint}章，建议{vol_min}~{vol_max}卷。
+【字数目标】全书目标：{target_words:,}字，折合约{total_chapters_hint}章；**必须恰好规划 {n_volumes} 卷**（由目标字数推算，不得增减卷数；卷较少时合并 phase，禁止为凑阶段而加卷）。
 
 请根据这个故事的特质规划卷级结构。
 章节数必须服务于「每卷约 60 章、每章 2200-2400 字」的长篇目录结构：planned_chapters 优先使用 60，必要时允许 30，不要使用篇/arc结构。
-所有卷的 planned_chapters 之和须尽量接近{total_chapters_hint}章，勿少于{vol_min * 30}章。
+所有卷的 planned_chapters 之和须尽量接近{total_chapters_hint}章。
 每卷必须围绕全书立意形成一个阶段性证明：人物选择如何变化，价值冲突如何升级，不能只做事件堆叠。
 
 返回JSON：
@@ -1121,6 +1137,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             prompt,
             max_tokens=max_tokens_plan_full_structure(self.profile),
             context={"operation": "plan_full_structure"},
+            task="outline.full_structure",
         )
         import re
         try:
@@ -1170,17 +1187,93 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         plot_dossier_context: str = "",
         # 本章字数目标（来自 OutlineNode.expected_words）
         word_target: int = 2300,
+        # 卷阶段（OutlineNode.phase / volume.extra.phase），用于切 prompt 模板与采样档位
+        phase: Optional[str] = None,
+        # 立项定位（Project.extra.positioning），用于把读者画像 / 爽点节奏注入 prompt
+        positioning: Optional[dict] = None,
         # 写入 llm_call_logs.context，便于对账（含模型完整原文 output_payload.text）
         stream_log_context: dict | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
         像一位有30年经验的作家，把世界观、人物弧、伏笔、故事线进展自然织入文字。
+
+        Args:
+            phase: 卷阶段，决定模板分支与采样档位。
+                可选：``opening`` / ``rising`` / ``turning`` / ``dark_hour`` / ``climax`` / ``ending``。
+                未提供时按"中段章节"模板写。
+            positioning: ``Project.extra.positioning`` JSON——读者画像 / 爽点类型 / 打脸频率 / 情感线占比 /
+                节奏类型。用于把作品基本面注入正文 prompt，避免每章独立漂移。
         """
+        from app.services.llm_task_profiles import phase_to_draft_task
+
         has_content = bool(
             not replace_existing and existing_content and len(existing_content.strip()) > 50
         )
         large_context = self._large_context_enabled()
+
+        # ── 阶段化 system prompt：开篇/起飞/转折/至暗/高潮/收束 各有侧重 ────────────
+        phase_norm = (phase or "").strip().lower()
+        phase_brief_map = {
+            "opening": (
+                "【当前卷阶段：开局期 / 新手村】\n"
+                "- 钩子密度高：每 800-1000 字至少一个张力点（疑问、压迫、伏笔、冲突）\n"
+                "- 信息密度高：开篇 200 字内必须落地世界、主角状态、核心痛点\n"
+                "- 爽点节奏：3 章一小爽，禁止纯铺垫章；当章必须有可被读者复述的「高光瞬间」\n"
+                "- 字数偏短（建议 ±200 字内贴近 2200 字），节奏要紧；忌用大段心理流水账"
+            ),
+            "rising": (
+                "【当前卷阶段：起飞期 / 扩张期】\n"
+                "- 势力面扩展、感情线接入；每章保留至少一条 hook\n"
+                "- 允许中等节奏的铺垫，但必须有「小爽收束」或反转预告\n"
+                "- 控制信息量，避免一章塞太多新设定"
+            ),
+            "turning": (
+                "【当前卷阶段：转折期】\n"
+                "- 推进核心矛盾升级；老角色态度转变；至少一处反转或代价兑现\n"
+                "- 节奏中速，对话比心理多；不要回避负面情绪"
+            ),
+            "dark_hour": (
+                "【当前卷阶段：至暗期】\n"
+                "- 允许「虐」，节奏放缓，让代价具象、让选择艰难\n"
+                "- 主角处境恶化，不要急于反弹；情绪基调克制不浮夸\n"
+                "- 字数可适度拉长（接近 2800 字），多用具体场景渲染压力"
+            ),
+            "climax": (
+                "【当前卷阶段：高潮期】\n"
+                "- 所有伏笔在本卷内必须给读者明确反馈（回收 / 提级 / 公开）\n"
+                "- 爆点拉满：动作 / 情绪 / 信息揭示三选二；字数允许 3000-3300 字\n"
+                "- 章末必须留下卷尾级钩子（更大反派 / 新地图 / 关键人物动向）"
+            ),
+            "ending": (
+                "【当前卷阶段：收束期】\n"
+                "- 给读者交代感，但保留下一卷悬念种子\n"
+                "- 不要总结性独白；用一个画面或对话句结束本章"
+            ),
+        }
+        phase_brief = phase_brief_map.get(phase_norm, "")
+
+        # ── 立项定位：读者画像 / 爽点类型 / 节奏（每章都要看见，不再让 AI 临场猜）────────
+        positioning_brief = ""
+        if positioning and isinstance(positioning, dict):
+            parts = []
+            if positioning.get("target_audience"):
+                parts.append(f"目标读者：{positioning['target_audience']}")
+            if positioning.get("tropes"):
+                tropes = positioning["tropes"]
+                if isinstance(tropes, list):
+                    tropes = "、".join(str(t) for t in tropes if t)
+                parts.append(f"核心爽点类型：{tropes}")
+            if positioning.get("face_slap_pattern"):
+                parts.append(f"打脸频率：{positioning['face_slap_pattern']}")
+            if positioning.get("emotional_arc"):
+                parts.append(f"情感线占比：{positioning['emotional_arc']}")
+            if positioning.get("pace_type"):
+                parts.append(f"节奏类型：{positioning['pace_type']}")
+            if positioning.get("selling_point"):
+                parts.append(f"卖点钩子：{positioning['selling_point']}")
+            if parts:
+                positioning_brief = "【作品基本面（必须每章贯彻）】\n" + "\n".join(parts)
 
         system = """你是拥有30年经验的网络小说作家，文笔老练，深谙追读节奏。
 你的任务是根据章节计划和故事背景，为作者提供一段高质量的正文文字。
@@ -1194,7 +1287,29 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 6. 故事线进展要顺势推进，切勿无视当前活跃的冲突线
 7. 每一场戏都必须服务作品基本面：读者定位、核心命题、爽点承诺、禁忌边界
 8. 写完正文后，必须追加「章节速查索引」区块，使用固定模板，便于后续复盘与连续性追踪
-9. 直接给出正文，不要解释、不要旁白、不要说"好的"之类的废话"""
+9. 直接给出正文，不要解释、不要旁白、不要说"好的"之类的废话
+
+【章末钩子硬约束（必须遵守）】
+- 章节最后一段（不超过 80 字）必须满足以下之一：
+  A) 出现新的未解之谜或揭示
+  B) 强敌 / 关键 NPC 登场但未交手
+  C) 关键人物开口未说完，话被掐断
+  D) 主角被推到决策悬崖（必须立刻选）
+- 严禁章末用总结句、抒情句、陈述性收束（如"夜更深了""一切归于平静"）
+- 钩子必须紧贴正文事件，不允许另起一段意义不明的"画外音"
+
+【反面例子 / 严禁清单】
+- 严禁流水账连接词："然后……接着……于是……此时……"
+- 严禁排比式抒情开篇："少年抬头望向天空""天地间一片寂静""时间仿佛静止"
+- 严禁单段心理独白超过 200 字
+- 严禁解释性旁白连续 3 句以上（让事件本身说话）
+- 严禁滥用"突然"作为段落起点
+- 严禁出现 AI 自指词（"作为一个 AI""根据您的要求""我来为您"）"""
+
+        if positioning_brief:
+            system = system + "\n\n" + positioning_brief
+        if phase_brief:
+            system = system + "\n\n" + phase_brief
 
         # 根据大纲 word_target 动态计算续写字数
         full_target = max(1500, int(word_target or 2300))
@@ -1324,10 +1439,22 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 {index_template}{extra}"""
 
         max_tok = max_tokens_draft_stream(large_context)
-        stream_ctx: dict = {"operation": "draft_assist_stream", "chapter_title": chapter_title}
+        stream_ctx: dict = {
+            "operation": "draft_assist_stream",
+            "chapter_title": chapter_title,
+            "phase": phase_norm or None,
+        }
         if stream_log_context:
             stream_ctx.update(stream_log_context)
-        async for chunk in self._stream_ai(system, prompt, max_tokens=max_tok, context=stream_ctx):
+        # 阶段→任务名映射：开局期/高潮期/至暗期分别走更激进或更克制的采样档位
+        draft_task = phase_to_draft_task(phase_norm)
+        async for chunk in self._stream_ai(
+            system,
+            prompt,
+            max_tokens=max_tok,
+            context=stream_ctx,
+            task=draft_task,
+        ):
             yield chunk
 
     # ── 自动复盘提取 ──────────────────────────────────
@@ -1393,7 +1520,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 2. 哪些人物习得了新技能
 3. 哪些故事线有了推进（节拍）
 4. 哪些信息来源需要记录，避免后文凭空知道信息
-5. 哪些伏笔被埋下或回收，避免后文突然出现无前因的设定
+5. 哪些伏笔被埋下或回收，避免后文突然出现无前因的设定（chapter_index 中回收条目须在 description 内写明全局伏笔编号 **F-xxx**，以便更新伏笔管理表；新埋伏笔建议同样带 **F-编号：** 前缀以便对齐）
 6. 哪些新道具/法宝、功法/技能、势力需要收入系统，或已有资产状态发生变化
 7. 生成章节索引（chapter_index）：完全依据上方叙事正文归纳；须与正文事实一致
 8. 本章是否出现了不在现有角色库中、且值得长期追踪的新角色（new_characters）
@@ -1557,8 +1684,8 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
     "story_day": "故事内时间（简体中文），如「第8日」「首日（夜→晨）」；未知则为空字符串",
     "core_events": ["本章实际发生的核心事件1", "核心事件2"],
     "first_appearances": [{{"character_id": "可为空", "name": "首次出场人物名"}}],
-    "actual_foreshadows_laid": [{{"description": "实际写进正文的新伏笔", "status": "open"}}],
-    "actual_foreshadows_resolved": [{{"description": "本章实际回收/解释的伏笔"}}],
+    "actual_foreshadows_laid": [{{"description": "实际写进正文的新伏笔；建议「F-编号：悬念描述」，全新伏笔也可仅写描述由系统分配编号", "status": "open"}}],
+    "actual_foreshadows_resolved": [{{"description": "本章回收的伏笔；每条必须以「F-编号：」开头（引用伏笔表中待回收条目），勿省略编号"}}],
     "ending_hook": "章末钩子描述",
     "hook_strength": 1,
     "continuity_notes": [{{"severity": "low/medium/high", "note": "生成或正文中发现的连续性风险"}}]
@@ -1571,6 +1698,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
             prompt,
             max_tokens=max_tokens_auto_debrief(self.profile),
             context={"operation": "auto_extract_debrief", "chapter_title": chapter_title},
+            task="debrief.auto",
         )
         try:
             import re as _re
@@ -1730,9 +1858,52 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
         msg = str(err).lower()
         return any(key in msg for key in ("error code: 502", "bad gateway", "timeout", "temporarily unavailable"))
 
-    async def _call_ai(self, system: str, prompt: str, max_tokens: int = 2048, context: Optional[dict] = None) -> str:
+    def _build_sampling_kwargs(
+        self,
+        task: Optional[str],
+        sampling_overrides: Optional[dict],
+    ) -> dict:
+        """合并「任务级默认采样」与「调用方覆写」并剔除空值。
+
+        - `task`：在 ``llm_task_profiles.TASK_PROFILES`` 中查表，未命中返回空 dict；
+        - `sampling_overrides`：调用方临时覆写（例如某次 A/B 测试），优先级最高；
+        - 空 dict / None 字段会被剔除，避免网关因不识别的空字段报错。
+
+        返回的 dict 直接展开进 ``client.chat.completions.create(**kwargs)``。
+        """
+        merged = dict(resolve_task_profile(task))
+        if sampling_overrides:
+            for k, v in sampling_overrides.items():
+                if v is not None:
+                    merged[k] = v
+        return {k: v for k, v in merged.items() if v is not None}
+
+    async def _call_ai(
+        self,
+        system: str,
+        prompt: str,
+        max_tokens: int = 2048,
+        context: Optional[dict] = None,
+        *,
+        task: Optional[str] = None,
+        sampling: Optional[dict] = None,
+    ) -> str:
+        """非流式 LLM 调用。
+
+        Args:
+            system: 系统提示。
+            prompt: 用户提示。
+            max_tokens: 单次输出上限。
+            context: 写入 ``llm_call_logs.context`` 的对账元数据。
+            task: 任务名，用于查 ``llm_task_profiles`` 选取采样参数；缺省走网关默认。
+            sampling: 调用方临时覆写采样字段（temperature/top_p/...）。
+
+        Returns:
+            模型返回的纯文本内容（不含 ``<think>``）。
+        """
         client = self._get_client()
         start = time.perf_counter()
+        sampling_kwargs = self._build_sampling_kwargs(task, sampling)
         try:
             # SDK 本身会重试；这里再补一层短退避，兜住网关偶发 5xx，减少工作流整体失败。
             resp = None
@@ -1747,6 +1918,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                             {"role": "user", "content": prompt},
                         ],
                         max_tokens=max_tokens,
+                        **sampling_kwargs,
                     )
                     last_error = None
                     break
@@ -1776,7 +1948,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                 mode=self.profile,
                 model=self.model,
                 llm_endpoint=f"{self.base_url.rstrip('/')}/chat/completions",
-                context=context or {},
+                context={**(context or {}), "task": task, "sampling": sampling_kwargs},
                 duration_ms=int((time.perf_counter() - start) * 1000),
                 status="ok",
                 prompt_text=f"{system}\n{prompt}",
@@ -1788,6 +1960,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                         {"role": "user", "content": prompt},
                     ],
                     "max_tokens": max_tokens,
+                    **sampling_kwargs,
                 },
                 output_payload={"text": content},
                 db=self._db,
@@ -1798,7 +1971,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                 mode=self.profile,
                 model=self.model,
                 llm_endpoint=f"{self.base_url.rstrip('/')}/chat/completions",
-                context=context or {},
+                context={**(context or {}), "task": task, "sampling": sampling_kwargs},
                 duration_ms=int((time.perf_counter() - start) * 1000),
                 status="error",
                 prompt_text=f"{system}\n{prompt}",
@@ -1809,15 +1982,27 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                         {"role": "user", "content": prompt},
                     ],
                     "max_tokens": max_tokens,
+                    **sampling_kwargs,
                 },
                 db=self._db,
             )
             raise
 
-    async def _stream_ai(self, system: str, prompt: str, max_tokens: int = 2048, context: Optional[dict] = None) -> AsyncGenerator[str, None]:
+    async def _stream_ai(
+        self,
+        system: str,
+        prompt: str,
+        max_tokens: int = 2048,
+        context: Optional[dict] = None,
+        *,
+        task: Optional[str] = None,
+        sampling: Optional[dict] = None,
+    ) -> AsyncGenerator[str, None]:
+        """流式 LLM 调用。参数语义与 :meth:`_call_ai` 一致。"""
         client = self._get_client()
         start = time.perf_counter()
         output_chunks: List[str] = []
+        sampling_kwargs = self._build_sampling_kwargs(task, sampling)
         try:
             stream = await client.chat.completions.create(
                 model=self.model,
@@ -1827,6 +2012,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                 ],
                 max_tokens=max_tokens,
                 stream=True,
+                **sampling_kwargs,
             )
             async for chunk in stream:
                 ch_list = getattr(chunk, "choices", None) or []
@@ -1841,7 +2027,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                 mode=self.profile,
                 model=self.model,
                 llm_endpoint=f"{self.base_url.rstrip('/')}/chat/completions",
-                context=context or {},
+                context={**(context or {}), "task": task, "sampling": sampling_kwargs},
                 duration_ms=int((time.perf_counter() - start) * 1000),
                 status="ok",
                 prompt_text=f"{system}\n{prompt}",
@@ -1853,6 +2039,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                     ],
                     "max_tokens": max_tokens,
                     "stream": True,
+                    **sampling_kwargs,
                 },
                 output_payload={"text": "".join(output_chunks)},
                 db=self._db,
@@ -1862,7 +2049,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                 mode=self.profile,
                 model=self.model,
                 llm_endpoint=f"{self.base_url.rstrip('/')}/chat/completions",
-                context=context or {},
+                context={**(context or {}), "task": task, "sampling": sampling_kwargs},
                 duration_ms=int((time.perf_counter() - start) * 1000),
                 status="error",
                 prompt_text=f"{system}\n{prompt}",
@@ -1875,6 +2062,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                     ],
                     "max_tokens": max_tokens,
                     "stream": True,
+                    **sampling_kwargs,
                 },
                 output_payload={"text": "".join(output_chunks)},
                 db=self._db,

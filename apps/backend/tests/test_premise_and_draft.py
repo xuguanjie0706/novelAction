@@ -34,6 +34,7 @@ from app.routers.ai import (
     _format_writing_chat_context,
     _sync_chapter_index_foreshadows,
 )
+from app.routers.ai.foreshadow import pick_open_foreshadow_for_resolve
 from app.services.ai_service import AIService
 
 
@@ -739,6 +740,60 @@ def test_sync_chapter_index_foreshadows_assigns_unique_codes_for_batch_items_wit
 
     assert stats == {"created": 2, "updated": 0, "resolved": 0}
     assert [f.code for f in db.added] == ["F-001", "F-002"]
+
+
+def test_pick_open_foreshadow_matches_exact_title_across_chapters():
+    open_fs = [
+        Foreshadow(
+            code="F-001",
+            title="矿脉异动之谜",
+            description="早前埋下",
+            status="open",
+            laid_chapter_number=5,
+            priority=3,
+        )
+    ]
+    payload = {
+        "title": "矿脉异动之谜",
+        "description": "本章揭晓矿脉异动来自上古封印",
+    }
+    assert pick_open_foreshadow_for_resolve(open_fs, payload) is open_fs[0]
+
+
+def test_pick_open_foreshadow_matches_title_embedded_in_resolve_description():
+    open_fs = [
+        Foreshadow(
+            code="F-002",
+            title="圣地造化代价",
+            description="慕容倾城冰系法则暗示圣地所获",
+            status="open",
+            laid_chapter_number=12,
+            priority=4,
+        )
+    ]
+    payload = {
+        "title": "本章回收圣地线与代价悬念",
+        "description": "正文通过长老对话揭示「圣地造化代价」实为灵魂契约条款",
+    }
+    assert pick_open_foreshadow_for_resolve(open_fs, payload) is open_fs[0]
+
+
+def test_pick_open_foreshadow_matches_stored_description_prefix_in_resolve_text():
+    open_fs = [
+        Foreshadow(
+            code="F-003",
+            title="简短",
+            description="慕容倾城展现的冰系法则强度远超同阶，暗示其在圣地获得了极高的造化",
+            status="open",
+            laid_chapter_number=8,
+            priority=3,
+        )
+    ]
+    payload = {
+        "title": "无关标题",
+        "description": "复盘：慕容倾城展现的冰系法则强度远超同阶，暗示其在圣地获得了极高的造化，本章终于证实",
+    }
+    assert pick_open_foreshadow_for_resolve(open_fs, payload) is open_fs[0]
 
 
 def test_repair_duplicate_foreshadow_codes_keeps_first_and_renumbers_duplicates():

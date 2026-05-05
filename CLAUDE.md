@@ -72,6 +72,25 @@ LLM_API_KEY=ollama
 - Gemini 支持 100 万 token context，可以切换到**方案 B（单次全量生成）**
 - `generation_service.py` 里 `mode="single_shot"` 已预留，切换只需改前端请求参数
 
+### 任务级采样配置（v3，2026-05）
+
+> 设计动机：此前 `_call_ai` / `_stream_ai` 全程不传 `temperature`，质检（要稳定 JSON）和写正文（要文采变化）共用一个默认温度，是 AI 味的系统性根因。
+
+- 配置文件：`apps/backend/app/services/llm_task_profiles.py`
+- 调用方约定：每次 `_call_ai` / `_stream_ai` 传 `task="<域>.<动作>"`（如 `quality.check`、`draft.opening`）；未识别走网关默认（向后兼容）。
+- 关键档位：
+
+| 任务域 | temperature | 说明 |
+|---|---|---|
+| `quality.*` / `debrief.*` | 0.2-0.3 | 要稳定 JSON 与可比较打分 |
+| `bootstrap.*` / `outline.*` | 0.55-0.75 | 半结构化生成 |
+| `draft.chapter` | 0.9 | 章节正文，加 frequency/presence_penalty 抑制重复 |
+| `draft.opening` / `draft.climax` | 0.95 | 开局期 / 高潮期允许更跳脱 |
+| `draft.dark_hour` | 0.75 | 至暗期需克制 |
+
+- 自定义覆写：调用方可传 `sampling={"temperature": 0.85}` 临时覆盖（A/B 测试用）。
+- 阶段→任务名映射：`phase_to_draft_task(phase)` 在 `draft_assist_stream` 内部按 `OutlineNode.phase` 自动选档。
+
 ---
 
 ## 数据模型速查
@@ -104,6 +123,26 @@ Project
 `key_skill_ids`关键技能、`emotional_tone`情感基调、`pacing`节奏标记、
 `power_milestone`实力里程碑、`foreshadows_laid`/`foreshadows_resolved`伏笔管理。
 
+### OutlineNode.phase（v3，2026-05）
+卷阶段标记，章节起草 prompt 按此切模板与采样档位：
+
+| 取值 | 含义 | 节奏要求 |
+|---|---|---|
+| `opening` | 开局期 / 新手村 | 钩子密度高、爽点 3 章一次、字数偏短（~2200） |
+| `rising` | 起飞期 / 扩张期 | 势力扩张、感情线接入 |
+| `turning` | 转折期 | 矛盾升级、代价兑现 |
+| `dark_hour` | 至暗期 | 允许「虐」、节奏放缓、字数 ~2800 |
+| `climax` | 高潮期 | 伏笔回收、爆点拉满、字数 3000-3300 |
+| `ending` | 收束期 | 留下一卷悬念种子 |
+
+由 Bootstrap Step 9 (`_gen_volumes`) 在卷级填入，写章节时回溯卷阶段。
+
+### Project.extra（v3，2026-05）
+JSON 杂物字段，当前已知键：
+- `extra.positioning`：Step 0 立项会议产物（`target_audience` / `tropes` / `reference_works` /
+  `selling_point` / `face_slap_pattern` / `emotional_arc` / `pace_type` / `taboo_lines`）。
+  写章节路径优先读 `Project.extra.positioning`，回退 `Project.story_core.positioning`。
+
 ---
 
 ## API 路由约定
@@ -127,15 +166,28 @@ Project
 
 ## 一句话生成（Bootstrap）双方案
 
-### 方案 A：串行步进（Sequential）— 默认，适合
+### 方案 A：串行步进（Sequential）— 默认
 
 ```
-logline → [Step1 项目] → [Step2 设定] → [Step3 人物] → [Step4 大纲] → [Step5 记忆] → [Step6 关系]
+logline
+  → [Step0 立项会议（v3，2026-05）]   # _gen_positioning：受众/爽点/打脸节奏/卖点
+  → [Step1 项目]                       # _gen_project，把定位写进 Project.extra.positioning
+  → [Step2 境界体系]
+  → [Step3 势力]
+  → [Step4 故事线]
+  → [Step5 人物]
+  → [Step6 技能]
+  → [Step7 道具]
+  → [Step8 设定卡]
+  → [Step9 卷骨架]                     # _gen_volumes 同时填 phase
+  → [Step10 记忆]
+  → [Step11 关系]
 ```
 
-- 每步独立 prompt，上下文逐步累积（压缩摘要传入）
+- 每步独立 prompt，上下文逐步累积（压缩摘要 + 立项定位传入）
 - 单步失败重试 1 次，不影响其他步骤
 - SSE 每步推送 `step_start` / `step_done` / `error`
+- **Step 0 是新增的"立项会议"**：从一句话推导目标读者画像、爽点类型、打脸频率、情感线占比、节奏类型，作为后续 11 步的全局约束注入到所有 prompt。这是网文系统区别于"AI 自由发挥"的关键防线。
 
 ### 方案 B：单次全量（Single-shot）— 适合大 context 模型（Gemini）
 
@@ -171,6 +223,7 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 | 设定类型 | 存储位置 | Bootstrap 步骤 |
 |---|---|---|
+| **题材定位** | `Project.extra.positioning` | **Step 0 `_gen_positioning`（v3）** |
 | 境界体系 | `PowerSystem` + `levels[]` | Step 2 `_gen_power_systems` |
 | 势力组织 | `Faction`（含 `extra.active_period`） | Step 3 `_gen_factions` |
 | 故事线 | `StoryLine` | Step 4 `_gen_storylines` |
@@ -178,7 +231,7 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 | 核心技能/功法 | `Skill` | Step 6 `_gen_key_skills` |
 | 关键道具/法宝 | `Item` | Step 7 `_gen_key_items` |
 | 纯叙事设定 | `WorldSetting`（分类存 `extra.category`） | Step 8 `_gen_settings` |
-| 卷级大纲 | `OutlineNode`（volume） | Step 9 `_gen_volumes` |
+| 卷级大纲 + phase | `OutlineNode`（volume） + `phase` | Step 9 `_gen_volumes` |
 | 记忆种子 | `MemoryChunk` | Step 10 `_gen_memory` |
 | 人物关系 | `CharacterRelationship` | Step 11 `_gen_relations` |
 
@@ -210,6 +263,12 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 ---
 
+## 代码文档与注释契约（架构级）
+
+**单一事实来源**：完整条文见 [AGENTS.md — 代码文档与注释契约](AGENTS.md#documentation-contract)。此处不重复，避免两处漂移。
+
+---
+
 ## 开发建议（给未来的 Claude）
 
 1. **改 AI 调用**：只需动 `apps/backend/app/services/ai_service.py`，不要在 router 层直接调 openai
@@ -218,6 +277,7 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 4. **JSON 解析**：所有 `_call_ai` 的 JSON 解析用 `_parse_json()` 统一处理，不要 try/except 分散在各处
 5. **pgvector**：embedding 字段已在 `MemoryChunk` 预留，启用时需 `CREATE EXTENSION vector;` 并取消 `memory.py` 中的条件导入
 6. **改创作端 UI**：主要改 `apps/client/`；**管理后台**改 `apps/frontend/`（与 client 独立依赖与构建）
+7. **TS/JS 注释**：新增或修改公共 `export` 时，遵循 [AGENTS.md 代码文档与注释契约](AGENTS.md#documentation-contract)（**严格 JSDoc**）；后端对应模块用 Google 风格 docstring。
 
 ---
 

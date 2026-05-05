@@ -23,6 +23,8 @@ import { http } from '../api/http'
 import type { LlmOverview } from '../types/llm'
 import type {
   ChapterCoherenceResult,
+  ChapterVersionDetail,
+  ChapterVersionTimelineItem,
   CoherenceApplyChapterResult,
   CoherenceApplyPreviewResponse,
   CoherenceApplyRevisionPreview,
@@ -64,6 +66,18 @@ function formatApplyChapterLine(chapterList: ReviewChapter[], a: CoherenceApplyC
   return `${label}（${a.word_count ?? '-'} 字）`
 }
 
+function snapshotSourceTag(note: string | null | undefined, isAuto: boolean) {
+  if (note?.includes('连贯性评测')) return { color: 'blue' as const, text: '连贯性改正前' }
+  if (isAuto) return { color: 'orange' as const, text: '自动快照' }
+  return { color: 'default' as const, text: '手动快照' }
+}
+
+function stripHtmlToPlain(html: string, maxLen: number) {
+  const t = (html || '').replace(/<[^>]+>/g, '\n').replace(/\n+/g, '\n').trim()
+  if (t.length <= maxLen) return t
+  return `${t.slice(0, maxLen)}…`
+}
+
 export default function ReadingReviewPage() {
   const navigate = useNavigate()
   const { message } = App.useApp()
@@ -94,6 +108,13 @@ export default function ReadingReviewPage() {
   const [coherenceApplyLoadingId, setCoherenceApplyLoadingId] = useState<string | null>(null)
   const [coherenceApplyCommitting, setCoherenceApplyCommitting] = useState(false)
   const [compareIds, setCompareIds] = useState<string[]>([])
+
+  const [versionTimelineLoading, setVersionTimelineLoading] = useState(false)
+  const [versionTimelineRows, setVersionTimelineRows] = useState<ChapterVersionTimelineItem[]>([])
+  const [versionPreviewOpen, setVersionPreviewOpen] = useState(false)
+  const [versionPreviewLoading, setVersionPreviewLoading] = useState(false)
+  const [versionPreviewTitle, setVersionPreviewTitle] = useState('')
+  const [versionPreviewPlain, setVersionPreviewPlain] = useState('')
 
   const loadProjects = useCallback(async () => {
     setLoading(true)
@@ -154,6 +175,45 @@ export default function ReadingReviewPage() {
     }
   }, [message])
 
+  const loadVersionTimeline = useCallback(
+    async (pid: string) => {
+      setVersionTimelineLoading(true)
+      try {
+        const { data } = await http.get<ChapterVersionTimelineItem[]>(`/api/v1/projects/${pid}/chapters/version-timeline`, {
+          params: { limit: 120 },
+        })
+        setVersionTimelineRows(data)
+      } catch {
+        message.error('加载正文快照列表失败')
+      } finally {
+        setVersionTimelineLoading(false)
+      }
+    },
+    [message],
+  )
+
+  const openVersionSnapshotPreview = useCallback(
+    async (row: ChapterVersionTimelineItem) => {
+      if (!projectId) return
+      setVersionPreviewOpen(true)
+      setVersionPreviewLoading(true)
+      setVersionPreviewTitle(`第${row.chapter_sort_order + 1}章 · ${row.chapter_title || '未命名'}`)
+      setVersionPreviewPlain('')
+      try {
+        const { data } = await http.get<ChapterVersionDetail>(
+          `/api/v1/projects/${projectId}/chapters/${row.chapter_id}/versions/${row.id}`,
+        )
+        setVersionPreviewPlain(stripHtmlToPlain(data.content || '', 120_000))
+      } catch {
+        message.error('加载快照正文失败')
+        setVersionPreviewOpen(false)
+      } finally {
+        setVersionPreviewLoading(false)
+      }
+    },
+    [message, projectId],
+  )
+
   useEffect(() => {
     void loadProjects()
     void loadLlmOverview()
@@ -202,18 +262,19 @@ export default function ReadingReviewPage() {
         report_id: coherenceApplyReportId,
         revisions: payload.map((r) => ({ chapter_id: r.chapter_id, revised_content: r.revised_content })),
       })
-      message.success('已写入正文')
+      message.success('已写入正文。改正记录已保存，之后随时打开「历史记录」即可查看')
       setCoherenceApplyModalOpen(false)
       setCoherenceApplyRevisions([])
       setCoherenceApplyReportId(null)
       await loadChapters(projectId)
       await loadHistory(projectId)
+      await loadVersionTimeline(projectId)
     } catch {
       message.error('写入失败')
     } finally {
       setCoherenceApplyCommitting(false)
     }
-  }, [coherenceApplyReportId, coherenceApplyRevisions, loadChapters, loadHistory, message, projectId])
+  }, [coherenceApplyReportId, coherenceApplyRevisions, loadChapters, loadHistory, loadVersionTimeline, message, projectId])
 
   useEffect(() => {
     if (!projectId) return
@@ -226,7 +287,8 @@ export default function ReadingReviewPage() {
     setCompareIds([])
     void loadChapters(projectId)
     void loadHistory(projectId)
-  }, [projectId, loadChapters, loadHistory])
+    void loadVersionTimeline(projectId)
+  }, [projectId, loadChapters, loadHistory, loadVersionTimeline])
 
   useEffect(() => {
     if (chapters.length === 0) return
@@ -718,9 +780,12 @@ export default function ReadingReviewPage() {
                   style={{ marginBottom: 16 }}
                   title="改正文写入记录（按评测落库，可回顾每次「写入数据库」）"
                 >
+                  <Typography.Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 12, fontSize: 12 }}>
+                    每次点击「写入数据库」后都会落库保存；离开或刷新页面后再进来，仍在本页按时间显示。也可展开下方对应报告，查看「本报告的改正文历史」。
+                  </Typography.Paragraph>
                   {applyTimeline.length === 0 ? (
                     <Typography.Text type="secondary">
-                      暂无记录。在下方报告中展开并点击「根据本评测改正文」→ 预览 →「写入数据库」后会在此按时间列出。
+                      暂无记录。在下方报告中展开，点击「根据本评测改正文」→ 预览 →「写入数据库」后即会出现。
                     </Typography.Text>
                   ) : (
                     <List
@@ -852,6 +917,77 @@ export default function ReadingReviewPage() {
               </Card>
             ),
           },
+          {
+            key: 'body-snapshots',
+            label: '正文快照',
+            children: (
+              <Card>
+                <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
+                  此处按时间列出本书各章的「修订前快照」（连贯性评测在点「写入数据库」时会自动各落一条）。仅 LLM 预览而未写入时不会产生快照；写入后可在此对照改正前后。
+                </Typography.Paragraph>
+                <Table<ChapterVersionTimelineItem>
+                  rowKey="id"
+                  loading={versionTimelineLoading}
+                  dataSource={versionTimelineRows}
+                  pagination={{ pageSize: 15 }}
+                  locale={{ emptyText: <Empty description="暂无快照。写入改正文或手动保存版本后会出现" /> }}
+                  columns={[
+                    {
+                      title: '快照时间',
+                      dataIndex: 'created_at',
+                      width: 200,
+                      render: (v: string) => new Date(v).toLocaleString('zh-CN'),
+                    },
+                    {
+                      title: '章节',
+                      render: (_, row) => `第${row.chapter_sort_order + 1}章 · ${row.chapter_title || '未命名'}`,
+                    },
+                    {
+                      title: '来源',
+                      width: 130,
+                      render: (_, row) => {
+                        const t = snapshotSourceTag(row.note, row.is_auto)
+                        return <Tag color={t.color}>{t.text}</Tag>
+                      },
+                    },
+                    {
+                      title: '备注',
+                      dataIndex: 'note',
+                      ellipsis: true,
+                      render: (v: string | null | undefined) => v || '—',
+                    },
+                    {
+                      title: '字数',
+                      dataIndex: 'word_count',
+                      width: 90,
+                      render: (w: number | null | undefined) => (w != null ? w : '—'),
+                    },
+                    {
+                      title: '操作',
+                      width: 200,
+                      render: (_, row) => (
+                        <Space size="small">
+                          <Button type="link" size="small" onClick={() => void openVersionSnapshotPreview(row)}>
+                            预览快照正文
+                          </Button>
+                          <Button
+                            type="link"
+                            size="small"
+                            onClick={() => {
+                              if (!projectId) return
+                              navigate(`/novels?projectId=${projectId}&chapterId=${row.chapter_id}`)
+                            }}
+                          >
+                            去编辑
+                          </Button>
+                        </Space>
+                      ),
+                    },
+                  ]}
+                />
+              </Card>
+            ),
+          },
         ]}
       />
       <Modal
@@ -923,6 +1059,42 @@ export default function ReadingReviewPage() {
             </List.Item>
           )}
         />
+      </Modal>
+      <Modal
+        title={versionPreviewTitle ? `快照：${versionPreviewTitle}` : '快照正文'}
+        open={versionPreviewOpen}
+        onCancel={() => {
+          setVersionPreviewOpen(false)
+          setVersionPreviewPlain('')
+        }}
+        footer={[
+          <Button
+            key="close"
+            onClick={() => {
+              setVersionPreviewOpen(false)
+              setVersionPreviewPlain('')
+            }}
+          >
+            关闭
+          </Button>,
+        ]}
+        width={800}
+      >
+        {versionPreviewLoading ? (
+          <Typography.Text type="secondary">加载中…</Typography.Text>
+        ) : (
+          <div
+            style={{
+              maxHeight: '65vh',
+              overflow: 'auto',
+              whiteSpace: 'pre-wrap',
+              fontSize: 13,
+              lineHeight: 1.6,
+            }}
+          >
+            {versionPreviewPlain || '（空）'}
+          </div>
+        )}
       </Modal>
     </Space>
   )

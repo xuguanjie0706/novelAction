@@ -8,6 +8,7 @@ from app.schemas.chapter import (
     ChapterOut,
     ChapterVersionOut,
     ChapterVersionDetailOut,
+    ChapterVersionTimelineItemOut,
 )
 from app.schemas.chapter_index import ChapterIndexCreate, ChapterIndexUpdate, ChapterIndexOut
 from app.schemas.memory import MemoryChunkCreate, MemoryChunkOut
@@ -20,6 +21,7 @@ __all__ = [
     "CharacterCreate", "CharacterUpdate", "CharacterOut", "RelationshipOut",
     "OutlineNodeCreate", "OutlineNodeUpdate", "OutlineNodeOut",
     "ChapterCreate", "ChapterUpdate", "ChapterOut", "ChapterVersionOut", "ChapterVersionDetailOut",
+    "ChapterVersionTimelineItemOut",
     "ChapterIndexCreate", "ChapterIndexUpdate", "ChapterIndexOut",
     "MemoryChunkCreate", "MemoryChunkOut",
     "ForeshadowCreate", "ForeshadowUpdate", "ForeshadowOut",

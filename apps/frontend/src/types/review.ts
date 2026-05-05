@@ -166,3 +166,26 @@ export interface CoherenceApplyPreviewResponse {
   report_id: string
   revisions: CoherenceApplyRevisionPreview[]
 }
+
+/** GET .../chapters/version-timeline 单行（无正文） */
+export interface ChapterVersionTimelineItem {
+  id: string
+  chapter_id: string
+  chapter_title: string
+  chapter_sort_order: number
+  word_count?: number | null
+  note?: string | null
+  is_auto: boolean
+  created_at: string
+}
+
+/** GET .../chapters/:id/versions/:vid 详情 */
+export interface ChapterVersionDetail {
+  id: string
+  chapter_id: string
+  word_count?: number | null
+  note?: string | null
+  is_auto: boolean
+  created_at: string
+  content: string
+}

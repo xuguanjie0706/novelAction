@@ -12,10 +12,18 @@ from app.models import (
     Character,
     Foreshadow,
     MemoryChunk,
+    Project,
     QualityDebt,
     StoryLine,
 )
-from app.schemas import ChapterCreate, ChapterUpdate, ChapterOut, ChapterVersionOut, ChapterVersionDetailOut
+from app.schemas import (
+    ChapterCreate,
+    ChapterUpdate,
+    ChapterOut,
+    ChapterVersionOut,
+    ChapterVersionDetailOut,
+    ChapterVersionTimelineItemOut,
+)
 from app.schemas.character_change_log import CharacterChangeLogOut
 
 router = APIRouter(prefix="/projects/{project_id}/chapters", tags=["chapters"])
@@ -206,6 +214,45 @@ def create_chapter(project_id: str, payload: ChapterCreate, db: Session = Depend
     return chapter
 
 
+@router.get("/version-timeline", response_model=List[ChapterVersionTimelineItemOut])
+def list_chapter_version_timeline(
+    project_id: str,
+    limit: int = Query(80, ge=1, le=200),
+    auto_only: bool = Query(False, description="仅自动快照（如连贯性改正前）"),
+    db: Session = Depends(get_db),
+):
+    """
+    本项目下所有章节的版本快照时间线（新→旧）。
+    连贯性「写入数据库」前会先落一条修订前快照，便于对照 LLM 改正。
+    """
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    q = (
+        db.query(ChapterVersion, Chapter)
+        .join(Chapter, Chapter.id == ChapterVersion.chapter_id)
+        .filter(Chapter.project_id == project_id)
+    )
+    if auto_only:
+        q = q.filter(ChapterVersion.is_auto.is_(True))
+
+    rows = q.order_by(ChapterVersion.created_at.desc()).limit(limit).all()
+    return [
+        ChapterVersionTimelineItemOut(
+            id=v.id,
+            chapter_id=v.chapter_id,
+            chapter_title=ch.title,
+            chapter_sort_order=ch.sort_order,
+            word_count=v.word_count,
+            note=v.note,
+            is_auto=bool(v.is_auto),
+            created_at=v.created_at,
+        )
+        for v, ch in rows
+    ]
+
+
 @router.get("/{chapter_id}", response_model=ChapterOut)
 def get_chapter(project_id: str, chapter_id: str, db: Session = Depends(get_db)):
     chapter = db.query(Chapter).filter(
@@ -259,14 +306,18 @@ def create_snapshot(
     ).first()
     if not chapter:
         raise HTTPException(404, "Chapter not found")
+    # 以正文实际内容为准；避免 chapters.word_count 未同步时快照列表显示 0 字
+    snap_wc = count_words(chapter.content or "")
     version = ChapterVersion(
         chapter_id=chapter_id,
         content=chapter.content,
-        word_count=chapter.word_count,
+        word_count=snap_wc,
         note=note,
         is_auto=is_auto,
     )
     db.add(version)
+    if chapter.word_count != snap_wc:
+        chapter.word_count = snap_wc
     db.commit()
     db.refresh(version)
     return version

@@ -262,6 +262,35 @@ async def draft_assist_stream(
     user_prompt_str = req.user_prompt or ""
     stream_log_ctx = {"project_id": str(project_id), "chapter_id": str(req.chapter_id)}
 
+    # ── 卷阶段（phase）解析 ─────────────────────────────────────────────
+    # 章节计划节点优先取自身 phase；缺省则回溯所属卷的 phase（一卷一阶段是常态，
+    # 章节级 override 仅在跨阶段过渡章使用）。
+    phase_value: str | None = None
+    if outline_node is not None:
+        phase_value = getattr(outline_node, "phase", None)
+        if not phase_value:
+            phase_value = (outline_node.extra or {}).get("phase")
+        if not phase_value and outline_node.parent_id is not None:
+            volume = db.query(OutlineNode).filter(OutlineNode.id == outline_node.parent_id).first()
+            if volume is not None:
+                phase_value = getattr(volume, "phase", None) or (volume.extra or {}).get("phase")
+
+    # ── 立项定位（positioning）：兼容多处来源 ──────────────────────────
+    # 优先 Project.extra.positioning（Step 0 写入），回退 Project.story_core.positioning
+    # （旧版本兼容 / 兜底放置）；都没有则不注入。
+    positioning_value: dict | None = None
+    project_extra = getattr(project, "extra", None) or {}
+    if isinstance(project_extra, dict):
+        pos = project_extra.get("positioning")
+        if isinstance(pos, dict) and pos:
+            positioning_value = pos
+    if positioning_value is None:
+        story_core = getattr(project, "story_core", None) or {}
+        if isinstance(story_core, dict):
+            pos = story_core.get("positioning")
+            if isinstance(pos, dict) and pos:
+                positioning_value = pos
+
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
         db=db,
@@ -296,6 +325,8 @@ async def draft_assist_stream(
                 writing_brief_context=writing_brief_context,
                 plot_dossier_context=plot_dossier_context,
                 word_target=word_target_val,
+                phase=phase_value,
+                positioning=positioning_value,
                 stream_log_context=stream_log_ctx,
             ):
                 yield f"data: {json.dumps({'text': chunk})}\n\n"

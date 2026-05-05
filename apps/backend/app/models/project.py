@@ -20,6 +20,10 @@ class Project(Base):
     target_words = Column(Integer, default=1200000)  # 目标字数（整数）
     # 可为外链或 data URL（AI 封面 base64 很长，不能用 String(500)）
     cover_url = Column(Text)
+    # 杂项扩展字段。当前已知键：
+    #   positioning: dict —— Step 0 立项会议产物（target_audience / tropes / face_slap_pattern 等）。
+    # 后续用于"作品级元设定"时优先放在这里，避免再起一张表。
+    extra = Column(JSON, default=dict)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())

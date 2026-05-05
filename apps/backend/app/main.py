@@ -69,6 +69,8 @@ def _ensure_outline_node_columns() -> None:
         "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS key_skill_ids JSON",
         "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS emotional_tone VARCHAR(50)",
         "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS pacing VARCHAR(20)",
+        # 卷阶段标记，写章节模板分流（opening/rising/turning/dark_hour/climax/ending）
+        "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS phase VARCHAR(20)",
         "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS power_milestone TEXT",
         "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS foreshadows_laid JSON",
         "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS foreshadows_resolved JSON",
@@ -163,6 +165,8 @@ def _ensure_project_columns() -> None:
         """,
         # 若列不存在则新建（全新部署）
         "ALTER TABLE projects ADD COLUMN IF NOT EXISTS target_words INTEGER DEFAULT 1200000",
+        # Step 0 立项定位与作品级元设定挂在 extra JSON
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS extra JSON",
     ]
     with engine.begin() as conn:
         for ddl in ddl_statements:

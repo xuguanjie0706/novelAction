@@ -402,17 +402,50 @@ async function runOutlineQualityCheck(
   }
 }
 
-async function runOutlineRepair(
+const DEFAULT_VOLUME_CONTINUOUS_REPAIR_ROUNDS = 5
+
+/** 连续修复提前结束：pass，或综合分不低于阈值（与 UI continuous_min_score 一致） */
+function volumeOutlineRepairShouldStop(
+  report: OutlinePlanQualityReport | undefined,
+  minScore: number | undefined,
+): 'pass' | 'score' | null {
+  if (!report) return null
+  if (report.status === 'pass') return 'pass'
+  if (minScore != null && report.overall_score != null) {
+    const s = Number(report.overall_score)
+    if (Number.isFinite(s) && s >= minScore) return 'score'
+  }
+  return null
+}
+
+/** 与大纲质检 overall_score / 时间线 quality_score 一致，0–100 */
+function parseContinuousMinScore(params: Record<string, unknown>): number | undefined {
+  const v = params.continuous_min_score
+  if (v === undefined || v === null || v === '') return undefined
+  const n = Number(v)
+  if (!Number.isFinite(n)) return undefined
+  return Math.min(100, Math.max(0, n))
+}
+
+type OutlineRepairRoundMeta = { round: number; maxRounds: number }
+
+/** 执行单轮大纲 Graph 修复工作流，返回是否成功及 workflow 最终质检结果 */
+async function runSingleOutlineRepairRound(
   task: GenTask,
   pushProgress: (item: GenProgressItem) => void,
   signal: AbortSignal,
-): Promise<boolean> {
-  if (signal.aborted) return false
+  roundMeta?: OutlineRepairRoundMeta,
+): Promise<{ ok: boolean; report?: OutlinePlanQualityReport }> {
+  if (signal.aborted) return { ok: false }
   const { projectId, params } = task
+  const roundHint =
+    roundMeta && roundMeta.maxRounds > 1
+      ? `（第 ${roundMeta.round}/${roundMeta.maxRounds} 轮）`
+      : ''
   pushProgress({
     step: 'outline-repair',
     progressKey: 'outline-repair-launch',
-    label: '正在启动大纲 Graph 修复…',
+    label: `正在启动大纲 Graph 修复${roundHint}…`,
     done: false,
     error: false,
   })
@@ -429,20 +462,20 @@ async function runOutlineRepair(
     pushProgress({
       step: 'outline-repair',
       progressKey: 'outline-repair-launch',
-      label: `大纲 Graph 修复已启动：${runId.slice(0, 8)}`,
+      label: `大纲 Graph 修复已启动${roundHint}：${runId.slice(0, 8)}`,
       done: true,
       error: false,
     })
 
-    return await new Promise<boolean>((resolve) => {
+    return await new Promise<{ ok: boolean; report?: OutlinePlanQualityReport }>((resolve) => {
       let settled = false
       const ws = new WebSocket(toWsUrl(outlineApi.qualityCheckWorkflowWsUrl(projectId, runId)))
-      const finish = (ok: boolean) => {
+      const finish = (ok: boolean, report?: OutlinePlanQualityReport) => {
         if (settled) return
         settled = true
         signal.removeEventListener('abort', onAbort)
         try { ws.close() } catch { /* ignore */ }
-        resolve(ok)
+        resolve({ ok, report })
       }
       const onAbort = () => finish(false)
       signal.addEventListener('abort', onAbort)
@@ -460,7 +493,7 @@ async function runOutlineRepair(
           progress_key?: string
           outline_quality_report?: unknown
           outline_quality_scope?: 'volume' | 'book'
-          result?: { summary?: string; status?: string; [key: string]: unknown }
+          result?: { summary?: string; status?: string; overall_score?: number; [key: string]: unknown }
           details?: string[]
         }
         try {
@@ -509,14 +542,19 @@ async function runOutlineRepair(
         }
 
         if (evt.event === 'workflow_done') {
+          const rep = evt.result as OutlinePlanQualityReport | undefined
+          const failed = evt.result?.status === 'error'
           pushProgress({
             step: 'outline-repair',
             progressKey: 'outline-repair-complete',
-            label: evt.result?.summary || '大纲 Graph 修复完成',
+            label: evt.result?.summary
+              ? `${roundHint ? `${roundHint.trim()} ` : ''}${evt.result.summary}`
+              : `大纲 Graph 修复完成${roundHint}`,
             done: true,
-            error: evt.result?.status === 'error',
+            error: failed,
+            outlineQualityReport: rep,
           })
-          finish(evt.result?.status !== 'error')
+          finish(!failed, rep)
           return
         }
 
@@ -557,7 +595,7 @@ async function runOutlineRepair(
       }
     })
   } catch (e: any) {
-    if (signal.aborted) return false
+    if (signal.aborted) return { ok: false }
     pushProgress({
       step: 'outline-repair',
       progressKey: 'outline-repair-error',
@@ -565,8 +603,80 @@ async function runOutlineRepair(
       done: true,
       error: true,
     })
-    return false
+    return { ok: false }
   }
+}
+
+async function runOutlineRepair(
+  task: GenTask,
+  pushProgress: (item: GenProgressItem) => void,
+  signal: AbortSignal,
+): Promise<boolean> {
+  const { params } = task
+  const scope = params.scope ?? 'all'
+  const continuous =
+    params.continuous_repair !== false
+    && scope === 'volume'
+    && Boolean(params.volume_node_id)
+
+  const rawMax = Number(params.continuous_max_rounds)
+  const maxRounds = continuous
+    ? Math.min(20, Math.max(1, Number.isFinite(rawMax) && rawMax > 0 ? rawMax : DEFAULT_VOLUME_CONTINUOUS_REPAIR_ROUNDS))
+    : 1
+  const minScore = continuous ? parseContinuousMinScore(params as Record<string, unknown>) : undefined
+
+  if (!continuous || maxRounds === 1) {
+    const { ok } = await runSingleOutlineRepairRound(task, pushProgress, signal)
+    return ok
+  }
+
+  let lastOk = false
+  let lastReport: OutlinePlanQualityReport | undefined
+  for (let round = 1; round <= maxRounds; round++) {
+    if (signal.aborted) return false
+    const meta: OutlineRepairRoundMeta = { round, maxRounds }
+    const { ok, report } = await runSingleOutlineRepairRound(task, pushProgress, signal, meta)
+    lastOk = ok
+    lastReport = report
+    if (!ok) return false
+    const stopWhy = volumeOutlineRepairShouldStop(report, minScore)
+    if (stopWhy) {
+      const scoreLabel = report?.overall_score ?? '-'
+      const label =
+        stopWhy === 'pass'
+          ? `第 ${round}/${maxRounds} 轮后质检已通过（status pass · score ${scoreLabel}），停止连续修复`
+          : `第 ${round}/${maxRounds} 轮后总分已达阈值（≥${minScore ?? '?'}，当前 ${scoreLabel}），停止连续修复`
+      pushProgress({
+        step: 'outline-repair',
+        progressKey: stopWhy === 'pass' ? 'outline-repair-pass' : 'outline-repair-score',
+        label,
+        done: true,
+        error: false,
+        outlineQualityReport: report,
+      })
+      return true
+    }
+    if (round < maxRounds) {
+      pushProgress({
+        step: 'outline-repair',
+        progressKey: `outline-repair-between-${round}`,
+        label: `第 ${round}/${maxRounds} 轮后仍未达标（${report?.status ?? '?'} · score ${report?.overall_score ?? '-'}），自动开始下一轮…`,
+        done: true,
+        error: false,
+        outlineQualityReport: report,
+      })
+    }
+  }
+
+  pushProgress({
+    step: 'outline-repair',
+    progressKey: 'outline-repair-max-rounds',
+    label: `已连续修复 ${maxRounds} 轮；最新质检 ${lastReport?.status ?? '?'} · score ${lastReport?.overall_score ?? '-'}`,
+    done: true,
+    error: false,
+    outlineQualityReport: lastReport,
+  })
+  return lastOk
 }
 
 /** 执行 batch_expand 任务：依次展开每个节点 */

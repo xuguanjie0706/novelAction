@@ -13,6 +13,31 @@ const MEMORY_TYPE_LABELS: Record<string, string> = {
   conflict: '冲突',
 }
 
+/** 去掉标题里自带的「第N章：」前缀，避免与 sort_order 推导的章节号重复叠显示 */
+function stripLeadingChapterTitlePrefix(title: string): string {
+  const stripped = title.replace(/^第\s*\d+\s*章\s*[：:]\s*/u, '').trim()
+  return stripped.length > 0 ? stripped : title
+}
+
+/**
+ * 与后端 `display_chapter_number` 一致：标题以「第N章」开头则取 N，否则为列表顺位 sort_order+1。
+ * 复盘落库的 `chapter_number` 按此规则，列表若只用 sort_order+1 会与标题/库内章号错位。
+ */
+function displayChapterNumber(title: string | undefined, sortOrder: number | undefined): number {
+  const raw = (title || '').trim()
+  const m = raw.match(/^\s*第\s*0*(\d+)\s*章/u)
+  if (m) return Math.max(1, parseInt(m[1], 10))
+  const so = sortOrder == null || Number.isNaN(Number(sortOrder)) ? 0 : Number(sortOrder)
+  return Math.max(1, so + 1)
+}
+
+function isChapterBodyEmpty(ch: ReviewChapter): boolean {
+  const wc = ch.word_count ?? 0
+  if (wc > 0) return false
+  const plain = (ch.content || '').replace(/<[^>]*>/g, '').replace(/\u00a0/g, ' ').trim()
+  return plain.length === 0
+}
+
 type Row = ReviewMemoryChunk & { chapterSort: number; chapterTitle: string }
 
 export default function DebriefListPage() {
@@ -30,7 +55,7 @@ export default function DebriefListPage() {
   const [memories, setMemories] = useState<ReviewMemoryChunk[]>([])
   const [memoriesLoading, setMemoriesLoading] = useState(false)
 
-  const [chapterFilter, setChapterFilter] = useState<string | 'all'>('all')
+  const [chapterFilter, setChapterFilter] = useState<string | 'all' | '__bootstrap__'>('all')
   const [typeFilter, setTypeFilter] = useState<string | 'all'>('all')
   const [keyword, setKeyword] = useState('')
 
@@ -108,32 +133,69 @@ export default function DebriefListPage() {
     return m
   }, [chapters])
 
-  /** 与小说管理页一致：仅展示绑定到某一写作章节的记忆（含复盘提交与章内提取） */
+  /**
+   * 含：① 已绑定章节的记忆（复盘提交、章内提取）；② 未绑定但带 chapter_number 的条目（如开书时写入的种子 chapter_number=0）。
+   * 后者在旧逻辑里被整表过滤掉，容易表现为「第一章/开书信息没了」。
+   */
   const rows: Row[] = useMemo(() => {
-    const bound = memories.filter((item) => item.chapter_id)
-    const out: Row[] = bound.map((item) => {
+    const included = memories.filter((item) => {
+      if (item.chapter_id) return true
+      return item.chapter_number !== null && item.chapter_number !== undefined
+    })
+    const sortedChapters = [...chapters].sort((a, b) => a.sort_order - b.sort_order)
+    const out: Row[] = included.map((item) => {
       const ch = item.chapter_id ? chapterById.get(item.chapter_id) : undefined
-      const sort = ch?.sort_order ?? item.chapter_number ?? 0
-      const title = ch?.title || '（章节已删或未知）'
+      let chapterSort: number
+      let chapterTitle: string
+      if (ch) {
+        chapterSort = ch.sort_order
+        const raw = ch.title || '（章节已删或未知）'
+        chapterTitle = stripLeadingChapterTitlePrefix(raw)
+      } else if (item.chapter_number === 0) {
+        chapterSort = -1
+        chapterTitle = '全书基线（未绑定章节）'
+      } else if (item.chapter_number != null && item.chapter_number > 0) {
+        const matched = sortedChapters.find(
+          (c) => displayChapterNumber(c.title, c.sort_order) === item.chapter_number,
+        )
+        chapterSort = matched ? matched.sort_order : item.chapter_number - 1
+        chapterTitle = matched
+          ? stripLeadingChapterTitlePrefix(matched.title || '未命名')
+          : `第${item.chapter_number}章（未关联写作章节）`
+      } else {
+        chapterSort = 9999
+        chapterTitle = '（未绑定章节）'
+      }
       return {
         ...item,
-        chapterSort: sort,
-        chapterTitle: title,
+        chapterSort,
+        chapterTitle,
       }
     })
+    // 倒序：最新写入的在上；同时间再按章节顺位倒序，保证顺序稳定
     out.sort((a, b) => {
-      if (a.chapterSort !== b.chapterSort) return a.chapterSort - b.chapterSort
       const ta = a.created_at ? new Date(a.created_at).getTime() : 0
       const tb = b.created_at ? new Date(b.created_at).getTime() : 0
-      return ta - tb
+      if (tb !== ta) return tb - ta
+      if (a.chapterSort !== b.chapterSort) return b.chapterSort - a.chapterSort
+      return String(b.id).localeCompare(String(a.id))
     })
     return out
-  }, [memories, chapterById])
+  }, [memories, chapterById, chapters])
 
   const filteredRows = useMemo(() => {
     let list = rows
-    if (chapterFilter !== 'all') {
-      list = list.filter((r) => r.chapter_id === chapterFilter)
+    if (chapterFilter === '__bootstrap__') {
+      list = list.filter((r) => !r.chapter_id && r.chapter_number === 0)
+    } else if (chapterFilter !== 'all') {
+      const sel = chapters.find((c) => c.id === chapterFilter)
+      list = list.filter((r) => {
+        if (r.chapter_id === chapterFilter) return true
+        if (!r.chapter_id && sel != null && r.chapter_number === displayChapterNumber(sel.title, sel.sort_order)) {
+          return true
+        }
+        return false
+      })
     }
     if (typeFilter !== 'all') {
       list = list.filter((r) => r.memory_type === typeFilter)
@@ -148,7 +210,7 @@ export default function DebriefListPage() {
       })
     }
     return list
-  }, [rows, chapterFilter, typeFilter, keyword])
+  }, [rows, chapterFilter, typeFilter, keyword, chapters])
 
   const memoryTypeOptions = useMemo(() => {
     const s = new Set<string>()
@@ -160,20 +222,29 @@ export default function DebriefListPage() {
     () => [
       {
         title: '章节',
-        width: 220,
+        width: 200,
         render: (_, r) => {
           const ch = r.chapter_id ? chapterById.get(r.chapter_id) : undefined
-          const n = ch ? ch.sort_order + 1 : (r.chapter_number ?? '—')
+          if (!r.chapter_id && r.chapter_number === 0) {
+            return <Typography.Text>开书记忆 · {r.chapterTitle}</Typography.Text>
+          }
+          const n = ch ? displayChapterNumber(ch.title, ch.sort_order) : (r.chapter_number ?? '—')
+          const emptyBody = ch ? isChapterBodyEmpty(ch) : false
           return (
             <Typography.Text>
               第{n}章 · {r.chapterTitle}
+              {emptyBody ? (
+                <Typography.Text type="secondary" style={{ marginLeft: 4 }}>
+                  （正文未录入）
+                </Typography.Text>
+              ) : null}
             </Typography.Text>
           )
         },
       },
       {
         title: '类型',
-        width: 100,
+        width: 88,
         dataIndex: 'memory_type',
         render: (t: string) => (
           <Tag color="purple">{MEMORY_TYPE_LABELS[t] ?? t}</Tag>
@@ -181,14 +252,14 @@ export default function DebriefListPage() {
       },
       {
         title: '标题',
-        width: 200,
+        width: 160,
         ellipsis: true,
         dataIndex: 'title',
         render: (t: string | undefined) => t || '—',
       },
       {
         title: '标签',
-        width: 180,
+        width: 140,
         render: (_, r) => (
           <Space size={[0, 4]} wrap>
             {(r.tags || []).length === 0 ? (
@@ -205,22 +276,23 @@ export default function DebriefListPage() {
         title: '内容',
         ellipsis: true,
         dataIndex: 'content',
+        minWidth: 640,
         render: (c: string) => (
-          <Typography.Text style={{ maxWidth: 420 }} ellipsis={{ tooltip: c }}>
+          <Typography.Text style={{ maxWidth: '100%', display: 'block' }} ellipsis={{ tooltip: c }}>
             {c}
           </Typography.Text>
         ),
       },
       {
         title: '时间',
-        width: 170,
+        width: 158,
         dataIndex: 'created_at',
         render: (v: string | undefined) =>
           v ? new Date(v).toLocaleString() : '—',
       },
       {
         title: '操作',
-        width: 120,
+        width: 100,
         fixed: 'right',
         render: (_, r) =>
           r.chapter_id ? (
@@ -261,7 +333,9 @@ export default function DebriefListPage() {
       </Space>
 
       <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
-        展示当前项目中绑定章节的记忆条目（与「小说管理」右侧「复盘记录」口径一致：含章节复盘提交与章内记忆提取）。
+        含已绑定写作章节的记忆（复盘提交、章内提取），以及开书时生成的记忆种子（未绑定章节，在列表中显示为「开书记忆」）。
+        章号与后端一致：优先取章节标题里的「第N章」，否则取正文列表顺位；若标题与顺位不一致，请勿混用二者理解进度。
+        标注「正文未录入」表示该章节尚无正文却已有记忆，多为自动生成或误绑，可在小说管理中核对。
       </Typography.Paragraph>
 
       <Card
@@ -276,11 +350,12 @@ export default function DebriefListPage() {
             loading={chaptersLoading}
             options={[
               { value: 'all', label: '全部章节' },
+              { value: '__bootstrap__', label: '开书记忆种子' },
               ...[...chapters]
                 .sort((a, b) => a.sort_order - b.sort_order)
                 .map((c) => ({
                   value: c.id,
-                  label: `第${c.sort_order + 1}章 · ${c.title || '未命名'}`,
+                  label: `第${displayChapterNumber(c.title, c.sort_order)}章 · ${stripLeadingChapterTitlePrefix(c.title || '未命名')}`,
                 })),
             ]}
           />
@@ -315,8 +390,8 @@ export default function DebriefListPage() {
             columns={columns}
             dataSource={filteredRows}
             pagination={{ pageSize: 25, showSizeChanger: true, pageSizeOptions: [25, 50, 100] }}
-            scroll={{ x: 1100, y: 'calc(100vh - 320px)' }}
-            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无绑定章节的记忆" /> }}
+            scroll={{ x: 1560, y: 'calc(100vh - 320px)' }}
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无记忆条目" /> }}
           />
         )}
       </Card>

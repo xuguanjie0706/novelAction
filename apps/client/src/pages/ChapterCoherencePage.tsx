@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import { Link } from 'react-router-dom'
 import { aiApi, chaptersApi, projectsApi } from '../api/client'
+import LlmAgentMenu from '../components/Layout/LlmAgentMenu'
+import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload } from '../store'
 import type { Chapter, Project } from '../types'
 
 type ModelProfile = 'local' | 'gemini'
@@ -57,7 +59,7 @@ export default function ChapterCoherencePage() {
   const [selectedProjectId, setSelectedProjectId] = useState('')
   const [chapters, setChapters] = useState<Chapter[]>([])
   const [selectedChapterIds, setSelectedChapterIds] = useState<string[]>([])
-  const [modelProfile, setModelProfile] = useState<ModelProfile>('local')
+  const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
   const [loadingProjects, setLoadingProjects] = useState(false)
   const [loadingChapters, setLoadingChapters] = useState(false)
   const [checking, setChecking] = useState(false)
@@ -122,7 +124,7 @@ export default function ChapterCoherencePage() {
     setSaving(true)
     try {
       const res = await aiApi.saveChapterCoherenceReport(selectedProjectId, {
-        model_profile: modelProfile,
+        model_profile: modelProfileFromRoute(aiBackendRoute),
         selected_chapter_ids: selectedChapterIds,
         result: result as Record<string, any>,
       })
@@ -152,7 +154,8 @@ export default function ChapterCoherencePage() {
     try {
       const res = await aiApi.chapterCoherenceCheck(selectedProjectId, {
         chapter_ids: selectedChapterIds,
-        model_profile: modelProfile,
+        model_profile: modelProfileFromRoute(aiBackendRoute),
+        ...routeLlmProviderPayload(aiBackendRoute),
       })
       const result = res.data as CoherenceReport
       setReport(result)
@@ -181,7 +184,8 @@ export default function ChapterCoherencePage() {
     try {
       const res = await aiApi.chapterCoherenceApplyPreview(selectedProjectId, {
         report_id: reportId,
-        model_profile: modelProfile,
+        model_profile: modelProfileFromRoute(aiBackendRoute),
+        ...routeLlmProviderPayload(aiBackendRoute),
       })
       const rows = (res.data as { revisions?: CoherenceApplyRevisionRow[] }).revisions ?? []
       setApplyPreviewRows(rows)
@@ -277,19 +281,12 @@ export default function ChapterCoherencePage() {
               </select>
             </div>
 
-            <div className="mt-4 text-sm font-semibold text-gray-800">2) 选择模型</div>
-            <div className="mt-2">
-              <select
-                value={modelProfile}
-                onChange={e => setModelProfile(e.target.value as ModelProfile)}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-amber-400"
-              >
-                <option value="local">本地模型</option>
-                <option value="gemini">远程模型（Gemini）</option>
-              </select>
+            <div className="mt-4 text-sm font-semibold text-gray-800">2) 模型 / 线路</div>
+            <div className="mt-2 w-full min-w-0">
+              <LlmAgentMenu />
             </div>
             <p className="mt-2 text-xs leading-relaxed text-gray-500">
-              根据历史评测修订多章正文时，章节较多建议选「远程模型」一次批量处理；本地模型将逐章调用。
+              与写作页、AI 助手共用全局线路；远程可指定具体 Provider。修订多章正文时远程线路通常一次批量处理，本地线路将逐章调用。
             </p>
 
             <button

@@ -12,6 +12,7 @@ import { collectAncestorIds, findChapterPlanByNumber } from '../utils/outlineNav
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import OutlineAIPanel from '../components/Outline/OutlineAIPanel'
+import { TargetWordsInput } from '../components/TargetWordsInput'
 import { collectExpandableNodes } from '../utils/outlineAiExpand'
 
 type RevisionSnapshotNode = {
@@ -305,18 +306,7 @@ function FullGenConfigModal({
             </div>
 
             {customMode ? (
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min={300000}
-                  max={5000000}
-                  step={100000}
-                  value={targetWords}
-                  onChange={e => setTargetWords(Number(e.target.value) || 1200000)}
-                  className="h-9 w-36 rounded-lg border border-gray-200 px-3 text-sm outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
-                />
-                <span className="text-xs text-gray-400">字</span>
-              </div>
+              <TargetWordsInput value={targetWords} onChange={setTargetWords} />
             ) : (
               <div className="grid grid-cols-4 gap-1.5">
                 {OUTLINE_WORD_OPTIONS.map(opt => (
@@ -513,6 +503,14 @@ export default function OutlinePage() {
   const [compareFilter, setCompareFilter] = useState<'all' | 'high' | 'structure' | 'content'>('high')
   const [selectedBookQualityRevisionId, setSelectedBookQualityRevisionId] = useState<string | null>(null)
   const [selectedVolumeQualityRevisionId, setSelectedVolumeQualityRevisionId] = useState<string | null>(null)
+  /** 单卷「修复本卷」：分数阈值、连续修复、最大轮数（写入队列 params） */
+  /** 与质检报告 / 时间线中的 score、总分 同刻度（0–100），非十分制 */
+  const [volumeRepairMinScore, setVolumeRepairMinScore] = useState(80)
+  const [volumeRepairContinuous, setVolumeRepairContinuous] = useState(true)
+  const [volumeRepairMaxRounds, setVolumeRepairMaxRounds] = useState(5)
+
+  const clampVolumeRepairRounds = (n: number) => Math.min(20, Math.max(1, Math.round(n)))
+  const clampVolumeRepairMinScore = (n: number) => Math.min(100, Math.max(0, Math.round(n)))
 
   const reload = () => {
     if (!projectId) return
@@ -716,9 +714,13 @@ export default function OutlinePage() {
       toast.error('请先选择要修复的卷')
       return
     }
+    const rounds = clampVolumeRepairRounds(volumeRepairMaxRounds)
+    const minScore = clampVolumeRepairMinScore(volumeRepairMinScore)
     const ok = window.confirm(
       scope === 'volume'
-        ? `将对「${volumeNode?.title ?? ''}」执行 Graph 修复，并自动保存修复前/后快照。继续？`
+        ? volumeRepairContinuous
+          ? `将对「${volumeNode?.title ?? ''}」执行连续 Graph 修复：最多 ${rounds} 轮；任一轮质检 status 为 pass，或总分 ≥ ${minScore}（与时间线 score 同为 0–100）时提前结束；每轮均保存修复前/后快照。继续？`
+          : `将对「${volumeNode?.title ?? ''}」执行单轮 Graph 修复，并自动保存修复前/后快照。继续？`
         : '将执行全书 Graph 修复，并自动保存修复前/后快照。继续？',
     )
     if (!ok) return
@@ -728,13 +730,24 @@ export default function OutlinePage() {
       type: 'outline_repair',
       projectId,
       label: scope === 'volume'
-        ? `单卷大纲修复：${volumeNode?.title ?? ''}`
+        ? volumeRepairContinuous
+          ? `单卷连续大纲修复（≤${rounds}轮·总分≥${minScore}或pass）：${volumeNode?.title ?? ''}`
+          : `单卷大纲修复：${volumeNode?.title ?? ''}`
         : scope === 'book'
           ? '全书大纲修复'
           : '大纲修复：单卷 + 全书',
       params: {
         scope,
         ...(volumeNode ? { volume_node_id: volumeNode.id } : {}),
+        ...(scope === 'volume'
+          ? volumeRepairContinuous
+            ? {
+              continuous_repair: true,
+              continuous_max_rounds: rounds,
+              continuous_min_score: minScore,
+            }
+            : { continuous_repair: false }
+          : {}),
         model_profile: modelProfile,
         ...routeLlmProviderPayload(route),
       },
@@ -1177,7 +1190,60 @@ export default function OutlinePage() {
                     : '请先在左侧选择一个卷（或该卷下的篇/章）'}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex max-w-[min(100vw-2rem,52rem)] flex-nowrap items-center justify-end gap-x-1.5 gap-y-0 overflow-x-auto pb-0.5 sm:max-w-none sm:gap-x-2">
+                <label
+                  className="flex shrink-0 items-center gap-0.5 text-[11px] text-gray-600 whitespace-nowrap"
+                  title="与下方时间线 score、质检报告总分相同刻度（0–100）"
+                >
+                  总分≥
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={volumeRepairMinScore}
+                    onChange={e => {
+                      const v = parseInt(e.target.value, 10)
+                      if (!Number.isNaN(v)) setVolumeRepairMinScore(clampVolumeRepairMinScore(v))
+                    }}
+                    className="w-11 rounded border border-gray-200 px-0.5 py-0.5 text-center text-[11px] text-gray-800 tabular-nums focus:border-rose-300 focus:outline-none focus:ring-1 focus:ring-rose-200"
+                  />
+                </label>
+                <span className="text-[11px] text-gray-600 whitespace-nowrap">连续</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={volumeRepairContinuous}
+                  onClick={() => setVolumeRepairContinuous(v => !v)}
+                  className={clsx(
+                    'relative inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-rose-300 focus:ring-offset-1',
+                    volumeRepairContinuous ? 'border-rose-300 bg-rose-400' : 'border-gray-200 bg-gray-200',
+                  )}
+                >
+                  <span
+                    className={clsx(
+                      'inline-block h-4 w-4 translate-x-1 rounded-full bg-white shadow transition-transform',
+                      volumeRepairContinuous && 'translate-x-5',
+                    )}
+                  />
+                </button>
+                {volumeRepairContinuous && (
+                  <label className="flex shrink-0 items-center gap-0.5 text-[11px] text-gray-600 whitespace-nowrap">
+                    最多
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={volumeRepairMaxRounds}
+                      onChange={e => {
+                        const v = parseInt(e.target.value, 10)
+                        if (!Number.isNaN(v)) setVolumeRepairMaxRounds(clampVolumeRepairRounds(v))
+                      }}
+                      className="w-10 rounded border border-gray-200 px-0.5 py-0.5 text-center text-[11px] text-gray-800 tabular-nums focus:border-rose-300 focus:outline-none focus:ring-1 focus:ring-rose-200"
+                    />
+                    轮
+                  </label>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -1188,7 +1254,7 @@ export default function OutlinePage() {
                     handleDispatchOutlineRepair('volume', selectedVolumeNode)
                   }}
                   disabled={!selectedVolumeNode}
-                  className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex shrink-0 items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 disabled:opacity-50 disabled:cursor-not-allowed sm:px-3"
                 >
                   <Sparkles size={12} />
                   修复本卷
@@ -1203,7 +1269,7 @@ export default function OutlinePage() {
                     handleDispatchOutlineQuality('volume', selectedVolumeNode)
                   }}
                   disabled={!selectedVolumeNode}
-                  className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg text-cyan-700 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex shrink-0 items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg text-cyan-700 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed sm:px-3"
                 >
                   <Check size={12} />
                   重新单卷质检

@@ -380,10 +380,11 @@ def chapter_coherence_apply_commit(
             applied.append({"chapter_id": cid, "skipped": True, "reason": "与当前正文相同"})
             continue
 
+        snap_wc = count_words(chapter.content or "")
         snap = ChapterVersion(
             chapter_id=chapter.id,
             content=chapter.content,
-            word_count=chapter.word_count,
+            word_count=snap_wc,
             note="连贯性评测修订前快照",
             is_auto=True,
         )

@@ -4,7 +4,7 @@ import { X, Zap, BookMarked, MessageSquare, SendHorizontal, Loader2 } from 'luci
 import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload, llmProviderIdFromRoute } from '../../store'
 import { aiApi } from '../../api/client'
 import { memoryDisplayChapter } from '../../utils/chapterNumber'
-import type { AiChatMessage, QualityReport } from '../../types'
+import type { AiChatMessage, Chapter, QualityReport } from '../../types'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 
@@ -20,6 +20,16 @@ const DIMENSION_LABELS: Record<string, string> = {
   pacing: '节奏',
   hooks: '悬念',
   outline_alignment: '大纲对齐',
+}
+
+function chapterPlainTextLen(ch: Chapter): number {
+  return (ch.content || '').replace(/<[^>]*>/g, '').replace(/\u00a0/g, ' ').trim().length
+}
+
+/** 参考上下文：正文有可用内容即可（不限定完稿/已审）；空占位不可选 */
+function isChapterReferenceSelectable(ch: Chapter): boolean {
+  if ((ch.word_count ?? 0) > 0) return true
+  return chapterPlainTextLen(ch) >= 10
 }
 
 export default function AIPanel({ projectId }: Props) {
@@ -49,6 +59,16 @@ export default function AIPanel({ projectId }: Props) {
     setChatRefChapterIds(prev => prev.filter(id => id !== activeChapterId))
   }, [activeChapterId])
 
+  useEffect(() => {
+    setChatRefChapterIds((prev) => {
+      const next = prev.filter((id) => {
+        const c = chapters.find((x) => x.id === id)
+        return c && isChapterReferenceSelectable(c)
+      })
+      return next.length === prev.length ? prev : next
+    })
+  }, [chapters])
+
   const chapterById = useMemo(() => {
     const m = new Map<string, { title: string; sort_order: number }>()
     for (const c of chapters) m.set(c.id, { title: c.title, sort_order: c.sort_order })
@@ -74,13 +94,20 @@ export default function AIPanel({ projectId }: Props) {
     return '项目'
   }, [activeChapter, chatContextType])
 
+  /** 参考章节：按正文列表顺位正序（第1章在上，依次向下） */
   const chaptersSortedForChat = useMemo(
-    () => [...chapters].sort((a, b) => a.sort_order - b.sort_order),
+    () =>
+      [...chapters].sort((a, b) => {
+        if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order
+        return String(a.id).localeCompare(String(b.id))
+      }),
     [chapters],
   )
 
   const toggleChatRefChapter = (id: string) => {
     if (id === activeChapterId) return
+    const target = chapters.find((c) => c.id === id)
+    if (!target || !isChapterReferenceSelectable(target)) return
     setChatRefChapterIds(prev => {
       if (prev.includes(id)) return prev.filter(x => x !== id)
       if (prev.length >= 8) {
@@ -382,29 +409,41 @@ export default function AIPanel({ projectId }: Props) {
                   )}
                 </summary>
                 <p className="border-t border-gray-100 px-3 py-1.5 text-[11px] leading-snug text-gray-500">
-                  勾选后，本轮对话会把对应章节的正文一并交给模型，便于对照伏笔、前后设定等。当前章已默认在上下文中，无需勾选。
+                  勾选后，本轮对话会把对应章节的正文一并交给模型。当前章已默认在上下文中，无需勾选。
+                  列表按正文顺序从前往后排列；只要该章已有正文（字数大于 0 或去掉格式后约有少量文字）即可勾选，空章节不可选。
                 </p>
                 <div className="max-h-36 space-y-0.5 overflow-y-auto border-t border-gray-100 px-2 py-2">
                   {chaptersSortedForChat.map(ch => {
                     const isCurrent = ch.id === activeChapterId
+                    const refOk = isChapterReferenceSelectable(ch)
                     const checked = chatRefChapterIds.includes(ch.id)
+                    const disabled = isCurrent || chatLoading || !refOk
+                    const blockReason = isCurrent
+                      ? '当前章节已带入对话'
+                      : !refOk
+                        ? '该章暂无正文'
+                        : undefined
                     return (
                       <label
                         key={ch.id}
+                        title={blockReason}
                         className={clsx(
                           'flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-white/90',
-                          isCurrent && 'cursor-not-allowed opacity-50',
+                          disabled && 'cursor-not-allowed opacity-55',
                         )}
                       >
                         <input
                           type="checkbox"
-                          className="shrink-0 rounded border-gray-300 text-amber-600 focus:ring-amber-400"
+                          className="shrink-0 rounded border-gray-300 text-amber-600 focus:ring-amber-400 disabled:opacity-40"
                           checked={checked}
-                          disabled={isCurrent || chatLoading}
+                          disabled={disabled}
                           onChange={() => toggleChatRefChapter(ch.id)}
                         />
                         <span className="min-w-0 truncate text-gray-700">{ch.title}</span>
                         {isCurrent && <span className="shrink-0 text-[10px] text-gray-400">当前</span>}
+                        {!isCurrent && !refOk && (
+                          <span className="shrink-0 text-[10px] text-gray-400">无正文</span>
+                        )}
                       </label>
                     )
                   })}

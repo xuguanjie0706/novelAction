@@ -11,6 +11,7 @@ import {
   Wand2,
 } from 'lucide-react'
 import type { Project } from '../../types'
+import { TargetWordsInput } from '../TargetWordsInput'
 import {
   HOME_INSPIRATION,
   HOME_RECOMMENDATIONS,
@@ -376,18 +377,11 @@ export function CreateProjectDialog({
             </div>
 
             {customMode ? (
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min={300000}
-                  max={5000000}
-                  step={100000}
-                  value={form.target_words}
-                  onChange={e => onChange(f => ({ ...f, target_words: Number(e.target.value) || 1200000 }))}
-                  className="h-9 w-36 rounded-lg border border-gray-200 px-3 text-sm outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
-                />
-                <span className="text-xs text-gray-400">字（约 {estChapters} 章 / {estVols} 卷）</span>
-              </div>
+              <TargetWordsInput
+                value={form.target_words}
+                onChange={n => onChange(f => ({ ...f, target_words: n }))}
+                hint={<>（约 {estChapters} 章 / {estVols} 卷）</>}
+              />
             ) : (
               <div className="grid grid-cols-4 gap-1.5">
                 {WORD_COUNT_OPTIONS.map(opt => (

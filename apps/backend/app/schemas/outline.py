@@ -14,6 +14,8 @@ class OutlineNodeCreate(BaseModel):
     conflict: Optional[str] = None
     sort_order: int = 0
     expected_words: Optional[int] = None
+    # 卷阶段：opening / rising / turning / dark_hour / climax / ending
+    phase: Optional[str] = None
     extra: dict = Field(default_factory=dict)
 
 
@@ -27,6 +29,7 @@ class OutlineNodeUpdate(BaseModel):
     sort_order: Optional[int] = None
     expected_words: Optional[int] = None
     reader_hook_score: Optional[int] = None
+    phase: Optional[str] = None
     extra: Optional[dict] = None
 
 
@@ -43,6 +46,7 @@ class OutlineNodeOut(BaseModel):
     sort_order: int
     expected_words: Optional[int]
     reader_hook_score: Optional[int]
+    phase: Optional[str] = None
     extra: dict = Field(default_factory=dict)
     children: List["OutlineNodeOut"] = Field(default_factory=list)
     created_at: datetime

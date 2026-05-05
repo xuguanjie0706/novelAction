@@ -1,6 +1,7 @@
 import re
 from typing import Optional
 
+from sqlalchemy import asc, desc, nullslast
 from sqlalchemy.orm import Session
 
 from app.models import Chapter, Foreshadow
@@ -105,6 +106,28 @@ def foreshadow_payload_from_index_item(item: dict, default_status: str = "open")
     }
 
 
+def pick_open_foreshadow_for_resolve(open_rows: list[Foreshadow], payload: dict) -> Optional[Foreshadow]:
+    """在无 F 编号时，将复盘条目与仍为 open 的全局伏笔对齐（跨章回收）。"""
+    if not open_rows or not payload:
+        return None
+    title = (payload.get("title") or "").strip()
+    if title:
+        for f in open_rows:
+            if (f.title or "").strip() == title:
+                return f
+    desc = (payload.get("description") or "").strip()
+    if not desc:
+        return None
+    for f in open_rows:
+        ft = (f.title or "").strip()
+        if len(ft) >= 6 and ft in desc:
+            return f
+        fd = (f.description or "").strip()
+        if len(fd) >= 12 and fd[:120] in desc:
+            return f
+    return None
+
+
 def sync_chapter_index_foreshadows(
     db: Session,
     project_id: str,
@@ -116,7 +139,7 @@ def sync_chapter_index_foreshadows(
     chapter_number = display_chapter_number(chapter.title, chapter.sort_order)
     reserved_codes: set[str] = set()
 
-    def find_existing(payload: dict) -> Optional[Foreshadow]:
+    def find_existing_laid(payload: dict) -> Optional[Foreshadow]:
         q = db.query(Foreshadow).filter(Foreshadow.project_id == project_id)
         if payload.get("code"):
             existing = q.filter(Foreshadow.code == payload["code"]).first()
@@ -127,11 +150,24 @@ def sync_chapter_index_foreshadows(
             Foreshadow.laid_chapter_id == chapter.id,
         ).first()
 
+    def find_existing_resolve(payload: dict) -> Optional[Foreshadow]:
+        q = db.query(Foreshadow).filter(Foreshadow.project_id == project_id)
+        if payload.get("code"):
+            existing = q.filter(Foreshadow.code == payload["code"]).first()
+            if existing:
+                return existing
+        open_rows = (
+            q.filter(Foreshadow.status == "open")
+            .order_by(desc(Foreshadow.priority), nullslast(asc(Foreshadow.laid_chapter_number)))
+            .all()
+        )
+        return pick_open_foreshadow_for_resolve(open_rows, payload)
+
     for item in chapter_index.actual_foreshadows_laid or []:
         payload = foreshadow_payload_from_index_item(item, default_status="open")
         if not payload:
             continue
-        existing = find_existing(payload)
+        existing = find_existing_laid(payload)
         if existing:
             existing.title = payload["title"]
             existing.description = payload["description"]
@@ -165,7 +201,7 @@ def sync_chapter_index_foreshadows(
         payload = foreshadow_payload_from_index_item(item, default_status="resolved")
         if not payload:
             continue
-        existing = find_existing(payload)
+        existing = find_existing_resolve(payload)
         if existing:
             existing.status = "resolved"
             existing.resolved_chapter_id = chapter.id

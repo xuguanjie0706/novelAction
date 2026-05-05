@@ -206,8 +206,7 @@ def _setting_extra_with_defaults(item: dict) -> dict:
 def _single_shot_prompt(logline: str, premise: str = "", target_words: int = 1_200_000) -> str:
     from app.services.outline_planning import words_to_plan
     plan = words_to_plan(target_words)
-    vol_min = max(3, plan["total_volumes"] - 1)
-    vol_max = plan["total_volumes"] + 1
+    n_volumes = plan["total_volumes"]
     total_chapters_hint = plan["total_chapters"]
     setting_blueprints = _setting_blueprints_for_prompt()
     return f"""根据以下创意，生成完整的小说初始化数据：
@@ -283,7 +282,7 @@ from_name, to_name, relation_type, description, intensity。
 - items 必须生成 {ITEM_MIN_TARGET}~{ITEM_MAX_TARGET} 个关键道具。
 - characters 必须生成 {CHARACTER_TARGET} 个：1 主角、3 核心配角、2 反派、2 师长/势力角色。
 - settings 必须生成 {len(GEMINI_SETTING_BLUEPRINTS)} 张，严格按以下【世界设定蓝图】顺序生成，不要少卡，不要合并卡。
-- outline 必须生成 {vol_min}~{vol_max} 卷，所有卷 planned_chapters 之和须尽量接近{total_chapters_hint}章。
+- outline 必须恰好生成 {n_volumes} 卷（由目标字数推算，不得增减），所有卷 planned_chapters 之和须尽量接近{total_chapters_hint}章。
 - memory 必须生成 10 条初始记忆库种子。
 
 世界设定蓝图：
@@ -340,6 +339,19 @@ class GenerationService:
         ctx = {"logline": logline, "premise": premise, "target_words": target_words}   # 上下文在步骤间传递
 
         try:
+            # Step 0 — 立项会议（题材定位 / 受众画像 / 爽点节奏）
+            # 必须放在所有设定生成之前：让"目标读者→爽点类型→打脸频率→情感线占比→节奏类型"
+            # 作为后续 11 步的全局约束，避免每步独立猜定位导致题材漂移。
+            yield _sse("step_start", step="positioning", label="召开立项会议（题材定位）...")
+            positioning = await self._gen_positioning(ctx)
+            ctx["positioning"] = positioning
+            yield _sse(
+                "step_done",
+                step="positioning",
+                count=1,
+                preview=positioning.get("selling_point", "")[:30] if positioning else "",
+            )
+
             # Step 1 — 项目基础
             yield _sse("step_start", step="project", label="生成项目基础信息...")
             project, ctx = await self._gen_project(ctx)
@@ -423,6 +435,7 @@ class GenerationService:
                 prompt,
                 max_tokens=settings.GEMINI_SINGLE_SHOT_MAX_TOKENS,
                 context={"operation": "bootstrap_single_shot"},
+                task="bootstrap.single_shot",
             )
             data = _parse_json(raw)
             data = await self._complete_single_shot_data(data, logline, premise)
@@ -437,6 +450,73 @@ class GenerationService:
             yield _sse("error", step="all", message=str(e))
 
     # ══════════════════════════════════════════════════════════
+    #  Step 0 — 立项会议（题材定位）
+    # ══════════════════════════════════════════════════════════
+
+    async def _gen_positioning(self, ctx: dict) -> dict:
+        """召开立项会议：从 logline 推出读者画像 / 爽点类型 / 打脸频率 / 情感线占比 / 节奏。
+
+        本步骤的产物 (``ctx['positioning']``) 必须在后续所有 Bootstrap 步骤的 prompt 中
+        作为全局约束注入，并在写章节 prompt 中作为「作品基本面」每章贯彻——这是网文
+        系统区别于"AI 自由发挥"的关键。
+
+        Returns:
+            dict 包含字段：
+              target_audience, tropes, reference_works, selling_point,
+              face_slap_pattern, emotional_arc, pace_type, taboo_lines。
+            字段缺失或解析失败时回退为空 dict（写章节路径会优雅降级）。
+        """
+        system = (
+            "你是有30年经验的网络小说总编辑。从一句话创意推导出可执行的题材定位，"
+            "只返回 JSON，不要任何解释文字。"
+        )
+        prompt = f"""创意：{ctx['logline']}
+作者补充：{(ctx.get('premise') or '')[:600] or '（未填写，请独立推导）'}
+
+请基于以上创意，做一次「立项会议」决策，返回 JSON：
+{{
+  "target_audience": "目标读者画像（性别/年龄段/平台调性，例：男频 18-30 岁起点向）",
+  "tropes": ["核心爽点类型 3-5 个，从：重生/系统/苟道/扮猪吃虎/无敌流/种田流/红尘炼心/打脸装x/团宠/收徒养崽/复仇/逆袭 等中筛选最契合的"],
+  "reference_works": ["3 部参照作品（同流派代表作，仅作基调参考，禁止抄袭）"],
+  "selling_point": "一句话卖点钩子（30 字内，必须能贴在书籍封面）",
+  "face_slap_pattern": "打脸节奏（例：每 3 章一小、每 10 章一中、每卷一大）",
+  "emotional_arc": "情感线占比（none/low/medium/high，对应 0%/10%/25%/40%）",
+  "pace_type": "节奏类型（fast=番茄式爽快 / medium=起点中速 / slow=猫腻式文笔）",
+  "taboo_lines": ["禁忌边界 2-4 条（禁止涉及的题材/主题）"]
+}}
+
+要求：
+1. tropes 必须互相协调，禁止"种田流+无敌流"这类自相矛盾组合
+2. reference_works 必须是同流派作品（不要跨流派类比）
+3. 若 logline 暗示女频题材，target_audience 不要硬扭成男频
+4. 严禁返回任何解释，仅返回 JSON。"""
+
+        raw = await self._call_with_retry(
+            system,
+            prompt,
+            max_tokens=2048,
+            task="bootstrap.positioning",
+        )
+        try:
+            data = _parse_json(raw)
+        except Exception:  # noqa: BLE001
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        # 字段兜底：缺失字段不丢，仅做最小清洗
+        for k in ("target_audience", "selling_point", "face_slap_pattern", "emotional_arc", "pace_type"):
+            v = data.get(k)
+            if not isinstance(v, str):
+                data[k] = ""
+        for k in ("tropes", "reference_works", "taboo_lines"):
+            v = data.get(k)
+            if not isinstance(v, list):
+                data[k] = []
+            else:
+                data[k] = [str(x).strip() for x in v if x and isinstance(x, (str, int, float))]
+        return data
+
+    # ══════════════════════════════════════════════════════════
     #  Step 1 — 项目基础信息
     # ══════════════════════════════════════════════════════════
 
@@ -444,8 +524,18 @@ class GenerationService:
         system = "你是网络小说策划专家。根据创意生成项目基础信息，只返回JSON。"
         tw = int(ctx.get("target_words") or 1_200_000)
         length_block = _book_length_constraints_for_prompt(tw)
+        # Step 0 立项定位作为全局约束注入：让 title/genre/premise 都贴合定位
+        positioning_block = ""
+        positioning = ctx.get("positioning") or {}
+        if isinstance(positioning, dict) and positioning:
+            positioning_block = (
+                "\n【立项定位（必须严格遵守）】\n"
+                + json.dumps(positioning, ensure_ascii=False, indent=2)
+                + "\n"
+            )
         prompt = f"""创意：{ctx['logline']}
 立意与类型：{ctx.get('premise')[:1500] if ctx.get('premise') else '（未填写，请自动提炼作品定位、主题命题、核心矛盾与禁忌边界）'}
+{positioning_block}
 {length_block}
 
 返回JSON：
@@ -471,18 +561,30 @@ class GenerationService:
             system,
             prompt,
             max_tokens=settings.GEMINI_SETTING_COMPLETION_MAX_TOKENS,
+            task="bootstrap.project",
         )
         data = _parse_json(raw)
 
-        project = Project(
+        # Step 0 立项定位写进 story_core.positioning，并把作品基本面 mirror 到
+        # Project.extra.positioning（如该列已迁移），写章节路径优先读后者。
+        story_core = data.get("story_core", {}) or {}
+        positioning = ctx.get("positioning") or {}
+        if isinstance(story_core, dict) and positioning:
+            story_core["positioning"] = positioning
+
+        project_kwargs = dict(
             title=data["title"],
             genre=data.get("genre", "玄幻"),
             logline=ctx["logline"],
             premise=data.get("premise") or ctx.get("premise") or "",
             world_overview=data.get("world_overview", ""),
-            story_core=data.get("story_core", {}),
+            story_core=story_core,
             target_words=int(ctx.get("target_words") or 1_200_000),
         )
+        # Project.extra 列在 main.py 的兼容迁移里新增；旧库未迁移时跳过赋值
+        if hasattr(Project, "extra") and positioning:
+            project_kwargs["extra"] = {"positioning": positioning}
+        project = Project(**project_kwargs)
         self.db.add(project)
         self.db.commit()
         self.db.refresh(project)
@@ -490,7 +592,7 @@ class GenerationService:
         ctx["project_title"] = project.title
         ctx["genre"] = project.genre
         ctx["world_overview"] = project.world_overview
-        ctx["story_core"] = data.get("story_core", {})
+        ctx["story_core"] = story_core
         ctx["premise"] = project.premise or ctx.get("premise") or ""
 
         return project, ctx
@@ -534,7 +636,7 @@ attitude_to_protagonist 只能是: friendly / hostile / neutral / subordinate / 
 必须涵盖主角阵营势力、核心反派势力、中立势力各至少1个。
 只返回JSON数组，不要说明文字。"""
 
-        raw = await self._call_with_retry(system, prompt)
+        raw = await self._call_with_retry(system, prompt, task="bootstrap.factions")
         data = _parse_json(raw)
         if not isinstance(data, list):
             data = data.get("factions", [])
@@ -604,7 +706,7 @@ grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
 选择对故事最重要的技能，包含主角核心战技和1~2个反派标志性技能。
 只返回JSON数组，不要说明文字。"""
 
-        raw = await self._call_with_retry(system, prompt)
+        raw = await self._call_with_retry(system, prompt, task="bootstrap.skills")
         data = _parse_json(raw)
         if not isinstance(data, list):
             data = data.get("skills", [])
@@ -672,7 +774,7 @@ status 只能是: intact / damaged / destroyed / lost / unknown
 选择对主线剧情影响最大的道具，包含主角核心战力道具和1~2个关键麦高芬道具。
 只返回JSON数组，不要说明文字。"""
 
-        raw = await self._call_with_retry(system, prompt)
+        raw = await self._call_with_retry(system, prompt, task="bootstrap.items")
         data = _parse_json(raw)
         if not isinstance(data, list):
             data = data.get("items", [])
@@ -849,7 +951,7 @@ status 只能是: intact / damaged / destroyed / lost / unknown
 6) 不要重复已有的境界体系或势力信息
 只返回JSON数组，不要解释。"""
 
-        raw = await self._call_with_retry(system, prompt)
+        raw = await self._call_with_retry(system, prompt, task="bootstrap.settings")
         data = _parse_json(raw)
         if not isinstance(data, list):
             data = data.get("settings", [])
@@ -905,7 +1007,7 @@ levels 至少包含 6 个境界，按强弱从低到高排列。
 protagonist_start_rank、protagonist_end_rank 必须是整数，且等于 levels 中某一层的 rank，禁止填境界中文名。
 只返回JSON数组，不要说明文字。"""
 
-        raw = await self._call_with_retry(system, prompt)
+        raw = await self._call_with_retry(system, prompt, task="bootstrap.power_systems")
         data = _parse_json(raw)
         if not isinstance(data, list):
             data = data.get("power_systems", [])
@@ -979,7 +1081,7 @@ status 只能是: planned / active
 必须有且只有1条 main，其余为其他类型。
 只返回JSON数组，不要说明文字。"""
 
-        raw = await self._call_with_retry(system, prompt)
+        raw = await self._call_with_retry(system, prompt, task="bootstrap.storylines")
         data = _parse_json(raw)
         if not isinstance(data, list):
             data = data.get("storylines", [])
@@ -1056,7 +1158,7 @@ character_tier 代表该人物在全书中的叙事层级，只能是以下4个�
 - background = 背景填充：丰富世界厚度与氛围，无强情节绑定
 请根据每个人物在故事中的实际定位严格判断，不要全部填 core。"""
 
-        raw = await self._call_with_retry(system, prompt)
+        raw = await self._call_with_retry(system, prompt, task="bootstrap.characters")
         data = _parse_json(raw)
         if not isinstance(data, list):
             data = data.get("characters", [])
@@ -1122,22 +1224,40 @@ character_tier 代表该人物在全书中的叙事层级，只能是以下4个�
         from app.services.outline_planning import words_to_plan
         tw = int(project.target_words or 1_200_000)
         plan = words_to_plan(tw)
-        vol_min = max(3, plan["total_volumes"] - 1)
-        vol_max = plan["total_volumes"] + 1
+        n_volumes = plan["total_volumes"]
         total_chapters_hint = plan["total_chapters"]
+
+        # Step 0 立项定位塞进卷规划：让卖点钩子 / 节奏类型 / 打脸频率落到卷级
+        positioning = ctx.get("positioning") or {}
+        positioning_block = ""
+        if isinstance(positioning, dict) and positioning:
+            positioning_block = (
+                "\n【立项定位（每卷必须贯彻）】\n"
+                + json.dumps(positioning, ensure_ascii=False)
+                + "\n"
+            )
 
         prompt = f"""小说：《{ctx['project_title']}》主角：{ctx['protagonist']}
 创意：{ctx['logline']}
 立意与类型：{ctx.get('premise', '')[:700] or '（未填写）'}
-设定摘要：{ctx['settings_summary']}{storyline_hint}
+设定摘要：{ctx['settings_summary']}{storyline_hint}{positioning_block}
 
 主线核心角色（固定卡司，非全书全部人物）：{', '.join(ctx.get('char_names', []))}
 ⚠️ 以上只是主线人物。每卷 summary/conflict 允许并鼓励提及未命名配角（如"某城守将""地下情报商""宗门长老"等职能角色），章节细化时会按需正式创建他们。
 
 根据故事规模规划卷级结构，返回JSON数组。
-【字数目标】全书目标：{tw:,}字，折合约{total_chapters_hint}章，建议{vol_min}~{vol_max}卷（勿少于{vol_min}卷）。
+【字数目标】全书目标：{tw:,}字，折合约{total_chapters_hint}章；**必须恰好 {n_volumes} 卷**（由目标字数推算，数组长度必须等于{n_volumes}；不得为多塞 phase 而加卷，卷少时合并阶段）。
 每卷 planned_chapters 只能填 30 或 60（过渡/尾卷可填30），不要其他数字。
 所有卷的 planned_chapters 之和须尽量接近{total_chapters_hint}章。
+
+【phase 阶段标记（必填，单值）】每卷必须从下列阶段中选一个，全书必须按以下顺序大致单调推进：
+  - opening    第一卷固定为开局期（新手村、立金手指、密集爽点）
+  - rising     起飞期（势力扩张、感情线接入），通常 1-2 卷
+  - turning    转折期（矛盾升级、代价兑现），通常 1 卷
+  - dark_hour  至暗期（虐主、节奏放缓），通常 1 卷或与 turning 合并
+  - climax     高潮期（伏笔回收、终战），通常 1 卷
+  - ending     收束期（最终卷，留下一卷悬念种子）
+若总卷数较少，可省略 dark_hour 或合并 turning + dark_hour，但 opening 与 climax 必须存在。
 
 [
   {{
@@ -1146,21 +1266,40 @@ character_tier 代表该人物在全书中的叙事层级，只能是以下4个�
     "summary": "本卷核心剧情概述，60字内",
     "hook": "本卷核心悬念：读者最想知道的问题",
     "conflict": "本卷主要矛盾冲突",
-    "planned_chapters": 60
+    "planned_chapters": 60,
+    "phase": "opening"
   }}
 ]
 只返回JSON数组，不要任何说明文字。"""
 
-        raw = await self._call_with_retry(system, prompt)
+        raw = await self._call_with_retry(
+            system,
+            prompt,
+            task="bootstrap.volumes",
+        )
         data = _parse_json(raw)
         if not isinstance(data, list):
             data = data.get("outline", data.get("volumes", []))
 
+        valid_phases = {"opening", "rising", "turning", "dark_hour", "climax", "ending"}
         results = []
         for i, vol in enumerate(data):
             planned = vol.get("planned_chapters", 60)
             if planned not in (30, 60):
                 planned = 60
+            phase_val = (vol.get("phase") or "").strip().lower() or None
+            if phase_val and phase_val not in valid_phases:
+                # 兜底：模型偶尔返回中文或其他写法，统一映射到默认轨迹
+                phase_val = None
+            # 若模型未返回 phase，按位置兜底：第一卷 opening、最后一卷 ending、其余 rising
+            if phase_val is None:
+                total_hint = max(1, len(data))
+                if i == 0:
+                    phase_val = "opening"
+                elif i == total_hint - 1:
+                    phase_val = "ending"
+                else:
+                    phase_val = "rising"
             node = OutlineNode(
                 project_id=project.id,
                 parent_id=None,
@@ -1170,7 +1309,8 @@ character_tier 代表该人物在全书中的叙事层级，只能是以下4个�
                 hook=vol.get("hook"),
                 conflict=vol.get("conflict"),
                 sort_order=vol.get("sort_order", i),
-                extra={"planned_chapters": planned},
+                phase=phase_val,
+                extra={"planned_chapters": planned, "phase": phase_val},
             )
             self.db.add(node)
             results.append(node)
@@ -1212,7 +1352,7 @@ character_tier 代表该人物在全书中的叙事层级，只能是以下4个�
 ]
 memory_type 只能是: event / character_state / foreshadow / setting / conflict"""
 
-        raw = await self._call_with_retry(system, prompt)
+        raw = await self._call_with_retry(system, prompt, task="bootstrap.memory")
         data = _parse_json(raw)
         if not isinstance(data, list):
             data = data.get("memory", [])
@@ -1258,7 +1398,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 intensity 为 1~10 的整数，只能使用上面列出的人物名"""
 
         try:
-            raw = await self._call_with_retry(system, prompt)
+            raw = await self._call_with_retry(system, prompt, task="bootstrap.relations")
             data = _parse_json(raw)
             if not isinstance(data, list):
                 data = data.get("relations", [])
@@ -1604,12 +1744,24 @@ role 只能是 protagonist / supporting / antagonist。
         prompt: str,
         max_retries: int = 2,
         max_tokens: int = 2048,
+        *,
+        task: Optional[str] = None,
     ) -> str:
-        """调用 AI，失败时最多重试 max_retries 次"""
+        """调用 AI，失败时最多重试 max_retries 次。
+
+        Args:
+            task: 任务名，传给 ``ai._call_ai`` 让其按任务级采样配置发起调用；
+                未传入时使用网关默认采样（与历史行为一致）。
+        """
         last_err = None
         for attempt in range(max_retries):
             try:
-                return await self.ai._call_ai(system, prompt, max_tokens=max_tokens)
+                return await self.ai._call_ai(
+                    system,
+                    prompt,
+                    max_tokens=max_tokens,
+                    task=task,
+                )
             except Exception as e:
                 last_err = e
                 continue

@@ -1,0 +1,153 @@
+"""
+LLM 任务级采样配置（temperature / top_p / penalty）。
+
+设计动机
+========
+此前 `_call_ai` / `_stream_ai` 仅传 `max_tokens`，所有任务（设定生成、章节起草、质检、复盘）
+共用同一组默认采样参数。结果是：
+  - 质检需要稳定 JSON 却用了高温 → 解析失败/字段抖动；
+  - 章节正文需要文采变化却被默认温度收敛 → 千篇一律的"AI 味"。
+
+本模块按任务类型给出 **保守而具备区分度的默认值**，调用方传入 `task` 字符串即可。
+未识别的任务回退 `default`，且整段配置允许被 `None` 覆盖以保持旧行为兼容。
+
+调用约定
+========
+- 数值型 prompt（境界数字、章节字数、JSON 解析）→ 低温度（0.2-0.4）+ 高 top_p；
+- 创意型 prompt（章节正文、复盘叙事）→ 高温度（0.85-0.95）+ presence_penalty 抑制重复；
+- 大纲规划/复盘提取等"半结构化任务"取中段（0.5-0.7）。
+
+只暴露纯 dict，不引入 SDK 类型，便于不同 OpenAI 兼容网关自适应（部分网关不接受
+`presence_penalty`，调用层会自动剔除空值）。
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+
+# 任务名 → 采样参数。键命名遵循「域.动作」便于扩展（例：bootstrap.settings、draft.chapter）。
+TASK_PROFILES: dict[str, dict] = {
+    # ── 章节正文（创意型，需要文采变化）────────────────────────────
+    "draft.chapter": {
+        "temperature": 0.9,
+        "top_p": 0.95,
+        "frequency_penalty": 0.4,
+        "presence_penalty": 0.3,
+    },
+    "draft.opening": {
+        # 开局期：钩子密度高，允许更跳脱
+        "temperature": 0.95,
+        "top_p": 0.95,
+        "frequency_penalty": 0.5,
+        "presence_penalty": 0.4,
+    },
+    "draft.climax": {
+        # 高潮期：情绪拉满
+        "temperature": 0.95,
+        "top_p": 0.97,
+        "frequency_penalty": 0.4,
+        "presence_penalty": 0.4,
+    },
+    "draft.dark_hour": {
+        # 至暗期：节奏放缓，需要克制不能太飘
+        "temperature": 0.75,
+        "top_p": 0.9,
+        "frequency_penalty": 0.3,
+        "presence_penalty": 0.2,
+    },
+    "suggest.stream": {
+        # 写作建议：偏自由，但不要走偏
+        "temperature": 0.8,
+        "top_p": 0.92,
+        "frequency_penalty": 0.3,
+        "presence_penalty": 0.2,
+    },
+    # ── Bootstrap / 设定生成（半结构化）────────────────────────────
+    "bootstrap.positioning": {
+        # 立项会议：需要理性收敛到清晰定位
+        "temperature": 0.55,
+        "top_p": 0.9,
+        "frequency_penalty": 0.1,
+        "presence_penalty": 0.0,
+    },
+    "bootstrap.project": {
+        "temperature": 0.6,
+        "top_p": 0.9,
+        "frequency_penalty": 0.1,
+        "presence_penalty": 0.0,
+    },
+    "bootstrap.settings": {
+        # 设定卡：偏稳定，避免胡乱发散
+        "temperature": 0.65,
+        "top_p": 0.9,
+        "frequency_penalty": 0.2,
+        "presence_penalty": 0.0,
+    },
+    "bootstrap.power_systems": {"temperature": 0.6, "top_p": 0.9},
+    "bootstrap.factions": {"temperature": 0.7, "top_p": 0.9},
+    "bootstrap.storylines": {"temperature": 0.7, "top_p": 0.9},
+    "bootstrap.characters": {"temperature": 0.75, "top_p": 0.9},
+    "bootstrap.skills": {"temperature": 0.65, "top_p": 0.9},
+    "bootstrap.items": {"temperature": 0.65, "top_p": 0.9},
+    "bootstrap.volumes": {"temperature": 0.6, "top_p": 0.9},
+    "bootstrap.memory": {"temperature": 0.6, "top_p": 0.9},
+    "bootstrap.relations": {"temperature": 0.65, "top_p": 0.9},
+    "bootstrap.single_shot": {
+        # 单次全量：偏稳定避免某一段失控影响整体
+        "temperature": 0.55,
+        "top_p": 0.9,
+        "frequency_penalty": 0.1,
+    },
+    # ── 大纲规划 ────────────────────────────────────────────────
+    "outline.full_structure": {"temperature": 0.55, "top_p": 0.9},
+    "outline.expand": {"temperature": 0.7, "top_p": 0.9},
+    "outline.character_gap": {"temperature": 0.55, "top_p": 0.9},
+    # ── 质检 / 一致性（要稳定 JSON 与可比较打分）────────────────
+    "quality.check": {
+        "temperature": 0.2,
+        "top_p": 0.8,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+    },
+    "quality.outline_check": {"temperature": 0.2, "top_p": 0.8},
+    "quality.coherence_check": {"temperature": 0.2, "top_p": 0.8},
+    "quality.coherence_apply": {"temperature": 0.4, "top_p": 0.85},
+    # ── 复盘 / 提取 ────────────────────────────────────────────
+    "debrief.auto": {"temperature": 0.3, "top_p": 0.85},
+    "debrief.extract_memory": {"temperature": 0.3, "top_p": 0.85},
+    "debrief.foreshadow": {"temperature": 0.3, "top_p": 0.85},
+    # ── 默认兜底 ───────────────────────────────────────────────
+    "default": {},  # 空 dict 表示走 LLM 默认采样，与历史行为一致
+}
+
+
+def resolve_task_profile(task: Optional[str]) -> dict:
+    """根据任务名返回采样参数；未识别返回空 dict。
+
+    返回的 dict 仅包含 temperature/top_p/frequency_penalty/presence_penalty 这四个
+    OpenAI 兼容协议公认字段，调用方在拼装 `chat.completions.create` 时直接 spread 即可。
+    空值字段会被调用方剔除，避免某些网关报错。
+    """
+    if not task:
+        return {}
+    profile = TASK_PROFILES.get(task)
+    if profile is None:
+        return {}
+    return {k: v for k, v in profile.items() if v is not None}
+
+
+def phase_to_draft_task(phase: Optional[str]) -> str:
+    """卷阶段（phase）→ 章节起草任务名映射。
+
+    阶段命名见 OutlineNode.phase 注释；未匹配则走通用 draft.chapter。
+    """
+    if not phase:
+        return "draft.chapter"
+    p = str(phase).strip().lower()
+    if p in ("opening", "开局期", "新手村"):
+        return "draft.opening"
+    if p in ("climax", "高潮期"):
+        return "draft.climax"
+    if p in ("dark_hour", "darkhour", "至暗期"):
+        return "draft.dark_hour"
+    return "draft.chapter"

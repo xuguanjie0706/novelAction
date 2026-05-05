@@ -57,3 +57,19 @@ class ChapterVersionDetailOut(ChapterVersionOut):
 
     class Config:
         from_attributes = True
+
+
+class ChapterVersionTimelineItemOut(BaseModel):
+    """项目维度：章节版本快照列表项（不含正文，用于时间线）"""
+
+    id: uuid.UUID
+    chapter_id: uuid.UUID
+    chapter_title: str
+    chapter_sort_order: int
+    word_count: Optional[int]
+    note: Optional[str]
+    is_auto: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

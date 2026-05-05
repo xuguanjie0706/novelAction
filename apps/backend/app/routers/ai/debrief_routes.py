@@ -389,6 +389,9 @@ def chapter_debrief(
                 extra={"first_appearance_chapter": chapter_num, "arc_scope": nc.arc_scope},
             )
             db.add(new_char)
+            # 先落库人物行，再挂审计日志，避免同一事务内 INSERT 顺序导致
+            # character_change_logs_character_id_fkey 校验失败。
+            db.flush()
 
             _tier_labels = {
                 "core": "核心长线", "arc": "弧线支柱",

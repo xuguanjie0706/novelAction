@@ -84,7 +84,7 @@ LLM_API_KEY=ollama
 
 ```
 章节写作请求
-  → apps/backend/app/routers/ai.py 聚合项目事实
+  → apps/backend/app/routers/ai/ 聚合项目事实
   → AIService.draft_assist_stream 组装长上下文 prompt
   → Gemini 流式生成正文 + 章节速查索引
   → 写完后 chapter-debrief / auto-extract 产出记忆与章节索引
@@ -229,6 +229,44 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 ---
 
+<span id="documentation-contract"></span>
+
+## 代码文档与注释契约（架构级）
+
+本节约束 **人机协作与长期演进**：注释不是为了「行数好看」，而是为了让 **公共 API、业务不变量、失败形态与边界** 在一屏内可被读懂；后续在本仓库改 **TypeScript/JavaScript** 时，以 **严格 JSDoc** 为默认交付标准。
+
+### 原则
+
+- **公共表面优先**：凡 `export` 的函数、类、hook、跨模块复用的类型辅助，必须具备可被 IDE 悬停展示的说明；私有实现若含非显而易见的算法或协议约束，在关键分支处补 **局部块注释**。
+- **意图优于复述**：不写「把 x 赋给 y」式废话；写 **为什么这样做**、**与哪条产品/架构决策对齐**、**违反时会怎样**。
+- **类型与文档分工**：TypeScript 类型表达「是什么」；JSDoc 补充 **业务语义、前置条件、副作用、与后端契约**（字段含义若与名称不完全一致，必须在 `@param` / 字段旁说明）。
+- **中英**：面向维护者与 AI 的注释以 **简体中文** 为主；已与对外 API/协议锁定的英文专有名词保持原文。
+
+### TypeScript / JavaScript（`apps/client`、`apps/frontend`）
+
+| 对象 | 最低要求 |
+|------|----------|
+| 模块 | 文件职责复杂或入口非自解释时，使用 `@file` / 顶部块说明 **职责与禁止事项**。 |
+| `export function` / `export const` 工厂 | 完整 JSDoc：`@param`、`@returns`；异步函数说明 rejection 场景或统一错误形态。 |
+| React 组件（命名导出） | 说明 **数据来源**（store / props / URL）、**关键副作用**（订阅、阻塞导航）；props 非直观时逐项 `@param`。 |
+| 自定义 Hook | 说明 **依赖**（哪些参数变化会触发重新请求）、**返回值契约**。 |
+| 复杂对象形态 | 使用 `@typedef` 或与 Zod/schema 同处的注释，标明 **不变量**（例如「永远与 project 维度同源」）。 |
+
+**推荐标签集合**（按需选用，避免堆砌）：`@param`、`@returns`、`@throws`、`@deprecated`、`@internal`（package 内边界）、`@example`（仅非平凡调用）、`@see`（指向规格或 OpenAPI）。
+
+**反面模式**：整文件无注释但大量魔法字符串；仅英文拼音缩写无释义；注释与实现漂移（改代码必改注释）。
+
+### Python（`apps/backend`）
+
+- **路由 handler、service 公共方法、复杂纯函数**：使用 **Google 风格 docstring**（`Args` / `Returns` / `Raises`）；与 TS 侧同一语义的概念用词保持一致，便于对读。
+- **AI 路由**：实现位于 `apps/backend/app/routers/ai/` 包；新端点在同一子模块内保持 **模块顶注释说明资源边界**。
+
+### 验收心智（给审查者与 Agent）
+
+新 PR / 新文件：公共 `export` 是否补齐 JSDoc；是否说明了 **错误与空状态** 的意图；是否在架构接缝（API、store、路由）有据可查的一句话 **设计动机**。
+
+---
+
 ## 开发建议（给未来的 Codex）
 
 1. **改 AI 调用**：只需动 `apps/backend/app/services/ai_service.py`，不要在 router 层直接调 openai
@@ -237,6 +275,7 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 4. **JSON 解析**：所有 `_call_ai` 的 JSON 解析用 `_parse_json()` 统一处理，不要 try/except 分散在各处
 5. **pgvector**：embedding 字段已在 `MemoryChunk` 预留，启用时需 `CREATE EXTENSION vector;` 并取消 `memory.py` 中的条件导入
 6. **改创作端 UI**：主要改 `apps/client/`；**管理后台**改 `apps/frontend/`（与 client 独立依赖与构建）
+7. **TS/JS 注释**：新增或修改公共 `export` 时，遵循上文「代码文档与注释契约」，使用 **严格 JSDoc**；后端对应模块用 Google 风格 docstring。
 
 ---
 

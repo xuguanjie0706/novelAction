@@ -5,6 +5,7 @@ import clsx from 'clsx'
 import { llmApi } from '../../api/client'
 import type { LlmOverview } from '../../types'
 import { llmProviderIdFromRoute, modelProfileFromRoute, routeLlmProviderPayload, useAppStore } from '../../store'
+import { TargetWordsInput } from '../TargetWordsInput'
 
 // ── 字数目标选项 ──────────────────────────────────────────────
 const WORD_OPTIONS = [
@@ -40,6 +41,8 @@ const STEP_DEFS: { key: StepKey; label: string }[] = [
 type Mode = 'sequential' | 'single_shot'
 
 const STEP_KEY_ALIAS: Record<string, StepKey> = {
+  // Step 0 立项会议：后端 step=positioning，UI 归到「项目基础信息」卡片（先后显示立项标签再进入生成项目）
+  positioning: 'project',
   // 世界观相关结构化子步骤归并到“世界观设定卡”
   power_systems: 'settings',
   factions: 'settings',
@@ -380,20 +383,16 @@ export default function GenerateWizard({ onClose }: Props) {
               </div>
 
               {customWordMode ? (
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min={300000}
-                    max={5000000}
-                    step={100000}
-                    value={targetWords}
-                    onChange={e => setTargetWords(Number(e.target.value) || 1200000)}
-                    className="h-9 w-36 rounded-xl border border-gray-200 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-                  />
-                  <span className="text-xs text-gray-400">
-                    字 · 约 {Math.round(targetWords / 2300)} 章 / {Math.ceil(Math.round(targetWords / 2300) / 60)} 卷
-                  </span>
-                </div>
+                <TargetWordsInput
+                  value={targetWords}
+                  onChange={setTargetWords}
+                  hint={
+                    <>
+                      · 约 {Math.round(targetWords / 2300)} 章 /{' '}
+                      {Math.ceil(Math.round(targetWords / 2300) / 60)} 卷
+                    </>
+                  }
+                />
               ) : (
                 <div className="grid grid-cols-4 gap-2">
                   {WORD_OPTIONS.map(opt => (

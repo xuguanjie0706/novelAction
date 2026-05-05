@@ -344,7 +344,8 @@ export interface GenTask {
   /** full_generate: { scale_hint: micro|auto|short|medium|long|epic, model_profile, clear_existing }
    *  batch_expand:  { nodes: [{id,title}], chapterCount, modelProfile }
    *  outline_quality: { scope: all|volume|book, volume_node_id?, model_profile, llm_provider_id }
-   *  outline_repair: { scope: all|volume|book, volume_node_id?, model_profile, llm_provider_id }
+   *  outline_repair: { scope, volume_node_id?, model_profile, llm_provider_id,
+   *    continuous_repair?, continuous_max_rounds?, continuous_min_score?（0–100，与质检总分同刻度） }
    *  continue_chapters: { chapterIds: string[], userPrompt, modelProfile, llm_provider_id }（单章时 chapterIds 可为 1 个）
    *  rewrite_chapter: { chapterId, userPrompt, modelProfile, llm_provider_id } */
   params: Record<string, any>

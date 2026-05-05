@@ -48,6 +48,17 @@ class OutlineNode(Base):
     pacing = Column(String(20), default="normal")
     # 节奏：slow/normal/fast/climax（快节奏、高潮章节特别标记）
 
+    # ── 卷阶段标记（OPEN / RISING / TURNING / DARK_HOUR / CLIMAX / ENDING）─
+    # 用于章节起草 prompt 模板分流与采样档位选择；章节级允许 override，但通常一卷一阶段。
+    # 取值约定（保持英文小写以便与 llm_task_profiles 映射）：
+    #   opening    —— 开局期 / 新手村（节奏紧、爽点密、字数偏短）
+    #   rising     —— 起飞期 / 扩张期
+    #   turning    —— 转折期
+    #   dark_hour  —— 至暗期
+    #   climax     —— 高潮期
+    #   ending     —— 收束期
+    phase = Column(String(20))
+
     # ── 实力里程碑（针对 chapter_plan / arc）────────────────────
     power_milestone = Column(Text)
     # 本节点内主角/重要人物的实力变化，如"主角突破斗者，习得天火流星拳"

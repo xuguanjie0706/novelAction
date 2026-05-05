@@ -162,6 +162,21 @@ export interface CoherenceApplyRevisionPreview {
   revised_plain_preview: string
 }
 
+export interface CoherenceApplyFocusSelection {
+  cross_chapter_issue_indices: number[]
+  suggestion_indices: number[]
+  chapter_evaluation_indices: number[]
+}
+
+export interface CoherenceApplyPreviewRequestBody {
+  report_id: string
+  model_profile: ModelProfile
+  llm_provider_id?: string
+  focus_keywords?: string[]
+  revision_note?: string
+  focus_selection?: CoherenceApplyFocusSelection
+}
+
 export interface CoherenceApplyPreviewResponse {
   report_id: string
   revisions: CoherenceApplyRevisionPreview[]

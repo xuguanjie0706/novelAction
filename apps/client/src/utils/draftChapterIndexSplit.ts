@@ -94,6 +94,33 @@ function splitForeshadowPieces(s: string): string[] {
 }
 
 /**
+ * 模型常把「伏笔回收」写在 **资产变动记录** 下的列表项里，例如：
+ * `* **伏笔回收**：F-016（……）。`
+ * 整行不会触发独立小节，需从行内抠出 F-xxx 供伏笔表同步。
+ */
+const INLINE_FS_RESOLVE_BOLD_RE =
+  /\*\*(?:伏笔回收|回收伏笔)\*\*\s*[:：]\s*(.+)$/
+const INLINE_FS_RESOLVE_PLAIN_RE = /(?:^|[\s*•-])(?:伏笔回收|回收伏笔)\s*[:：]\s*(.+)$/
+
+function extractInlineForeshadowResolveFromLine(line: string): string[] {
+  const t = line.trim()
+  if (!t) return []
+  const bold = INLINE_FS_RESOLVE_BOLD_RE.exec(t)
+  if (bold) {
+    const chunk = bold[1].trim()
+    return splitForeshadowPieces(chunk)
+  }
+  if (!/\*\*/.test(t)) {
+    const plain = INLINE_FS_RESOLVE_PLAIN_RE.exec(t)
+    if (plain) {
+      const chunk = plain[1].trim()
+      return splitForeshadowPieces(chunk)
+    }
+  }
+  return []
+}
+
+/**
  * 将模型输出的索引 Markdown 解析为 chapter_index；失败时返回 null（调用方可降级为 continuity_notes）。
  */
 export function parseChapterIndexMarkdown(md: string): ChapterIndexDebriefPayload | null {
@@ -166,6 +193,13 @@ export function parseChapterIndexMarkdown(md: string): ChapterIndexDebriefPayloa
     }
     if (!line.trim()) continue
     buffers[current].push(line)
+  }
+
+  // 从「资产变动」等 other 区的列表行里抽出 **伏笔回收**：… → 全局伏笔同步
+  for (const ol of buffers.other) {
+    for (const piece of extractInlineForeshadowResolveFromLine(ol)) {
+      buffers.foreshadows_resolved.push(piece)
+    }
   }
 
   const coreLines = buffers.core_events

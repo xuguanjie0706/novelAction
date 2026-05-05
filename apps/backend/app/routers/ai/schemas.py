@@ -55,10 +55,24 @@ class SaveChapterCoherenceReportRequest(BaseModel):
     result: dict
 
 
+class CoherenceApplyFocusSelection(BaseModel):
+    """与报告内数组下标对应；提供时仅将这些条目并入改正文提示（scores/summary 仍用完整报告）。"""
+
+    cross_chapter_issue_indices: List[int] = Field(default_factory=list)
+    suggestion_indices: List[int] = Field(default_factory=list)
+    chapter_evaluation_indices: List[int] = Field(default_factory=list)
+
+
 class ChapterCoherenceApplyPreviewRequest(BaseModel):
     report_id: UUID
     model_profile: Literal["local", "gemini"] = "local"
     llm_provider_id: Optional[UUID] = None
+    focus_keywords: Optional[List[str]] = Field(default=None, description="定向修订关键词，并入模型提示")
+    revision_note: Optional[str] = Field(default=None, description="作者补充说明")
+    focus_selection: Optional[CoherenceApplyFocusSelection] = Field(
+        default=None,
+        description="勾选子集；不传则使用报告内全部跨章问题、建议、章节点评",
+    )
 
 
 class CoherenceApplyRevisionItem(BaseModel):

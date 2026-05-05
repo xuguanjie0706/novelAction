@@ -5,21 +5,27 @@ import {
   Card,
   Checkbox,
   Col,
+  Divider,
+  Drawer,
   Empty,
+  Input,
   List,
   Modal,
   Row,
   Select,
   Space,
   Statistic,
+  Steps,
   Table,
   Tabs,
   Tag,
   Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
+import axios from 'axios'
 import { useNavigate } from 'react-router-dom'
-import { http } from '../api/http'
+import { ChapterSnapshotDiffView } from '../components/ReadingReview/ChapterSnapshotDiffView'
+import { http, LONG_RUNNING_HTTP_TIMEOUT_MS } from '../api/http'
 import type { LlmOverview } from '../types/llm'
 import type {
   ChapterCoherenceResult,
@@ -78,6 +84,12 @@ function stripHtmlToPlain(html: string, maxLen: number) {
   return `${t.slice(0, maxLen)}…`
 }
 
+function clipLabel(s: string, maxLen: number) {
+  const t = (s || '').replace(/\s+/g, ' ').trim()
+  if (t.length <= maxLen) return t
+  return `${t.slice(0, maxLen)}…`
+}
+
 type VersionPreviewPanel = {
   id: string
   chapterId: string
@@ -122,7 +134,15 @@ export default function ReadingReviewPage() {
   const [versionPreviewOpen, setVersionPreviewOpen] = useState(false)
   const [versionPreviewLoading, setVersionPreviewLoading] = useState(false)
   const [versionPreviewPanels, setVersionPreviewPanels] = useState<VersionPreviewPanel[]>([])
-  const [snapshotCompareIds, setSnapshotCompareIds] = useState<string[]>([])
+
+  const [lastSavedCoherenceReport, setLastSavedCoherenceReport] = useState<CoherenceReportRecord | null>(null)
+  const [revisionDrawerOpen, setRevisionDrawerOpen] = useState(false)
+  const [revisionReport, setRevisionReport] = useState<CoherenceReportRecord | null>(null)
+  const [focusIssueIndices, setFocusIssueIndices] = useState<number[]>([])
+  const [focusSuggIndices, setFocusSuggIndices] = useState<number[]>([])
+  const [focusEvalIndices, setFocusEvalIndices] = useState<number[]>([])
+  const [revisionKeywordTags, setRevisionKeywordTags] = useState<string[]>([])
+  const [revisionNote, setRevisionNote] = useState('')
 
   const loadProjects = useCallback(async () => {
     setLoading(true)
@@ -215,17 +235,32 @@ export default function ReadingReviewPage() {
     }
   }, [])
 
-  const openVersionSnapshotPreview = useCallback(
+  /** 修订前 = 本条快照；修订后 = 该章当前数据库正文（写入改正文之后可在此对照） */
+  const openSnapshotBeforeAfterPreview = useCallback(
     async (row: ChapterVersionTimelineItem) => {
       if (!projectId) return
       setVersionPreviewOpen(true)
       setVersionPreviewLoading(true)
       setVersionPreviewPanels([])
       try {
-        const panel = await fetchVersionPanel(projectId, row)
-        setVersionPreviewPanels([panel])
+        const [beforePanel, { data: ch }] = await Promise.all([
+          fetchVersionPanel(projectId, row),
+          http.get<ReviewChapter>(`/api/v1/projects/${projectId}/chapters/${row.chapter_id}`),
+        ])
+        const afterMeta =
+          ch.updated_at != null
+            ? `当前正文（数据库）· 最后更新 ${new Date(ch.updated_at).toLocaleString('zh-CN')}`
+            : '当前正文（数据库）'
+        const afterPanel: VersionPreviewPanel = {
+          id: `current-${row.chapter_id}`,
+          chapterId: row.chapter_id,
+          title: beforePanel.title,
+          meta: afterMeta,
+          plain: stripHtmlToPlain(ch.content || '', 120_000),
+        }
+        setVersionPreviewPanels([beforePanel, afterPanel])
       } catch {
-        message.error('加载快照正文失败')
+        message.error('加载改正前后对照失败')
         setVersionPreviewOpen(false)
       } finally {
         setVersionPreviewLoading(false)
@@ -233,51 +268,6 @@ export default function ReadingReviewPage() {
     },
     [fetchVersionPanel, message, projectId],
   )
-
-  const addComparePanelByVersionId = useCallback(
-    async (otherId: string) => {
-      if (!projectId || versionPreviewPanels.length !== 1) return
-      const row = versionTimelineRows.find((r) => r.id === otherId)
-      if (!row) return
-      setVersionPreviewLoading(true)
-      try {
-        const panel = await fetchVersionPanel(projectId, row)
-        setVersionPreviewPanels((prev) => [...prev, panel])
-      } catch {
-        message.error('加载对比快照失败')
-      } finally {
-        setVersionPreviewLoading(false)
-      }
-    },
-    [fetchVersionPanel, message, projectId, versionPreviewPanels.length, versionTimelineRows],
-  )
-
-  const openDualSnapshotPreviewFromTable = useCallback(async () => {
-    if (!projectId || snapshotCompareIds.length !== 2) return
-    const rowA = versionTimelineRows.find((r) => r.id === snapshotCompareIds[0])
-    const rowB = versionTimelineRows.find((r) => r.id === snapshotCompareIds[1])
-    if (!rowA || !rowB) {
-      message.warning('找不到所选快照')
-      return
-    }
-    setVersionPreviewOpen(true)
-    setVersionPreviewLoading(true)
-    setVersionPreviewPanels([])
-    try {
-      const [pa, pb] = await Promise.all([
-        fetchVersionPanel(projectId, rowA),
-        fetchVersionPanel(projectId, rowB),
-      ])
-      const ordered =
-        new Date(rowA.created_at).getTime() <= new Date(rowB.created_at).getTime() ? [pa, pb] : [pb, pa]
-      setVersionPreviewPanels(ordered)
-    } catch {
-      message.error('加载快照正文失败')
-      setVersionPreviewOpen(false)
-    } finally {
-      setVersionPreviewLoading(false)
-    }
-  }, [fetchVersionPanel, message, projectId, snapshotCompareIds, versionTimelineRows])
 
   useEffect(() => {
     void loadProjects()
@@ -289,30 +279,98 @@ export default function ReadingReviewPage() {
     : undefined
   const modelProfile: ModelProfile = selectedProviderId ? 'gemini' : 'local'
 
-  const runCoherenceApplyPreview = useCallback(
-    async (row: CoherenceReportRecord) => {
+  const openRevisionDrawer = useCallback((row: CoherenceReportRecord) => {
+    const res = row.result
+    const nIssues = (res.cross_chapter_issues ?? []).length
+    const nSugg = (res.suggestions ?? []).length
+    const nEval = (res.chapter_evaluations ?? []).length
+    setRevisionReport(row)
+    setFocusIssueIndices(Array.from({ length: nIssues }, (_, i) => i))
+    setFocusSuggIndices(Array.from({ length: nSugg }, (_, i) => i))
+    setFocusEvalIndices(Array.from({ length: nEval }, (_, i) => i))
+    setRevisionKeywordTags([])
+    setRevisionNote('')
+    setRevisionDrawerOpen(true)
+  }, [])
+
+  const runCoherenceApplyPreviewRequest = useCallback(
+    async (
+      body: {
+        report_id: string
+        model_profile: ModelProfile
+        llm_provider_id?: string
+        focus_keywords?: string[]
+        revision_note?: string
+        focus_selection?: {
+          cross_chapter_issue_indices: number[]
+          suggestion_indices: number[]
+          chapter_evaluation_indices: number[]
+        }
+      },
+      loadingKey?: string,
+    ) => {
       if (!projectId) return
-      setCoherenceApplyLoadingId(row.id)
+      if (loadingKey) setCoherenceApplyLoadingId(loadingKey)
       try {
         const { data } = await http.post<CoherenceApplyPreviewResponse>(
           `/api/v1/projects/${projectId}/ai/chapter-coherence-apply/preview`,
-          {
-            report_id: row.id,
-            model_profile: modelProfile,
-            llm_provider_id: selectedProviderId,
-          },
+          body,
+          { timeout: LONG_RUNNING_HTTP_TIMEOUT_MS },
         )
         setCoherenceApplyReportId(data.report_id)
         setCoherenceApplyRevisions(data.revisions ?? [])
         setCoherenceApplyModalOpen(true)
-      } catch {
-        message.error('修订预览生成失败')
+        setRevisionDrawerOpen(false)
+      } catch (e) {
+        const extra = axios.isAxiosError(e)
+          ? e.code === 'ECONNABORTED'
+            ? '（客户端等待超时；已延长至 15 分钟，若仍失败请缩小评测章节数）'
+            : `: ${String((e.response?.data as { detail?: unknown } | undefined)?.detail ?? e.message)}`
+          : ''
+        message.error(`修订预览生成失败${extra}`)
       } finally {
-        setCoherenceApplyLoadingId(null)
+        if (loadingKey) setCoherenceApplyLoadingId(null)
       }
     },
-    [message, modelProfile, projectId, selectedProviderId],
+    [message, projectId],
   )
+
+  const submitRevisionPreviewFromDrawer = useCallback(() => {
+    if (!revisionReport || !projectId) return
+    const n =
+      focusIssueIndices.length + focusSuggIndices.length + focusEvalIndices.length
+    if (n === 0) {
+      message.warning('请至少勾选一项评测条目（跨章风险、建议或章节点评）')
+      return
+    }
+    void runCoherenceApplyPreviewRequest(
+      {
+        report_id: revisionReport.id,
+        model_profile: modelProfile,
+        llm_provider_id: selectedProviderId,
+        focus_keywords: revisionKeywordTags.length ? revisionKeywordTags : undefined,
+        revision_note: revisionNote.trim() || undefined,
+        focus_selection: {
+          cross_chapter_issue_indices: focusIssueIndices,
+          suggestion_indices: focusSuggIndices,
+          chapter_evaluation_indices: focusEvalIndices,
+        },
+      },
+      revisionReport.id,
+    )
+  }, [
+    focusEvalIndices,
+    focusIssueIndices,
+    focusSuggIndices,
+    message,
+    modelProfile,
+    projectId,
+    revisionKeywordTags,
+    revisionNote,
+    revisionReport,
+    runCoherenceApplyPreviewRequest,
+    selectedProviderId,
+  ])
 
   const commitCoherenceApply = useCallback(async () => {
     if (!projectId || !coherenceApplyReportId) return
@@ -323,14 +381,20 @@ export default function ReadingReviewPage() {
     }
     setCoherenceApplyCommitting(true)
     try {
-      await http.post(`/api/v1/projects/${projectId}/ai/chapter-coherence-apply/commit`, {
-        report_id: coherenceApplyReportId,
-        revisions: payload.map((r) => ({ chapter_id: r.chapter_id, revised_content: r.revised_content })),
-      })
-      message.success('已写入正文。改正记录已保存，之后随时打开「历史记录」即可查看')
+      await http.post(
+        `/api/v1/projects/${projectId}/ai/chapter-coherence-apply/commit`,
+        {
+          report_id: coherenceApplyReportId,
+          revisions: payload.map((r) => ({ chapter_id: r.chapter_id, revised_content: r.revised_content })),
+        },
+        { timeout: LONG_RUNNING_HTTP_TIMEOUT_MS },
+      )
+      message.success('已写入正文。改正记录已保存，在「报告与修订」中可随时查看')
       setCoherenceApplyModalOpen(false)
       setCoherenceApplyRevisions([])
       setCoherenceApplyReportId(null)
+      setRevisionDrawerOpen(false)
+      setRevisionReport(null)
       await loadChapters(projectId)
       await loadHistory(projectId)
       await loadVersionTimeline(projectId)
@@ -350,7 +414,9 @@ export default function ReadingReviewPage() {
     setRangeEndId(undefined)
     setAnchorChapterId(undefined)
     setCompareIds([])
-    setSnapshotCompareIds([])
+    setLastSavedCoherenceReport(null)
+    setRevisionDrawerOpen(false)
+    setRevisionReport(null)
     void loadChapters(projectId)
     void loadHistory(projectId)
     void loadVersionTimeline(projectId)
@@ -373,12 +439,16 @@ export default function ReadingReviewPage() {
     }
     setQualityLoading(true)
     try {
-      const { data } = await http.post<QualityReport>(`/api/v1/projects/${projectId}/ai/quality-check`, {
-        chapter_id: selectedChapterId,
-        model_profile: modelProfile,
-        check_types: CHECK_TYPES,
-        llm_provider_id: selectedProviderId,
-      })
+      const { data } = await http.post<QualityReport>(
+        `/api/v1/projects/${projectId}/ai/quality-check`,
+        {
+          chapter_id: selectedChapterId,
+          model_profile: modelProfile,
+          check_types: CHECK_TYPES,
+          llm_provider_id: selectedProviderId,
+        },
+        { timeout: LONG_RUNNING_HTTP_TIMEOUT_MS },
+      )
       if (data.error) {
         setQualityReport(null)
         message.error(`单章评测失败：${data.error}`)
@@ -408,12 +478,13 @@ export default function ReadingReviewPage() {
           : `${selectedNos[0]}-${selectedNos[selectedNos.length - 1]}章`
         : `${selectedCoherenceChapters.length}章`
       const projectTitle = projects.find((p) => p.id === projectId)?.title || '未命名小说'
-      await http.post(`/api/v1/projects/${projectId}/ai/chapter-coherence-reports`, {
+      const { data: saved } = await http.post<CoherenceReportRecord>(`/api/v1/projects/${projectId}/ai/chapter-coherence-reports`, {
         name: `${projectTitle}｜${chapterRangeText}`,
         model_profile: modelProfile,
         selected_chapter_ids: selectedCoherenceChapters,
         result,
       })
+      setLastSavedCoherenceReport(saved)
       await loadHistory(projectId)
       message.success('连贯性评测完成并已自动保存')
     } catch {
@@ -433,6 +504,7 @@ export default function ReadingReviewPage() {
       return
     }
     setCoherenceLoading(true)
+    setLastSavedCoherenceReport(null)
     try {
       const { data } = await http.post<ChapterCoherenceResult>(
         `/api/v1/projects/${projectId}/ai/chapter-coherence-check`,
@@ -441,6 +513,7 @@ export default function ReadingReviewPage() {
           model_profile: modelProfile,
           llm_provider_id: selectedProviderId,
         },
+        { timeout: LONG_RUNNING_HTTP_TIMEOUT_MS },
       )
       if (data.error) {
         setCoherenceResult(null)
@@ -555,77 +628,57 @@ export default function ReadingReviewPage() {
     : '尚未选择章节'
 
   const versionPreviewModalTitle = useMemo(() => {
-    if (versionPreviewPanels.length === 0) return '快照正文'
-    if (versionPreviewPanels.length === 1) return `快照：${versionPreviewPanels[0].title}`
-    const [a, b] = versionPreviewPanels
-    if (a.title === b.title) return `快照对比 · ${a.title}`
-    return `快照对比 · ${a.title} / ${b.title}`
+    if (versionPreviewPanels.length >= 2) return `改正前后对照 · ${versionPreviewPanels[0].title}`
+    return '改正前后对照'
   }, [versionPreviewPanels])
 
-  const sameChapterCompareOptions = useMemo(() => {
-    if (versionPreviewPanels.length !== 1) return []
-    const chId = versionPreviewPanels[0].chapterId
-    const excludeId = versionPreviewPanels[0].id
-    return versionTimelineRows
-      .filter((r) => r.chapter_id === chId && r.id !== excludeId)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      .map((r) => {
-        const t = snapshotSourceTag(r.note, r.is_auto)
-        return {
-          value: r.id,
-          label: `${new Date(r.created_at).toLocaleString('zh-CN')} · ${t.text} · ${r.word_count ?? '-'} 字`,
-        }
-      })
-  }, [versionPreviewPanels, versionTimelineRows])
-
-  const versionPreviewPanelsForGrid = useMemo(() => {
-    if (versionPreviewLoading && versionPreviewPanels.length === 1) {
-      return [
-        ...versionPreviewPanels,
-        {
-          id: '__compare_loading__',
-          chapterId: '',
-          title: '对比快照',
-          meta: '',
-          plain: '',
-        },
-      ]
-    }
-    return versionPreviewPanels
-  }, [versionPreviewLoading, versionPreviewPanels])
+  const revisionStepIndex = coherenceApplyModalOpen ? 2 : revisionDrawerOpen ? 1 : 0
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          小说阅读评测
-        </Typography.Title>
-        <Space wrap>
-          <Select
-            style={{ minWidth: 240 }}
-            placeholder="选择项目"
-            options={projects.map((p) => ({ value: p.id, label: p.title }))}
-            value={projectId}
-            loading={loading}
-            onChange={setProjectId}
-          />
-          <Select<string>
-            style={{ width: 340 }}
-            value={selectedModelOption}
-            options={[
-              {
-                label: `本地 · ${llmOverview?.local_model_name ?? 'default'}`,
-                value: 'local',
-              },
-              ...(llmOverview?.remote_providers ?? []).map((p) => ({
-                label: `远程 · ${p.name} (${p.model_name})${p.is_default ? ' [默认]' : ''}`,
-                value: `provider:${p.id}`,
-              })),
-            ]}
-            onChange={setSelectedModelOption}
-          />
-        </Space>
-      </Space>
+      <Row gutter={[24, 12]} align="middle" justify="space-between" style={{ width: '100%' }}>
+        <Col flex="auto">
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            作品质量与修订
+          </Typography.Title>
+          <Typography.Paragraph type="secondary" style={{ margin: '6px 0 0', maxWidth: 720 }}>
+            先诊断再修订；改正文须预览差异后写入数据库，并自动保留修订前快照。定向修订中可勾选评测条目并补充关键词。
+          </Typography.Paragraph>
+        </Col>
+        <Col>
+          <Space wrap size="middle" align="center">
+            <Space align="center">
+              <Typography.Text type="secondary">项目</Typography.Text>
+              <Select
+                style={{ minWidth: 220 }}
+                placeholder="选择项目"
+                options={projects.map((p) => ({ value: p.id, label: p.title }))}
+                value={projectId}
+                loading={loading}
+                onChange={setProjectId}
+              />
+            </Space>
+            <Space align="center">
+              <Typography.Text type="secondary">模型</Typography.Text>
+              <Select<string>
+                style={{ width: 300 }}
+                value={selectedModelOption}
+                options={[
+                  {
+                    label: `本地 · ${llmOverview?.local_model_name ?? 'default'}`,
+                    value: 'local',
+                  },
+                  ...(llmOverview?.remote_providers ?? []).map((p) => ({
+                    label: `远程 · ${p.name} (${p.model_name})${p.is_default ? ' [默认]' : ''}`,
+                    value: `provider:${p.id}`,
+                  })),
+                ]}
+                onChange={setSelectedModelOption}
+              />
+            </Space>
+          </Space>
+        </Col>
+      </Row>
 
       <Tabs
         items={[
@@ -867,6 +920,45 @@ export default function ReadingReviewPage() {
                         )}
                       />
                     </Card>
+                    <Card title="修改建议">
+                      <List
+                        dataSource={coherenceResult.suggestions || []}
+                        locale={{ emptyText: '暂无建议' }}
+                        renderItem={(item) => <List.Item>{item}</List.Item>}
+                      />
+                    </Card>
+                    <Card title="章节点评（标题匹配）">
+                      <List
+                        dataSource={coherenceResult.chapter_evaluations || []}
+                        locale={{ emptyText: '暂无章节点评' }}
+                        renderItem={(item) => (
+                          <List.Item>
+                            <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                              <Space wrap>
+                                <Typography.Text strong>{item.chapter_title || item.chapter_id}</Typography.Text>
+                                <Tag>{item.risk_level}</Tag>
+                                <Typography.Text type="secondary">标题匹配 {item.title_match_score}</Typography.Text>
+                              </Space>
+                              <Typography.Text type="secondary">{item.title_match_comment}</Typography.Text>
+                            </Space>
+                          </List.Item>
+                        )}
+                      />
+                    </Card>
+                    <Card size="small" type="inner" title="正文修订">
+                      <Space direction="vertical" style={{ width: '100%' }}>
+                        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                          报告已自动保存后，可在此进入「定向修订」：勾选要落实的条目，并可选填关键词与补充说明，再生成预览。
+                        </Typography.Text>
+                        <Button
+                          type="primary"
+                          disabled={!lastSavedCoherenceReport}
+                          onClick={() => lastSavedCoherenceReport && openRevisionDrawer(lastSavedCoherenceReport)}
+                        >
+                          定向修订正文
+                        </Button>
+                      </Space>
+                    </Card>
                     <Card title="保存状态">
                       <Typography.Text type={saveLoading ? 'secondary' : 'success'}>
                         {saveLoading ? '正在自动保存报告...' : '评测结果已自动保存到历史记录'}
@@ -879,9 +971,19 @@ export default function ReadingReviewPage() {
           },
           {
             key: 'history',
-            label: '历史记录',
+            label: '报告与修订',
             children: (
               <Card>
+                <Steps
+                  size="small"
+                  current={revisionStepIndex}
+                  style={{ marginBottom: 20 }}
+                  items={[
+                    { title: '选择报告与条目', description: '勾选评测结论' },
+                    { title: '定向条件', description: '关键词与说明' },
+                    { title: '预览并写入', description: '确认后落库' },
+                  ]}
+                />
                 <Card
                   size="small"
                   style={{ marginBottom: 16 }}
@@ -892,7 +994,7 @@ export default function ReadingReviewPage() {
                   </Typography.Paragraph>
                   {applyTimeline.length === 0 ? (
                     <Typography.Text type="secondary">
-                      暂无记录。在下方报告中展开，点击「根据本评测改正文」→ 预览 →「写入数据库」后即会出现。
+                      暂无记录。在下方报告中展开，点击「定向修订」→ 勾选条目并生成预览 →「写入数据库」后即会出现。
                     </Typography.Text>
                   ) : (
                     <List
@@ -980,12 +1082,12 @@ export default function ReadingReviewPage() {
                             size="small"
                             loading={coherenceApplyLoadingId === row.id}
                             disabled={!!row.result?.error}
-                            onClick={() => void runCoherenceApplyPreview(row)}
+                            onClick={() => openRevisionDrawer(row)}
                           >
-                            根据本评测改正文
+                            定向修订
                           </Button>
                           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                            按评测结论做最小幅度修改并预览，确认后再写入数据库（自动打修订前快照）。
+                            勾选要落实的评测条目，可填关键词；按最小幅度修改并预览，确认后再写入数据库（自动打修订前快照）。
                           </Typography.Text>
                         </Space>
                         {(row.apply_events?.length ?? 0) > 0 ? (
@@ -1028,29 +1130,15 @@ export default function ReadingReviewPage() {
             key: 'body-snapshots',
             label: '正文快照',
             children: (
-              <Card
-                extra={
-                  <Button
-                    type="primary"
-                    disabled={snapshotCompareIds.length !== 2}
-                    onClick={() => void openDualSnapshotPreviewFromTable()}
-                  >
-                    并排预览选中的两份
-                  </Button>
-                }
-              >
+              <Card>
                 <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-                  此处按时间列出本书各章的「修订前快照」（连贯性评测在点「写入数据库」时会自动各落一条）。仅 LLM 预览而未写入时不会产生快照；写入后可在此对照改正前后。在表格中勾选两行后点「并排预览选中的两份」可左右对照；单份预览时也可在弹窗内选择同章另一快照加入对比。
+                  此处按时间列出本书各章的「修订前快照」（连贯性评测在点「写入数据库」时会自动各落一条）。点「改正前后对照」会并排展示：左侧为该快照保存时的正文（改正前），右侧为当前章节在数据库中的正文（改正后）；若尚未写入或正文未变，两侧可能相同。
                 </Typography.Paragraph>
                 <Table<ChapterVersionTimelineItem>
                   rowKey="id"
                   loading={versionTimelineLoading}
                   dataSource={versionTimelineRows}
                   pagination={{ pageSize: 15 }}
-                  rowSelection={{
-                    selectedRowKeys: snapshotCompareIds,
-                    onChange: (keys) => setSnapshotCompareIds((keys as string[]).slice(-2)),
-                  }}
                   locale={{ emptyText: <Empty description="暂无快照。写入改正文或手动保存版本后会出现" /> }}
                   columns={[
                     {
@@ -1088,8 +1176,8 @@ export default function ReadingReviewPage() {
                       width: 200,
                       render: (_, row) => (
                         <Space size="small">
-                          <Button type="link" size="small" onClick={() => void openVersionSnapshotPreview(row)}>
-                            预览快照正文
+                          <Button type="link" size="small" onClick={() => void openSnapshotBeforeAfterPreview(row)}>
+                            改正前后对照
                           </Button>
                           <Button
                             type="link"
@@ -1111,6 +1199,194 @@ export default function ReadingReviewPage() {
           },
         ]}
       />
+      <Drawer
+        title="定向修订"
+        width={560}
+        open={revisionDrawerOpen}
+        onClose={() => {
+          setRevisionDrawerOpen(false)
+          setRevisionReport(null)
+        }}
+        destroyOnClose
+        footer={
+          <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
+            <Button
+              onClick={() => {
+                setRevisionDrawerOpen(false)
+                setRevisionReport(null)
+              }}
+            >
+              关闭
+            </Button>
+            <Button
+              type="primary"
+              loading={!!revisionReport && coherenceApplyLoadingId === revisionReport.id}
+              disabled={!revisionReport || !!revisionReport.result?.error}
+              onClick={() => void submitRevisionPreviewFromDrawer()}
+            >
+              生成修订预览
+            </Button>
+          </Space>
+        }
+      >
+        {revisionReport ? (
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <div>
+              <Typography.Text strong>{revisionReport.name}</Typography.Text>
+              <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                {new Date(revisionReport.created_at).toLocaleString('zh-CN')}
+              </Typography.Text>
+            </div>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              {revisionReport.result?.summary || '暂无摘要'}
+            </Typography.Paragraph>
+            <Divider orientation="left" plain style={{ margin: '8px 0' }}>
+              勾选要纳入改正文的条目
+            </Divider>
+            <div>
+              <Space style={{ marginBottom: 8 }} wrap>
+                <Typography.Text strong>跨章风险</Typography.Text>
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ padding: 0, height: 'auto' }}
+                  onClick={() => {
+                    const n = (revisionReport.result.cross_chapter_issues ?? []).length
+                    setFocusIssueIndices(Array.from({ length: n }, (_, i) => i))
+                  }}
+                >
+                  全选
+                </Button>
+                <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={() => setFocusIssueIndices([])}>
+                  全不选
+                </Button>
+              </Space>
+              {(revisionReport.result.cross_chapter_issues ?? []).length === 0 ? (
+                <Typography.Text type="secondary">无</Typography.Text>
+              ) : (
+                <Checkbox.Group
+                  style={{ width: '100%' }}
+                  value={focusIssueIndices}
+                  onChange={(vals) => setFocusIssueIndices(vals as number[])}
+                >
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    {(revisionReport.result.cross_chapter_issues ?? []).map((item, idx) => (
+                      <Checkbox key={`iss-${idx}`} value={idx}>
+                        <Tag color={item.severity === 'warning' ? 'orange' : 'red'}>{item.type}</Tag>
+                        {clipLabel(item.description, 200)}
+                      </Checkbox>
+                    ))}
+                  </Space>
+                </Checkbox.Group>
+              )}
+            </div>
+            <div>
+              <Space style={{ marginBottom: 8 }} wrap>
+                <Typography.Text strong>修改建议</Typography.Text>
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ padding: 0, height: 'auto' }}
+                  onClick={() => {
+                    const n = (revisionReport.result.suggestions ?? []).length
+                    setFocusSuggIndices(Array.from({ length: n }, (_, i) => i))
+                  }}
+                >
+                  全选
+                </Button>
+                <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={() => setFocusSuggIndices([])}>
+                  全不选
+                </Button>
+              </Space>
+              {(revisionReport.result.suggestions ?? []).length === 0 ? (
+                <Typography.Text type="secondary">无</Typography.Text>
+              ) : (
+                <Checkbox.Group
+                  style={{ width: '100%' }}
+                  value={focusSuggIndices}
+                  onChange={(vals) => setFocusSuggIndices(vals as number[])}
+                >
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    {(revisionReport.result.suggestions ?? []).map((item, idx) => (
+                      <Checkbox key={`sug-${idx}`} value={idx}>
+                        {clipLabel(item, 220)}
+                      </Checkbox>
+                    ))}
+                  </Space>
+                </Checkbox.Group>
+              )}
+            </div>
+            <div>
+              <Space style={{ marginBottom: 8 }} wrap>
+                <Typography.Text strong>章节点评</Typography.Text>
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ padding: 0, height: 'auto' }}
+                  onClick={() => {
+                    const n = (revisionReport.result.chapter_evaluations ?? []).length
+                    setFocusEvalIndices(Array.from({ length: n }, (_, i) => i))
+                  }}
+                >
+                  全选
+                </Button>
+                <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={() => setFocusEvalIndices([])}>
+                  全不选
+                </Button>
+              </Space>
+              {(revisionReport.result.chapter_evaluations ?? []).length === 0 ? (
+                <Typography.Text type="secondary">无</Typography.Text>
+              ) : (
+                <Checkbox.Group
+                  style={{ width: '100%' }}
+                  value={focusEvalIndices}
+                  onChange={(vals) => setFocusEvalIndices(vals as number[])}
+                >
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    {(revisionReport.result.chapter_evaluations ?? []).map((ev, idx) => (
+                      <Checkbox key={`ev-${idx}`} value={idx}>
+                        <Space direction="vertical" size={0}>
+                          <Typography.Text strong>{ev.chapter_title || ev.chapter_id}</Typography.Text>
+                          <Typography.Text type="secondary">{clipLabel(ev.title_match_comment, 160)}</Typography.Text>
+                        </Space>
+                      </Checkbox>
+                    ))}
+                  </Space>
+                </Checkbox.Group>
+              )}
+            </div>
+            <Divider orientation="left" plain style={{ margin: '8px 0' }}>
+              定向条件（可选）
+            </Divider>
+            <div>
+              <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>
+                关键词（回车添加多个）
+              </Typography.Text>
+              <Select
+                mode="tags"
+                style={{ width: '100%' }}
+                placeholder="例如：时间线、某角色名、称谓统一"
+                value={revisionKeywordTags}
+                onChange={(v) => setRevisionKeywordTags(v)}
+                tokenSeparators={[',', '，', ';', '；']}
+              />
+            </div>
+            <div>
+              <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>
+                补充说明
+              </Typography.Text>
+              <Input.TextArea
+                rows={3}
+                value={revisionNote}
+                onChange={(e) => setRevisionNote(e.target.value)}
+                placeholder="可选：风格禁忌、优先处理的矛盾等（与评测冲突时以评测为准）"
+                maxLength={2000}
+                showCount
+              />
+            </div>
+          </Space>
+        ) : null}
+      </Drawer>
       <Modal
         title="连贯性修订预览"
         open={coherenceApplyModalOpen}
@@ -1118,6 +1394,7 @@ export default function ReadingReviewPage() {
           setCoherenceApplyModalOpen(false)
           setCoherenceApplyRevisions([])
           setCoherenceApplyReportId(null)
+          if (revisionReport) setRevisionDrawerOpen(true)
         }}
         width={720}
         footer={[
@@ -1127,9 +1404,10 @@ export default function ReadingReviewPage() {
               setCoherenceApplyModalOpen(false)
               setCoherenceApplyRevisions([])
               setCoherenceApplyReportId(null)
+              if (revisionReport) setRevisionDrawerOpen(true)
             }}
           >
-            取消
+            返回修改条件
           </Button>,
           <Button
             key="ok"
@@ -1199,74 +1477,19 @@ export default function ReadingReviewPage() {
             关闭
           </Button>,
         ]}
-        width={versionPreviewPanels.length >= 2 ? 1100 : 800}
+        width={1100}
       >
         {versionPreviewLoading && versionPreviewPanels.length === 0 ? (
           <Typography.Text type="secondary">加载中…</Typography.Text>
-        ) : (
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-            {versionPreviewPanels.length === 1 && sameChapterCompareOptions.length > 0 ? (
-              <Space wrap align="center">
-                <Typography.Text type="secondary">与另一快照对比：</Typography.Text>
-                <Select
-                  key={versionPreviewPanels[0]?.id ?? 'snap'}
-                  style={{ minWidth: 360 }}
-                  placeholder="选择同章的其他快照…"
-                  options={sameChapterCompareOptions}
-                  loading={versionPreviewLoading}
-                  disabled={versionPreviewLoading}
-                  onChange={(v) => {
-                    if (v) void addComparePanelByVersionId(v)
-                  }}
-                />
-              </Space>
-            ) : null}
-            {versionPreviewPanels.length === 2 ? (
-              <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={() => setVersionPreviewPanels((p) => p.slice(0, 1))}>
-                恢复为仅预览左侧一份
-              </Button>
-            ) : null}
-            <Row gutter={16}>
-              {versionPreviewPanelsForGrid.map((panel, idx) => {
-                const dual = versionPreviewPanelsForGrid.length >= 2
-                const isCompareLoading = panel.id === '__compare_loading__'
-                return (
-                  <Col key={panel.id} span={dual ? 12 : 24}>
-                    {dual ? (
-                      <Typography.Text strong style={{ display: 'block', marginBottom: 4 }}>
-                        {isCompareLoading ? '右侧（加载中）' : `${idx === 0 ? '左侧' : '右侧'} · ${panel.title}`}
-                      </Typography.Text>
-                    ) : null}
-                    {!isCompareLoading && panel.meta ? (
-                      <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
-                        {panel.meta}
-                      </Typography.Text>
-                    ) : null}
-                    <div
-                      style={{
-                        maxHeight: '65vh',
-                        overflow: 'auto',
-                        whiteSpace: 'pre-wrap',
-                        fontSize: 13,
-                        lineHeight: 1.6,
-                        padding: 12,
-                        background: idx === 1 ? '#fafafa' : '#fff',
-                        border: '1px solid #f0f0f0',
-                        borderRadius: 8,
-                      }}
-                    >
-                      {isCompareLoading ? (
-                        <Typography.Text type="secondary">加载对比中…</Typography.Text>
-                      ) : (
-                        panel.plain || '（空）'
-                      )}
-                    </div>
-                  </Col>
-                )
-              })}
-            </Row>
-          </Space>
-        )}
+        ) : versionPreviewPanels.length >= 2 ? (
+          <ChapterSnapshotDiffView
+            chapterTitle={versionPreviewPanels[0].title}
+            leftMeta={versionPreviewPanels[0].meta}
+            rightMeta={versionPreviewPanels[1].meta}
+            leftPlain={versionPreviewPanels[0].plain}
+            rightPlain={versionPreviewPanels[1].plain}
+          />
+        ) : null}
       </Modal>
     </Space>
   )

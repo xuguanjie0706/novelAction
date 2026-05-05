@@ -24,11 +24,33 @@ from app.routers.ai.schemas import (
     ChapterCoherenceApplyCommitRequest,
     ChapterCoherenceApplyPreviewRequest,
     ChapterCoherenceCheckRequest,
+    CoherenceApplyFocusSelection,
     SaveChapterCoherenceReportRequest,
 )
 from app.routers.ai.text_utils import plain_text, truncate
 
 router = APIRouter()
+
+
+def _merge_coherence_with_focus(result: dict, sel: CoherenceApplyFocusSelection) -> dict:
+    """用勾选下标过滤列表型字段；scores/summary 等保留原报告。"""
+    out = dict(result)
+    issues = list(result.get("cross_chapter_issues") or [])
+    sugs = list(result.get("suggestions") or [])
+    evs = list(result.get("chapter_evaluations") or [])
+
+    def pick(arr: list, indices: list) -> list:
+        idxs = sorted({i for i in indices if isinstance(i, int) and i >= 0})
+        return [arr[i] for i in idxs if i < len(arr)]
+
+    out["cross_chapter_issues"] = pick(issues, sel.cross_chapter_issue_indices)
+    out["suggestions"] = pick(sugs, sel.suggestion_indices)
+    out["chapter_evaluations"] = pick(evs, sel.chapter_evaluation_indices)
+    return out
+
+
+def _count_focus_items(d: dict) -> int:
+    return len(d.get("cross_chapter_issues") or []) + len(d.get("suggestions") or []) + len(d.get("chapter_evaluations") or [])
 
 
 @router.post("/chapter-coherence-check")
@@ -264,6 +286,12 @@ async def chapter_coherence_apply_preview(
     if result.get("error"):
         raise HTTPException(400, "该评测记录解析失败，无法用于修订正文")
 
+    coherence_for_apply = result
+    if req.focus_selection is not None:
+        coherence_for_apply = _merge_coherence_with_focus(result, req.focus_selection)
+        if _count_focus_items(coherence_for_apply) == 0:
+            raise HTTPException(400, "请至少勾选一项评测条目（跨章风险、建议或章节点评）再生成修订预览")
+
     raw_ids = report.selected_chapter_ids or []
     if len(raw_ids) < 2:
         raise HTTPException(400, "该评测记录章节数不足")
@@ -302,8 +330,10 @@ async def chapter_coherence_apply_preview(
     try:
         rows = await svc.apply_coherence_revisions(
             project_title=project.title,
-            coherence=result,
+            coherence=coherence_for_apply,
             chapters=payload,
+            focus_keywords=req.focus_keywords,
+            revision_note=req.revision_note,
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e

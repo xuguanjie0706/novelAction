@@ -495,7 +495,12 @@ class AIService:
     "按章节顺序给出可执行修改建议"
   ],
   "summary": "一句话总评"
-}}"""
+}}
+
+硬性数量要求（在真实问题规模允许的前提下尽量满足，勿用少量笼统条目敷衍）：
+- cross_chapter_issues：有明显问题时**至少 6 条**、问题多时可到 **20 条**；不要无故停在 4 条左右。
+- suggestions：**至少 8 条、至多 18 条**，逐条具体可执行；按章节顺序组织，覆盖标题兑现、承接、人物状态、时间线、伏笔、节奏与信息密度；禁止把多条合并成一句空话。
+- chapter_evaluations：须覆盖**每一章**一条，字段填完整。"""
 
         response = await self._call_ai(
             system,
@@ -555,12 +560,36 @@ class AIService:
             text = text[start:]
         return json.loads(text)
 
+    def _author_directives_block(
+        self,
+        focus_keywords: Optional[List[str]],
+        revision_note: Optional[str],
+    ) -> str:
+        parts: List[str] = []
+        if focus_keywords:
+            kw = [str(k).strip() for k in focus_keywords if str(k).strip()]
+            if kw:
+                parts.append("【作者关键词侧重】" + "、".join(kw[:40]))
+        note = (revision_note or "").strip()
+        if note:
+            parts.append("【作者补充说明】" + note[:2500])
+        if not parts:
+            return ""
+        return (
+            "\n\n"
+            + "\n".join(parts)
+            + "\n\n约束：若作者说明与上文「连贯性评测结果」中的具体诊断冲突，以评测结论为准；"
+            "作者说明仅用于调整优先级、措辞与侧重点。\n"
+        )
+
     async def apply_coherence_revisions(
         self,
         *,
         project_title: str,
         coherence: dict,
         chapters: List[dict],
+        focus_keywords: Optional[List[str]] = None,
+        revision_note: Optional[str] = None,
     ) -> List[dict]:
         """
         根据连贯性评测结论，对所选章节正文做最小幅度修订（非整章重写）。
@@ -573,6 +602,7 @@ class AIService:
         slim = self._slim_coherence_for_apply(coherence or {})
         coherence_json = json.dumps(slim, ensure_ascii=False)
         coherence_json = self._clip_context(coherence_json, 10000, 56000)
+        author_block = self._author_directives_block(focus_keywords, revision_note)
 
         system = (
             "你是资深网文编辑，只根据给定的「连贯性评测」结论修订正文。"
@@ -594,7 +624,7 @@ class AIService:
 
 【连贯性评测结果】（JSON）
 {coherence_json}
-
+{author_block}
 【待处理章节正文】（按顺序，与评测所选章节一致）
 {joined}
 
@@ -673,7 +703,7 @@ class AIService:
 
 【连贯性评测结果】（JSON）
 {coherence_json}
-
+{author_block}
 【相邻上下文（纯文本摘录，仅供衔接判断）】
 上一章结尾：{prev_tail or "（无）"}
 下一章开头：{next_head or "（无）"}

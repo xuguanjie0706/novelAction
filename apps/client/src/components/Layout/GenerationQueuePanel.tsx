@@ -840,7 +840,11 @@ async function runContinueChapters(
         try {
           const parsed = parseChapterIndexMarkdown(indexMarkdown)
           const chapter_index = parsed ?? fallbackChapterIndexFromRawMarkdown(indexMarkdown)
-          await aiApi.chapterDebrief(projectId, { chapter_id: chapterId, chapter_index })
+          await aiApi.chapterDebrief(projectId, {
+            chapter_id: chapterId,
+            chapter_index,
+            apply_source: 'queue_auto',
+          })
           indexPersistedFromDraft = true
           pushProgress({ step: phaseStep('index'), label: '✓ 索引已从流式稿末解析入库', done: true, error: false })
         } catch (e: any) {
@@ -887,6 +891,9 @@ async function runContinueChapters(
           llmProviderId,
           { omitChapterIndex: indexPersistedFromDraft },
         )
+        if (applied.debriefPreview && typeof applied.debriefPreview === 'object') {
+          useAppStore.getState().setQueueDebriefUiSnapshot(chapterId, applied.debriefPreview as Record<string, unknown>)
+        }
         markChapterDebriefCommitted(chapterId)
         const indexLabel =
           applied.chapterIndexSaved || indexPersistedFromDraft ? 'ChapterIndex 已写入' : 'ChapterIndex 未更新'
@@ -1037,7 +1044,11 @@ async function runRewriteChapter(
       try {
         const parsed = parseChapterIndexMarkdown(indexMarkdown)
         const chapter_index = parsed ?? fallbackChapterIndexFromRawMarkdown(indexMarkdown)
-        await aiApi.chapterDebrief(projectId, { chapter_id: chapterId, chapter_index })
+        await aiApi.chapterDebrief(projectId, {
+          chapter_id: chapterId,
+          chapter_index,
+          apply_source: 'queue_auto',
+        })
         indexPersistedFromDraft = true
         pushProgress({ step: 'index', label: '✓ 索引已从流式稿末解析入库', done: true, error: false })
       } catch (e: any) {
@@ -1084,6 +1095,9 @@ async function runRewriteChapter(
         llmProviderId,
         { omitChapterIndex: indexPersistedFromDraft },
       )
+      if (applied.debriefPreview && typeof applied.debriefPreview === 'object') {
+        useAppStore.getState().setQueueDebriefUiSnapshot(chapterId, applied.debriefPreview as Record<string, unknown>)
+      }
       markChapterDebriefCommitted(chapterId)
       pushProgress({
         step: 'debrief',

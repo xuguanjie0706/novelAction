@@ -78,6 +78,14 @@ function stripHtmlToPlain(html: string, maxLen: number) {
   return `${t.slice(0, maxLen)}…`
 }
 
+type VersionPreviewPanel = {
+  id: string
+  chapterId: string
+  title: string
+  meta: string
+  plain: string
+}
+
 export default function ReadingReviewPage() {
   const navigate = useNavigate()
   const { message } = App.useApp()
@@ -113,8 +121,8 @@ export default function ReadingReviewPage() {
   const [versionTimelineRows, setVersionTimelineRows] = useState<ChapterVersionTimelineItem[]>([])
   const [versionPreviewOpen, setVersionPreviewOpen] = useState(false)
   const [versionPreviewLoading, setVersionPreviewLoading] = useState(false)
-  const [versionPreviewTitle, setVersionPreviewTitle] = useState('')
-  const [versionPreviewPlain, setVersionPreviewPlain] = useState('')
+  const [versionPreviewPanels, setVersionPreviewPanels] = useState<VersionPreviewPanel[]>([])
+  const [snapshotCompareIds, setSnapshotCompareIds] = useState<string[]>([])
 
   const loadProjects = useCallback(async () => {
     setLoading(true)
@@ -192,18 +200,30 @@ export default function ReadingReviewPage() {
     [message],
   )
 
+  const fetchVersionPanel = useCallback(async (pid: string, row: ChapterVersionTimelineItem): Promise<VersionPreviewPanel> => {
+    const { data } = await http.get<ChapterVersionDetail>(
+      `/api/v1/projects/${pid}/chapters/${row.chapter_id}/versions/${row.id}`,
+    )
+    const t = snapshotSourceTag(row.note, row.is_auto)
+    const meta = `${new Date(row.created_at).toLocaleString('zh-CN')} · ${t.text}`
+    return {
+      id: row.id,
+      chapterId: row.chapter_id,
+      title: `第${row.chapter_sort_order + 1}章 · ${row.chapter_title || '未命名'}`,
+      meta,
+      plain: stripHtmlToPlain(data.content || '', 120_000),
+    }
+  }, [])
+
   const openVersionSnapshotPreview = useCallback(
     async (row: ChapterVersionTimelineItem) => {
       if (!projectId) return
       setVersionPreviewOpen(true)
       setVersionPreviewLoading(true)
-      setVersionPreviewTitle(`第${row.chapter_sort_order + 1}章 · ${row.chapter_title || '未命名'}`)
-      setVersionPreviewPlain('')
+      setVersionPreviewPanels([])
       try {
-        const { data } = await http.get<ChapterVersionDetail>(
-          `/api/v1/projects/${projectId}/chapters/${row.chapter_id}/versions/${row.id}`,
-        )
-        setVersionPreviewPlain(stripHtmlToPlain(data.content || '', 120_000))
+        const panel = await fetchVersionPanel(projectId, row)
+        setVersionPreviewPanels([panel])
       } catch {
         message.error('加载快照正文失败')
         setVersionPreviewOpen(false)
@@ -211,8 +231,53 @@ export default function ReadingReviewPage() {
         setVersionPreviewLoading(false)
       }
     },
-    [message, projectId],
+    [fetchVersionPanel, message, projectId],
   )
+
+  const addComparePanelByVersionId = useCallback(
+    async (otherId: string) => {
+      if (!projectId || versionPreviewPanels.length !== 1) return
+      const row = versionTimelineRows.find((r) => r.id === otherId)
+      if (!row) return
+      setVersionPreviewLoading(true)
+      try {
+        const panel = await fetchVersionPanel(projectId, row)
+        setVersionPreviewPanels((prev) => [...prev, panel])
+      } catch {
+        message.error('加载对比快照失败')
+      } finally {
+        setVersionPreviewLoading(false)
+      }
+    },
+    [fetchVersionPanel, message, projectId, versionPreviewPanels.length, versionTimelineRows],
+  )
+
+  const openDualSnapshotPreviewFromTable = useCallback(async () => {
+    if (!projectId || snapshotCompareIds.length !== 2) return
+    const rowA = versionTimelineRows.find((r) => r.id === snapshotCompareIds[0])
+    const rowB = versionTimelineRows.find((r) => r.id === snapshotCompareIds[1])
+    if (!rowA || !rowB) {
+      message.warning('找不到所选快照')
+      return
+    }
+    setVersionPreviewOpen(true)
+    setVersionPreviewLoading(true)
+    setVersionPreviewPanels([])
+    try {
+      const [pa, pb] = await Promise.all([
+        fetchVersionPanel(projectId, rowA),
+        fetchVersionPanel(projectId, rowB),
+      ])
+      const ordered =
+        new Date(rowA.created_at).getTime() <= new Date(rowB.created_at).getTime() ? [pa, pb] : [pb, pa]
+      setVersionPreviewPanels(ordered)
+    } catch {
+      message.error('加载快照正文失败')
+      setVersionPreviewOpen(false)
+    } finally {
+      setVersionPreviewLoading(false)
+    }
+  }, [fetchVersionPanel, message, projectId, snapshotCompareIds, versionTimelineRows])
 
   useEffect(() => {
     void loadProjects()
@@ -285,6 +350,7 @@ export default function ReadingReviewPage() {
     setRangeEndId(undefined)
     setAnchorChapterId(undefined)
     setCompareIds([])
+    setSnapshotCompareIds([])
     void loadChapters(projectId)
     void loadHistory(projectId)
     void loadVersionTimeline(projectId)
@@ -487,6 +553,47 @@ export default function ReadingReviewPage() {
   const selectedRangeHint = selectedCoherenceChapterNos.length
     ? `第${selectedCoherenceChapterNos[0]}章 ~ 第${selectedCoherenceChapterNos[selectedCoherenceChapterNos.length - 1]}章`
     : '尚未选择章节'
+
+  const versionPreviewModalTitle = useMemo(() => {
+    if (versionPreviewPanels.length === 0) return '快照正文'
+    if (versionPreviewPanels.length === 1) return `快照：${versionPreviewPanels[0].title}`
+    const [a, b] = versionPreviewPanels
+    if (a.title === b.title) return `快照对比 · ${a.title}`
+    return `快照对比 · ${a.title} / ${b.title}`
+  }, [versionPreviewPanels])
+
+  const sameChapterCompareOptions = useMemo(() => {
+    if (versionPreviewPanels.length !== 1) return []
+    const chId = versionPreviewPanels[0].chapterId
+    const excludeId = versionPreviewPanels[0].id
+    return versionTimelineRows
+      .filter((r) => r.chapter_id === chId && r.id !== excludeId)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .map((r) => {
+        const t = snapshotSourceTag(r.note, r.is_auto)
+        return {
+          value: r.id,
+          label: `${new Date(r.created_at).toLocaleString('zh-CN')} · ${t.text} · ${r.word_count ?? '-'} 字`,
+        }
+      })
+  }, [versionPreviewPanels, versionTimelineRows])
+
+  const versionPreviewPanelsForGrid = useMemo(() => {
+    if (versionPreviewLoading && versionPreviewPanels.length === 1) {
+      return [
+        ...versionPreviewPanels,
+        {
+          id: '__compare_loading__',
+          chapterId: '',
+          title: '对比快照',
+          meta: '',
+          plain: '',
+        },
+      ]
+    }
+    return versionPreviewPanels
+  }, [versionPreviewLoading, versionPreviewPanels])
+
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
@@ -921,15 +1028,29 @@ export default function ReadingReviewPage() {
             key: 'body-snapshots',
             label: '正文快照',
             children: (
-              <Card>
+              <Card
+                extra={
+                  <Button
+                    type="primary"
+                    disabled={snapshotCompareIds.length !== 2}
+                    onClick={() => void openDualSnapshotPreviewFromTable()}
+                  >
+                    并排预览选中的两份
+                  </Button>
+                }
+              >
                 <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-                  此处按时间列出本书各章的「修订前快照」（连贯性评测在点「写入数据库」时会自动各落一条）。仅 LLM 预览而未写入时不会产生快照；写入后可在此对照改正前后。
+                  此处按时间列出本书各章的「修订前快照」（连贯性评测在点「写入数据库」时会自动各落一条）。仅 LLM 预览而未写入时不会产生快照；写入后可在此对照改正前后。在表格中勾选两行后点「并排预览选中的两份」可左右对照；单份预览时也可在弹窗内选择同章另一快照加入对比。
                 </Typography.Paragraph>
                 <Table<ChapterVersionTimelineItem>
                   rowKey="id"
                   loading={versionTimelineLoading}
                   dataSource={versionTimelineRows}
                   pagination={{ pageSize: 15 }}
+                  rowSelection={{
+                    selectedRowKeys: snapshotCompareIds,
+                    onChange: (keys) => setSnapshotCompareIds((keys as string[]).slice(-2)),
+                  }}
                   locale={{ emptyText: <Empty description="暂无快照。写入改正文或手动保存版本后会出现" /> }}
                   columns={[
                     {
@@ -1061,39 +1182,90 @@ export default function ReadingReviewPage() {
         />
       </Modal>
       <Modal
-        title={versionPreviewTitle ? `快照：${versionPreviewTitle}` : '快照正文'}
+        title={versionPreviewModalTitle}
         open={versionPreviewOpen}
         onCancel={() => {
           setVersionPreviewOpen(false)
-          setVersionPreviewPlain('')
+          setVersionPreviewPanels([])
         }}
         footer={[
           <Button
             key="close"
             onClick={() => {
               setVersionPreviewOpen(false)
-              setVersionPreviewPlain('')
+              setVersionPreviewPanels([])
             }}
           >
             关闭
           </Button>,
         ]}
-        width={800}
+        width={versionPreviewPanels.length >= 2 ? 1100 : 800}
       >
-        {versionPreviewLoading ? (
+        {versionPreviewLoading && versionPreviewPanels.length === 0 ? (
           <Typography.Text type="secondary">加载中…</Typography.Text>
         ) : (
-          <div
-            style={{
-              maxHeight: '65vh',
-              overflow: 'auto',
-              whiteSpace: 'pre-wrap',
-              fontSize: 13,
-              lineHeight: 1.6,
-            }}
-          >
-            {versionPreviewPlain || '（空）'}
-          </div>
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            {versionPreviewPanels.length === 1 && sameChapterCompareOptions.length > 0 ? (
+              <Space wrap align="center">
+                <Typography.Text type="secondary">与另一快照对比：</Typography.Text>
+                <Select
+                  key={versionPreviewPanels[0]?.id ?? 'snap'}
+                  style={{ minWidth: 360 }}
+                  placeholder="选择同章的其他快照…"
+                  options={sameChapterCompareOptions}
+                  loading={versionPreviewLoading}
+                  disabled={versionPreviewLoading}
+                  onChange={(v) => {
+                    if (v) void addComparePanelByVersionId(v)
+                  }}
+                />
+              </Space>
+            ) : null}
+            {versionPreviewPanels.length === 2 ? (
+              <Button type="link" size="small" style={{ padding: 0, height: 'auto' }} onClick={() => setVersionPreviewPanels((p) => p.slice(0, 1))}>
+                恢复为仅预览左侧一份
+              </Button>
+            ) : null}
+            <Row gutter={16}>
+              {versionPreviewPanelsForGrid.map((panel, idx) => {
+                const dual = versionPreviewPanelsForGrid.length >= 2
+                const isCompareLoading = panel.id === '__compare_loading__'
+                return (
+                  <Col key={panel.id} span={dual ? 12 : 24}>
+                    {dual ? (
+                      <Typography.Text strong style={{ display: 'block', marginBottom: 4 }}>
+                        {isCompareLoading ? '右侧（加载中）' : `${idx === 0 ? '左侧' : '右侧'} · ${panel.title}`}
+                      </Typography.Text>
+                    ) : null}
+                    {!isCompareLoading && panel.meta ? (
+                      <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8, fontSize: 12 }}>
+                        {panel.meta}
+                      </Typography.Text>
+                    ) : null}
+                    <div
+                      style={{
+                        maxHeight: '65vh',
+                        overflow: 'auto',
+                        whiteSpace: 'pre-wrap',
+                        fontSize: 13,
+                        lineHeight: 1.6,
+                        padding: 12,
+                        background: idx === 1 ? '#fafafa' : '#fff',
+                        border: '1px solid #f0f0f0',
+                        borderRadius: 8,
+                      }}
+                    >
+                      {isCompareLoading ? (
+                        <Typography.Text type="secondary">加载对比中…</Typography.Text>
+                      ) : (
+                        panel.plain || '（空）'
+                      )}
+                    </div>
+                  </Col>
+                )
+              })}
+            </Row>
+          </Space>
         )}
       </Modal>
     </Space>

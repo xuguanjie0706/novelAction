@@ -235,6 +235,8 @@ class ChapterDebriefRequest(BaseModel):
     new_characters: List[NewCharacterPayload] = []   # 本章新出场、值得入库的配角
     chapter_index: Optional[ChapterIndexPayload] = None
     notes: Optional[str] = None           # 作者备注，存到 chapter
+    #: 落库审计：队列自动复盘 / Tab 手动提交（缺省按 manual_tab 记）
+    apply_source: Optional[Literal["queue_auto", "manual_tab"]] = None
 
 
 class AutoDebriefRequest(BaseModel):
@@ -242,3 +244,5 @@ class AutoDebriefRequest(BaseModel):
     model_profile: Literal["local", "gemini"] = "local"
     llm_provider_id: Optional[UUID] = None
     force_refresh: bool = False
+    #: 仅读 ChapterDebriefCache，不调用 LLM；用于写作页打开复盘 Tab 时恢复上次分析结果
+    cache_only: bool = False

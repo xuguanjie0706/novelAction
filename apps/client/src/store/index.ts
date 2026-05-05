@@ -192,6 +192,13 @@ interface AppState {
   /** 队列已自动提交复盘的章节 ID 集合，避免切换复盘 tab 时重复触发 AI 分析 */
   queueCommittedDebriefIds: Set<string>
   markChapterDebriefCommitted: (chapterId: string) => void
+  /**
+   * 队列 auto-debrief 落库前保存的原始 JSON（按章节）。
+   * 服务端 chapter-debrief 会删除 ChapterDebriefCache，用此快照在复盘 Tab 恢复黄色 AI 标记。
+   */
+  queueDebriefUiSnapshotByChapterId: Record<string, Record<string, unknown>>
+  setQueueDebriefUiSnapshot: (chapterId: string, payload: Record<string, unknown> | null) => void
+  clearQueueDebriefUiSnapshots: () => void
 }
 
 const _storedQueueState = readStoredGenQueueState()
@@ -361,4 +368,13 @@ export const useAppStore = create<AppState>((set) => ({
   queueCommittedDebriefIds: new Set<string>(),
   markChapterDebriefCommitted: (chapterId) =>
     set((state) => ({ queueCommittedDebriefIds: new Set([...state.queueCommittedDebriefIds, chapterId]) })),
+  queueDebriefUiSnapshotByChapterId: {},
+  setQueueDebriefUiSnapshot: (chapterId, payload) =>
+    set((state) => {
+      const next = { ...state.queueDebriefUiSnapshotByChapterId }
+      if (payload == null) delete next[chapterId]
+      else next[chapterId] = payload
+      return { queueDebriefUiSnapshotByChapterId: next }
+    }),
+  clearQueueDebriefUiSnapshots: () => set({ queueDebriefUiSnapshotByChapterId: {} }),
 }))

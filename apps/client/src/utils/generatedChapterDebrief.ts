@@ -20,7 +20,8 @@ interface NewCharacterResult {
   author_notes?: string
 }
 
-interface AutoDebriefResult {
+/** 与 /ai/auto-debrief 返回体一致；导出供队列复盘 UI 快照类型引用 */
+export interface AutoDebriefResult {
   character_updates?: Array<{
     character_id?: string
     current_realm?: string
@@ -65,6 +66,8 @@ export interface GeneratedChapterDebriefStats {
   assetUpdatedCount: number
   chapterIndexSaved: boolean
   chapterIndexError?: string
+  /** 提交 chapter-debrief 前保留的 AI 提取结果（服务端提交后会删缓存，供写作页复盘 Tab 恢复黄标） */
+  debriefPreview?: AutoDebriefResult
 }
 
 export async function autoCommitGeneratedChapterDebrief(
@@ -138,6 +141,7 @@ export async function autoCommitGeneratedChapterDebrief(
     asset_updates: data.asset_updates,
     new_characters: newCharacters as any,
     notes: data.summary ? `AI生成自动复盘：${data.summary}` : undefined,
+    apply_source: 'queue_auto',
   }
   if (!options?.omitChapterIndex && data.chapter_index) {
     commitPayload.chapter_index = data.chapter_index
@@ -165,5 +169,6 @@ export async function autoCommitGeneratedChapterDebrief(
     assetUpdatedCount,
     chapterIndexSaved: !!d?.chapter_index_saved,
     chapterIndexError: d?.chapter_index_error as string | undefined,
+    debriefPreview: data,
   }
 }

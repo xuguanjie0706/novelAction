@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db, SessionLocal
 from app.models import (
     Chapter,
+    ChapterDebriefApplyRecord,
     ChapterDebriefCache,
     ChapterDebriefUndo,
     ChapterIndex,
@@ -436,6 +437,41 @@ def chapter_debrief(
         ChapterDebriefCache.chapter_id == chapter.id,
     ).delete(synchronize_session=False)
 
+    new_char_suffix = f"、新配角入库 {len(added_new_characters)} 个（{', '.join(added_new_characters)}）" if added_new_characters else ""
+    result_message = (
+        f"已更新 {len(updated_chars)} 个人物状态、{len(updated_storylines)} 条故事线、"
+        f"{len(added_memories)} 条记忆、章节索引={'已写入' if chapter_index_saved else '未更新'}、"
+        f"伏笔管理新增{synced_foreshadows['created']}条/更新{synced_foreshadows['updated']}条/"
+        f"回收{synced_foreshadows['resolved']}条、资产新增"
+        f"{asset_stats['created_items'] + asset_stats['created_skills'] + asset_stats['created_factions']}条/"
+        f"更新{asset_stats['updated_items'] + asset_stats['updated_skills'] + asset_stats['updated_factions']}条"
+        f"{new_char_suffix}"
+    )
+
+    plain_for_hash = plain_text(chapter.content or "")
+    narrative_for_hash, _ = split_plain_manuscript_and_index_block(plain_for_hash)
+    if not narrative_for_hash.strip():
+        narrative_for_hash = plain_for_hash.strip()
+    content_hash_at_apply = chapter_debrief_content_hash(narrative_for_hash)
+
+    apply_src = req.apply_source or "manual_tab"
+    if apply_src not in ("queue_auto", "manual_tab"):
+        apply_src = "manual_tab"
+
+    try:
+        payload_snapshot = req.model_dump(mode="json")
+    except Exception:
+        payload_snapshot = {"chapter_id": req.chapter_id, "error": "model_dump_failed"}
+
+    db.add(ChapterDebriefApplyRecord(
+        project_id=project_id,
+        chapter_id=req.chapter_id,
+        apply_source=apply_src,
+        content_hash=content_hash_at_apply,
+        payload=payload_snapshot,
+        result_message=result_message[:8000] if result_message else None,
+    ))
+
     try:
         db.commit()
     except SQLAlchemyError as exc:
@@ -448,7 +484,6 @@ def chapter_debrief(
         embed_text = f"{mc.title or ''}\n{mc.content}".strip()
         embed_chunk_async(mc.id, embed_text, SessionLocal)
 
-    new_char_suffix = f"、新配角入库 {len(added_new_characters)} 个（{', '.join(added_new_characters)}）" if added_new_characters else ""
     return {
         "ok": True,
         "updated_characters": updated_chars,
@@ -459,15 +494,7 @@ def chapter_debrief(
         "chapter_index_error": chapter_index_error,
         "synced_foreshadows": synced_foreshadows,
         "asset_updates": asset_stats,
-        "message": (
-            f"已更新 {len(updated_chars)} 个人物状态、{len(updated_storylines)} 条故事线、"
-            f"{len(added_memories)} 条记忆、章节索引={'已写入' if chapter_index_saved else '未更新'}、"
-            f"伏笔管理新增{synced_foreshadows['created']}条/更新{synced_foreshadows['updated']}条/"
-            f"回收{synced_foreshadows['resolved']}条、资产新增"
-            f"{asset_stats['created_items'] + asset_stats['created_skills'] + asset_stats['created_factions']}条/"
-            f"更新{asset_stats['updated_items'] + asset_stats['updated_skills'] + asset_stats['updated_factions']}条"
-            f"{new_char_suffix}"
-        ),
+        "message": result_message,
     }
 
 
@@ -481,6 +508,9 @@ async def auto_debrief(
     AI 读取章节正文，对照当前人物状态和故事线，
     提取本章发生的状态变化建议。结果仅供前端预填，
     不直接写库——需用户确认后调用 /chapter-debrief 提交。
+
+    请求体 `cache_only=true` 时：仅返回与当前正文哈希一致的 ChapterDebriefCache，
+    不调用 LLM；无缓存时返回空建议且 `cache_only_miss=true`（供写作页打开复盘 Tab 恢复展示）。
     """
     chapter = db.query(Chapter).filter(
         Chapter.id == req.chapter_id, Chapter.project_id == project_id
@@ -493,6 +523,44 @@ async def auto_debrief(
             "character_updates": [],
             "storyline_updates": [],
             "summary": "章节内容为空，无法分析",
+        }
+
+    plain_content = plain_text(chapter.content or "")
+    narrative_plain, _ = split_plain_manuscript_and_index_block(plain_content)
+    if not narrative_plain.strip():
+        narrative_plain = plain_content.strip()
+    content_hash = chapter_debrief_content_hash(narrative_plain)
+    current_llm_provider = str(req.llm_provider_id) if req.llm_provider_id else None
+
+    cached = db.query(ChapterDebriefCache).filter(
+        ChapterDebriefCache.project_id == project_id,
+        ChapterDebriefCache.chapter_id == chapter.id,
+    ).first()
+    cache_hit = (
+        cached
+        and not req.force_refresh
+        and cached.content_hash == content_hash
+        and cached.model_profile == req.model_profile
+        and (cached.llm_provider_id or None) == current_llm_provider
+        and isinstance(cached.payload, dict)
+    )
+    if cache_hit:
+        payload = dict(cached.payload)
+        payload["cached"] = True
+        return payload
+
+    if req.cache_only:
+        # 无可用缓存：不调用 LLM，返回空建议供前端保持表单/提示用户手动「AI 分析」
+        return {
+            "character_updates": [],
+            "storyline_updates": [],
+            "memory_updates": [],
+            "asset_updates": {},
+            "new_characters": [],
+            "chapter_index": None,
+            "summary": "",
+            "cached": False,
+            "cache_only_miss": True,
         }
 
     characters = db.query(Character).filter(
@@ -529,29 +597,6 @@ async def auto_debrief(
         db=db,
         llm_provider_id=req.llm_provider_id,
     )
-
-    plain_content = plain_text(chapter.content or "")
-    narrative_plain, _ = split_plain_manuscript_and_index_block(plain_content)
-    if not narrative_plain.strip():
-        narrative_plain = plain_content.strip()
-    content_hash = chapter_debrief_content_hash(narrative_plain)
-    current_llm_provider = str(req.llm_provider_id) if req.llm_provider_id else None
-
-    cached = db.query(ChapterDebriefCache).filter(
-        ChapterDebriefCache.project_id == project_id,
-        ChapterDebriefCache.chapter_id == chapter.id,
-    ).first()
-    if (
-        cached
-        and not req.force_refresh
-        and cached.content_hash == content_hash
-        and cached.model_profile == req.model_profile
-        and (cached.llm_provider_id or None) == current_llm_provider
-        and isinstance(cached.payload, dict)
-    ):
-        payload = dict(cached.payload)
-        payload["cached"] = True
-        return payload
 
     result = await svc.auto_extract_debrief(
         chapter_content=narrative_plain,

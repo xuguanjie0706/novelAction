@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import Any, Dict, List
 from app.database import get_db
 from app.models import (
     CharacterChangeLog,
     Chapter,
+    ChapterDebriefApplyRecord,
     ChapterDebriefCache,
     ChapterDebriefUndo,
     ChapterIndex,
@@ -167,6 +168,10 @@ def clear_chapter_rewrite_derivatives(db: Session, project_id: str, chapter_id: 
         ChapterDebriefCache.project_id == project_id,
         ChapterDebriefCache.chapter_id == chapter_id,
     ).delete(synchronize_session=False)
+    db.query(ChapterDebriefApplyRecord).filter(
+        ChapterDebriefApplyRecord.project_id == project_id,
+        ChapterDebriefApplyRecord.chapter_id == chapter_id,
+    ).delete(synchronize_session=False)
     db.query(Foreshadow).filter(
         Foreshadow.project_id == project_id,
         Foreshadow.laid_chapter_id == chapter_id,
@@ -271,6 +276,42 @@ def list_chapter_version_timeline(
             created_at=v.created_at,
         )
         for v, ch in rows
+    ]
+
+
+@router.get("/{chapter_id}/debrief-apply-records")
+def list_chapter_debrief_apply_records(
+    project_id: str,
+    chapter_id: str,
+    limit: int = Query(40, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> List[Dict[str, Any]]:
+    """本章历次复盘提交审计：来源（队列自动 / Tab 手动）、当时正文哈希、完整请求体快照、结果摘要。"""
+    chapter = db.query(Chapter).filter(
+        Chapter.id == chapter_id, Chapter.project_id == project_id
+    ).first()
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+    rows = (
+        db.query(ChapterDebriefApplyRecord)
+        .filter(
+            ChapterDebriefApplyRecord.project_id == project_id,
+            ChapterDebriefApplyRecord.chapter_id == chapter_id,
+        )
+        .order_by(ChapterDebriefApplyRecord.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": str(r.id),
+            "apply_source": r.apply_source,
+            "content_hash": r.content_hash,
+            "payload": r.payload or {},
+            "result_message": r.result_message,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
     ]
 
 

@@ -16,6 +16,7 @@ from app.models import (
     StoryLine,
     QualityDebt,
     ChapterDebriefCache,
+    ChapterDebriefApplyRecord,
     ChapterDebriefUndo,
     ChapterCoherenceReport,
     AiChatMessage,
@@ -105,6 +106,9 @@ def reset_writing_progress(project_id: str, db: Session = Depends(get_db)):
     stats["foreshadows"] = db.query(Foreshadow).filter(Foreshadow.project_id == pid).delete(synchronize_session=False)
     stats["chapter_indexes"] = db.query(ChapterIndex).filter(ChapterIndex.project_id == pid).delete(synchronize_session=False)
     stats["debrief_caches"] = db.query(ChapterDebriefCache).filter(ChapterDebriefCache.project_id == pid).delete(synchronize_session=False)
+    stats["debrief_apply_records"] = db.query(ChapterDebriefApplyRecord).filter(
+        ChapterDebriefApplyRecord.project_id == pid
+    ).delete(synchronize_session=False)
     stats["debrief_undos"] = db.query(ChapterDebriefUndo).filter(ChapterDebriefUndo.project_id == pid).delete(synchronize_session=False)
     stats["coherence_reports"] = db.query(ChapterCoherenceReport).filter(ChapterCoherenceReport.project_id == pid).delete(synchronize_session=False)
     stats["ai_messages"] = db.query(AiChatMessage).filter(AiChatMessage.project_id == pid).delete(synchronize_session=False)

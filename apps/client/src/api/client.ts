@@ -233,6 +233,18 @@ export const chaptersApi = {
   listVersions: (pid: string, id: string) => api.get(`/projects/${pid}/chapters/${id}/versions`),
   getVersion: (pid: string, chapterId: string, versionId: string) =>
     api.get(`/projects/${pid}/chapters/${chapterId}/versions/${versionId}`),
+  /** 本章历次复盘落库审计（含完整 payload，可追溯） */
+  listDebriefApplyRecords: (pid: string, chapterId: string, limit = 40) =>
+    api.get<
+      Array<{
+        id: string
+        apply_source: string
+        content_hash: string | null
+        payload: Record<string, unknown>
+        result_message: string | null
+        created_at: string | null
+      }>
+    >(`/projects/${pid}/chapters/${chapterId}/debrief-apply-records?limit=${limit}`),
 }
 
 // ── Bootstrap（一句话生成）────────────────────────────
@@ -291,6 +303,8 @@ export const aiApi = {
     model_profile?: 'local' | 'gemini'
     llm_provider_id?: string
     force_refresh?: boolean
+    /** 仅读服务端复盘缓存，不调用 LLM */
+    cache_only?: boolean
   }) => api.post(`/projects/${pid}/ai/auto-debrief`, data),
 
   /** 章节写完后批量提交状态更新 */
@@ -345,6 +359,7 @@ export const aiApi = {
       continuity_notes?: Array<Record<string, unknown> | string>
     }
     notes?: string
+    apply_source?: 'queue_auto' | 'manual_tab'
   }) => api.post(`/projects/${pid}/ai/chapter-debrief`, data),
 
   chapterCoherenceCheck: (

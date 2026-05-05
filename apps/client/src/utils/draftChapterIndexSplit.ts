@@ -42,6 +42,8 @@ export function splitStreamedDraftText(full: string): { body: string; indexMarkd
 }
 
 const SECTION_RE = /^\s*\*\*([^*]+)\*\*\s*[:：]?\s*(.*)$/
+/** 与 SECTION_RE 并列：模型常用 ### 小节标题，仅 **…** 时伏笔回收整段会掉进 other，导致不同步伏笔表 */
+const MD_HEADING_RE = /^\s{0,3}#{1,6}\s+(.+?)\s*$/
 
 function countHookStars(s: string): number {
   const m = s.match(/[⭐★]/g)
@@ -136,12 +138,14 @@ export function parseChapterIndexMarkdown(md: string): ChapterIndexDebriefPayloa
   }
 
   const mapLabel = (label: string): Key => {
-    const s = label.trim()
+    const s = label.replace(/\*+/g, '').trim()
     if (s.includes('核心事件')) return 'core_events'
-    if (s.includes('首次出场')) return 'first_appearances'
+    if (s.includes('首次出场') || s.includes('首次登场')) return 'first_appearances'
     if (s.includes('章末钩子')) return 'ending_hook'
-    if (s.includes('伏笔埋设')) return 'foreshadows_laid'
-    if (s.includes('伏笔回收')) return 'foreshadows_resolved'
+    if (s.includes('伏笔埋设') || s.includes('埋设伏笔')) return 'foreshadows_laid'
+    if (s.includes('伏笔回收') || s.includes('回收伏笔') || /^已回收/.test(s)) {
+      return 'foreshadows_resolved'
+    }
     if (s.includes('连续性')) return 'continuity'
     return 'other'
   }
@@ -153,6 +157,11 @@ export function parseChapterIndexMarkdown(md: string): ChapterIndexDebriefPayloa
       current = mapLabel(sec[1])
       const rest = sec[2].trim()
       if (rest) buffers[current].push(rest)
+      continue
+    }
+    const mdHead = MD_HEADING_RE.exec(line)
+    if (mdHead) {
+      current = mapLabel(mdHead[1])
       continue
     }
     if (!line.trim()) continue

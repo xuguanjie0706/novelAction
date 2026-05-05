@@ -77,6 +77,7 @@ type AutoDebriefResponse = {
   summary?: string
   error?: string
   cached?: boolean
+  cache_only_miss?: boolean
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -189,11 +190,17 @@ export default function ChapterEditor({
   } = useAppStore()
   const genQueue = useAppStore(s => s.genQueue)
   const queueCommittedDebriefIds = useAppStore(s => s.queueCommittedDebriefIds)
+  const queueDebriefSnapshot = useAppStore(s => s.queueDebriefUiSnapshotByChapterId[chapter.id])
+  const setQueueDebriefUiSnapshot = useAppStore(s => s.setQueueDebriefUiSnapshot)
+  const clearQueueDebriefUiSnapshots = useAppStore(s => s.clearQueueDebriefUiSnapshots)
   const saveTimer = useRef<ReturnType<typeof setTimeout>>()
   const storylineAutoSyncingRef = useRef(false)
   const memoryAutoSyncingRef = useRef(false)
   const lastMemoryAutoExtractAtRef = useRef(0)
-  const debriefAutoLoadedChapterRef = useRef<string | null>(null)
+  /** 队列已落库复盘提示，每章最多 toast 一次（避免依赖项抖动重复弹） */
+  const queueDebriefToastShownRef = useRef<Set<string>>(new Set())
+  /** 已为当前章应用过「队列复盘 UI 快照」，避免 effect 重复预填 */
+  const queueSnapHydratedChapterRef = useRef<string | null>(null)
 
   // ── 面板 UI 状态 ───────────────────────────────────────────────────
   const [contextOpen, setContextOpen]   = useState(!!outlineNode)
@@ -211,6 +218,14 @@ export default function ChapterEditor({
   // ── 章节复盘（写完后提交状态更新）────────────────────────────────
   const [debriefSubmitting, setDebriefSubmitting] = useState(false)
   const [autoDebriefing, setAutoDebriefing]       = useState(false)
+  /** 打开复盘 Tab 时仅读缓存，与 AI 分析区分开 */
+  const [debriefCacheHydrating, setDebriefCacheHydrating] = useState(false)
+  /** 当前面板展示的是「生成队列自动复盘」的快照（黄标含义） */
+  const [debriefFromQueueSnapshot, setDebriefFromQueueSnapshot] = useState(false)
+  /** 复盘提交成功后刷新「落库记录」列表 */
+  const [debriefHistoryTick, setDebriefHistoryTick] = useState(0)
+
+  const prevProjectIdForDebriefRef = useRef<string | null>(null)
   const [cleaningChapter, setCleaningChapter]     = useState(false)
   // charUpdates: map of characterId → partial update
   const [charUpdates, setCharUpdates] = useState<Record<string, {
@@ -375,12 +390,21 @@ export default function ChapterEditor({
     setAiSuggestedSlIds(new Set())
     setAiSuggestedAssetUpdates(null)
     setAiNewCharacters([])
-    debriefAutoLoadedChapterRef.current = null
+    setDebriefFromQueueSnapshot(false)
+    queueSnapHydratedChapterRef.current = null
     setManuscriptView((chapter.manuscript_raw_snapshot || '').trim() ? 'prose' : 'source')
     setHistoryOpen(false)
     setVersionsList([])
     setHistoryPreview(null)
   }, [chapter.id])
+
+  useEffect(() => {
+    if (prevProjectIdForDebriefRef.current !== null && prevProjectIdForDebriefRef.current !== projectId) {
+      queueDebriefToastShownRef.current.clear()
+      clearQueueDebriefUiSnapshots()
+    }
+    prevProjectIdForDebriefRef.current = projectId
+  }, [projectId, clearQueueDebriefUiSnapshots])
 
   /** 同章经队列写入/更新快照后，回到可编辑「正文」 */
   useEffect(() => {
@@ -677,7 +701,11 @@ export default function ChapterEditor({
     toast.success(`已加入 AI 队列：连续续写 ${targetChapters.length} 章`)
   }
 
-  const applyAutoDebriefData = useCallback((data: AutoDebriefResponse, source: 'cache' | 'llm') => {
+  const applyAutoDebriefData = useCallback((
+    data: AutoDebriefResponse,
+    source: 'cache' | 'llm',
+    opts?: { silent?: boolean },
+  ) => {
     // 预填人物更新
     const newCharUpdates: typeof charUpdates = {}
     const suggestedCharIds = new Set<string>()
@@ -728,14 +756,16 @@ export default function ChapterEditor({
       )
       : 0
     if (total > 0 || assetCount > 0 || validNewChars.length > 0) {
-      if (source === 'cache') {
-        toast('已复用本章复盘结果', { icon: 'ℹ️' })
-      } else {
-        toast.success(`AI 自动提取了 ${suggestedCharIds.size} 个人物变化、${suggestedSlIds.size} 条故事线更新、${assetCount} 条资产变化，请确认后提交`)
+      if (!opts?.silent) {
+        if (source === 'cache') {
+          toast('已复用本章复盘结果', { icon: 'ℹ️' })
+        } else {
+          toast.success(`AI 自动提取了 ${suggestedCharIds.size} 个人物变化、${suggestedSlIds.size} 条故事线更新、${assetCount} 条资产变化，请确认后提交`)
+        }
+        setContextOpen(true)
+        setContextTab('debrief')
       }
-      setContextOpen(true)
-      setContextTab('debrief')
-    } else if (source === 'llm') {
+    } else if (source === 'llm' && !opts?.silent) {
       toast('AI 未检测到明确的状态变化', { icon: 'ℹ️' })
     }
   }, [storyLines])
@@ -759,6 +789,7 @@ export default function ChapterEditor({
       }
 
       applyAutoDebriefData(data, data.cached ? 'cache' : 'llm')
+      setDebriefFromQueueSnapshot(false)
     } catch {
       toast.error('AI 自动复盘失败，请手动填写')
     } finally {
@@ -766,20 +797,66 @@ export default function ChapterEditor({
     }
   }
 
+  /** 打开复盘 Tab 时：仅读服务端缓存并预填（不调用 LLM） */
+  const loadDebriefTabCache = useCallback(async () => {
+    if (!hasHtmlTextContent(chapter.content)) return
+    setDebriefCacheHydrating(true)
+    try {
+      const route = useAppStore.getState().aiBackendRoute
+      const res = await aiApi.autoDebrief(projectId, {
+        chapter_id: chapter.id,
+        model_profile: modelProfileFromRoute(route),
+        ...routeLlmProviderPayload(route),
+        cache_only: true,
+      })
+      const data = res.data as AutoDebriefResponse
+      if (data.error || data.cache_only_miss || !data.cached) return
+      applyAutoDebriefData(data, 'cache', { silent: true })
+      setDebriefFromQueueSnapshot(false)
+    } catch { /* 静默：无缓存或网络失败不打扰 */ }
+    finally {
+      setDebriefCacheHydrating(false)
+    }
+  }, [projectId, chapter.id, applyAutoDebriefData])
+
   useEffect(() => {
     if (!contextOpen || contextTab !== 'debrief') return
     if (!hasHtmlTextContent(chapter.content)) return
-    if (debriefAutoLoadedChapterRef.current === chapter.id) return
     if (autoDebriefing || debriefSubmitting) return
-    // 队列已自动提交复盘，无需重复 AI 分析，但需告知用户
     if (queueCommittedDebriefIds.has(chapter.id)) {
-      debriefAutoLoadedChapterRef.current = chapter.id
-      toast('此章复盘已由队列自动完成', { icon: '✅' })
+      const snap = queueDebriefSnapshot as AutoDebriefResponse | undefined
+      const snapHasUi = snap && (
+        (snap.character_updates?.length ?? 0) > 0
+        || (snap.storyline_updates?.length ?? 0) > 0
+        || (snap.new_characters?.length ?? 0) > 0
+        || (snap.asset_updates && Object.keys(snap.asset_updates).length > 0)
+        || (typeof snap.summary === 'string' && snap.summary.trim().length > 0)
+        || !!snap.chapter_index
+      )
+      if (snapHasUi && queueSnapHydratedChapterRef.current !== chapter.id) {
+        queueSnapHydratedChapterRef.current = chapter.id
+        applyAutoDebriefData(snap, 'cache', { silent: true })
+        setDebriefFromQueueSnapshot(true)
+      }
+      if (!queueDebriefToastShownRef.current.has(chapter.id)) {
+        queueDebriefToastShownRef.current.add(chapter.id)
+        toast('此章复盘已由队列自动完成', { icon: '✅' })
+      }
       return
     }
-    debriefAutoLoadedChapterRef.current = chapter.id
-    void runAutoDebrief(false)
-  }, [contextOpen, contextTab, chapter.id, chapter.content, autoDebriefing, debriefSubmitting, runAutoDebrief, queueCommittedDebriefIds])
+    void loadDebriefTabCache()
+  }, [
+    contextOpen,
+    contextTab,
+    chapter.id,
+    chapter.updated_at,
+    autoDebriefing,
+    debriefSubmitting,
+    queueCommittedDebriefIds,
+    queueDebriefSnapshot,
+    loadDebriefTabCache,
+    applyAutoDebriefData,
+  ])
 
   const submitDebrief = async (selectedAssetUpdates?: Record<string, unknown>) => {
     const characterUpdates = Object.entries(charUpdates)
@@ -840,8 +917,10 @@ export default function ChapterEditor({
         new_characters: aiNewCharacters.length > 0 ? aiNewCharacters as any : undefined,
         chapter_index: aiChapterIndex || undefined,
         notes: debriefNotes || undefined,
+        apply_source: 'manual_tab',
       })
       toast.success(res.data.message)
+      setDebriefHistoryTick((t) => t + 1)
       const refreshRequests: Promise<any>[] = [
         storylinesApi.list(projectId),
         aiApi.listMemory(projectId),
@@ -853,8 +932,9 @@ export default function ChapterEditor({
       if (refreshedCharsRes) {
         refreshedCharsRes.data.forEach((c: any) => useAppStore.getState().upsertCharacter(c))
       }
-      // 清空表单，重置 autoLoad 标记，使用户再次进入 tab 时能读取缓存结果
-      debriefAutoLoadedChapterRef.current = null
+      setQueueDebriefUiSnapshot(chapter.id, null)
+      setDebriefFromQueueSnapshot(false)
+      queueSnapHydratedChapterRef.current = null
       setCharUpdates({})
       setStorylineBeats({})
       setAiSuggestedAssetUpdates(null)
@@ -1607,6 +1687,7 @@ export default function ChapterEditor({
                   setDebriefNotes={setDebriefNotes}
                   submitting={debriefSubmitting}
                   autoDebriefing={autoDebriefing}
+                  cacheHydrating={debriefCacheHydrating}
                   aiSuggestedCharIds={aiSuggestedCharIds}
                   aiSuggestedSlIds={aiSuggestedSlIds}
                   aiSuggestedAssetUpdates={aiSuggestedAssetUpdates}
@@ -1614,6 +1695,8 @@ export default function ChapterEditor({
                   aiSummary={aiDebriefSummary}
                   onAutoDebrief={runAutoDebrief}
                   onSubmit={submitDebrief}
+                  fromQueueSnapshot={debriefFromQueueSnapshot}
+                  debriefHistoryTick={debriefHistoryTick}
                 />
               )}
 
@@ -1838,6 +1921,8 @@ interface DebriefPanelProps {
   setDebriefNotes: (v: string) => void
   submitting: boolean
   autoDebriefing?: boolean
+  /** 打开 Tab 时从服务端缓存恢复建议（非 LLM） */
+  cacheHydrating?: boolean
   aiSuggestedCharIds?: Set<string>
   aiSuggestedSlIds?: Set<string>
   aiSuggestedAssetUpdates?: Record<string, unknown> | null
@@ -1845,6 +1930,10 @@ interface DebriefPanelProps {
   aiSummary?: string
   onAutoDebrief?: (forceRefresh?: boolean) => void
   onSubmit: (selectedAssetUpdates?: Record<string, unknown>) => void
+  /** 展示内容来自生成队列自动复盘快照（已落库），与手动 AI 分析区分 */
+  fromQueueSnapshot?: boolean
+  /** 变更时重新拉取本章复盘落库审计列表 */
+  debriefHistoryTick?: number
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -1852,6 +1941,10 @@ const STATUS_LABEL: Record<string, string> = {
 }
 const STORYLINE_STATUS_LABEL: Record<string, string> = {
   planned: '规划中', active: '进行中', climax: '高潮', resolved: '已结局', dropped: '已废弃',
+}
+const DEBRIEF_APPLY_SOURCE_LABEL: Record<string, string> = {
+  queue_auto: '生成队列 · 自动落库',
+  manual_tab: '复盘 Tab · 手动提交',
 }
 const ASSET_UPDATE_LABELS: Record<string, string> = {
   new_items: '新增道具/法宝',
@@ -1863,11 +1956,13 @@ const ASSET_UPDATE_LABELS: Record<string, string> = {
 }
 
 function DebriefPanel({
+  projectId,
   chapter, outlineNode, characters, storyLines,
   charUpdates, setCharUpdates,
   storylineBeats, setStorylineBeats,
   debriefNotes, setDebriefNotes,
   submitting, autoDebriefing,
+  cacheHydrating = false,
   aiSuggestedCharIds = new Set(),
   aiSuggestedSlIds = new Set(),
   aiSuggestedAssetUpdates = null,
@@ -1875,7 +1970,35 @@ function DebriefPanel({
   aiSummary,
   onAutoDebrief,
   onSubmit,
+  fromQueueSnapshot = false,
+  debriefHistoryTick = 0,
 }: DebriefPanelProps) {
+  const [applyRecords, setApplyRecords] = useState<Array<{
+    id: string
+    apply_source: string
+    content_hash: string | null
+    payload: Record<string, unknown>
+    result_message: string | null
+    created_at: string | null
+  }>>([])
+  const [applyRecordsLoading, setApplyRecordsLoading] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setApplyRecordsLoading(true)
+    chaptersApi.listDebriefApplyRecords(projectId, chapter.id, 25)
+      .then((r) => {
+        if (!cancelled) setApplyRecords(r.data)
+      })
+      .catch(() => {
+        if (!cancelled) setApplyRecords([])
+      })
+      .finally(() => {
+        if (!cancelled) setApplyRecordsLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [projectId, chapter.id, debriefHistoryTick])
+
   // 本章出场人物（优先从大纲节点 involved_character_ids 取，否则展示全部）
   const involvedIds = new Set(outlineNode?.involved_character_ids?.map(String) || [])
   const displayChars = involvedIds.size > 0
@@ -1944,6 +2067,57 @@ function DebriefPanel({
   return (
     <div className="p-4 space-y-4">
 
+      {fromQueueSnapshot && (
+        <div className="rounded-novel border border-amber-200 bg-amber-50/90 px-3 py-2 text-[10px] text-amber-900 leading-relaxed">
+          <span className="font-semibold">生成队列已自动复盘并写入数据库。</span>
+          以下为当时的 AI 提取快照（黄标与预填一致），便于对照；若再改正文可点「重新分析」刷新。
+        </div>
+      )}
+
+      <section className="rounded-novel border border-novel-border bg-novel-card/90 px-3 py-2.5 space-y-2">
+        <div className="flex items-center gap-1.5">
+          <History size={11} className="text-novel-ink-muted" />
+          <span className="text-[10px] font-semibold text-novel-ink-muted uppercase tracking-wider">复盘落库记录</span>
+          {applyRecordsLoading && <span className="text-[10px] text-novel-ink-faint">加载中…</span>}
+        </div>
+        <p className="text-[9px] text-novel-ink-faint leading-relaxed">
+          每次落库（队列自动或本页提交）都会在服务端留档：时间、来源、摘要与完整填入 JSON，便于回溯本章做过哪些复盘操作。
+        </p>
+        {!applyRecordsLoading && applyRecords.length === 0 && (
+          <p className="text-[10px] text-novel-ink-faint italic">本章尚无落库记录。</p>
+        )}
+        <div className="space-y-1.5 max-h-56 overflow-y-auto">
+          {applyRecords.map((r) => {
+            const t = r.created_at ? r.created_at.replace('T', ' ').slice(0, 19) : '—'
+            const src = DEBRIEF_APPLY_SOURCE_LABEL[r.apply_source] ?? r.apply_source
+            return (
+              <details
+                key={r.id}
+                className="rounded border border-novel-border bg-white/70 px-2 py-1.5 text-[10px] text-novel-ink"
+              >
+                <summary className="cursor-pointer select-none list-none flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <span className="font-medium text-novel-ink">{t}</span>
+                  <span className="text-[9px] text-novel-accent">{src}</span>
+                  {r.content_hash && (
+                    <span className="text-[9px] text-novel-ink-faint font-mono truncate max-w-[10rem]" title={r.content_hash}>
+                      正文哈希 {r.content_hash.slice(0, 8)}…
+                    </span>
+                  )}
+                </summary>
+                {r.result_message && (
+                  <p className="mt-1.5 text-[10px] text-novel-ink-muted leading-relaxed border-t border-novel-border/60 pt-1.5">
+                    {r.result_message}
+                  </p>
+                )}
+                <pre className="mt-1.5 max-h-36 overflow-auto text-[9px] leading-snug text-novel-ink-faint whitespace-pre-wrap break-words">
+                  {JSON.stringify(r.payload, null, 2)}
+                </pre>
+              </details>
+            )
+          })}
+        </div>
+      </section>
+
       {/* AI 自动分析区 */}
       {hasAiSuggestions && aiSummary ? (
         <div className="rounded-novel border border-amber-200 bg-amber-50/80 px-3 py-2.5">
@@ -1959,13 +2133,13 @@ function DebriefPanel({
       ) : (
         <div className="flex items-center justify-between">
           <p className="text-[10px] text-novel-ink-faint leading-relaxed">
-            写完本章后，让 AI 自动提取变化，或手动填写后提交
+            点击下方「AI 分析」提取变化（若此前分析过且正文未改，打开本页会自动载入缓存）；也可纯手动填写后提交
           </p>
           {onAutoDebrief && (
             <button
               type="button"
               onClick={() => onAutoDebrief(hasAiSuggestions)}
-              disabled={autoDebriefing || !chapter.content?.trim()}
+              disabled={autoDebriefing || cacheHydrating || !chapter.content?.trim()}
               className="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-novel border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 transition-novel shrink-0"
             >
               <Bot size={11} className={autoDebriefing ? 'animate-pulse' : ''} />
@@ -1975,7 +2149,12 @@ function DebriefPanel({
         </div>
       )}
 
-      {/* 加载中遮罩 */}
+      {/* 加载中：区分「读缓存」与「AI 分析」 */}
+      {cacheHydrating && (
+        <div className="flex items-center justify-center gap-2 py-2 text-slate-500">
+          <span className="text-xs">正在载入已保存的复盘建议…</span>
+        </div>
+      )}
       {autoDebriefing && (
         <div className="flex items-center justify-center gap-2 py-3 text-amber-600">
           <Bot size={14} className="animate-pulse" />
@@ -2291,7 +2470,7 @@ function DebriefPanel({
             <button
               type="button"
               onClick={() => onAutoDebrief(hasAiSuggestions)}
-              disabled={autoDebriefing || submitting || !chapter.content?.trim()}
+              disabled={autoDebriefing || cacheHydrating || submitting || !chapter.content?.trim()}
               className="flex items-center justify-center gap-1.5 text-xs py-2.5 px-3 border border-amber-300 text-amber-800 bg-amber-50 hover:bg-amber-100 rounded-xl font-semibold disabled:opacity-50 transition-novel shrink-0"
             >
               <Bot size={13} className={autoDebriefing ? 'animate-pulse' : ''} />
@@ -2301,7 +2480,7 @@ function DebriefPanel({
           <button
             type="button"
             onClick={() => onSubmit(buildSelectedAssetUpdates())}
-            disabled={submitting || autoDebriefing}
+            disabled={submitting || autoDebriefing || cacheHydrating}
             className={clsx(
               'flex-1 flex items-center justify-center gap-2 min-h-[3rem] rounded-xl text-[15px] font-semibold text-white shadow-lg transition-all disabled:opacity-55 disabled:shadow-none active:scale-[0.99]',
               hasAiSuggestions

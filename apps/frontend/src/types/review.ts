@@ -101,6 +101,10 @@ export interface QualityReport {
   summary: string
   error?: string
   raw_response?: string
+  /** 新增：本章最有截图价值的1句原文（狠话/反转/细节） */
+  highlight_quote?: string
+  /** 新增：章末追读意愿估分（1-10） */
+  subscribe_intent_score?: number
 }
 
 export interface ChapterCoherenceResult {

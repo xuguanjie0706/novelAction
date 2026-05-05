@@ -271,12 +271,21 @@ class AIService:
     "setting_consistency": {{"score": 7, "status": "warning", "comment": "境界/技能/位置是否前后一致"}},
     "pacing": {{"score": 8, "status": "pass", "comment": "节奏是否合适"}},
     "hooks": {{"score": 9, "status": "excellent", "comment": "钩子和悬念是否到位"}},
-    "outline_alignment": {{"score": 8, "status": "pass", "comment": "本章内容与大纲节点目标的匹配度"}}
+    "outline_alignment": {{"score": 8, "status": "pass", "comment": "本章内容与大纲节点目标的匹配度"}},
+    "face_slap_payoff": {{"score": 8, "status": "pass", "comment": "本章是否兑现之前积累的打脸/爽感期待？憋了几章的情绪有没有具体释放？（0-10）"}},
+    "emotional_resonance": {{"score": 7, "status": "pass", "comment": "读者是否会为主角揪心/爽/心疼/愤怒？情感有没有被具体调动？（0-10）"}},
+    "subscribe_intent": {{"score": 8, "status": "pass", "comment": "章末付费订阅下一章的意愿估分——读完最后一句会不会忍不住翻页？7分以上合格（0-10）"}}
   }},
   "issues": [{{"type": "warning", "description": "具体问题描述，如：林默在第X章记录位置为青云城，本章却出现在远水城"}}],
   "suggestions": ["具体可操作的修改建议"],
-  "summary": "整体评价一句话"
-}}"""
+  "summary": "整体评价一句话",
+  "highlight_quote": "本章最有截图价值的1句原文（狠话/反转/让人背脊发凉的细节）；全章无亮句则填空字符串"
+}}
+
+评分额外约束：
+- face_slap_payoff < 6 时，suggestions 必须包含一条"本章如何增加打脸兑现感"的具体操作
+- subscribe_intent < 7 时，issues 中必须加一条 type="low_hook" 的 warning，说明章末钩子哪里不够抓人
+- 评分时先用编辑视角检查技术质量，再切换成「下班后刷手机的28岁读者」视角问：这章会让他熬夜追下一章吗？"""
 
         try:
             response = await self._call_ai(
@@ -884,6 +893,8 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         prior_foreshadow_ledger: str = "",          # 前文伏笔汇总 + 伏笔表未回收项
         realm_whitelist: list[str] | None = None,   # 项目合法境界名白名单
         protagonist_state: str = "",                 # 主角当前结构化状态（境界/位置/持有物）
+        villain_timelines: list[str] | None = None,  # 反派势力行动时间线摘要（来自 Faction.extra.villain_timeline）
+        opening_contract: dict | None = None,        # 开局承诺清单（来自 Project.extra.opening_contract，仅第一卷前10章使用）
     ) -> dict:
         """
         为选定的大纲节点（卷或旧篇）生成详细的子章节计划。
@@ -943,6 +954,39 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             )
         else:
             realm_constraint_block = ""
+
+        # ── 反派行动时间线注入 ───────────────────────────────
+        villain_block = ""
+        if villain_timelines:
+            vt_lines = "\n".join(f"- {vt}" for vt in villain_timelines)
+            villain_block = (
+                f"\n【反派行动时间线（必须体现在章纲中）】\n"
+                f"以下是主要反派势力的独立行动计划（不以主角为中心，而是他们主动推进的阴谋）：\n"
+                f"{vt_lines}\n"
+                f"要求：本卷章纲中必须至少有1章体现「反派主动行动」而非被动应付主角；\n"
+                f"并在 core_event 中说明反派此时正在做什么（即便本章主视角是主角）。\n"
+            )
+
+        # ── 开局三章生死线（仅第一卷前三章触发）────────────────
+        opening_death_line_block = ""
+        is_opening_vol = existing_chapters == 0  # 第一卷第一批
+        if is_opening_vol and opening_contract and isinstance(opening_contract, dict):
+            ch1_hook = opening_contract.get("chapter1_hook", "")
+            ch3_payoff = opening_contract.get("chapter3_payoff", "")
+            first_200 = opening_contract.get("first_200_words_test", "")
+            rhythm = opening_contract.get("chapter_rhythm", "")
+            traps = opening_contract.get("opening_traps_to_avoid", [])
+            traps_str = "；".join(traps) if isinstance(traps, list) else str(traps)
+            opening_death_line_block = (
+                f"\n【⚠️开局三章生死线 — 此卷前三章必须满足以下所有条件，否则读者无法追下去】\n"
+                f"第1章前200字必须完成：{first_200 or '落地世界观、主角核心痛点、一个悬而未决的问题'}\n"
+                f"第1章末钩子承诺：{ch1_hook or '读者必须知道答案才肯看第2章的问题'}\n"
+                f"第3章小爽点：{ch3_payoff or '主角的第一次具体反转或胜利'}\n"
+                f"前10章节奏：{rhythm or '（未设定，请自行规划快慢节奏）'}\n"
+                f"必须避免的开局坑：{traps_str or '（未设定）'}\n"
+                f"生死线约束：前三章的 opening_hook 必须紧贴以上要求，不能使用通用模板钩子。\n"
+            )
+
         prompt = f"""小说：《{project_title}》（{genre}）
 当前节点：{node_type == 'volume' and '卷' or '旧篇'}《{node_title}》
 节点概述：{node_summary or '（未填写）'}
@@ -950,7 +994,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 世界观摘要：{world_summary[:400]}
 主要人物（主线核心卡司，非全书全部人物——配角可按剧情需要随时引入）：{character_summary[:500]}
 全书立意：{theme_statement[:300] or '（未填写；请从创意和人物中提炼一条贯穿全书的价值命题）'}
-{realm_constraint_block}{protagonist_state_context}{global_context}{prior_plot_block}{prior_ledger_block}{previous_context}{continuity_context}{batch_goal_context}
+{realm_constraint_block}{protagonist_state_context}{global_context}{prior_plot_block}{prior_ledger_block}{previous_context}{continuity_context}{batch_goal_context}{villain_block}{opening_death_line_block}
 请为本{node_type == 'volume' and '卷' or '旧篇'}生成 {chapter_count} 个章节计划，章节编号从第{start_num}章开始。
 {genre_guardrail_text(genre)}
 
@@ -985,7 +1029,8 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 6. 如果提供了已生成章节上下文或滚动连续性账本，必须承接上一批章末钩子、人物状态和未回收伏笔，不得重复已发生的核心事件
 7. 本批第一章要自然回应上一批最后一章留下的具体悬念；如果处于新卷开头，则先承接全书卷线蓝图再开启本卷核心问题
 8. 若提供了「前几卷已规划章纲」：不得复述或改头换面重复前序已写核心事件；新卷情节在其上推进
-9. 若提供了「前几卷伏笔台账」：本卷各章 foreshadow 字段须点名埋/收，优先处理台账中高优先级仍未回收条目，并与章纲五要素一致"""
+9. 若提供了「前几卷伏笔台账」：本卷各章 foreshadow 字段须点名埋/收，优先处理台账中高优先级仍未回收条目，并与章纲五要素一致
+10. 「合同型伏笔」硬约束：台账中 deadline_chapter <= 本批最后一章章号 的条目视为「逾期伏笔」，必须在本批章纲中安排至少一章写明「收[F-xxx：...]」，否则视为结构缺陷"""
 
         max_tok = max_tokens_expand_outline(self.profile)
         response = await self._call_ai(
@@ -1025,6 +1070,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         theme_statement: str = "",
         story_bible_context: str = "",
         word_budget_context: str = "",
+        overdue_foreshadow_ledger: str = "",  # 逾期未回收伏笔清单（F-编号:描述:deadline_chapter）
     ) -> dict:
         """
         大纲质检：检查卷内/全书章节计划的连续性，并返回可定位、可修复的问题列表。
@@ -1063,6 +1109,8 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 【篇幅与字数约束】
 {self._clip_context(word_budget_context, 600, None, field_name="word_budget") or '（未提供）'}
 
+{("【⚠️逾期未回收伏笔清单（必须在本批章纲中安排回收）】" + chr(10) + self._clip_context(overdue_foreshadow_ledger, 2000, None, field_name="overdue_foreshadow")) if overdue_foreshadow_ledger else ""}
+
 【待质检章节计划】
 {self._clip_context(chr(10).join(chapter_lines), 12000, None, field_name="chapter_lines_quality")}
 
@@ -1075,6 +1123,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 6. 全书立意：核心事件是否服务主题，而不是单纯堆事件
 7. 故事圣经一致性：角色死亡/封印/失踪后再登场必须有明确机制；核心道具、力量体系、势力目标、世界规则和人物弧线不得被后续章节随意否定
 8. 篇幅兑现：检查当前大纲是否支撑目标字数，重点识别中后期节奏压缩（如跨位面速刷、关键成长阶段被跳过）
+9. 逾期伏笔：若提供了「逾期未回收伏笔清单」，检查本批章纲是否有对应章安排回收；未安排者报告 overdue_foreshadow 类型问题
 
 返回JSON：
 {{
@@ -1085,7 +1134,7 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
   "issues": [
     {{
       "severity": "low/medium/high/critical",
-      "type": "continuity/duplicate_event/hook_continuity/foreshadow/character_arc/pacing/theme_alignment",
+      "type": "continuity/duplicate_event/hook_continuity/foreshadow/overdue_foreshadow/character_arc/pacing/theme_alignment",
       "chapter_numbers": [1],
       "description": "问题说明，要具体到章节和原因",
       "suggested_patch": {{
@@ -1361,35 +1410,41 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
                 "- 钩子密度高：每 800-1000 字至少一个张力点（疑问、压迫、伏笔、冲突）\n"
                 "- 信息密度高：开篇 200 字内必须落地世界、主角状态、核心痛点\n"
                 "- 爽点节奏：3 章一小爽，禁止纯铺垫章；当章必须有可被读者复述的「高光瞬间」\n"
-                "- 字数偏短（建议 ±200 字内贴近 2200 字），节奏要紧；忌用大段心理流水账"
+                "- 字数偏短（建议 ±200 字内贴近 2200 字），节奏要紧；忌用大段心理流水账\n"
+                "- 文本比例参考：对话 40% / 行动场景 40% / 心理独白 20%（对话段视觉上更轻，利于追读）"
             ),
             "rising": (
                 "【当前卷阶段：起飞期 / 扩张期】\n"
                 "- 势力面扩展、感情线接入；每章保留至少一条 hook\n"
                 "- 允许中等节奏的铺垫，但必须有「小爽收束」或反转预告\n"
-                "- 控制信息量，避免一章塞太多新设定"
+                "- 控制信息量，避免一章塞太多新设定\n"
+                "- 文本比例参考：对话 35% / 行动场景 40% / 心理独白 25%"
             ),
             "turning": (
                 "【当前卷阶段：转折期】\n"
                 "- 推进核心矛盾升级；老角色态度转变；至少一处反转或代价兑现\n"
-                "- 节奏中速，对话比心理多；不要回避负面情绪"
+                "- 节奏中速，对话比心理多；不要回避负面情绪\n"
+                "- 文本比例参考：对话 35% / 行动场景 35% / 心理独白 30%"
             ),
             "dark_hour": (
                 "【当前卷阶段：至暗期】\n"
                 "- 允许「虐」，节奏放缓，让代价具象、让选择艰难\n"
                 "- 主角处境恶化，不要急于反弹；情绪基调克制不浮夸\n"
-                "- 字数可适度拉长（接近 2800 字），多用具体场景渲染压力"
+                "- 字数可适度拉长（接近 2800 字），多用具体场景渲染压力\n"
+                "- 文本比例参考：心理独白 40% / 行动场景 35% / 对话 25%（心理戏为主，但独白单段不超200字）"
             ),
             "climax": (
                 "【当前卷阶段：高潮期】\n"
                 "- 所有伏笔在本卷内必须给读者明确反馈（回收 / 提级 / 公开）\n"
                 "- 爆点拉满：动作 / 情绪 / 信息揭示三选二；字数允许 3000-3300 字\n"
-                "- 章末必须留下卷尾级钩子（更大反派 / 新地图 / 关键人物动向）"
+                "- 章末必须留下卷尾级钩子（更大反派 / 新地图 / 关键人物动向）\n"
+                "- 文本比例参考：行动场景 55% / 对话 30% / 心理独白 15%（此阶段减少独白，让动作说话）"
             ),
             "ending": (
                 "【当前卷阶段：收束期】\n"
                 "- 给读者交代感，但保留下一卷悬念种子\n"
-                "- 不要总结性独白；用一个画面或对话句结束本章"
+                "- 不要总结性独白；用一个画面或对话句结束本章\n"
+                "- 文本比例参考：行动场景 40% / 对话 35% / 心理独白 25%"
             ),
         }
         phase_brief = phase_brief_map.get(phase_norm, "")
@@ -1445,7 +1500,14 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
 - 严禁单段心理独白超过 200 字
 - 严禁解释性旁白连续 3 句以上（让事件本身说话）
 - 严禁滥用"突然"作为段落起点
-- 严禁出现 AI 自指词（"作为一个 AI""根据您的要求""我来为您"）"""
+- 严禁出现 AI 自指词（"作为一个 AI""根据您的要求""我来为您"）
+
+【截图时刻硬要求（每章至少1处）】
+每章必须设计至少一处「截图时刻」——让读者忍不住截图转发的句子。三种档次任选其一：
+A) 狠话档：主角或反派说出一句话，读者觉得"这句话太绝了"（要有力度，不要矫情）
+B) 细节档：一个让人背脊发凉或忍俊不禁的环境/动作细节，五感具象
+C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，信息量大
+「截图时刻」不需要另起一段标注，自然融入正文即可。"""
 
         genre_gr = genre_guardrail_text(genre)
         if genre_gr.strip():
@@ -1829,12 +1891,15 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
     "story_day": "故事内时间（简体中文），如「第8日」「首日（夜→晨）」；未知则为空字符串",
     "core_events": ["本章实际发生的核心事件1", "核心事件2"],
     "first_appearances": [{{"character_id": "可为空", "name": "首次出场人物名"}}],
-    "actual_foreshadows_laid": [{{"description": "实际写进正文的新伏笔；建议「F-编号：悬念描述」，全新伏笔也可仅写描述由系统分配编号", "status": "open"}}],
+    "actual_foreshadows_laid": [{{"description": "实际写进正文的新伏笔；建议「F-编号：悬念描述」，全新伏笔也可仅写描述由系统分配编号", "status": "open", "deadline_chapter": 0}}],
     "actual_foreshadows_resolved": [{{"description": "本章回收的伏笔；每条必须以「F-编号：」开头（引用伏笔表中待回收条目），勿省略编号"}}],
+    （deadline_chapter 填写规则：以「多少章之内必须回收」来估算最晚章号；短伏笔（悬念型）<=3章内，中伏笔（设定型）<=15章，长伏笔（主线型）<=全卷章数；0表示不限期，但强烈建议每条伏笔都有明确 deadline。）
     "ending_hook": "章末钩子描述",
     "hook_strength": 1,
     "continuity_notes": [{{"severity": "low/medium/high", "note": "生成或正文中发现的连续性风险"}}]
   }},
+  "highlight_quote": "本章最有截图/转发价值的1句原文（可以是狠话/反转/让人背脊发凉的细节/让读者想@好友的句子）；全章无亮句则填空字符串",
+  "subscribe_intent_score": 8,
   "summary": "本章整体复盘总结（一句话）"
 }}"""
 
@@ -1930,7 +1995,12 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                     if isinstance(item, dict) and (item.get("name") or item.get("character_id"))
                 ],
                 "actual_foreshadows_laid": [
-                    item for item in (chapter_index.get("actual_foreshadows_laid") or [])[:10]
+                    {
+                        "description": item.get("description", ""),
+                        "status": item.get("status", "open"),
+                        "deadline_chapter": int(item["deadline_chapter"]) if isinstance(item.get("deadline_chapter"), (int, float)) else 0,
+                    }
+                    for item in (chapter_index.get("actual_foreshadows_laid") or [])[:10]
                     if isinstance(item, dict) and item.get("description")
                 ],
                 "actual_foreshadows_resolved": [
@@ -1993,6 +2063,213 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                 "error": f"解析失败: {e}",
                 "raw": response[:300],
             }
+
+    # ── 写前预警 ─────────────────────────────────────
+    async def pre_write_warning(
+        self,
+        project_title: str,
+        genre: str,
+        chapter_plan_summary: str,          # 本章计划摘要（五要素或简述）
+        memory_chunks: list[dict],           # MemoryChunk 列表，每条含 title/content/memory_type
+        continuity_state: str = "",          # 滚动连续性账本
+        foreshadow_ledger: str = "",         # 伏笔台账
+        character_states: str = "",          # 主要角色当前状态快照
+    ) -> dict:
+        """
+        写前预警：根据本章计划对照记忆/状态库，输出潜在矛盾风险，让作者在动笔前发现问题。
+        返回结构：{"risks": [...], "reminders": [...], "ok": bool}
+        """
+        # 拼接记忆摘要，按类型分组
+        mem_lines: list[str] = []
+        for chunk in memory_chunks[:40]:
+            mt = chunk.get("memory_type", "event")
+            title = (chunk.get("title") or "").strip()
+            content = (chunk.get("content") or "").strip()[:200]
+            mem_lines.append(f"[{mt}] {title}：{content}")
+        mem_block = "\n".join(mem_lines) if mem_lines else "（无记忆条目）"
+
+        system = "你是资深网络小说编辑，专门在写章节前帮作者排雷。严格返回JSON，不要额外文字。"
+        prompt = f"""小说：《{project_title}》（{genre}）
+
+【本章计划】
+{self._clip_context(chapter_plan_summary, 1200, None, field_name="chapter_plan")}
+
+【主要角色当前状态】
+{self._clip_context(character_states, 1200, None, field_name="char_states") or "（未提供）"}
+
+【滚动连续性账本】
+{self._clip_context(continuity_state, 2000, None, field_name="continuity") or "（未提供）"}
+
+【伏笔台账（含未收束条目）】
+{self._clip_context(foreshadow_ledger, 1500, None, field_name="foreshadow_ledger") or "（未提供）"}
+
+【历史记忆库（事件/状态/伏笔/设定/冲突）】
+{self._clip_context(mem_block, 3000, None, field_name="memory_chunks")}
+
+根据本章计划，逐条对照上述资料，识别以下类型的潜在问题：
+1. 连续性矛盾：本章计划与已发生事件、人物状态、位置不符
+2. 伏笔违约：本章计划中回收了不存在的伏笔，或应在此章回收的伏笔被遗漏
+3. 设定违规：计划中出现的境界/势力/道具与世界观设定矛盾
+4. 人物OOC：本章人物行为与已建立的性格/价值观/心理创伤明显冲突
+5. 节奏预警：计划节奏与前章章末钩子的期望落差（如钩子承诺了高潮但本章是过渡章）
+
+返回JSON：
+{{
+  "ok": true,
+  "risk_count": 0,
+  "risks": [
+    {{
+      "type": "continuity/foreshadow/setting/ooc/pacing",
+      "severity": "low/medium/high/critical",
+      "description": "具体说明矛盾点，精确到涉及的条目和章节",
+      "suggested_fix": "建议的解决方案"
+    }}
+  ],
+  "reminders": [
+    "写作前必须注意的提醒（如：本章应回收F-03伏笔、本章主角境界是XX不能使用YY技能）"
+  ]
+}}
+若无风险则 risks 为空数组，ok=true；有 high/critical 风险则 ok=false。"""
+
+        response = await self._call_ai(
+            system,
+            prompt,
+            max_tokens=1500,
+            context={"operation": "pre_write_warning", "chapter_plan": chapter_plan_summary[:80]},
+            task="quality.check",
+        )
+        try:
+            text = response.strip()
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            if "```" in text:
+                fence = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
+                if fence:
+                    text = fence.group(1).strip()
+            start = text.find("{")
+            if start == -1:
+                raise ValueError("No JSON found")
+            data = json.loads(text[start:])
+            risks = [r for r in (data.get("risks") or []) if isinstance(r, dict) and r.get("description")]
+            reminders = [str(r) for r in (data.get("reminders") or []) if r]
+            has_critical = any(r.get("severity") in ("high", "critical") for r in risks)
+            return {
+                "ok": not has_critical,
+                "risk_count": len(risks),
+                "risks": risks[:15],
+                "reminders": reminders[:10],
+            }
+        except Exception as e:
+            return {"ok": True, "risk_count": 0, "risks": [], "reminders": [], "error": str(e), "raw": response[:300]}
+
+    # ── 读者心理模拟 ──────────────────────────────────
+    async def reader_psychology_sim(
+        self,
+        project_title: str,
+        genre: str,
+        recent_chapters: list[dict],         # 最近10章的摘要，每条含 title/summary/hook_strength/subscribe_intent_score
+        positioning: dict | None = None,     # Project.extra.positioning（目标读者画像、爽点类型等）
+        current_chapter_number: int = 0,
+    ) -> dict:
+        """
+        读者心理模拟：模拟目标读者阅读最近若干章后的感受，输出追读意愿评分和流失风险点。
+        返回：{"read_through_score": 7, "dropout_risks": [...], "strengths": [...], "editor_verdict": "..."}
+        """
+        if not recent_chapters:
+            return {"error": "no chapters provided"}
+
+        # 拼接最近章节摘要
+        ch_lines: list[str] = []
+        for ch in recent_chapters[-10:]:
+            num = ch.get("number") or ch.get("chapter_number") or "?"
+            title = ch.get("title") or ""
+            summary = (ch.get("summary") or "").strip()[:200]
+            hook = ch.get("hook_strength", "?")
+            sub_score = ch.get("subscribe_intent_score", "?")
+            ch_lines.append(f"第{num}章《{title}》 钩子强度:{hook}/5 追读分:{sub_score}/10\n  {summary}")
+        chapters_block = "\n".join(ch_lines)
+
+        pos_block = ""
+        if positioning and isinstance(positioning, dict):
+            audience = positioning.get("target_audience", "")
+            tropes = positioning.get("tropes", "")
+            selling_point = positioning.get("selling_point", "")
+            face_slap = positioning.get("face_slap_pattern", "")
+            pos_block = (
+                f"\n【目标读者画像与爽点设计】\n"
+                f"目标受众：{audience}\n"
+                f"核心爽点类型：{tropes}\n"
+                f"卖点差异化：{selling_point}\n"
+                f"打脸节奏：{face_slap}\n"
+            )
+
+        system = "你是专业的网络小说读者体验分析师，模拟目标读者视角进行追读意愿评估。严格返回JSON。"
+        prompt = f"""小说：《{project_title}》（{genre}）
+当前已写至第{current_chapter_number}章。
+{pos_block}
+【最近章节概览（模拟读者视角）】
+{self._clip_context(chapters_block, 4000, None, field_name="recent_chapters")}
+
+请以「目标读者」的视角，模拟读完以上章节后的真实感受，评估：
+
+1. **追读意愿评分**（1-10）：读完最后一章后，有多大可能点「订阅」或「追更」
+2. **流失风险点**：哪些章节/情节模式会让目标读者放弃（要具体，如：第X章节奏拖沓、第Y章爽点兑现不足）
+3. **优势段落**：哪些地方做得好，读者会截图转发或催更
+4. **编辑意见**：如果你是责任编辑，给作者最关键的3条建议
+
+返回JSON：
+{{
+  "read_through_score": 7,
+  "score_basis": "评分依据（一句话说明高/低的主要原因）",
+  "trend": "rising/stable/declining",
+  "trend_note": "追读趋势说明（如：连续3章钩子强度下降，进入衰减区）",
+  "dropout_risks": [
+    {{
+      "chapter_range": "第X-Y章",
+      "risk_type": "pacing/payoff/repetition/ooc/hook_weak/setting_inconsistency",
+      "description": "具体流失原因",
+      "severity": "low/medium/high"
+    }}
+  ],
+  "strengths": ["做得好的具体点（章节级别）"],
+  "editor_verdict": "责任编辑给作者的最关键建议（100字以内，直接、可执行）",
+  "immediate_action": "下一章必须做的最重要一件事（一句话）"
+}}"""
+
+        response = await self._call_ai(
+            system,
+            prompt,
+            max_tokens=1800,
+            context={"operation": "reader_psychology_sim", "chapter": current_chapter_number},
+            task="quality.check",
+        )
+        try:
+            text = response.strip()
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            if "```" in text:
+                fence = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
+                if fence:
+                    text = fence.group(1).strip()
+            start = text.find("{")
+            if start == -1:
+                raise ValueError("No JSON found")
+            data = json.loads(text[start:])
+            score = data.get("read_through_score", 5)
+            try:
+                score = max(1, min(10, int(score)))
+            except Exception:
+                score = 5
+            return {
+                "read_through_score": score,
+                "score_basis": data.get("score_basis", ""),
+                "trend": data.get("trend", "stable"),
+                "trend_note": data.get("trend_note", ""),
+                "dropout_risks": [r for r in (data.get("dropout_risks") or []) if isinstance(r, dict)][:10],
+                "strengths": [s for s in (data.get("strengths") or []) if s][:8],
+                "editor_verdict": data.get("editor_verdict", ""),
+                "immediate_action": data.get("immediate_action", ""),
+            }
+        except Exception as e:
+            return {"error": str(e), "raw": response[:300]}
 
     # ── 底层调用 ──────────────────────────────────────
     @staticmethod

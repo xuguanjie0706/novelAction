@@ -1,11 +1,12 @@
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Chapter, Character, MemoryChunk, OutlineNode, Project, StoryLine, WorldSetting, PowerSystem
+from app.models import Chapter, Character, Foreshadow, MemoryChunk, OutlineNode, Project, StoryLine, WorldSetting, PowerSystem
 from app.services.ai_service import AIService
 from app.routers.ai.context import (
     build_chapter_index_context,
@@ -17,6 +18,13 @@ from app.routers.ai.quality_debt import sync_quality_debts
 from app.routers.ai.schemas import QualityCheckRequest
 
 router = APIRouter()
+
+
+class PreWriteWarningRequest(BaseModel):
+    chapter_plan_summary: str          # 本章五要素或写作计划摘要
+    chapter_number: int = 0            # 当前章节号（用于筛选逾期伏笔）
+    model_profile: str = "local"
+    llm_provider_id: Optional[str] = None
 
 
 @router.post("/quality-check")
@@ -187,4 +195,79 @@ async def quality_check(
     sync_quality_debts(db, project_id, chapter, result)
     db.commit()
 
+    return result
+
+
+@router.post("/pre-write-warning")
+async def pre_write_warning(
+    project_id: str,
+    req: PreWriteWarningRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    写前预警：传入本章计划，对照记忆库/连续性账本/伏笔台账，输出潜在矛盾风险。
+    供写作页「动笔前」调用，让作者在落笔前发现连续性/伏笔/设定/人物OOC问题。
+    """
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    # 加载记忆
+    memories = (
+        db.query(MemoryChunk)
+        .filter(MemoryChunk.project_id == project_id)
+        .order_by(MemoryChunk.chapter_number.asc())
+        .limit(40)
+        .all()
+    )
+    memory_chunks = [
+        {"title": m.title or "", "content": m.content or "", "memory_type": m.memory_type or "event"}
+        for m in memories
+    ]
+
+    # 加载未回收伏笔台账
+    open_foreshadows = (
+        db.query(Foreshadow)
+        .filter(Foreshadow.project_id == project_id, Foreshadow.status == "open")
+        .order_by(Foreshadow.priority.desc())
+        .limit(30)
+        .all()
+    )
+    foreshadow_lines = []
+    for f in open_foreshadows:
+        code = f.code or "—"
+        overdue = ""
+        if f.planned_resolve_chapter and req.chapter_number > 0:
+            if f.planned_resolve_chapter <= req.chapter_number:
+                overdue = "【⚠️已逾期】"
+        foreshadow_lines.append(
+            f"{overdue}{code} {f.title or ''} | 预计第{f.planned_resolve_chapter or '?'}章回收 | {(f.description or '')[:100]}"
+        )
+    foreshadow_ledger = "\n".join(foreshadow_lines)
+
+    # 加载人物状态
+    characters = db.query(Character).filter(Character.project_id == project_id).all()
+    character_states = "\n".join(
+        f"{c.name}：境界={c.current_realm or '?'}，位置={c.current_location or '?'}，状态={c.current_status or 'alive'}"
+        for c in characters[:12]
+    )
+
+    # 取最近连续性账本（从项目 story_core 里读滚动状态）
+    story_core = project.story_core if isinstance(project.story_core, dict) else {}
+    continuity_state = story_core.get("rolling_continuity_state", "")
+
+    svc = AIService(
+        req.model_profile if req.model_profile in ("gemini", "local") else "default",
+        db=db,
+        llm_provider_id=req.llm_provider_id,
+    )
+    result = await svc.pre_write_warning(
+        project_title=project.title,
+        genre=project.genre or "玄幻",
+        chapter_plan_summary=req.chapter_plan_summary,
+        memory_chunks=memory_chunks,
+        continuity_state=str(continuity_state) if continuity_state else "",
+        foreshadow_ledger=foreshadow_ledger,
+        character_states=character_states,
+    )
     return result

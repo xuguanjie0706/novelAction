@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, X, CheckCircle, Loader, AlertCircle, ChevronRight } from 'lucide-react'
+import { Sparkles, X, CheckCircle, Loader, AlertCircle, ChevronRight, ShieldAlert, BookOpen } from 'lucide-react'
 import clsx from 'clsx'
-import { llmApi } from '../../api/client'
+import { llmApi, projectsApi } from '../../api/client'
 import type { LlmOverview } from '../../types'
 import { llmProviderIdFromRoute, modelProfileFromRoute, routeLlmProviderPayload, useAppStore } from '../../store'
 import { TargetWordsInput } from '../TargetWordsInput'
@@ -74,6 +74,7 @@ export default function GenerateWizard({ onClose }: Props) {
   )
   const [errorMsg, setErrorMsg] = useState('')
   const [projectId, setProjectId] = useState<string | null>(null)
+  const [insights, setInsights] = useState<{ consistency_issues: any[]; opening_contract: Record<string,any> } | null>(null)
   const [llmOverview, setLlmOverview] = useState<LlmOverview | null>(null)
   const [llmLoading, setLlmLoading] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
@@ -256,6 +257,12 @@ export default function GenerateWizard({ onClose }: Props) {
       streamCompleteRef.current = true
       setProjectId(project_id)
       setPhase('done')
+      // 拉取 Bootstrap 后写入的编辑洞察数据
+      if (project_id) {
+        projectsApi.getInsights(project_id)
+          .then(res => setInsights(res.data))
+          .catch(() => {/* 非关键，忽略 */})
+      }
     }
   }
 
@@ -489,6 +496,39 @@ export default function GenerateWizard({ onClose }: Props) {
             {errorMsg && (
               <div className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-4">
                 {errorMsg}
+              </div>
+            )}
+
+            {/* 完成后：编辑洞察摘要卡 */}
+            {phase === 'done' && insights && (
+              <div className="space-y-2 mb-4">
+                {/* 一致性问题摘要 */}
+                {insights.consistency_issues.length > 0 && (
+                  <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-xs">
+                    <ShieldAlert size={14} className="text-amber-500 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-medium text-amber-800">发现 {insights.consistency_issues.length} 处一致性待确认项</span>
+                      <p className="text-amber-700 mt-0.5 leading-relaxed">
+                        {insights.consistency_issues.slice(0, 2).map((issue: any) =>
+                          typeof issue === 'string' ? issue : (issue.description || issue.issue || '')
+                        ).filter(Boolean).join('；')}
+                        {insights.consistency_issues.length > 2 && `…等${insights.consistency_issues.length}项`}
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {/* 开局追读承诺摘要 */}
+                {insights.opening_contract?.chapter1_hook && (
+                  <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-xs">
+                    <BookOpen size={14} className="text-blue-500 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-medium text-blue-800">开局追读承诺已生成</span>
+                      <p className="text-blue-700 mt-0.5 leading-relaxed line-clamp-2">
+                        第1章钩子：{insights.opening_contract.chapter1_hook}
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

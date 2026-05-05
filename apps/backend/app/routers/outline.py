@@ -1910,6 +1910,39 @@ def _build_prior_foreshadow_ledger(
     return text
 
 
+def _build_overdue_foreshadow_ledger(
+    foreshadow_rows: list,
+    max_chapter_number: int,
+    max_chars: int = 2000,
+) -> str:
+    """
+    从伏笔表中筛选「已逾期未回收」条目并格式化为字符串。
+    逾期定义：status=open AND planned_resolve_chapter <= max_chapter_number
+    """
+    if not foreshadow_rows or max_chapter_number <= 0:
+        return ""
+    overdue = [
+        f for f in foreshadow_rows
+        if (f.status or "open") == "open"
+        and f.planned_resolve_chapter
+        and f.planned_resolve_chapter <= max_chapter_number
+    ]
+    if not overdue:
+        return ""
+    overdue.sort(key=lambda f: (-(f.priority or 3), f.planned_resolve_chapter or 0))
+    lines: list[str] = []
+    for f in overdue:
+        code = f.code or "—"
+        title = _clean_outline_text(f.title, 60)
+        plan = f.planned_resolve_chapter
+        desc = _clean_outline_text(f.description, 100)
+        lines.append(f"{code} {title} | 应于第{plan}章前回收（已逾期） | {desc}")
+    text = "\n".join(lines)
+    if len(text) > max_chars:
+        return text[: max_chars - 20] + "\n…（逾期列表过长已截断）"
+    return text
+
+
 def _ai_expand_prior_plot_budget(model_profile: str) -> int:
     return 14000 if model_profile == "gemini" else 6500
 
@@ -2663,6 +2696,12 @@ async def _quality_check_outline_volumes(ctx: dict[str, Any]) -> dict[str, Any]:
             scope="volume",
         )
         hard_rule_report = _merge_outline_quality_reports(hard_rule_report, embedding_report)
+        vol_max_ch = max((_chapter_number_value(c) for c in volume_chapters), default=0)
+        overdue_ledger = _build_overdue_foreshadow_ledger(
+            ctx.get("foreshadows") or [],
+            vol_max_ch,
+            max_chars=1800 if req.model_profile == "gemini" else 800,
+        )
         svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
         report = await svc.outline_quality_check(
             project_title=project.title,
@@ -2693,6 +2732,7 @@ async def _quality_check_outline_volumes(ctx: dict[str, Any]) -> dict[str, Any]:
                     scope_label=f"卷《{volume.title}》",
                 ),
             ]),
+            overdue_foreshadow_ledger=overdue_ledger,
         )
         if svc._truncation_warnings:
             await publish({
@@ -2765,6 +2805,12 @@ async def _quality_check_outline_book(ctx: dict[str, Any]) -> dict[str, Any]:
         scope="book",
     )
     hard_rule_report = _merge_outline_quality_reports(hard_rule_report, embedding_report)
+    book_max_ch = max((_chapter_number_value(c) for c in chapters), default=0)
+    book_overdue_ledger = _build_overdue_foreshadow_ledger(
+        ctx.get("foreshadows") or [],
+        book_max_ch,
+        max_chars=2000 if req.model_profile == "gemini" else 1000,
+    )
     svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
     report = await svc.outline_quality_check(
         project_title=project.title,
@@ -2779,6 +2825,7 @@ async def _quality_check_outline_book(ctx: dict[str, Any]) -> dict[str, Any]:
         continuity_state=_format_book_quality_continuity_state(chapters),
         chapters=chapters,
         word_budget_context=ctx.get("book_word_budget_context", ""),
+        overdue_foreshadow_ledger=book_overdue_ledger,
     )
     if svc._truncation_warnings:
         await publish({

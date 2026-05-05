@@ -12,6 +12,7 @@ import {
   Maximize2, Minimize2, Clock, ChevronDown, ChevronRight, Anchor, History,
   Feather, PenLine, ListPlus, CheckCircle, Circle,
   CheckSquare, TrendingUp, MapPin, Swords, Bot, Save, Trash2, ClipboardList, UserPlus,
+  ShieldAlert, ShieldCheck,
 } from 'lucide-react'
 import clsx from 'clsx'
 import {
@@ -204,7 +205,14 @@ export default function ChapterEditor({
 
   // ── 面板 UI 状态 ───────────────────────────────────────────────────
   const [contextOpen, setContextOpen]   = useState(!!outlineNode)
-  const [contextTab, setContextTab]     = useState<'plan' | 'scene' | 'debrief' | 'chindex'>('plan')
+  const [contextTab, setContextTab]     = useState<'plan' | 'scene' | 'debrief' | 'chindex' | 'warn'>('plan')
+  const [warnLoading, setWarnLoading]   = useState(false)
+  const [warnResult, setWarnResult]     = useState<{
+    ok: boolean; risk_count: number
+    risks: Array<{ type: string; severity: string; description: string; suggested_fix: string }>
+    reminders: string[]
+    error?: string
+  } | null>(null)
   const [focusMode, setFocusMode]       = useState(false)
   const [statusOpen, setStatusOpen]     = useState(false)
   const statusRef = useRef<HTMLDivElement>(null)
@@ -976,6 +984,36 @@ export default function ChapterEditor({
     }
   }
 
+  const runPreWriteWarning = async () => {
+    setWarnLoading(true)
+    setWarnResult(null)
+    setContextOpen(true)
+    setContextTab('warn')
+    // 拼接本章计划摘要（优先用 outlineNode，降级用章节标题）
+    const planSummary = outlineNode
+      ? [
+          outlineNode.summary && `概述：${outlineNode.summary}`,
+          outlineNode.hook && `开篇钩子：${outlineNode.hook}`,
+          outlineNode.conflict && `核心事件：${outlineNode.conflict}`,
+          outlineNode.highlight && `章末方向：${outlineNode.highlight}`,
+        ].filter(Boolean).join('\n')
+      : `第${chapter.sort_order ?? '?'}章《${chapter.title}》`
+    try {
+      const route = useAppStore.getState().aiBackendRoute
+      const { data } = await aiApi.preWriteWarning(projectId, {
+        chapter_plan_summary: planSummary,
+        chapter_number: chapter.sort_order ?? 0,
+        model_profile: modelProfileFromRoute(route),
+        llm_provider_id: llmProviderIdFromRoute(route),
+      })
+      setWarnResult(data)
+    } catch {
+      toast.error('写前预警请求失败')
+    } finally {
+      setWarnLoading(false)
+    }
+  }
+
   const openChapterHistory = async () => {
     setHistoryOpen(true)
     setVersionsLoading(true)
@@ -1198,6 +1236,27 @@ export default function ChapterEditor({
                   ? TOP_TOOL_BUTTON_ACTIVE
                   : TOP_TOOL_BUTTON_IDLE)}>
               <ClipboardList size={14} />索引
+            </button>
+          )}
+
+          {/* 写前预警 */}
+          {!focusMode && (
+            <button type="button"
+              onClick={runPreWriteWarning}
+              disabled={warnLoading}
+              title="写前预警：对照记忆/伏笔台账检查本章计划的潜在矛盾"
+              className={clsx(TOP_TOOL_BUTTON_BASE,
+                contextOpen && contextTab === 'warn'
+                  ? 'border-rose-300 bg-rose-50 text-rose-600'
+                  : warnResult && !warnResult.ok
+                    ? 'border-rose-300 bg-rose-50 text-rose-500'
+                    : TOP_TOOL_BUTTON_IDLE)}>
+              {warnLoading
+                ? <RefreshCw size={14} className="animate-spin" />
+                : warnResult && !warnResult.ok
+                  ? <ShieldAlert size={14} />
+                  : <ShieldAlert size={14} />}
+              预警
             </button>
           )}
 
@@ -1520,7 +1579,7 @@ export default function ChapterEditor({
         {contextOpen && !focusMode && (
           <div className={clsx(
             'shrink-0 border-l border-novel-border bg-novel-panel flex flex-col overflow-hidden',
-            contextTab === 'chindex' ? 'w-[24rem]' : 'w-80',
+            contextTab === 'chindex' ? 'w-[24rem]' : contextTab === 'warn' ? 'w-[22rem]' : 'w-80',
           )}>
 
             {/* Tab 导航头 */}
@@ -1531,6 +1590,7 @@ export default function ChapterEditor({
                   { key: 'scene',   label: '场景',  icon: <Users size={11} /> },
                   { key: 'debrief', label: '复盘',  icon: <CheckSquare size={11} /> },
                   { key: 'chindex', label: '索引',  icon: <ClipboardList size={11} /> },
+                  { key: 'warn',    label: '预警',  icon: <ShieldAlert size={11} /> },
                 ] as const
               ).map(tab => (
                 <button key={tab.key} type="button"
@@ -1710,6 +1770,97 @@ export default function ChapterEditor({
                     foreshadowsApi.list(projectId, 'open').then(r => setOpenForeshadows(r.data)).catch(() => {})
                   }}
                 />
+              )}
+
+              {/* ── 写前预警 Tab ── */}
+              {contextTab === 'warn' && (
+                <div className="p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-novel-ink flex items-center gap-1.5">
+                      <ShieldAlert size={13} className="text-rose-500" />写前预警
+                    </span>
+                    <button type="button" onClick={runPreWriteWarning} disabled={warnLoading}
+                      className="text-xs px-2.5 py-1 rounded-lg border border-novel-border bg-novel-card hover:bg-novel-panel transition-novel disabled:opacity-40 flex items-center gap-1">
+                      {warnLoading ? <RefreshCw size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+                      重新检测
+                    </button>
+                  </div>
+
+                  {warnLoading && (
+                    <div className="text-xs text-novel-ink-muted text-center py-8">
+                      <RefreshCw size={16} className="animate-spin mx-auto mb-2 text-rose-400" />
+                      正在对照记忆库检查矛盾…
+                    </div>
+                  )}
+
+                  {!warnLoading && !warnResult && (
+                    <div className="text-xs text-novel-ink-faint text-center py-8 leading-relaxed">
+                      点击工具栏「预警」按钮<br />动笔前检查连续性、伏笔和人物OOC风险
+                    </div>
+                  )}
+
+                  {!warnLoading && warnResult && (
+                    <>
+                      {/* 总体状态 */}
+                      <div className={clsx(
+                        'flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium',
+                        warnResult.ok
+                          ? 'bg-green-50 border border-green-200 text-green-700'
+                          : 'bg-rose-50 border border-rose-200 text-rose-700',
+                      )}>
+                        {warnResult.ok
+                          ? <ShieldCheck size={14} />
+                          : <ShieldAlert size={14} />}
+                        {warnResult.ok
+                          ? `未发现高危风险，可以动笔`
+                          : `发现 ${warnResult.risk_count} 处风险，建议先修正`}
+                      </div>
+
+                      {/* 风险列表 */}
+                      {warnResult.risks.length > 0 && (
+                        <div className="space-y-2">
+                          {warnResult.risks.map((risk, i) => (
+                            <div key={i} className={clsx(
+                              'rounded-lg border p-2.5 text-xs space-y-1',
+                              risk.severity === 'critical' || risk.severity === 'high'
+                                ? 'border-rose-200 bg-rose-50'
+                                : 'border-amber-200 bg-amber-50',
+                            )}>
+                              <div className="flex items-center gap-1.5 font-medium">
+                                <span className={clsx(
+                                  'px-1.5 py-0.5 rounded text-[10px]',
+                                  risk.severity === 'critical' || risk.severity === 'high'
+                                    ? 'bg-rose-200 text-rose-700'
+                                    : 'bg-amber-200 text-amber-700',
+                                )}>{risk.severity}</span>
+                                <span className="text-novel-ink-muted">{risk.type}</span>
+                              </div>
+                              <p className="text-novel-ink leading-relaxed">{risk.description}</p>
+                              {risk.suggested_fix && (
+                                <p className="text-novel-ink-muted leading-relaxed border-t border-current/10 pt-1">
+                                  建议：{risk.suggested_fix}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* 写前提醒 */}
+                      {warnResult.reminders.length > 0 && (
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-semibold text-novel-ink-muted uppercase tracking-wide">写前提醒</p>
+                          {warnResult.reminders.map((r, i) => (
+                            <div key={i} className="flex items-start gap-1.5 text-xs text-novel-ink-muted">
+                              <span className="text-novel-accent shrink-0 mt-0.5">·</span>
+                              <span className="leading-relaxed">{r}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
               )}
 
             </div>

@@ -37,6 +37,7 @@ class ProjectOut(BaseModel):
     status: str
     target_words: Optional[int]
     cover_url: Optional[str]
+    extra: Optional[dict] = None
     created_at: datetime
     updated_at: Optional[datetime]
 

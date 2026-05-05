@@ -200,6 +200,9 @@ def _setting_extra_with_defaults(item: dict) -> dict:
         }
     else:
         extra = {"schema_version": 2, **extra}
+    # 揭示节奏字段（v3，若 AI 生成时填写则保留，否则给空字符串占位）
+    extra.setdefault("reveal_timing", "")      # 本设定何时/以何种情节方式向读者/主角揭示
+    extra.setdefault("who_knows_now", "")      # 故事开篇时哪些角色/势力知道这一设定
     return extra
 
 
@@ -412,6 +415,26 @@ class GenerationService:
             rels = await self._gen_relations(project, chars, ctx)
             yield _sse("step_done", step="relations", count=len(rels))
 
+            # Step 12 — 全局一致性扫描（交叉核验所有生成物的关键字段）
+            yield _sse("step_start", step="consistency", label="全局一致性扫描...")
+            consistency_issues = await self._gen_consistency_scan(project, ctx)
+            yield _sse(
+                "step_done",
+                step="consistency",
+                count=len(consistency_issues),
+                preview=f"发现{len(consistency_issues)}处需确认项" if consistency_issues else "无明显矛盾",
+            )
+
+            # Step 13 — 开局前十章追读承诺清单
+            yield _sse("step_start", step="opening_contract", label="规划开局追读承诺...")
+            opening_contract = await self._gen_opening_contract(project, ctx)
+            yield _sse(
+                "step_done",
+                step="opening_contract",
+                count=1,
+                preview=opening_contract.get("chapter1_hook", "")[:30] if opening_contract else "",
+            )
+
             yield _sse("complete", project_id=str(project.id))
 
         except Exception as e:
@@ -463,7 +486,8 @@ class GenerationService:
         Returns:
             dict 包含字段：
               target_audience, tropes, reference_works, selling_point,
-              face_slap_pattern, emotional_arc, pace_type, taboo_lines。
+              face_slap_pattern, emotional_arc, pace_type, taboo_lines,
+              market_risk, differentiation_durability, hook_test（v3.1 新增，市场可行性评估）。
             字段缺失或解析失败时回退为空 dict（写章节路径会优雅降级）。
         """
         system = (
@@ -482,19 +506,24 @@ class GenerationService:
   "face_slap_pattern": "打脸节奏（例：每 3 章一小、每 10 章一中、每卷一大）",
   "emotional_arc": "情感线占比（none/low/medium/high，对应 0%/10%/25%/40%）",
   "pace_type": "节奏类型（fast=番茄式爽快 / medium=起点中速 / slow=猫腻式文笔）",
-  "taboo_lines": ["禁忌边界 2-4 条（禁止涉及的题材/主题）"]
+  "taboo_lines": ["禁忌边界 2-4 条（禁止涉及的题材/主题）"],
+  "market_risk": "市场风险评估（同质化程度/受众规模/题材饱和度，各一句，合计50字内）",
+  "differentiation_durability": "差异化持续性：你的核心差异化能撑几卷？第几卷之后最可能暴露同质化？建议提前布局什么钩子来对冲？（60字内）",
+  "hook_test": "封面50字钩子：用50字以内写出这本书的书架推荐语，然后自评'一个从未看过此类书的28岁男/女读者，看到这50字的点击意愿（1-10分）'，格式：推荐语｜自评分:X｜理由（30字）"
 }}
 
 要求：
 1. tropes 必须互相协调，禁止"种田流+无敌流"这类自相矛盾组合
 2. reference_works 必须是同流派作品（不要跨流派类比）
 3. 若 logline 暗示女频题材，target_audience 不要硬扭成男频
-4. 严禁返回任何解释，仅返回 JSON。"""
+4. market_risk 必须诚实评估，不要只说好话——若同质化风险高，直接指出
+5. hook_test 的自评分要实事求是，6分以下要给出"如何提升钩子吸引力"的建议
+6. 严禁返回任何解释，仅返回 JSON。"""
 
         raw = await self._call_with_retry(
             system,
             prompt,
-            max_tokens=2048,
+            max_tokens=2560,
             task="bootstrap.positioning",
         )
         try:
@@ -504,7 +533,11 @@ class GenerationService:
         if not isinstance(data, dict):
             return {}
         # 字段兜底：缺失字段不丢，仅做最小清洗
-        for k in ("target_audience", "selling_point", "face_slap_pattern", "emotional_arc", "pace_type"):
+        for k in (
+            "target_audience", "selling_point", "face_slap_pattern",
+            "emotional_arc", "pace_type",
+            "market_risk", "differentiation_durability", "hook_test",
+        ):
             v = data.get(k)
             if not isinstance(v, str):
                 data[k] = ""
@@ -626,7 +659,9 @@ class GenerationService:
     "secrets": "势力不为人知的秘密/隐藏阴谋（供作者参考）",
     "rivals": ["竞争势力名"],
     "allies": ["盟友势力名"],
-    "attitude_to_protagonist": "hostile"
+    "attitude_to_protagonist": "hostile",
+    "internal_factions": "势力内部的派系博弈（至少2派，各有代表人物与目标差异，50字内；protagonist阵营与neutral阵营也必须填写，写'改革派vs保守派'等内部张力）",
+    "villain_timeline": "【仅 antagonist 阵营填写，其余填空字符串】若主角什么都不做，这股势力会在第几卷完成什么阴谋？被主角打断后的应对策略是什么？（70字内，具体到卷号）"
   }}
 ]
 faction_type 只能是: sect / kingdom / family / guild / evil / race / other
@@ -634,6 +669,7 @@ alignment 只能是: protagonist / neutral / antagonist / unknown
 active_period 只能是: early / mid / late / full
 attitude_to_protagonist 只能是: friendly / hostile / neutral / subordinate / superior
 必须涵盖主角阵营势力、核心反派势力、中立势力各至少1个。
+villain_timeline 对 antagonist 类势力为必填，要求具体到"第X卷前完成xxx，主角若干预则转为yyy策略"。
 只返回JSON数组，不要说明文字。"""
 
         raw = await self._call_with_retry(system, prompt, task="bootstrap.factions")
@@ -661,7 +697,11 @@ attitude_to_protagonist 只能是: friendly / hostile / neutral / subordinate / 
                 allies=item.get("allies", []),
                 attitude_to_protagonist=item.get("attitude_to_protagonist", "neutral"),
                 sort_order=i,
-                extra={"active_period": item.get("active_period", "")},
+                extra={
+                    "active_period": item.get("active_period", ""),
+                    "internal_factions": item.get("internal_factions", ""),
+                    "villain_timeline": item.get("villain_timeline", ""),
+                },
             )
             self.db.add(f)
             results.append(f)
@@ -674,6 +714,13 @@ attitude_to_protagonist 只能是: friendly / hostile / neutral / subordinate / 
             for f in results
         )
         ctx["faction_names"] = [f.name for f in results]
+        # 压入 villain_timeline 汇总，供 expand_outline 注入反派行动线约束
+        villain_timelines = [
+            f"{f.name}：{f.extra.get('villain_timeline', '')}"
+            for f in results
+            if f.alignment == "antagonist" and f.extra.get("villain_timeline", "").strip()
+        ]
+        ctx["villain_timelines"] = villain_timelines
         return results
 
     # ══════════════════════════════════════════════════════════
@@ -698,12 +745,14 @@ attitude_to_protagonist 只能是: friendly / hostile / neutral / subordinate / 
     "description": "功法/技能描述（40字内）",
     "effects": "使用效果",
     "limitations": "使用限制或副作用",
-    "mastered_by": ["掌握此技能的人物名（从上面人物列表选）"]
+    "mastered_by": ["掌握此技能的人物名（从上面人物列表选）"],
+    "plot_hook": "这个技能/功法在故事中的剧情钩子：何时会被损毁/被夺走/被超越/失效/揭露禁忌代价？用一句话指明触发章节范围（如：「第2卷高潮时主角核心功法被反派破解，被迫觉醒隐藏传承」）"
   }}
 ]
 skill_type 只能是: combat / defense / movement / support / bloodline / special
 grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
 选择对故事最重要的技能，包含主角核心战技和1~2个反派标志性技能。
+每个技能必须填写 plot_hook，不得留空。
 只返回JSON数组，不要说明文字。"""
 
         raw = await self._call_with_retry(system, prompt, task="bootstrap.skills")
@@ -721,6 +770,9 @@ grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
                 for name in item.get("mastered_by", [])
                 if name in char_name_to_id
             ]
+            skill_extra = {}
+            if item.get("plot_hook"):
+                skill_extra["plot_hook"] = str(item["plot_hook"])[:300]
             sk = Skill(
                 project_id=project.id,
                 name=item.get("name", f"功法{i+1}"),
@@ -733,6 +785,7 @@ grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
                 limitations=item.get("limitations"),
                 mastered_by_character_ids=mastered_ids,
                 sort_order=i,
+                extra=skill_extra,
             )
             self.db.add(sk)
             results.append(sk)
@@ -765,13 +818,15 @@ grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
     "limitations": "使用限制（境界要求、次数、副作用）",
     "story_significance": "在故事中的重要性/象征意义",
     "current_owner": "当前持有人名（从人物列表选，或留空）",
-    "status": "intact"
+    "status": "intact",
+    "plot_hook": "这件道具在故事中的剧情钩子：何时会被损毁/被夺走/持有者死亡/揭露隐藏能力/成为争夺焦点？用一句话指明触发章节范围（如：「第1卷末法宝被反派势力强夺，主角踏上复夺之路」）"
   }}
 ]
 item_type 只能是: weapon / armor / pill / artifact / material / scroll / beast / other
 rarity 只能是: common / uncommon / rare / epic / legendary / mythic / unique
 status 只能是: intact / damaged / destroyed / lost / unknown
 选择对主线剧情影响最大的道具，包含主角核心战力道具和1~2个关键麦高芬道具。
+每件道具必须填写 plot_hook，不得留空。
 只返回JSON数组，不要说明文字。"""
 
         raw = await self._call_with_retry(system, prompt, task="bootstrap.items")
@@ -784,6 +839,9 @@ status 只能是: intact / damaged / destroyed / lost / unknown
         for i, item in enumerate(data):
             owner_name = item.get("current_owner", "") or ""
             owner_uuid_str = char_name_to_id.get(owner_name) if owner_name else None
+            item_extra = {}
+            if item.get("plot_hook"):
+                item_extra["plot_hook"] = str(item["plot_hook"])[:300]
             it = Item(
                 project_id=project.id,
                 name=item.get("name", f"道具{i+1}"),
@@ -797,6 +855,7 @@ status 只能是: intact / damaged / destroyed / lost / unknown
                 status=item.get("status", "intact"),
                 current_owner_id=UUID(owner_uuid_str) if owner_uuid_str else None,
                 sort_order=i,
+                extra=item_extra,
             )
             self.db.add(it)
             results.append(it)
@@ -949,6 +1008,9 @@ status 只能是: intact / damaged / destroyed / lost / unknown
 4) 其他卡必须填写 extra.focus 的全部字段，每个字段一句短句，先给作者可扫读抓手
 5) 每张卡 content 至少180字，有可落地的名词、规则、代价、例外和冲突
 6) 不要重复已有的境界体系或势力信息
+7) 每张卡必须在 extra 中填写两个揭示节奏字段：
+   - reveal_timing：本设定何时、通过什么情节方式揭示给读者/主角（例：「第3卷主角发现禁忌遗迹时逐步揭示」）
+   - who_knows_now：故事开篇时已知晓这一设定的角色/势力（例：「上古三宗宗主、反派首领；主角完全不知」）
 只返回JSON数组，不要解释。"""
 
         raw = await self._call_with_retry(system, prompt, task="bootstrap.settings")
@@ -997,14 +1059,30 @@ status 只能是: intact / damaged / destroyed / lost / unknown
     "protagonist_start_rank": 1,
     "protagonist_end_rank": 9,
     "levels": [
-      {{"rank": 1, "name": "境界名", "description": "简述", "abilities": ["能力1"]}},
-      {{"rank": 2, "name": "境界名", "description": "简述", "abilities": ["能力1"]}}
+      {{
+        "rank": 1,
+        "name": "境界名",
+        "description": "简述",
+        "abilities": ["能力1"],
+        "chapter_budget": 20,
+        "gatekeeper": "守在这一境界卡点的核心障碍（强敌名/事件类型/资源缺口，10字内）"
+      }},
+      {{
+        "rank": 2,
+        "name": "境界名",
+        "description": "简述",
+        "abilities": ["能力1"],
+        "chapter_budget": 30,
+        "gatekeeper": "守在这一境界卡点的核心障碍"
+      }}
     ]
   }}
 ]
 system_type 只能是: cultivation / magic / ability / tech / hybrid
 levels 至少包含 6 个境界，按强弱从低到高排列。
 protagonist_start_rank、protagonist_end_rank 必须是整数，且等于 levels 中某一层的 rank，禁止填境界中文名。
+chapter_budget 为主角在该境界停留的预计章数（整数）；所有境界 chapter_budget 之和建议在目标总章数 70% 左右（其余 30% 用于横向扩展剧情）。
+gatekeeper 必须具体（如"宗门首席×××"或"突破所需天材地宝被反派势力垄断"），不要空泛写"强敌"。
 只返回JSON数组，不要说明文字。"""
 
         raw = await self._call_with_retry(system, prompt, task="bootstrap.power_systems")
@@ -1143,11 +1221,13 @@ status 只能是: planned / active
     "current_realm": "当前境界（或能力层级）",
     "speech_style": "说话风格",
     "values": "价值观",
-    "fear": "最恐惧的东西",
-    "secrets": "不愿公开的秘密",
+    "fear": "最恐惧的东西——必须具体，且这个恐惧在故事中会被迫直面",
+    "secrets": "不愿公开的秘密——必须具体，且这个秘密暴露后会引发实质性后果",
     "strengths": ["特质1", "特质2"],
     "weaknesses": ["弱点1"],
-    "special_traits": ["特殊能力或标志性特征"]
+    "special_traits": ["特殊能力或标志性特征"],
+    "debt_to": "对哪个角色（用名字）有未还的恩情/仇怨/承诺？欠了什么？（15字内；若无则填空）",
+    "detonation_vol": "上述欠债预计在第几卷被引爆或清偿？（填卷号整数，如2；若无欠债填0）"
   }}
 ]
 role 只能是: protagonist / supporting / antagonist
@@ -1156,7 +1236,8 @@ character_tier 代表该人物在全书中的叙事层级，只能是以下4个�
 - arc        = 弧线支柱：在某卷或某段剧情中主导走向，随该弧线完结后淡出或阵亡
 - plot       = 剧情推手：短期出现以推进特定情节节点，之后退场
 - background = 背景填充：丰富世界厚度与氛围，无强情节绑定
-请根据每个人物在故事中的实际定位严格判断，不要全部填 core。"""
+请根据每个人物在故事中的实际定位严格判断，不要全部填 core。
+debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对主角或某配角有欠债（仇怨或嫉妒型）；这些欠债要分散在不同卷引爆，制造持续的人物动力。"""
 
         raw = await self._call_with_retry(system, prompt, task="bootstrap.characters")
         data = _parse_json(raw)
@@ -1169,6 +1250,15 @@ character_tier 代表该人物在全书中的叙事层级，只能是以下4个�
             tier = item.get("character_tier", "core")
             if tier not in _VALID_TIERS:
                 tier = "core"
+            # 欠债字段：存入 extra，供大纲质检和 expand_outline 引用
+            char_extra: dict = {}
+            debt_to = (item.get("debt_to") or "").strip()
+            if debt_to:
+                char_extra["debt_to"] = debt_to
+            det_vol_raw = item.get("detonation_vol")
+            det_vol = _safe_int(det_vol_raw, default=0)
+            if det_vol and det_vol > 0:
+                char_extra["detonation_vol"] = det_vol
             c = Character(
                 project_id=project.id,
                 name=item.get("name", "未命名"),
@@ -1189,6 +1279,7 @@ character_tier 代表该人物在全书中的叙事层级，只能是以下4个�
                 strengths=item.get("strengths", []),
                 weaknesses=item.get("weaknesses", []),
                 special_traits=item.get("special_traits", []),
+                extra=char_extra if char_extra else None,
             )
             self.db.add(c)
             results.append(c)
@@ -1382,20 +1473,30 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             return []
 
         name_map = {c.name: c for c in chars}
+        # 把欠债信息汇总给关系生成，让 AI 设计互相呼应的张力
+        debt_summary = "; ".join(
+            f"{c.name}→欠债:{c.extra.get('debt_to','')}(第{c.extra.get('detonation_vol',0)}卷引爆)"
+            for c in chars
+            if c.extra and c.extra.get("debt_to", "").strip()
+        )
         system = "你是人物关系设计专家。只返回JSON数组。"
         prompt = f"""人物列表：{', '.join(ctx['char_names'])}
 创意：{ctx['logline']}
+已知欠债关系（请让关系设计与欠债相互呼应）：{debt_summary or '（无）'}
 
-生成人物关系，返回JSON数组：
+生成人物关系（覆盖所有核心人物，每对关系1条），返回JSON数组：
 [
   {{
     "from_name": "人物A", "to_name": "人物B",
     "relation_type": "师徒",
-    "description": "关系描述",
-    "intensity": 8
+    "description": "关系现状描述（15字内）",
+    "intensity": 8,
+    "unresolved_tension": "这段关系中悬而未决的张力/恩怨/信息差（20字内；若纯粹积极关系，写潜在的分歧或考验）",
+    "trigger_event": "什么事件会让这段关系发生质变？（15字内，要具体）"
   }}
 ]
-intensity 为 1~10 的整数，只能使用上面列出的人物名"""
+intensity 为 1~10 的整数，只能使用上面列出的人物名。
+unresolved_tension 和 trigger_event 为必填，不能为空或敷衍。"""
 
         try:
             raw = await self._call_with_retry(system, prompt, task="bootstrap.relations")
@@ -1411,6 +1512,15 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
             to_char = name_map.get(item.get("to_name", ""))
             if not from_char or not to_char:
                 continue
+            # 将 unresolved_tension / trigger_event 拼入 evolution_note 持久化
+            tension = (item.get("unresolved_tension") or "").strip()
+            trigger = (item.get("trigger_event") or "").strip()
+            evolution_note_parts = []
+            if tension:
+                evolution_note_parts.append(f"[张力]{tension}")
+            if trigger:
+                evolution_note_parts.append(f"[引爆事件]{trigger}")
+            evolution_note = "；".join(evolution_note_parts) or None
             rel = CharacterRelationship(
                 project_id=project.id,
                 from_character_id=from_char.id,
@@ -1418,12 +1528,177 @@ intensity 为 1~10 的整数，只能使用上面列出的人物名"""
                 relation_type=item.get("relation_type", "认识"),
                 description=item.get("description"),
                 intensity=int(item.get("intensity", 5)),
+                evolution_note=evolution_note,
             )
             self.db.add(rel)
             results.append(rel)
 
         self.db.commit()
         return results
+
+    # ══════════════════════════════════════════════════════════
+    #  Step 12 — 全局一致性扫描
+    # ══════════════════════════════════════════════════════════
+
+    async def _gen_consistency_scan(self, project, ctx: dict) -> list:
+        """Bootstrap 全部步骤完成后，对所有生成物做一次交叉核验。
+
+        检查常见矛盾：境界数字一致性、人物 faction 与势力档案对齐、
+        主角掌握技能是否满足境界要求、故事线与卷骨架是否呼应等。
+        结果写入 Project.extra.consistency_issues，供前端展示"X处需确认项"。
+
+        Returns:
+            list[dict]：每条 issue 含 severity / type / description / suggestion。
+        """
+        system = (
+            "你是有30年经验的网络小说总编辑，专门做稿件前置审核。"
+            "只返回 JSON 数组，不要任何解释文字。"
+        )
+
+        # 汇总关键字段摘要（压缩到能交叉对比的程度）
+        power_summary = ctx.get("power_summary", "（未设定）")
+        faction_summary = ctx.get("faction_summary", "（未设定）")
+        char_realms = ctx.get("char_realms", {})
+        char_names = ctx.get("char_names", [])
+        skill_names = ctx.get("skill_names", [])
+        item_names = ctx.get("item_names", [])
+        storyline_summary = ctx.get("storyline_summary", "（未设定）")
+        volumes_summary = ctx.get("volumes_summary", "（未设定）")
+        protagonist = ctx.get("protagonist", "主角")
+
+        char_realm_lines = "\n".join(
+            f"- {name}：境界={realm}" for name, realm in char_realms.items()
+        )
+
+        prompt = f"""小说：《{ctx.get('project_title', '未命名')}》（{ctx.get('genre', '')}）
+
+【境界体系】
+{power_summary}
+
+【势力档案摘要】
+{faction_summary}
+
+【人物+当前境界】
+{char_realm_lines or '（未设定）'}
+
+【人物列表】{', '.join(char_names)}
+主角：{protagonist}
+主角起点境界（power_systems 中 protagonist_start_rank 对应名称）：{ctx.get('power_level_names', ['（未知）'])[0] if ctx.get('power_level_names') else '（未知）'}
+
+【已生成技能】{', '.join(skill_names) or '（无）'}
+【已生成道具】{', '.join(item_names) or '（无）'}
+
+【故事线】
+{storyline_summary}
+
+【卷级骨架】
+{volumes_summary}
+
+请对以上信息做「交叉核验」，找出所有显著矛盾或风险项，返回JSON数组：
+[
+  {{
+    "severity": "high/medium/low",
+    "type": "realm_mismatch/faction_mismatch/skill_requirement/storyline_gap/timeline_conflict/other",
+    "description": "具体矛盾描述，举例说明哪里和哪里不一致（30字内）",
+    "suggestion": "最简单的修复建议（20字内）"
+  }}
+]
+
+检查重点：
+1. 人物卡中 current_realm 是否在境界体系 levels 的合法名称里？
+2. 主角和重要人物的 faction 是否与势力档案中的势力名吻合（允许模糊匹配）？
+3. 故事线类型（main/sub/romance等）与卷骨架描述的冲突走向是否吻合？
+4. 若有多条故事线，是否都能在卷骨架中找到对应的推进节点？
+5. 境界体系 protagonist_start_rank 与主角人物卡 current_realm 是否对应同一境界？
+如果没有发现矛盾，返回空数组 []。只返回JSON数组，不要任何解释。"""
+
+        try:
+            raw = await self._call_with_retry(
+                system, prompt, max_tokens=2048, task="bootstrap.consistency_scan"
+            )
+            issues = _parse_json(raw)
+            if not isinstance(issues, list):
+                issues = []
+        except Exception:
+            issues = []
+
+        # 写入 Project.extra
+        try:
+            extra = project.extra or {}
+            extra["consistency_issues"] = issues
+            project.extra = extra
+            self.db.commit()
+        except Exception:
+            pass
+
+        return issues
+
+    # ══════════════════════════════════════════════════════════
+    #  Step 13 — 开局前十章追读承诺清单
+    # ══════════════════════════════════════════════════════════
+
+    async def _gen_opening_contract(self, project, ctx: dict) -> dict:
+        """生成开局前十章的「追读承诺清单」。
+
+        网文能否存活，开局前十章决定 70%。本步骤从全部已生成设定中
+        提炼「每章必须兑现的追读钩子」，写入 Project.extra.opening_contract。
+
+        Returns:
+            dict：包含 chapter1_hook / chapter3_payoff / chapter5_foreshadow /
+                  chapter10_subscribe_reason / first_200_words_test 等字段。
+        """
+        system = (
+            "你是有30年经验的网络小说总编辑，专门做开局追读策划。"
+            "只返回 JSON，不要任何解释文字。"
+        )
+
+        positioning = ctx.get("positioning") or {}
+        tropes = positioning.get("tropes", [])
+        pace_type = positioning.get("pace_type", "medium")
+        target_audience = positioning.get("target_audience", "")
+
+        prompt = f"""小说：《{ctx.get('project_title', '未命名')}》（{ctx.get('genre', '')}）
+主角：{ctx.get('protagonist', '主角')}  起点境界：{ctx.get('power_level_names', ['（未知）'])[0] if ctx.get('power_level_names') else '（未知）'}
+创意：{ctx.get('logline', '')}
+核心爽点：{', '.join(tropes) or '（未设定）'}
+节奏类型：{pace_type}
+目标读者：{target_audience or '（未设定）'}
+世界观：{ctx.get('world_overview', '')[:200]}
+卷一概述：{(ctx.get('volumes_summary') or '').split('|')[0][:100]}
+
+请为本书开局前10章制定「追读承诺清单」，这是编辑决定是否签约的核心审核项。
+返回JSON：
+{{
+  "first_200_words_test": "第一章前200字必须完成的3件事：1) xxx 2) xxx 3) xxx（具体到场景/信息/情绪，不要废话）",
+  "chapter1_hook": "第1章末尾钩子：读者读完第1章后必须知道答案才肯继续的那个问题（一句话）",
+  "chapter3_payoff": "第3章小爽点：主角在前3章内必须获得的第一次具体反转/胜利/资源（要具体，不要'小小展示实力'这种废话）",
+  "chapter5_foreshadow": "第5章必须埋下的长线伏笔：能支撑读者追到第30章的那个谜（一句话，具体到人物或秘密）",
+  "chapter10_subscribe_reason": "第10章末尾：读者为什么要付费订阅第11章？给出一个让人无法放下的悬念设计（具体手法：强敌登场/秘密揭示/关系逆转/etc）",
+  "opening_traps_to_avoid": ["开局必须避免的3个常见坑（针对本书题材和爽点类型的具体风险）"],
+  "chapter_rhythm": "前10章节奏设计：哪章快哪章慢，何时第一次打脸，何时第一次建立情感连接（50字内）"
+}}
+要求：每个字段必须结合本书具体设定给出，禁止使用通用模板语言。"""
+
+        try:
+            raw = await self._call_with_retry(
+                system, prompt, max_tokens=2048, task="bootstrap.opening_contract"
+            )
+            contract = _parse_json(raw)
+            if not isinstance(contract, dict):
+                contract = {}
+        except Exception:
+            contract = {}
+
+        # 写入 Project.extra
+        try:
+            extra = project.extra or {}
+            extra["opening_contract"] = contract
+            project.extra = extra
+            self.db.commit()
+        except Exception:
+            pass
+
+        return contract
 
     # ══════════════════════════════════════════════════════════
     #  单次全量保存（方案B）

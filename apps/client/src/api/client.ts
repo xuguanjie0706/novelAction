@@ -68,6 +68,13 @@ export const projectsApi = {
   update: (id: string, data: any) => api.patch(`/projects/${id}`, data),
   delete: (id: string) => api.delete(`/projects/${id}`),
   resetWriting: (id: string) => api.post(`/projects/${id}/reset-writing`),
+  /** Bootstrap 后写入 Project.extra 的编辑洞察：consistency_issues / opening_contract / positioning */
+  getInsights: (id: string) => api.get<{
+    project_id: string
+    consistency_issues: Array<{ severity?: string; description?: string; issue?: string; category?: string }>
+    opening_contract: Record<string, any>
+    positioning: Record<string, any>
+  }>(`/projects/${id}/insights`),
 }
 
 // ── Cover Generation ──────────────────────────────────
@@ -400,4 +407,21 @@ export const aiApi = {
       revisions: Array<{ chapter_id: string; revised_content: string }>
     }
   ) => api.post(`/projects/${pid}/ai/chapter-coherence-apply/commit`, data),
+
+  /** 写前预警：传入本章计划，对照记忆/连续性/伏笔台账，输出矛盾风险 */
+  preWriteWarning: (
+    pid: string,
+    data: {
+      chapter_plan_summary: string
+      chapter_number?: number
+      model_profile?: 'local' | 'gemini'
+      llm_provider_id?: string
+    },
+  ) => api.post<{
+    ok: boolean
+    risk_count: number
+    risks: Array<{ type: string; severity: string; description: string; suggested_fix: string }>
+    reminders: string[]
+    error?: string
+  }>(`/projects/${pid}/ai/pre-write-warning`, data),
 }

@@ -151,3 +151,23 @@ def reset_writing_progress(project_id: str, db: Session = Depends(get_db)):
         ),
         "stats": stats,
     }
+
+
+@router.get("/{project_id}/insights")
+def get_project_insights(project_id: str, db: Session = Depends(get_db)):
+    """
+    返回 Bootstrap 生成后写入 Project.extra 的编辑视角洞察数据：
+    - consistency_issues：全局一致性扫描结果（Step 12）
+    - opening_contract：开局前10章追读承诺清单（Step 13）
+    调用方：Bootstrap 完成页、项目概览、写前预警。
+    """
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    extra = project.extra if isinstance(project.extra, dict) else {}
+    return {
+        "project_id": str(project.id),
+        "consistency_issues": extra.get("consistency_issues") or [],
+        "opening_contract": extra.get("opening_contract") or {},
+        "positioning": extra.get("positioning") or {},
+    }

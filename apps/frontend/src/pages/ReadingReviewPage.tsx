@@ -41,7 +41,17 @@ import type {
   ReviewProject,
 } from '../types/review'
 
-const CHECK_TYPES = ['plot', 'character', 'setting_consistency', 'pacing', 'hooks', 'outline_alignment']
+const CHECK_TYPES = [
+  'plot',
+  'character',
+  'setting_consistency',
+  'pacing',
+  'hooks',
+  'outline_alignment',
+  'face_slap_payoff',
+  'emotional_resonance',
+  'subscribe_intent',
+]
 
 const CHECK_LABELS: Record<string, string> = {
   plot: '情节推进',
@@ -50,6 +60,9 @@ const CHECK_LABELS: Record<string, string> = {
   pacing: '节奏控制',
   hooks: '悬念钩子',
   outline_alignment: '大纲匹配度',
+  face_slap_payoff: '打脸兑现',
+  emotional_resonance: '情感共鸣',
+  subscribe_intent: '追读意愿',
 }
 
 const SCORE_COLORS = [
@@ -784,6 +797,33 @@ export default function ReadingReviewPage() {
                       <Typography.Paragraph style={{ marginTop: 12, marginBottom: 0 }}>
                         {qualityReport.summary || '暂无总结'}
                       </Typography.Paragraph>
+
+                      {/* 新增：截图时刻 & 追读意愿 */}
+                      {(qualityReport.highlight_quote || qualityReport.subscribe_intent_score != null) && (
+                        <Card size="small" style={{ marginTop: 12, background: '#f6ffed', borderColor: '#b7eb8f' }} title="读者沉浸亮点">
+                          <Space direction="vertical" style={{ width: '100%' }}>
+                            {qualityReport.highlight_quote && (
+                              <div>
+                                <Typography.Text strong>📸 截图时刻：</Typography.Text>
+                                <Typography.Text italic style={{ marginLeft: 8, color: '#389e0d' }}>
+                                  「{qualityReport.highlight_quote}」
+                                </Typography.Text>
+                              </div>
+                            )}
+                            {qualityReport.subscribe_intent_score != null && (
+                              <div>
+                                <Typography.Text strong>📈 追读意愿估分：</Typography.Text>
+                                <Tag color={qualityReport.subscribe_intent_score >= 7 ? 'green' : qualityReport.subscribe_intent_score >= 5 ? 'orange' : 'red'} style={{ marginLeft: 8 }}>
+                                  {qualityReport.subscribe_intent_score}/10
+                                </Tag>
+                                <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
+                                  {qualityReport.subscribe_intent_score >= 7 ? '高意愿，易形成连更' : '需加强章末钩子'}
+                                </Typography.Text>
+                              </div>
+                            )}
+                          </Space>
+                        </Card>
+                      )}
                     </Card>
                     <Card title="问题清单">
                       <List
@@ -792,7 +832,9 @@ export default function ReadingReviewPage() {
                         renderItem={(item) => (
                           <List.Item>
                             <Space>
-                              <Tag color={item.type === 'warning' ? 'orange' : 'red'}>{item.type}</Tag>
+                              <Tag color={['warning', 'low_hook', 'overdue_foreshadow'].includes(item.type) ? 'orange' : 'red'}>
+                                {item.type === 'low_hook' ? '弱钩子' : item.type === 'overdue_foreshadow' ? '逾期伏笔' : item.type}
+                              </Tag>
                               <span>{item.description}</span>
                             </Space>
                           </List.Item>

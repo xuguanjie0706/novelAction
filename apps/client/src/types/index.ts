@@ -511,3 +511,91 @@ export interface CharacterChangeLog {
   changes:        ChangeItem[]
   created_at:     string
 }
+
+// ── 节奏地图：追读模拟 / 钩子检测 / 故事线悬空 ──────────────
+export interface ReaderSimulationResult {
+  chapter_id: string
+  chapter_title: string
+  chapter_number: number
+  will_continue: boolean
+  /** 追读意愿分 1-10 */
+  score: number
+  drop_risk: 'low' | 'medium' | 'high'
+  what_hooked: string
+  what_repelled: string
+  verdict: string
+  hook_tail: string
+}
+
+export interface HookMatchedPromise {
+  promise_id: string
+  promise_text: string
+  promise_type: string
+  status: string
+}
+
+export interface HookCheckResult {
+  chapter_id: string
+  chapter_title: string
+  hook_text: string
+  hook_type: 'cliffhanger' | 'curiosity' | 'promise' | 'emotional' | 'revelation' | 'weak' | 'none'
+  hook_strength: number
+  matched_promises: HookMatchedPromise[]
+  analysis: string
+  suggestions: string[]
+}
+
+export interface StorylineGapItem {
+  storyline_id: string
+  storyline_name: string
+  line_type: string
+  status: string
+  last_seen_chapter_number: number | null
+  current_max_chapter: number
+  gap_size: number
+  severity: 'warning' | 'critical'
+}
+
+export interface StorylineGapsResult {
+  gaps: StorylineGapItem[]
+  total_chapters: number
+  checked_storylines: number
+}
+
+/** 章节综合分析结果（单次 AI 调用，内部用于写库，不直接展示给用户）*/
+export interface ChapterAnalysisResult {
+  simulation: ReaderSimulationResult
+  hook: HookCheckResult
+}
+
+/**
+ * 章节分析均值统计——汇总该章所有历史分析记录的结果。
+ *
+ * 由 POST /ai/chapter-analysis（每次分析后）和
+ * GET /ai/chapter-analysis-stats（页面加载批量拉取）返回。
+ *
+ * avg_score / avg_hook_strength 为浮点数，展示时保留一位小数。
+ * 定性字段（verdict、what_hooked 等）取最近一次分析。
+ */
+export interface ChapterAnalysisStats {
+  chapter_id: string
+  run_count: number
+  /** 追读意愿均值（1-10，float） */
+  avg_score: number
+  /** 钩子强度均值（1-5，float） */
+  avg_hook_strength: number
+  /** 由 avg_score 推导：>=7 low / >=5 medium / else high */
+  drop_risk: 'low' | 'medium' | 'high'
+  will_continue: boolean
+  // ── 最新一次分析的定性字段 ──
+  what_hooked: string
+  what_repelled: string
+  verdict: string
+  hook_type: 'cliffhanger' | 'curiosity' | 'promise' | 'emotional' | 'revelation' | 'weak' | 'none'
+  hook_analysis: string
+  hook_suggestions: string[]
+  matched_promises: HookMatchedPromise[]
+  hook_tail: string
+  /** 最近一次分析的 ISO 时间戳 */
+  latest_at: string
+}

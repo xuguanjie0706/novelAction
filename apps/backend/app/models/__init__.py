@@ -25,6 +25,7 @@ from app.models.character_change_log import CharacterChangeLog
 from app.models.cover_image_call_log import CoverImageCallLog
 from app.models.scene import Scene
 from app.models.reader_promise import ReaderPromise
+from app.models.chapter_analysis_record import ChapterAnalysisRecord
 
 __all__ = [
     "Project",
@@ -53,4 +54,5 @@ __all__ = [
     "CoverImageCallLog",
     "Scene",
     "ReaderPromise",
+    "ChapterAnalysisRecord",
 ]

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ChevronRight, ChevronDown, Plus, Trash2, Pencil, Check, X,
-  Sparkles, BookOpen, Users, TrendingUp, GitBranch,
+  Sparkles, BookOpen, Users, TrendingUp, GitBranch, Target,
 } from 'lucide-react'
 import { chaptersApi, outlineApi, projectsApi } from '../api/client'
 import { useAppStore, toOutlineApiModelProfile, routeLlmProviderPayload } from '../store'

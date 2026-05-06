@@ -5,10 +5,24 @@ from __future__ import annotations
 import re
 
 
+def _strip_leading_chapter_title(text: str) -> str:
+    """从正文开头过滤掉章节标题行（如“第1章 xxx”、“Chapter 1:”等），确保正文与章节标题区分。"""
+    if not text or not text.strip():
+        return text or ""
+    lines = text.split("\n")
+    if lines:
+        first = lines[0].strip()
+        # 匹配常见中英文章节标题格式
+        if re.match(r'^(第\s*[一二三四五六七八九十百千\d]+\s*章|第\s*\d+\s*章|Chapter\s*\d+|卷\s*[一二三四五六七八九十]+|卷\s*\d+)', first, re.IGNORECASE):
+            return "\n".join(lines[1:]).strip()
+    return text.strip()
+
+
 def split_plain_manuscript_and_index_block(plain: str) -> tuple[str, str | None]:
     """
     将去 HTML 后的纯文本拆成「叙事正文」与「稿末 ### ch_ / 章节速查索引」块。
     业务库只存叙事时，稿末仅用于解析入库或存在于 llm_call_logs。
+    正文会自动过滤开头的章节标题行，确保正文与章节标题严格区分。
     """
     t = (plain or "").replace("\r\n", "\n")
     if not t.strip():
@@ -32,11 +46,13 @@ def split_plain_manuscript_and_index_block(plain: str) -> tuple[str, str | None]
         if split < 0 or lead < split:
             split = lead
     if split < 0:
-        return t.strip(), None
+        body = _strip_leading_chapter_title(t)
+        return body, None
     body = t[:split].rstrip().strip()
+    body = _strip_leading_chapter_title(body)
     index_block = t[split:].strip()
     if not index_block:
-        return t.strip(), None
+        return body, None
     return body, index_block
 
 

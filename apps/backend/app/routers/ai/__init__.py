@@ -4,6 +4,7 @@
 - `context`：为大模型组装的各类上下文（连续性、索引、对话等）
 - `quality_debt` / `foreshadow` / `debrief_assets`：与质检、伏笔、复盘写库相关的纯逻辑
 - `*_routes`：FastAPI 路由声明（薄层，编排 DB 与 AIService）
+- `reader_simulation_routes`：追读模拟 / 章末钩子检测 / 故事线悬空检测
 
 对外仍导出 `router` 供 `main.include_router` 使用；并保留若干以下划线开头的别名，供测试与内部模块兼容旧 `app.routers.ai` 导入路径。
 """
@@ -19,6 +20,7 @@ from app.routers.ai import (  # noqa: E402
     memory_routes,
     quality_debt_fix_routes,
     quality_routes,
+    reader_simulation_routes,
 )
 
 router.include_router(quality_routes.router)
@@ -28,6 +30,7 @@ router.include_router(memory_routes.router)
 router.include_router(draft_routes.router)
 router.include_router(debrief_routes.router)
 router.include_router(quality_debt_fix_routes.router)
+router.include_router(reader_simulation_routes.router)
 
 # --- 兼容旧单文件 `ai.py` 的导入（测试等） ---
 from app.routers.ai.context import (  # noqa: E402

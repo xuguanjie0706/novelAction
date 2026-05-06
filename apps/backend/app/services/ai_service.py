@@ -1541,6 +1541,7 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
             task_line = (
                 f"【整章重写】请根据本章大纲与故事背景，写出全新正文约{full_target}字（±200字），"
                 "不要复述或抄袭旧稿套话；若旧稿与大纲冲突，以大纲为准。"
+                "正文不要包含章节标题行，直接从故事第一句话开始叙事。"
             )
         elif has_content:
             existing_tail_limit = 4000 if large_context else 500
@@ -1548,9 +1549,10 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
                 f"当前已写内容（最后{existing_tail_limit}字供衔接参考）：\n"
                 f"{self._clip_context(existing_content, 500, 4000, from_end=True)}\n\n"
                 f"请根据章节计划，续写接下来约{cont_target_lo}-{cont_target_hi}字的正文，保持章节爽点与情绪推进："
+                "正文不要包含章节标题行，直接从故事第一句话开始叙事。"
             )
         else:
-            task_line = f"请根据章节计划，写出本章完整初稿约{full_target}字（±200字），第一句话必须立刻抓住读者，并在章末留下追读钩子："
+            task_line = f"请根据章节计划，写出本章完整初稿约{full_target}字（±200字），第一句话必须立刻抓住读者，并在章末留下追读钩子：正文不要包含章节标题行，直接从故事第一句话开始叙事。"
 
         # 本地小模型仍保持短上下文；Gemini 使用长上下文，优先保证故事连续性。
         premise_part = (

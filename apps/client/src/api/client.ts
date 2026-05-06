@@ -1,6 +1,6 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
-import type { AiChatMessage, Chapter, LlmOverview } from '../types'
+import type { AiChatMessage, Chapter, ChapterAnalysisResult, ChapterAnalysisStats, HookCheckResult, LlmOverview, ReaderSimulationResult, StorylineGapsResult } from '../types'
 import {
   extractUsage,
   finishLlmCall,
@@ -424,4 +424,67 @@ export const aiApi = {
     reminders: string[]
     error?: string
   }>(`/projects/${pid}/ai/pre-write-warning`, data),
+
+  /**
+   * 章节综合分析（推荐入口）：单次 LLM 调用，结果写入 DB，返回该章历次均值统计。
+   * 每次调用都会新增一条历史记录，多跑几次可获得更稳定的 avg_score。
+   * @param pid - 项目 ID
+   * @param chapterId - 章节 ID
+   * @param modelProfile - 模型线路
+   * @param llmProviderId - 可选远程线路 provider ID
+   */
+  chapterAnalysis: (
+    pid: string,
+    chapterId: string,
+    modelProfile: 'local' | 'gemini' = 'local',
+    llmProviderId?: string,
+  ) => api.post<ChapterAnalysisStats>(`/projects/${pid}/ai/chapter-analysis`, {
+    chapter_id: chapterId,
+    model_profile: modelProfile,
+    ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
+  }),
+
+  /**
+   * 批量读取项目所有章节的分析均值统计（无 AI 调用）。
+   * 供节奏地图页面加载时恢复历史数据。
+   * @param pid - 项目 ID
+   */
+  chapterAnalysisStats: (pid: string) =>
+    api.get<ChapterAnalysisStats[]>(`/projects/${pid}/ai/chapter-analysis-stats`),
+
+  /**
+   * 故事线悬空检测：无 AI，纯逻辑，找出 N 章以上未出现的活跃故事线。
+   * @param pid - 项目 ID
+   * @param gapThreshold - 悬空阈值章数，默认 8
+   */
+  storylineGaps: (pid: string, gapThreshold = 8) =>
+    api.get<StorylineGapsResult>(`/projects/${pid}/ai/storyline-gaps`, {
+      params: { gap_threshold: gapThreshold },
+    }),
+
+  // ── 独立端点（保留，供其他场景单独调用） ──────────────────────────────────
+
+  /** @internal 仅追读模拟（推荐用 chapterAnalysis） */
+  readerSimulation: (
+    pid: string,
+    chapterId: string,
+    modelProfile: 'local' | 'gemini' = 'local',
+    llmProviderId?: string,
+  ) => api.post<ReaderSimulationResult>(`/projects/${pid}/ai/reader-simulation`, {
+    chapter_id: chapterId,
+    model_profile: modelProfile,
+    ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
+  }),
+
+  /** @internal 仅钩子检测（推荐用 chapterAnalysis） */
+  hookCheck: (
+    pid: string,
+    chapterId: string,
+    modelProfile: 'local' | 'gemini' = 'local',
+    llmProviderId?: string,
+  ) => api.post<HookCheckResult>(`/projects/${pid}/ai/hook-check`, {
+    chapter_id: chapterId,
+    model_profile: modelProfile,
+    ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
+  }),
 }

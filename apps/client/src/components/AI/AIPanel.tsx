@@ -20,6 +20,9 @@ const DIMENSION_LABELS: Record<string, string> = {
   pacing: '节奏',
   hooks: '悬念',
   outline_alignment: '大纲对齐',
+  face_slap_payoff: '打脸兑现',
+  emotional_resonance: '情感共鸣',
+  subscribe_intent: '追读意愿',
 }
 
 function chapterPlainTextLen(ch: Chapter): number {
@@ -378,8 +381,14 @@ export default function AIPanel({ projectId }: Props) {
                   <div>
                     <div className="text-xs font-semibold text-gray-700 mb-2">优化建议</div>
                     <ul className="space-y-1">
-                      {report.suggestions.map((s, i) => {
-                        const text = typeof s === 'string' ? s : s && typeof s === 'object' ? (s.comment || s.description || JSON.stringify(s)) : String(s ?? '')
+                      {report.suggestions.map((raw, i) => {
+                        const s = raw as string | { comment?: string; description?: string }
+                        const text =
+                          typeof s === 'string'
+                            ? s
+                            : s && typeof s === 'object'
+                              ? s.comment || s.description || JSON.stringify(s)
+                              : String(s ?? '')
                         return (
                           <li key={i} className="text-xs text-gray-600 flex gap-1.5">
                             <span className="text-amber-500 shrink-0">•</span>

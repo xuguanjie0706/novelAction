@@ -1,3 +1,4 @@
+import re
 from typing import Optional
 from uuid import uuid4
 
@@ -47,11 +48,65 @@ def _find_asset_by_id_or_name(
         if found:
             return found
     if asset_name:
-        return db.query(model).filter(
+        by_exact_name = db.query(model).filter(
             model.project_id == project_id,
             model.name == asset_name,
         ).first()
+        if by_exact_name:
+            return by_exact_name
+        if model is Faction:
+            return _find_faction_by_fuzzy_name(db, project_id, asset_name)
     return None
+
+
+_FACTION_LOCATION_MARKERS = ("郡", "州", "府", "城", "县", "镇", "村", "域", "界", "岭", "谷", "海", "湖")
+
+
+def _normalize_faction_name_candidates(name: Optional[str]) -> set[str]:
+    text = (name or "").strip()
+    if not text:
+        return set()
+    compact = re.sub(r"[\s·•\\\-_/（）()【】\[\]<>《》“”\"'`~!@#$%^&*+,，。；：、？?]+", "", text)
+    if not compact:
+        return set()
+    candidates = {compact}
+    for marker in _FACTION_LOCATION_MARKERS:
+        if marker in compact:
+            tail = compact.rsplit(marker, 1)[-1]
+            if len(tail) >= 2:
+                candidates.add(tail)
+    if "的" in compact:
+        tail = compact.rsplit("的", 1)[-1]
+        if len(tail) >= 2:
+            candidates.add(tail)
+    return candidates
+
+
+def _find_faction_by_fuzzy_name(db: Session, project_id: str, asset_name: str) -> Optional[Faction]:
+    lookup_candidates = _normalize_faction_name_candidates(asset_name)
+    if not lookup_candidates:
+        return None
+    factions = db.query(Faction).filter(Faction.project_id == project_id).all()
+    for faction in factions:
+        existing_candidates = _normalize_faction_name_candidates(faction.name)
+        extra = dict(faction.extra or {})
+        for alias in (extra.get("name_aliases") or []):
+            existing_candidates |= _normalize_faction_name_candidates(str(alias))
+        if lookup_candidates & existing_candidates:
+            return faction
+    return None
+
+
+def _append_faction_alias(faction: Faction, alias_name: str) -> None:
+    alias = (alias_name or "").strip()
+    if not alias or alias == faction.name:
+        return
+    extra = dict(faction.extra or {})
+    aliases = [str(v).strip() for v in (extra.get("name_aliases") or []) if str(v).strip()]
+    if alias not in aliases:
+        aliases.append(alias)
+    extra["name_aliases"] = aliases
+    faction.extra = extra
 
 
 def merge_extra(existing: Optional[dict], **updates) -> dict:
@@ -289,6 +344,7 @@ def apply_asset_updates(
             reason_to_store=data.reason_to_store,
             first_recorded_chapter=chapter_number,
         )
+        _append_faction_alias(faction, name)
 
     for data in asset_updates.faction_updates:
         faction = _find_asset_by_id_or_name(db, Faction, project_id, data.faction_id, data.faction_name)

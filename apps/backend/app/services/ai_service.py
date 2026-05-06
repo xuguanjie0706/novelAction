@@ -1916,36 +1916,36 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
   "subscribe_intent_score": 8,
   "summary": "本章整体复盘总结（一句话）",
   "speech_kit_updates": [
-    {
+    {{
       "character_id": "人物id",
       "character_name": "人物名",
       "new_signature_words": ["本章新出现的标志性词语"],
       "new_sample_dialogues": ["本章新出现的典型台词（1-3句）"],
       "evolution_note": "本章人物说话风格/心理有何细微演变"
-    }
+    }}
   ],
   "new_reader_promises": [
-    {
+    {{
       "promise_text": "对读者的承诺原文或提炼（例：下一章林凡将面对天劫）",
       "promise_type": "chapter_ending / volume_ending / name_implication / chapter_comment_consensus",
       "expected_within_chapters": 1,
       "priority": 5,
       "audience_aware": 4
-    }
+    }}
   ],
   "next_chapter_directives": [
-    {
+    {{
       "outline_node_id": "目标下一章 OutlineNode 的 id（若本章已知下一章 id 则填，否则留空字符串，由系统自动匹配下一章）",
-      "patch": {
+      "patch": {{
         "add_foreshadow": "若本章埋了新伏笔但未在 chapter_index 完全覆盖，建议在下一章回收或发展，描述一句",
         "force_pov": "下一章建议强制使用哪位角色 POV（角色名），用于避免全知视角或配角失语",
         "increase_screen_time_for": ["角色id列表，本章戏份不足的角色，下一章必须补"],
         "must_resolve_promise_in_next_N_chapters": 2,
         "adjust_pacing": "fast / normal / slow（本章节奏拖了则 fast，本章太赶则 slow）",
         "reader_expectation_note": "读者当前最期待/最怕看到什么，本章应如何照顾情绪曲线"
-      },
+      }},
       "reason": "为什么要做这个 patch 的编辑逻辑（简短一句）"
-    }
+    }}
   ]
 }}"""
 

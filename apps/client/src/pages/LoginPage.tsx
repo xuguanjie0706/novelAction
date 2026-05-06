@@ -10,6 +10,7 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
+import { Eye, EyeOff } from 'lucide-react'
 
 /** 当前模式：登录 or 注册 */
 type Mode = 'login' | 'register'
@@ -24,6 +25,7 @@ export default function LoginPage() {
   const [username, setUsername] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [showPassword, setShowPassword] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -118,6 +120,90 @@ export default function LoginPage() {
               注册
             </button>
           </div>
+
+          <form onSubmit={handleSubmit} className="space-y-5">
+            {/* 用户名（仅注册） */}
+            {mode === 'register' && (
+              <div>
+                <label className="block text-sm font-medium text-[#A8B0B8] mb-1.5">
+                  用户名 <span className="text-[#5C5240] font-normal">（可选）</span>
+                </label>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
+                  placeholder="留空则使用邮箱前缀"
+                  className="w-full bg-[#121B22] border border-[#3A2F2A] rounded-xl px-4 py-3 text-sm text-[#F5E8C7] placeholder:text-[#5C5240] focus:outline-none focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]/30 transition-all"
+                />
+              </div>
+            )}
+
+            {/* 邮箱 */}
+            <div>
+              <label className="block text-sm font-medium text-[#A8B0B8] mb-1.5">
+                邮箱
+              </label>
+              <input
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="your@email.com"
+                required
+                autoComplete="email"
+                className="w-full bg-[#121B22] border border-[#3A2F2A] rounded-xl px-4 py-3 text-sm text-[#F5E8C7] placeholder:text-[#5C5240] focus:outline-none focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]/30 transition-all"
+              />
+            </div>
+
+            {/* 密码 + visibility toggle (new) */}
+            <div>
+              <label className="block text-sm font-medium text-[#A8B0B8] mb-1.5">
+                密码 {mode === 'register' && <span className="text-[#5C5240] font-normal">（至少 6 位）</span>}
+              </label>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder={mode === 'register' ? '至少 6 位' : '请输入密码'}
+                  required
+                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                  className="w-full bg-[#121B22] border border-[#3A2F2A] rounded-xl px-4 py-3 pr-12 text-sm text-[#F5E8C7] placeholder:text-[#5C5240] focus:outline-none focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]/30 transition-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-[#A8B0B8] hover:text-[#C9A227] transition-colors"
+                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </div>
+
+            {/* 错误提示 */}
+            {error && (
+              <div className="flex items-start gap-2 bg-[#3A2A2A]/60 border border-[#8B4A4A]/40 rounded-xl px-4 py-3 text-sm text-[#D4A5A5]">
+                <span className="mt-0.5">✕</span>
+                <p>{error}</p>
+              </div>
+            )}
+
+            {/* 提交按钮 */}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-[#C9A227] hover:bg-[#D4AF37] active:bg-[#B8971F] disabled:bg-[#5C5240] disabled:text-[#8A7F6A] disabled:cursor-not-allowed text-[#0C111C] font-medium py-3 rounded-xl text-sm transition-all shadow-lg shadow-[#C9A227]/20 mt-2 flex items-center justify-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <span className="inline-block w-4 h-4 border-2 border-[#0C111C] border-t-transparent rounded-full animate-spin" />
+                  {mode === 'login' ? '登录中…' : '注册中…'}
+                </>
+              ) : (
+                mode === 'login' ? '登录' : '注册并登录'
+              )}
+            </button>
+          </form>
         </div>
       </div>
     </div>

@@ -1,12 +1,11 @@
-# Novel System — 项目记忆 (AGENTS.md)
+# Novel System — 项目记忆 (CLAUDE.md)
 
-> 这个文件是给 AI 助手（Codex）读的上下文锚点。  
+> 这个文件是给 AI 助手（Claude）读的上下文锚点。  
 > 每次重要决策、架构变更、未完成事项都记录在这里，避免重复推导。
 
 ---
 
 ## 项目概述
-
 
 **目标**：一个以 AI 生成为核心的网络小说创作系统。人工不负责填写设定，所有世界观、势力、境界、人物、大纲均由 AI 从一句话创意全量生成。  
 **核心特性**：输入一句话创意，AI 全量生成结构化设定（境界体系、势力档案、故事线、人物、技能、道具）并存入对应数据表；后续章节写作、质检、记忆管理也全部由 AI 驱动，人工只做审阅和微调。
@@ -43,13 +42,13 @@
 
 | 前端「模型 / 线路」 | 模型与连接来源 |
 |---------------------|----------------|
-| 远程 · 某条提供者 | 管理后台 `llm_providers`（请求带 `llm_provider_id`） |
-| 远程 · 环境变量 | `GEMINI_BASE_URL` + `GEMINI_MODEL`（无 DB 行时） |
-| 本地 | `apps/backend/.env` 的 `LLM_BASE_URL` + `LLM_API_KEY` + **`AI_MODEL`（必填）** |
+| 远程 · 某条提供者 | 管理后台 `llm_providers` 表（`base_url` / `model_name` / `api_key`），请求带 `llm_provider_id` |
+| 远程 · 环境变量（无 DB 行） | `GEMINI_BASE_URL` + `GEMINI_MODEL`（兼容旧部署） |
+| 本地 | 仅 `apps/backend/.env` 的 `LLM_BASE_URL` + `LLM_API_KEY` + **`AI_MODEL`（必填）** |
 
 ### 关键决策：统一用 OpenAI 兼容协议
 
-**原因**：不绑定任何 SDK；远程由管理后台或 `GEMINI_*`；本地由 `LLM_*` + `AI_MODEL`。
+**原因**：不绑定任何 SDK；远程改管理后台或 `.env` 的 `GEMINI_*`；本地改 `.env` 的 `LLM_*` + `AI_MODEL`。
 
 ```env
 # 仅在使用「本地」线路时需要配置 AI_MODEL
@@ -57,7 +56,7 @@ LLM_BASE_URL=http://localhost:11434/v1
 LLM_API_KEY=ollama
 # AI_MODEL=你的本地模型 id
 
-# 可选：无 DB 时的远程兜底
+# 可选：无 DB 时的远程兜底（OpenAI 兼容层）
 # GEMINI_BASE_URL=https://...
 # GEMINI_API_KEY=...
 # GEMINI_MODEL=...
@@ -65,50 +64,32 @@ LLM_API_KEY=ollama
 
 ### 本地线路与短上下文（`model_profile=local`）
 
-- 小上下文时控制单次 prompt 长度；`_parse_json()` 做容错（fence、strip、部分网关夹带的 think 标签）
-- 若某网关对 `thinking` 类参数报错，可按网关文档在调用层用 `extra_body` 关闭
+- 小上下文时单次 prompt 需控制长度；`_parse_json()` 做容错（去 markdown fence、strip、部分网关夹带的 think 标签）
+- 若某兼容网关对 `thinking` 类参数报错，可在调用层按需加 `extra_body` 关闭（视网关文档）
 
 ### Gemini 迁移时的变化
 
 - Gemini 支持 100 万 token context，可以切换到**方案 B（单次全量生成）**
 - `generation_service.py` 里 `mode="single_shot"` 已预留，切换只需改前端请求参数
 
-### Gemini 章节写作与质检核心流程
+### 任务级采样配置（v3，2026-05）
 
-当前正文生成、单章质检、多章连贯性检测都按 **model_profile** 分流：
+> 设计动机：此前 `_call_ai` / `_stream_ai` 全程不传 `temperature`，质检（要稳定 JSON）和写正文（要文采变化）共用一个默认温度，是 AI 味的系统性根因。
 
-- `local/default`：短上下文策略，严格裁剪 prompt，避免本地模型 context 溢出。
-- `gemini`：启用长上下文策略，不优先考虑 token 节省，而优先保证故事事实、人物状态、伏笔和章节承接完整。
+- 配置文件：`apps/backend/app/services/llm_task_profiles.py`
+- 调用方约定：每次 `_call_ai` / `_stream_ai` 传 `task="<域>.<动作>"`（如 `quality.check`、`draft.opening`）；未识别走网关默认（向后兼容）。
+- 关键档位：
 
-核心链路如下：
+| 任务域 | temperature | 说明 |
+|---|---|---|
+| `quality.*` / `debrief.*` | 0.2-0.3 | 要稳定 JSON 与可比较打分 |
+| `bootstrap.*` / `outline.*` | 0.55-0.75 | 半结构化生成 |
+| `draft.chapter` | 0.9 | 章节正文，加 frequency/presence_penalty 抑制重复 |
+| `draft.opening` / `draft.climax` | 0.95 | 开局期 / 高潮期允许更跳脱 |
+| `draft.dark_hour` | 0.75 | 至暗期需克制 |
 
-```
-章节写作请求
-  → apps/backend/app/routers/ai/ 聚合项目事实
-  → AIService.draft_assist_stream 组装长上下文 prompt
-  → Gemini 流式生成正文 + 章节速查索引
-  → 写完后 chapter-debrief / auto-extract 产出记忆与章节索引
-  → 下一章生成与质检继续读取这些事实
-```
-
-生成正文时，Gemini 分支会尽量传入：
-
-- 作品基本面：`Project.premise`
-- 本章大纲：开篇钩子、核心事件、人物变化、章末方向、实力里程碑、情感基调、伏笔要求
-- 世界观设定：更多 `WorldSetting` 完整内容
-- 人物事实：境界、位置、状态、技能、道具、价值观、恐惧、秘密等
-- 故事线：planned / active / climax 的故事线与关键节拍
-- 近期记忆：更多 `MemoryChunk`
-- 上一章尾部：Gemini 读取更长的前章结尾用于情绪和因果衔接
-- 连续性账本：人物状态、力量体系、最近章节、未解决承接点、禁止事项
-- 章节速查索引：最近章节核心事件、章末钩子、未回收伏笔
-
-质检分两层：
-
-- **单章质检** `/quality-check`：Gemini 读取完整正文，结合连续性账本、章节索引、人物状态、故事线和力量体系，重点查境界/技能/位置/状态/信息来源是否矛盾。
-- **多章连贯性检测** `/chapter-coherence-check`：Gemini 读取所选章节更完整正文，并额外读取项目事实、世界观、人物状态、故事线、章节索引和记忆库，用来检查标题兑现、跨章因果、时间线、人物状态突变和伏笔承接。
-
-重要原则：**Gemini 路径不要回退到“小模型省 token”思路。** 如果连贯性差，优先检查是否漏传了结构化事实（章节索引、复盘记忆、人物状态、故事线节拍、伏笔表），而不是继续缩短 prompt。
+- 自定义覆写：调用方可传 `sampling={"temperature": 0.85}` 临时覆盖（A/B 测试用）。
+- 阶段→任务名映射：`phase_to_draft_task(phase)` 在 `draft_assist_stream` 内部按 `OutlineNode.phase` 自动选档。
 
 ---
 
@@ -125,7 +106,11 @@ Project
   ├── PowerSystem（境界/力量体系，含结构化 levels 数组）
   ├── Skill（功法/技能，关联 PowerSystem，记录掌握者）
   ├── Item（道具/法宝，含稀有度、持有历史）
-  └── Faction（势力/宗门/国家，支持父子层级）
+  ├── Faction（势力/宗门/国家，支持父子层级）
+  ├── Foreshadow（伏笔台账）
+  ├── QualityDebt（质检欠债记录）
+  ├── Scene（章节分场，三层调度核心；表已建，router 待实现）
+  └── ReaderPromise（读者承诺台账；表已建，router 待实现）
 ```
 
 所有 UUID 主键，`project_id` 外键贯穿所有表。
@@ -141,6 +126,41 @@ Project
 新增：`storyline_ids`关联故事线、`involved_character_ids`出场人物、`key_item_ids`关键道具、
 `key_skill_ids`关键技能、`emotional_tone`情感基调、`pacing`节奏标记、
 `power_milestone`实力里程碑、`foreshadows_laid`/`foreshadows_resolved`伏笔管理。
+
+### OutlineNode.phase（v3，2026-05）
+卷阶段标记，章节起草 prompt 按此切模板与采样档位：
+
+| 取值 | 含义 | 节奏要求 |
+|---|---|---|
+| `opening` | 开局期 / 新手村 | 钩子密度高、爽点 3 章一次、字数偏短（~2200） |
+| `rising` | 起飞期 / 扩张期 | 势力扩张、感情线接入 |
+| `turning` | 转折期 | 矛盾升级、代价兑现 |
+| `dark_hour` | 至暗期 | 允许「虐」、节奏放缓、字数 ~2800 |
+| `climax` | 高潮期 | 伏笔回收、爆点拉满、字数 3000-3300 |
+| `ending` | 收束期 | 留下一卷悬念种子 |
+
+由 Bootstrap Step 9 (`_gen_volumes`) 在卷级填入，写章节时回溯卷阶段。
+
+### Scene 模型（v3，2026-05）
+
+章节分场，三层调度（章纲 → 分场 → 逐场正文）的核心数据单元。
+- 关联：`Project` / `Chapter`（写完后绑定）/ `OutlineNode`
+- 关键字段：`order`、`pov_character_id`、`characters_on_stage`、`goal`、`conflict`、`turn`、`hook`、`hook_strength`、`word_budget`、`pacing`、`sensory_focus`、`status`（planned/written/reviewed）、`content`
+- `location_id`（ForeignKey `locations.id`）已**注释预留**，待 Location 模型（P2-W7）实现后启用；当前用 `location_name` 文本字段
+- **当前状态**：模型 + migration 已就位，router 待实现
+
+### ReaderPromise 模型（v3，2026-05）
+
+读者承诺台账，记录章末/卷末预告、名字暗示、章评共识等对读者的显式或隐式承诺。
+- 关键字段：`promise_type`（chapter_ending / volume_ending / name_implication / ...）、`expected_chapter_window`、`status`（open / fulfilled / broken）、`priority`（1-5）、`audience_aware`（0-5）
+- 写章时 prompt 注入"本章必须/可以兑现的承诺"；复盘自动检测新承诺并标记回收
+- **当前状态**：模型 + migration 已就位，router 待实现
+
+### Project.extra（v3，2026-05）
+JSON 杂物字段，当前已知键：
+- `extra.positioning`：Step 0 立项会议产物（`target_audience` / `tropes` / `reference_works` /
+  `selling_point` / `face_slap_pattern` / `emotional_arc` / `pace_type` / `taboo_lines`）。
+  写章节路径优先读 `Project.extra.positioning`，回退 `Project.story_core.positioning`。
 
 ---
 
@@ -165,15 +185,32 @@ Project
 
 ## 一句话生成（Bootstrap）双方案
 
-### 方案 A：串行步进（Sequential）— 默认，适合
+### 方案 A：串行步进（Sequential）— 默认
 
 ```
-logline → [Step1 项目] → [Step2 设定] → [Step3 人物] → [Step4 大纲] → [Step5 记忆] → [Step6 关系]
+logline
+  → [Step0  立项会议]          # _gen_positioning：受众/爽点/打脸节奏/卖点
+  → [Step1  项目]              # _gen_project，把定位写进 Project.extra.positioning
+  → [Step2  境界体系]
+  → [Step3  势力]
+  → [Step4  故事线]
+  → [Step5  人物]
+  → [Step6  技能]
+  → [Step7  道具]
+  → [Step8  设定卡]
+  → [Step9  卷骨架]            # _gen_volumes 同时填 phase
+  → [Step10 记忆]
+  → [Step11 关系]
+  → [Step12 全局一致性扫描]    # _gen_consistency_scan，结果写 Project.extra.consistency_issues
+  → [Step13 开局追读承诺清单]  # 生成前十章的 ReaderPromise 种子
 ```
 
-- 每步独立 prompt，上下文逐步累积（压缩摘要传入）
+- 每步独立 prompt，上下文逐步累积（压缩摘要 + 立项定位传入）
 - 单步失败重试 1 次，不影响其他步骤
 - SSE 每步推送 `step_start` / `step_done` / `error`
+- **Step 0 是新增的"立项会议"**：从一句话推导目标读者画像、爽点类型、打脸频率、情感线占比、节奏类型，作为后续各步的全局约束注入到所有 prompt。这是网文系统区别于"AI 自由发挥"的关键防线。
+- **Step 12** 交叉核验所有生成物的关键字段，矛盾列表写入 `Project.extra.consistency_issues`，供前端展示"X 处需确认项"。
+- **Step 13** 为开局前十章生成 `ReaderPromise` 种子，让写章路径从第一章就有承诺台账可读。
 
 ### 方案 B：单次全量（Single-shot）— 适合大 context 模型（Gemini）
 
@@ -188,7 +225,7 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 前端请求 `POST /api/v1/bootstrap/stream` 时传 `mode` 参数：
 ```json
-{ "logline": "...", "mode": "sequential" }   // 串行，适合短上下文本地模型
+{ "logline": "...", "mode": "sequential" }   // 串行，适合生成更多的内容
 { "logline": "...", "mode": "single_shot" }  // 单次全量，适合大上下文远程模型
 ```
 
@@ -203,10 +240,32 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 ---
 
+## 设定生成架构原则
+
+**本系统核心是 AI 生成，不是人工填写。** 所有设定在 Bootstrap 时由 AI 生成结构化数据，直接写入对应表：
+
+| 设定类型 | 存储位置 | Bootstrap 步骤 |
+|---|---|---|
+| **题材定位** | `Project.extra.positioning` | **Step 0 `_gen_positioning`（v3）** |
+| 境界体系 | `PowerSystem` + `levels[]` | Step 2 `_gen_power_systems` |
+| 势力组织 | `Faction`（含 `extra.active_period`） | Step 3 `_gen_factions` |
+| 故事线 | `StoryLine` | Step 4 `_gen_storylines` |
+| 人物 | `Character` | Step 5 `_gen_characters` |
+| 核心技能/功法 | `Skill` | Step 6 `_gen_key_skills` |
+| 关键道具/法宝 | `Item` | Step 7 `_gen_key_items` |
+| 纯叙事设定 | `WorldSetting`（分类存 `extra.category`） | Step 8 `_gen_settings` |
+| 卷级大纲 + phase | `OutlineNode`（volume） + `phase` | Step 9 `_gen_volumes` |
+| 记忆种子 | `MemoryChunk` | Step 10 `_gen_memory` |
+| 人物关系 | `CharacterRelationship` | Step 11 `_gen_relations` |
+| 一致性矛盾列表 | `Project.extra.consistency_issues` | Step 12 `_gen_consistency_scan` |
+| 开局追读承诺 | `ReaderPromise` | Step 13（前十章承诺种子） |
+
+`WorldSetting` 只存**无专属结构化表的纯叙事内容**：作品立意、世界底层规则、历史谜团、地理格局、文化风俗。不再用文字卡存境界体系或势力描述（这些有专属表）。
+
 ## 已完成功能
 
 - [x] 项目 CRUD
-- [x] 世界观设定 CRUD
+- [x] 世界观设定 CRUD（分类体系：世界背景/地理场景/历史传说/文化风俗/规则法则）
 - [x] 人物 + 关系 CRUD
 - [x] 大纲树（层级编辑）
 - [x] 章节写作（TipTap + 自动保存 + 版本快照）
@@ -214,22 +273,31 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 - [x] AI 流式建议（SSE）
 - [x] 记忆提取
 - [x] 一句话生成（方案A串行 + 方案B单次）
+- [x] 故事线/境界体系/技能/道具/势力前端 UI（WorldBuildingPage 五标签页）
+- [x] Bootstrap 生成时结构化生成势力（Faction）、核心技能（Skill）、关键道具（Item）
+- [x] Bootstrap Step 12：全局一致性扫描（`_gen_consistency_scan`，结果存 `Project.extra.consistency_issues`）
+- [x] Bootstrap Step 13：开局追读承诺清单（生成前十章 `ReaderPromise` 种子）
+- [x] 伏笔台账（`Foreshadow` 模型 + router）
+- [x] 质检欠债记录（`QualityDebt` 模型 + router）
+- [x] 封面图生成日志（`CoverImageCallLog` 模型 + router）
+- [x] Scene / ReaderPromise 模型 + Alembic migration（表已建，router 待实现）
+- [x] 任务级采样配置（`llm_task_profiles.py`，quality/draft/bootstrap 分档温度）
 
 ## 待完成功能
 
+- [ ] Scene router + 三层调度（章纲 → 分场 → 逐场正文 → stitch）
+- [ ] ReaderPromise router + 写章时承诺注入 + 复盘自动检测回收
+- [ ] Location 模型（当前 Scene.location_name 文本字段，location_id 已注释预留，P2-W7）
 - [ ] 人物关系图可视化（ReactFlow）
-- [ ] 世界观设定卡完整 UI（分类卡片布局）
-- [ ] 前十章追读分析表
 - [ ] pgvector 语义记忆检索（`MemoryChunk.embedding` 字段已预留）
 - [ ] 导出 TXT / EPUB
 - [ ] 登录鉴权（目前无 auth）
-- [ ] 故事线/境界体系/技能/道具/势力的前端 UI
-- [ ] Bootstrap 生成时同步生成故事线、境界体系、核心技能与道具
 - [ ] AI 质检时结合故事线进度与境界体系做一致性检查
+- [ ] Bootstrap 生成的技能/道具 mastered_by 字段关联真实 character UUID（目前只存名字）
+- [ ] 读者模拟器与主写章流程打通（低分项自动转 next_chapter_directives）
+- [ ] 伏笔台账升级：type / min_max_distance / paid_off_quality / volume_budget + audit 接口
 
 ---
-
-<span id="documentation-contract"></span>
 
 ## 代码文档与注释契约（架构级）
 
@@ -267,7 +335,9 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 ---
 
-## 开发建议（给未来的 Codex）
+---
+
+## 开发建议（给未来的 Claude）
 
 1. **改 AI 调用**：只需动 `apps/backend/app/services/ai_service.py`，不要在 router 层直接调 openai
 2. **加新数据表**：在 `apps/backend/app/models/` 新建文件 → `models/__init__.py` 导出 → `schemas/` 对应 → `routers/` 路由 → `main.py` 注册

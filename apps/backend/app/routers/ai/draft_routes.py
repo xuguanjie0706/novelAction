@@ -23,6 +23,8 @@ from app.routers.ai.quality_debt import (
     resolve_chapter_for_quality_debt,
 )
 from app.routers.ai.schemas import DraftAssistRequest
+from app.schemas.scene import ScenePlanRequest, ScenePlanResponse
+from app.models import Scene
 from app.routers.ai.text_utils import plain_text, strip_tail_meta_lines, truncate
 
 router = APIRouter()
@@ -264,6 +266,14 @@ async def draft_assist_stream(
     outline_emotional_tone_str = outline_node.emotional_tone or "" if outline_node else ""
     premise_str = project.premise or ""
     user_prompt_str = (req.user_prompt or "").strip()
+
+    # P2-W5-2 提取戏份预算与强制 POV
+    pov_character_name = ""
+    character_screen_time = {}
+    if outline_node:
+        if outline_node.pov_character:
+            pov_character_name = outline_node.pov_character.name
+        character_screen_time = outline_node.character_screen_time or {}
     if req.focus_quality_debt_id:
         debt = (
             db.query(QualityDebt)
@@ -366,6 +376,8 @@ async def draft_assist_stream(
                 positioning=positioning_value,
                 stream_log_context=stream_log_ctx,
                 genre=project.genre or "",
+                pov_character_name=pov_character_name,
+                character_screen_time=character_screen_time,
             ):
                 yield f"data: {json.dumps({'text': chunk})}\n\n"
         except Exception as e:
@@ -377,3 +389,61 @@ async def draft_assist_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ═══════════════════════════════════════════════════════════════
+# P2-W5-1：三层调度之分场计划（Scene Plan）
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/scene-plan", response_model=ScenePlanResponse)
+async def scene_plan_endpoint(
+    project_id: str,
+    req: ScenePlanRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    章纲 → 分场（Scene Plan）
+    输入：OutlineNode 或 Chapter 的摘要
+    输出：结构化 4-8 场计划（POV、目标、冲突、转折、钩子、字数预算等）
+    供前端展示、分场微调、后续逐场生成正文使用。
+    """
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    # 收集当前主要角色（供 scene_plan 参考 POV 分配）
+    chars = db.query(Character).filter(Character.project_id == project_id).limit(12).all()
+    existing_characters = [{"id": str(c.id), "name": c.name, "role": c.role} for c in chars]
+
+    # 读取上一章复盘指令（最高优先级）
+    prev_directives = ""
+    if req.outline_node_id:
+        node = db.query(OutlineNode).filter(OutlineNode.id == req.outline_node_id).first()
+        if node and node.extra:
+            dirs = node.extra.get("directives_from_prev") or []
+            if dirs:
+                prev_directives = "; ".join([d.get("patch", {}).get("adjust_pacing", "") or d.get("reason", "") for d in dirs[-2:]])
+
+    svc = AIService(
+        "gemini" if req.model_profile == "gemini" else "default",
+        db=db,
+        llm_provider_id=req.llm_provider_id,
+    )
+
+    result = await svc.scene_plan(
+        chapter_title=req.chapter_title or "未命名章节",
+        chapter_summary=req.chapter_summary or "",
+        genre=req.genre or project.genre or "玄幻",
+        positioning=(project.extra or {}).get("positioning") if hasattr(project, "extra") else None,
+        existing_characters=existing_characters,
+        prev_directives=prev_directives,
+        model_profile=req.model_profile,
+        word_target=2200,
+    )
+
+    scenes = result.get("scenes", [])
+    return {
+        "scenes": scenes,
+        "total_word_budget": result.get("total_word_budget", 2200),
+        "notes": result.get("notes", ""),
+    }

@@ -41,3 +41,5 @@ class Project(Base):
     skills = relationship("Skill", back_populates="project", cascade="all, delete-orphan")
     items = relationship("Item", back_populates="project", cascade="all, delete-orphan")
     factions = relationship("Faction", back_populates="project", cascade="all, delete-orphan")
+    scenes = relationship("Scene", back_populates="project", cascade="all, delete-orphan")
+    reader_promises = relationship("ReaderPromise", back_populates="project", cascade="all, delete-orphan")

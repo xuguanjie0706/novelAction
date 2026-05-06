@@ -1380,6 +1380,9 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         genre: str = "",
         # 复盘闭环：来自上一章复盘的 next_chapter_directives，高优先级注入
         prev_directives: str = "",
+        # P2-W5-2 戏份预算 + 强制 POV
+        pov_character_name: str = "",
+        character_screen_time: Optional[dict] = None,
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
@@ -1516,6 +1519,18 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
             system = system + "\n\n" + phase_brief
         if prev_directives.strip():
             system = system + "\n\n【上一章复盘闭环指令（最高优先级，必须先满足再写正文）】\n" + prev_directives.strip()
+
+        # P2-W5-2 戏份预算 + 强制 POV 硬约束（三层调度核心）
+        pov_constraint = ""
+        if pov_character_name:
+            pov_constraint = f"\n【强制 POV】本章必须严格使用 {pov_character_name} 的第一人称/第三人称有限视点写作，严禁全知视角或切换到其他角色 POV。"
+        screen_time_constraint = ""
+        if character_screen_time:
+            st = ", ".join([f"{k}:{v}%" for k, v in character_screen_time.items()])
+            screen_time_constraint = f"\n【戏份预算（必须严格遵守）】{st}。若某角色戏份偏差超过 ±5%，本章判不合格。"
+        quota_constraint = "\n【配角配额硬约束】本章在场命名角色不得超过 genre_kit 规定的 quota（主1 + 核心配角3 + 反派2 + 师长2）。多余角色必须合并或用无名路人处理。"
+        if pov_constraint or screen_time_constraint:
+            system = system + "\n\n【P2 三层调度硬约束】" + pov_constraint + screen_time_constraint + quota_constraint
 
         # 根据大纲 word_target 动态计算续写字数
         full_target = max(1500, int(word_target or 2300))
@@ -2191,6 +2206,100 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
             }
         except Exception as e:
             return {"ok": True, "risk_count": 0, "risks": [], "reminders": [], "error": str(e), "raw": response[:300]}
+
+    # ── 三层调度：章纲 → 分场（Scene Plan）─────────────────────────────────
+    async def scene_plan(
+        self,
+        chapter_title: str,
+        chapter_summary: str,
+        genre: str = "",
+        positioning: Optional[dict] = None,
+        existing_characters: List[dict] = None,
+        prev_directives: str = "",
+        model_profile: str = "local",
+        word_target: int = 2200,
+    ) -> dict:
+        """
+        根据章纲生成结构化分场计划（4-8 场）。
+        每场包含：POV、时间、地点、在场角色、目标、冲突、转折、钩子、字数预算、感官焦点、节奏。
+        这是把“节奏平、AI味”根治的关键一步。
+        """
+        system = (
+            "你是资深网文分镜师。严格返回 JSON，不要任何额外文字。"
+            "必须严格遵守 genre_kit 的 pacing_guide 和 side_character_quota。"
+            "每章 4-8 场，字数总和接近 word_target。"
+            "每场必须有明确的 POV（禁止全知），在场角色不得超过 genre_kit quota。"
+        )
+
+        kit_block = ""
+        if genre:
+            from app.services.genre_kit import get_genre_guardrail
+            kit_block = "\n" + get_genre_guardrail(genre) + "\n"
+
+        positioning_block = ""
+        if positioning:
+            positioning_block = "\n【立项定位】\n" + json.dumps(positioning, ensure_ascii=False) + "\n"
+
+        prev_block = ""
+        if prev_directives.strip():
+            prev_block = "\n【上一章复盘指令（最高优先级）】\n" + prev_directives.strip() + "\n"
+
+        char_block = ""
+        if existing_characters:
+            char_lines = [f"- {c.get('name','')}（id:{c.get('id','')}）" for c in existing_characters[:8]]
+            char_block = "\n当前主要角色：\n" + "\n".join(char_lines)
+
+        prompt = f"""{kit_block}{positioning_block}{prev_block}
+本章标题：《{chapter_title}》
+本章摘要：{chapter_summary[:800]}
+{char_block}
+
+请为本章拆分 4-8 场（scene），返回 JSON：
+{{
+  "scenes": [
+    {{
+      "order": 1,
+      "title": "场标题",
+      "time": "第X日·夜",
+      "location_name": "地点",
+      "pov_character_name": "POV 角色名（必须是现有角色之一）",
+      "characters_on_stage": ["角色名列表"],
+      "goal": "本场角色想要什么",
+      "conflict": "冲突/障碍",
+      "turn": "本场关键转折",
+      "hook": "场末钩子（留给下一场）",
+      "hook_strength": 3,
+      "word_budget": 350,
+      "pacing": "fast/mid/slow",
+      "sensory_focus": "sight/sound/mixed"
+    }}
+  ],
+  "total_word_budget": {word_target},
+  "notes": "分场说明（可选）"
+}}
+只返回 JSON。"""
+
+        raw = await self._call_with_retry(
+            system,
+            prompt,
+            max_tokens=2000,
+            task="draft.scene_plan",
+        )
+        try:
+            data = _parse_json(raw)
+        except Exception:
+            # 兜底：返回最简 4 场
+            data = {
+                "scenes": [
+                    {"order": 1, "title": "开场", "time": "同日", "location_name": "未知", "pov_character_name": (existing_characters[0]["name"] if existing_characters else "主角"), "characters_on_stage": [], "goal": chapter_summary[:60], "conflict": "", "turn": "", "hook": "章末钩子待定", "hook_strength": 3, "word_budget": 500, "pacing": "mid", "sensory_focus": "mixed"},
+                    {"order": 2, "title": "冲突升级", "time": "同日", "location_name": "未知", "pov_character_name": (existing_characters[0]["name"] if existing_characters else "主角"), "characters_on_stage": [], "goal": "", "conflict": "", "turn": "", "hook": "", "hook_strength": 3, "word_budget": 500, "pacing": "mid", "sensory_focus": "mixed"},
+                    {"order": 3, "title": "转折", "time": "同日", "location_name": "未知", "pov_character_name": (existing_characters[0]["name"] if existing_characters else "主角"), "characters_on_stage": [], "goal": "", "conflict": "", "turn": "", "hook": "", "hook_strength": 4, "word_budget": 600, "pacing": "fast", "sensory_focus": "mixed"},
+                    {"order": 4, "title": "收束与钩子", "time": "同日", "location_name": "未知", "pov_character_name": (existing_characters[0]["name"] if existing_characters else "主角"), "characters_on_stage": [], "goal": "", "conflict": "", "turn": "", "hook": "下一章方向", "hook_strength": 5, "word_budget": 600, "pacing": "mid", "sensory_focus": "mixed"},
+                ],
+                "total_word_budget": word_target,
+                "notes": "兜底分场（LLM 解析失败）"
+            }
+        return data
 
     # ── 读者心理模拟 ──────────────────────────────────
     async def reader_psychology_sim(

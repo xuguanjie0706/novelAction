@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Integer
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Integer, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -31,6 +31,14 @@ class Foreshadow(Base):
     # 状态与优先级
     status = Column(String(20), default="open")  # open / resolved / dropped
     priority = Column(Integer, default=3)         # 1=低 … 5=关键主线
+
+    # P2-W5-3 伏笔台账升级（预算 + 超期告警 + 质量追踪）
+    foreshadow_type = Column(String(30), default="hook")  # hook / reversal / prop / identity / prophecy
+    min_distance = Column(Integer, default=1)             # 埋后最少多少章回收
+    max_distance = Column(Integer, default=15)            # 埋后最多多少章必须回收，否则告警
+    paid_off_quality = Column(Integer)                    # 回收质量 0-5（由 quality_check 打分）
+    audience_aware = Column(Integer, default=3)           # 读者感知度 0-5（埋时读者是否明显感觉到是承诺）
+    volume_budget = Column(JSON, default=dict)            # {volume: {"must_recover": N, "must_lay": M}} 每卷预算
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())

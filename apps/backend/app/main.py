@@ -53,6 +53,7 @@ from app.database import engine, Base
 from app.routers import projects, world_settings, characters, outline, chapters, chapter_indexes, ai, generate, admin_llm, llm_public, admin_llm_calls, admin_cover_image_calls
 from app.routers import storylines, power_systems, skills, items, factions
 from app.routers import foreshadows, quality_debts
+from app.routers import scenes, reader_promises
 from app.routers import cover as cover_router
 from app.services.llm_config import seed_llm_from_env_if_empty
 from app.services.cover_storage import ensure_cover_storage_dir, resolved_cover_storage_dir
@@ -69,6 +70,9 @@ def _ensure_outline_node_columns() -> None:
         "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS key_skill_ids JSON",
         "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS emotional_tone VARCHAR(50)",
         "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS pacing VARCHAR(20)",
+        # P2 戏份预算 / 强制 POV（与 ORM OutlineNode 一致）
+        "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS character_screen_time JSON",
+        "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS pov_character_id UUID",
         # 卷阶段标记，写章节模板分流（opening/rising/turning/dark_hour/climax/ending）
         "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS phase VARCHAR(20)",
         "ALTER TABLE outline_nodes ADD COLUMN IF NOT EXISTS power_milestone TEXT",
@@ -100,6 +104,7 @@ def _ensure_character_columns() -> None:
         "ALTER TABLE characters ADD COLUMN IF NOT EXISTS realm_rank INTEGER",
         "ALTER TABLE characters ADD COLUMN IF NOT EXISTS personality TEXT",
         "ALTER TABLE characters ADD COLUMN IF NOT EXISTS speech_style TEXT",
+        "ALTER TABLE characters ADD COLUMN IF NOT EXISTS speech_kit JSON",
         "ALTER TABLE characters ADD COLUMN IF NOT EXISTS values TEXT",
         "ALTER TABLE characters ADD COLUMN IF NOT EXISTS background TEXT",
         "ALTER TABLE characters ADD COLUMN IF NOT EXISTS secrets TEXT",
@@ -198,12 +203,31 @@ def _ensure_foreshadow_columns() -> None:
     """
     ddl_statements = [
         "ALTER TABLE foreshadows ADD COLUMN IF NOT EXISTS planned_action VARCHAR(20)",
+        # P2-W5-3 伏笔台账升级（与 ORM Foreshadow 一致）
+        "ALTER TABLE foreshadows ADD COLUMN IF NOT EXISTS foreshadow_type VARCHAR(30) DEFAULT 'hook'",
+        "ALTER TABLE foreshadows ADD COLUMN IF NOT EXISTS min_distance INTEGER DEFAULT 1",
+        "ALTER TABLE foreshadows ADD COLUMN IF NOT EXISTS max_distance INTEGER DEFAULT 15",
+        "ALTER TABLE foreshadows ADD COLUMN IF NOT EXISTS paid_off_quality INTEGER",
+        "ALTER TABLE foreshadows ADD COLUMN IF NOT EXISTS audience_aware INTEGER DEFAULT 3",
+        "ALTER TABLE foreshadows ADD COLUMN IF NOT EXISTS volume_budget JSON",
     ]
     with engine.begin() as conn:
         for ddl in ddl_statements:
             conn.execute(text(ddl))
         conn.execute(text(
             "UPDATE foreshadows SET planned_action = 'resolve' WHERE planned_action IS NULL"
+        ))
+        conn.execute(text(
+            "UPDATE foreshadows SET foreshadow_type = 'hook' WHERE foreshadow_type IS NULL"
+        ))
+        conn.execute(text(
+            "UPDATE foreshadows SET min_distance = 1 WHERE min_distance IS NULL"
+        ))
+        conn.execute(text(
+            "UPDATE foreshadows SET max_distance = 15 WHERE max_distance IS NULL"
+        ))
+        conn.execute(text(
+            "UPDATE foreshadows SET audience_aware = 3 WHERE audience_aware IS NULL"
         ))
 
 
@@ -370,6 +394,8 @@ app.include_router(items.router, prefix="/api/v1")
 app.include_router(factions.router, prefix="/api/v1")
 app.include_router(foreshadows.router, prefix="/api/v1")
 app.include_router(quality_debts.router, prefix="/api/v1")
+app.include_router(scenes.router, prefix="/api/v1")
+app.include_router(reader_promises.router, prefix="/api/v1")
 app.include_router(cover_router.router, prefix="/api/v1")
 
 ensure_cover_storage_dir()

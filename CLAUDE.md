@@ -106,7 +106,11 @@ Project
   ├── PowerSystem（境界/力量体系，含结构化 levels 数组）
   ├── Skill（功法/技能，关联 PowerSystem，记录掌握者）
   ├── Item（道具/法宝，含稀有度、持有历史）
-  └── Faction（势力/宗门/国家，支持父子层级）
+  ├── Faction（势力/宗门/国家，支持父子层级）
+  ├── Foreshadow（伏笔台账）
+  ├── QualityDebt（质检欠债记录）
+  ├── Scene（章节分场，三层调度核心；表已建，router 待实现）
+  └── ReaderPromise（读者承诺台账；表已建，router 待实现）
 ```
 
 所有 UUID 主键，`project_id` 外键贯穿所有表。
@@ -136,6 +140,21 @@ Project
 | `ending` | 收束期 | 留下一卷悬念种子 |
 
 由 Bootstrap Step 9 (`_gen_volumes`) 在卷级填入，写章节时回溯卷阶段。
+
+### Scene 模型（v3，2026-05）
+
+章节分场，三层调度（章纲 → 分场 → 逐场正文）的核心数据单元。
+- 关联：`Project` / `Chapter`（写完后绑定）/ `OutlineNode`
+- 关键字段：`order`、`pov_character_id`、`characters_on_stage`、`goal`、`conflict`、`turn`、`hook`、`hook_strength`、`word_budget`、`pacing`、`sensory_focus`、`status`（planned/written/reviewed）、`content`
+- `location_id`（ForeignKey `locations.id`）已**注释预留**，待 Location 模型（P2-W7）实现后启用；当前用 `location_name` 文本字段
+- **当前状态**：模型 + migration 已就位，router 待实现
+
+### ReaderPromise 模型（v3，2026-05）
+
+读者承诺台账，记录章末/卷末预告、名字暗示、章评共识等对读者的显式或隐式承诺。
+- 关键字段：`promise_type`（chapter_ending / volume_ending / name_implication / ...）、`expected_chapter_window`、`status`（open / fulfilled / broken）、`priority`（1-5）、`audience_aware`（0-5）
+- 写章时 prompt 注入"本章必须/可以兑现的承诺"；复盘自动检测新承诺并标记回收
+- **当前状态**：模型 + migration 已就位，router 待实现
 
 ### Project.extra（v3，2026-05）
 JSON 杂物字段，当前已知键：
@@ -170,24 +189,28 @@ JSON 杂物字段，当前已知键：
 
 ```
 logline
-  → [Step0 立项会议（v3，2026-05）]   # _gen_positioning：受众/爽点/打脸节奏/卖点
-  → [Step1 项目]                       # _gen_project，把定位写进 Project.extra.positioning
-  → [Step2 境界体系]
-  → [Step3 势力]
-  → [Step4 故事线]
-  → [Step5 人物]
-  → [Step6 技能]
-  → [Step7 道具]
-  → [Step8 设定卡]
-  → [Step9 卷骨架]                     # _gen_volumes 同时填 phase
+  → [Step0  立项会议]          # _gen_positioning：受众/爽点/打脸节奏/卖点
+  → [Step1  项目]              # _gen_project，把定位写进 Project.extra.positioning
+  → [Step2  境界体系]
+  → [Step3  势力]
+  → [Step4  故事线]
+  → [Step5  人物]
+  → [Step6  技能]
+  → [Step7  道具]
+  → [Step8  设定卡]
+  → [Step9  卷骨架]            # _gen_volumes 同时填 phase
   → [Step10 记忆]
   → [Step11 关系]
+  → [Step12 全局一致性扫描]    # _gen_consistency_scan，结果写 Project.extra.consistency_issues
+  → [Step13 开局追读承诺清单]  # 生成前十章的 ReaderPromise 种子
 ```
 
 - 每步独立 prompt，上下文逐步累积（压缩摘要 + 立项定位传入）
 - 单步失败重试 1 次，不影响其他步骤
 - SSE 每步推送 `step_start` / `step_done` / `error`
-- **Step 0 是新增的"立项会议"**：从一句话推导目标读者画像、爽点类型、打脸频率、情感线占比、节奏类型，作为后续 11 步的全局约束注入到所有 prompt。这是网文系统区别于"AI 自由发挥"的关键防线。
+- **Step 0 是新增的"立项会议"**：从一句话推导目标读者画像、爽点类型、打脸频率、情感线占比、节奏类型，作为后续各步的全局约束注入到所有 prompt。这是网文系统区别于"AI 自由发挥"的关键防线。
+- **Step 12** 交叉核验所有生成物的关键字段，矛盾列表写入 `Project.extra.consistency_issues`，供前端展示"X 处需确认项"。
+- **Step 13** 为开局前十章生成 `ReaderPromise` 种子，让写章路径从第一章就有承诺台账可读。
 
 ### 方案 B：单次全量（Single-shot）— 适合大 context 模型（Gemini）
 
@@ -202,7 +225,7 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 前端请求 `POST /api/v1/bootstrap/stream` 时传 `mode` 参数：
 ```json
-{ "logline": "...", "mode": "sequential" }   // 串行，适合短上下文本地模型
+{ "logline": "...", "mode": "sequential" }   // 串行，适合生成更多的内容
 { "logline": "...", "mode": "single_shot" }  // 单次全量，适合大上下文远程模型
 ```
 
@@ -234,6 +257,8 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 | 卷级大纲 + phase | `OutlineNode`（volume） + `phase` | Step 9 `_gen_volumes` |
 | 记忆种子 | `MemoryChunk` | Step 10 `_gen_memory` |
 | 人物关系 | `CharacterRelationship` | Step 11 `_gen_relations` |
+| 一致性矛盾列表 | `Project.extra.consistency_issues` | Step 12 `_gen_consistency_scan` |
+| 开局追读承诺 | `ReaderPromise` | Step 13（前十章承诺种子） |
 
 `WorldSetting` 只存**无专属结构化表的纯叙事内容**：作品立意、世界底层规则、历史谜团、地理格局、文化风俗。不再用文字卡存境界体系或势力描述（这些有专属表）。
 
@@ -250,22 +275,65 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 - [x] 一句话生成（方案A串行 + 方案B单次）
 - [x] 故事线/境界体系/技能/道具/势力前端 UI（WorldBuildingPage 五标签页）
 - [x] Bootstrap 生成时结构化生成势力（Faction）、核心技能（Skill）、关键道具（Item）
+- [x] Bootstrap Step 12：全局一致性扫描（`_gen_consistency_scan`，结果存 `Project.extra.consistency_issues`）
+- [x] Bootstrap Step 13：开局追读承诺清单（生成前十章 `ReaderPromise` 种子）
+- [x] 伏笔台账（`Foreshadow` 模型 + router）
+- [x] 质检欠债记录（`QualityDebt` 模型 + router）
+- [x] 封面图生成日志（`CoverImageCallLog` 模型 + router）
+- [x] Scene / ReaderPromise 模型 + Alembic migration（表已建，router 待实现）
+- [x] 任务级采样配置（`llm_task_profiles.py`，quality/draft/bootstrap 分档温度）
 
 ## 待完成功能
 
+- [ ] Scene router + 三层调度（章纲 → 分场 → 逐场正文 → stitch）
+- [ ] ReaderPromise router + 写章时承诺注入 + 复盘自动检测回收
+- [ ] Location 模型（当前 Scene.location_name 文本字段，location_id 已注释预留，P2-W7）
 - [ ] 人物关系图可视化（ReactFlow）
-- [ ] 前十章追读分析表
 - [ ] pgvector 语义记忆检索（`MemoryChunk.embedding` 字段已预留）
 - [ ] 导出 TXT / EPUB
 - [ ] 登录鉴权（目前无 auth）
 - [ ] AI 质检时结合故事线进度与境界体系做一致性检查
 - [ ] Bootstrap 生成的技能/道具 mastered_by 字段关联真实 character UUID（目前只存名字）
+- [ ] 读者模拟器与主写章流程打通（低分项自动转 next_chapter_directives）
+- [ ] 伏笔台账升级：type / min_max_distance / paid_off_quality / volume_budget + audit 接口
 
 ---
 
 ## 代码文档与注释契约（架构级）
 
-**单一事实来源**：完整条文见 [AGENTS.md — 代码文档与注释契约](AGENTS.md#documentation-contract)。此处不重复，避免两处漂移。
+本节约束 **人机协作与长期演进**：注释不是为了「行数好看」，而是为了让 **公共 API、业务不变量、失败形态与边界** 在一屏内可被读懂；后续在本仓库改 **TypeScript/JavaScript** 时，以 **严格 JSDoc** 为默认交付标准。
+
+### 原则
+
+- **公共表面优先**：凡 `export` 的函数、类、hook、跨模块复用的类型辅助，必须具备可被 IDE 悬停展示的说明；私有实现若含非显而易见的算法或协议约束，在关键分支处补 **局部块注释**。
+- **意图优于复述**：不写「把 x 赋给 y」式废话；写 **为什么这样做**、**与哪条产品/架构决策对齐**、**违反时会怎样**。
+- **类型与文档分工**：TypeScript 类型表达「是什么」；JSDoc 补充 **业务语义、前置条件、副作用、与后端契约**（字段含义若与名称不完全一致，必须在 `@param` / 字段旁说明）。
+- **中英**：面向维护者与 AI 的注释以 **简体中文** 为主；已与对外 API/协议锁定的英文专有名词保持原文。
+
+### TypeScript / JavaScript（`apps/client`、`apps/frontend`）
+
+| 对象 | 最低要求 |
+|------|----------|
+| 模块 | 文件职责复杂或入口非自解释时，使用 `@file` / 顶部块说明 **职责与禁止事项**。 |
+| `export function` / `export const` 工厂 | 完整 JSDoc：`@param`、`@returns`；异步函数说明 rejection 场景或统一错误形态。 |
+| React 组件（命名导出） | 说明 **数据来源**（store / props / URL）、**关键副作用**（订阅、阻塞导航）；props 非直观时逐项 `@param`。 |
+| 自定义 Hook | 说明 **依赖**（哪些参数变化会触发重新请求）、**返回值契约**。 |
+| 复杂对象形态 | 使用 `@typedef` 或与 Zod/schema 同处的注释，标明 **不变量**（例如「永远与 project 维度同源」）。 |
+
+**推荐标签集合**（按需选用，避免堆砌）：`@param`、`@returns`、`@throws`、`@deprecated`、`@internal`（package 内边界）、`@example`（仅非平凡调用）、`@see`（指向规格或 OpenAPI）。
+
+**反面模式**：整文件无注释但大量魔法字符串；仅英文拼音缩写无释义；注释与实现漂移（改代码必改注释）。
+
+### Python（`apps/backend`）
+
+- **路由 handler、service 公共方法、复杂纯函数**：使用 **Google 风格 docstring**（`Args` / `Returns` / `Raises`）；与 TS 侧同一语义的概念用词保持一致，便于对读。
+- **AI 路由**：实现位于 `apps/backend/app/routers/ai/` 包；新端点在同一子模块内保持 **模块顶注释说明资源边界**。
+
+### 验收心智（给审查者与 Agent）
+
+新 PR / 新文件：公共 `export` 是否补齐 JSDoc；是否说明了 **错误与空状态** 的意图；是否在架构接缝（API、store、路由）有据可查的一句话 **设计动机**。
+
+---
 
 ---
 
@@ -277,7 +345,7 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 4. **JSON 解析**：所有 `_call_ai` 的 JSON 解析用 `_parse_json()` 统一处理，不要 try/except 分散在各处
 5. **pgvector**：embedding 字段已在 `MemoryChunk` 预留，启用时需 `CREATE EXTENSION vector;` 并取消 `memory.py` 中的条件导入
 6. **改创作端 UI**：主要改 `apps/client/`；**管理后台**改 `apps/frontend/`（与 client 独立依赖与构建）
-7. **TS/JS 注释**：新增或修改公共 `export` 时，遵循 [AGENTS.md 代码文档与注释契约](AGENTS.md#documentation-contract)（**严格 JSDoc**）；后端对应模块用 Google 风格 docstring。
+7. **TS/JS 注释**：新增或修改公共 `export` 时，遵循上文「代码文档与注释契约」，使用 **严格 JSDoc**；后端对应模块用 Google 风格 docstring。
 
 ---
 

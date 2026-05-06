@@ -48,6 +48,12 @@ class OutlineNode(Base):
     pacing = Column(String(20), default="normal")
     # 节奏：slow/normal/fast/climax（快节奏、高潮章节特别标记）
 
+    # ── P2 戏份预算与强制 POV（三层调度核心）────────────────────
+    character_screen_time = Column(JSON, default=dict)
+    # {character_id: 百分比} 本章各角色戏份预算（必须遵守 genre_kit quota）
+    pov_character_id = Column(UUID(as_uuid=True), ForeignKey("characters.id"), nullable=True)
+    # 本章主要 POV 角色（强制视点，禁止全知）
+
     # ── 卷阶段标记（OPEN / RISING / TURNING / DARK_HOUR / CLIMAX / ENDING）─
     # 用于章节起草 prompt 模板分流与采样档位选择；章节级允许 override，但通常一卷一阶段。
     # 取值约定（保持英文小写以便与 llm_task_profiles 映射）：
@@ -78,3 +84,5 @@ class OutlineNode(Base):
     parent = relationship("OutlineNode", remote_side=[id], back_populates="children")
     children = relationship("OutlineNode", back_populates="parent", cascade="all, delete-orphan")
     chapter = relationship("Chapter", back_populates="outline_node", uselist=False)
+    pov_character = relationship("Character", foreign_keys=[pov_character_id])
+    scenes = relationship("Scene", back_populates="outline_node", cascade="all, delete-orphan")

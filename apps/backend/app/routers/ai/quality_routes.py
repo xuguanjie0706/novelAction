@@ -7,7 +7,18 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Chapter, Character, Foreshadow, MemoryChunk, OutlineNode, Project, StoryLine, WorldSetting, PowerSystem
+from app.models import (
+    Chapter,
+    Character,
+    Foreshadow,
+    MemoryChunk,
+    OutlineNode,
+    PowerSystem,
+    PreWriteWarningRecord,
+    Project,
+    StoryLine,
+    WorldSetting,
+)
 from app.services.ai_service import AIService
 from app.routers.ai.context import (
     build_chapter_index_context,
@@ -22,6 +33,7 @@ router = APIRouter()
 
 
 class PreWriteWarningRequest(BaseModel):
+    chapter_id: str                    # FK chapters.id，用于落库与按章查历史
     chapter_plan_summary: str          # 本章五要素或写作计划摘要
     chapter_number: int = 0            # 当前章节号（用于筛选逾期伏笔）
     model_profile: str = "local"
@@ -199,6 +211,44 @@ async def quality_check(
     return result
 
 
+@router.get("/pre-write-warning/history")
+async def pre_write_warning_history(
+    project_id: str,
+    chapter_id: str,
+    db: Session = Depends(get_db),
+    limit: int = 30,
+):
+    """当前章节历次写前预警结果（新→旧），供写作侧栏查阅。"""
+    chapter = db.query(Chapter).filter(
+        Chapter.id == chapter_id, Chapter.project_id == project_id
+    ).first()
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+    lim = max(1, min(limit, 50))
+    rows = (
+        db.query(PreWriteWarningRecord)
+        .filter(
+            PreWriteWarningRecord.project_id == project_id,
+            PreWriteWarningRecord.chapter_id == chapter_id,
+        )
+        .order_by(PreWriteWarningRecord.created_at.desc())
+        .limit(lim)
+        .all()
+    )
+    return [
+        {
+            "id": str(r.id),
+            "chapter_id": str(r.chapter_id),
+            "chapter_number": r.chapter_number,
+            "chapter_plan_summary": r.chapter_plan_summary or "",
+            "model_profile": r.model_profile or "local",
+            "result": r.result or {},
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+
+
 @router.post("/pre-write-warning")
 async def pre_write_warning(
     project_id: str,
@@ -208,10 +258,17 @@ async def pre_write_warning(
     """
     写前预警：传入本章计划，对照记忆库/连续性账本/伏笔台账，输出潜在矛盾风险。
     供写作页「动笔前」调用，让作者在落笔前发现连续性/伏笔/设定/人物OOC问题。
+    结果写入 pre_write_warning_records，可通过 GET history 再次查阅。
     """
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "Project not found")
+
+    chapter = db.query(Chapter).filter(
+        Chapter.id == req.chapter_id, Chapter.project_id == project_id
+    ).first()
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
 
     # 加载记忆
     memories = (
@@ -271,7 +328,24 @@ async def pre_write_warning(
         foreshadow_ledger=foreshadow_ledger,
         character_states=character_states,
     )
-    return result
+
+    ch_no = req.chapter_number if req.chapter_number > 0 else (chapter.sort_order or 0)
+    profile = req.model_profile if req.model_profile in ("local", "gemini") else "local"
+    rec = PreWriteWarningRecord(
+        project_id=project.id,
+        chapter_id=chapter.id,
+        chapter_number=ch_no,
+        chapter_plan_summary=req.chapter_plan_summary or "",
+        model_profile=profile,
+        llm_provider_id=req.llm_provider_id,
+        result=result,
+    )
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+    out = dict(result)
+    out["record_id"] = str(rec.id)
+    return out
 
 
 # ═══════════════════════════════════════════════════════════════

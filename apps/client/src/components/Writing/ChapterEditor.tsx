@@ -47,6 +47,23 @@ type NewCharacterSuggestion = {
   author_notes?: string
 }
 
+type PreWriteWarnResult = {
+  ok: boolean
+  risk_count: number
+  risks: Array<{ type: string; severity: string; description: string; suggested_fix: string }>
+  reminders: string[]
+  error?: string
+  record_id?: string
+}
+
+type PreWriteWarnHistoryRow = {
+  id: string
+  created_at: string | null
+  model_profile: string
+  chapter_plan_summary: string
+  result: PreWriteWarnResult
+}
+
 type AutoDebriefResponse = {
   character_updates: Array<{
     character_id: string
@@ -207,12 +224,9 @@ export default function ChapterEditor({
   const [contextOpen, setContextOpen]   = useState(!!outlineNode)
   const [contextTab, setContextTab]     = useState<'plan' | 'scene' | 'debrief' | 'chindex' | 'warn'>('plan')
   const [warnLoading, setWarnLoading]   = useState(false)
-  const [warnResult, setWarnResult]     = useState<{
-    ok: boolean; risk_count: number
-    risks: Array<{ type: string; severity: string; description: string; suggested_fix: string }>
-    reminders: string[]
-    error?: string
-  } | null>(null)
+  const [warnResult, setWarnResult]     = useState<PreWriteWarnResult | null>(null)
+  const [warnHistory, setWarnHistory]   = useState<PreWriteWarnHistoryRow[]>([])
+  const [selectedWarnRecordId, setSelectedWarnRecordId] = useState<string | null>(null)
   const [focusMode, setFocusMode]       = useState(false)
   const [statusOpen, setStatusOpen]     = useState(false)
   const statusRef = useRef<HTMLDivElement>(null)
@@ -293,6 +307,32 @@ export default function ChapterEditor({
       .then(r => setCurrentChIndex(r.data))
       .catch(() => setCurrentChIndex(null))
   }, [projectId, chapter.id])
+
+  useEffect(() => {
+    setWarnResult(null)
+    setWarnHistory([])
+    setSelectedWarnRecordId(null)
+  }, [chapter.id])
+
+  useEffect(() => {
+    if (contextTab !== 'warn' || !chapter.id || !projectId) return
+    let cancelled = false
+    void aiApi.preWriteWarningHistory(projectId, chapter.id).then((r) => {
+      if (!cancelled) setWarnHistory(r.data as PreWriteWarnHistoryRow[])
+    }).catch(() => {
+      if (!cancelled) setWarnHistory([])
+    })
+    return () => { cancelled = true }
+  }, [contextTab, chapter.id, projectId])
+
+  useEffect(() => {
+    if (contextTab !== 'warn') return
+    if (warnResult !== null) return
+    const first = warnHistory[0]
+    if (!first?.result) return
+    setWarnResult({ ...first.result })
+    setSelectedWarnRecordId(first.id)
+  }, [contextTab, warnHistory, warnResult])
 
   // ── 写作统计 ───────────────────────────────────────────────────────
   const sessionStartWords = useRef<number>(chapter.word_count)
@@ -986,7 +1026,6 @@ export default function ChapterEditor({
 
   const runPreWriteWarning = async () => {
     setWarnLoading(true)
-    setWarnResult(null)
     setContextOpen(true)
     setContextTab('warn')
     // 拼接本章计划摘要（优先用 outlineNode，降级用章节标题）
@@ -1001,12 +1040,17 @@ export default function ChapterEditor({
     try {
       const route = useAppStore.getState().aiBackendRoute
       const { data } = await aiApi.preWriteWarning(projectId, {
+        chapter_id: chapter.id,
         chapter_plan_summary: planSummary,
         chapter_number: chapter.sort_order ?? 0,
         model_profile: modelProfileFromRoute(route),
         llm_provider_id: llmProviderIdFromRoute(route),
       })
       setWarnResult(data)
+      if (data.record_id) setSelectedWarnRecordId(data.record_id)
+      void aiApi.preWriteWarningHistory(projectId, chapter.id).then((r) => {
+        setWarnHistory(r.data as PreWriteWarnHistoryRow[])
+      }).catch(() => {})
     } catch {
       toast.error('写前预警请求失败')
     } finally {
@@ -1785,6 +1829,33 @@ export default function ChapterEditor({
                       重新检测
                     </button>
                   </div>
+
+                  {warnHistory.length > 0 && (
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-novel-ink-muted uppercase tracking-wide">历史记录</label>
+                      <select
+                        value={selectedWarnRecordId ?? warnHistory[0]?.id ?? ''}
+                        onChange={(e) => {
+                          const id = e.target.value
+                          const row = warnHistory.find(h => h.id === id)
+                          if (row) {
+                            setSelectedWarnRecordId(id)
+                            setWarnResult({ ...row.result })
+                          }
+                        }}
+                        className="w-full text-xs rounded-lg border border-novel-border bg-novel-panel px-2 py-1.5 text-novel-ink"
+                      >
+                        {warnHistory.map((h) => (
+                          <option key={h.id} value={h.id}>
+                            {(h.created_at && !Number.isNaN(new Date(h.created_at).getTime()))
+                              ? new Date(h.created_at).toLocaleString()
+                              : '未知时间'}
+                            {' · '}{h.result?.risk_count ?? 0} 条风险 · {h.model_profile || 'local'}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   {warnLoading && (
                     <div className="text-xs text-novel-ink-muted text-center py-8">

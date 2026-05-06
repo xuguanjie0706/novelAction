@@ -412,6 +412,7 @@ export const aiApi = {
   preWriteWarning: (
     pid: string,
     data: {
+      chapter_id: string
       chapter_plan_summary: string
       chapter_number?: number
       model_profile?: 'local' | 'gemini'
@@ -423,7 +424,29 @@ export const aiApi = {
     risks: Array<{ type: string; severity: string; description: string; suggested_fix: string }>
     reminders: string[]
     error?: string
+    record_id?: string
   }>(`/projects/${pid}/ai/pre-write-warning`, data),
+
+  preWriteWarningHistory: (pid: string, chapterId: string, limit = 30) =>
+    api.get<
+      Array<{
+        id: string
+        chapter_id: string
+        chapter_number: number
+        chapter_plan_summary: string
+        model_profile: string
+        result: {
+          ok: boolean
+          risk_count: number
+          risks: Array<{ type: string; severity: string; description: string; suggested_fix: string }>
+          reminders: string[]
+          error?: string
+        }
+        created_at: string | null
+      }>
+    >(`/projects/${pid}/ai/pre-write-warning/history`, {
+      params: { chapter_id: chapterId, limit },
+    }),
 
   /**
    * 章节综合分析（推荐入口）：单次 LLM 调用，结果写入 DB，返回该章历次均值统计。

@@ -22,8 +22,35 @@ export default function LlmCallLogsPage() {
   const [detailRow, setDetailRow] = useState<LlmCallRecord | null>(null)
   const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null] | null>(null)
 
+  const resolveOperationKey = (row: LlmCallRecord) => {
+    const op = row.context?.operation
+    if (typeof op === 'string' && op.trim()) return op.trim()
+    const task = row.context?.task
+    if (typeof task === 'string' && task.trim()) return task.trim()
+    return ''
+  }
+
   const operationLabel = (op?: string) => {
     const m: Record<string, string> = {
+      'bootstrap.positioning': 'Bootstrap 立项会议：提炼题材定位与卖点承诺',
+      'bootstrap.project': 'Bootstrap 项目初始化：生成项目基础设定与核心故事',
+      'bootstrap.settings': 'Bootstrap 世界观总设：生成设定卡',
+      'bootstrap.power_systems': 'Bootstrap 力量体系：生成等级、机制与代价',
+      'bootstrap.factions': 'Bootstrap 阵营势力：生成组织关系与立场冲突',
+      'bootstrap.storylines': 'Bootstrap 故事线：生成主线/支线与推进节奏',
+      'bootstrap.characters': 'Bootstrap 人物库：生成核心角色与关系锚点',
+      'bootstrap.skills': 'Bootstrap 技能体系：生成技能结构与成长路径',
+      'bootstrap.items': 'Bootstrap 道具体系：生成资源、稀有度与用途',
+      'bootstrap.volumes': 'Bootstrap 卷章规划：生成卷级结构与章节分布',
+      'bootstrap.memory': 'Bootstrap 记忆库：生成可复用事实与约束',
+      'bootstrap.relations': 'Bootstrap 人物关系：生成人际网络与动态张力',
+      'bootstrap.single_shot': 'Bootstrap 单次全量：一次性生成完整世界蓝图',
+      'bootstrap.consistency_scan': 'Bootstrap 一致性扫描：检测设定冲突与结构缺口',
+      'bootstrap.ch1_scenes': 'Bootstrap 第一章场景规划：生成开篇场景与节奏节点',
+      'bootstrap.vol1_chapters': 'Bootstrap 第一卷章节细化：生成首卷章节拆分与推进线',
+      bootstrap_single_shot: 'Bootstrap 单次全量：一次性生成完整世界蓝图',
+      bootstrap_complete_settings: 'Bootstrap 设定补全：补齐世界观结构化条目',
+      bootstrap_complete_characters: 'Bootstrap 人物补全：补齐角色画像与关系',
       quality_check: '章节质检：检查剧情、人物一致性与设定冲突',
       chapter_coherence_check: '多章节连贯性检测：检查标题匹配与章节衔接',
       chapter_coherence_apply: '连贯性评测修订：按评测结论最小幅度改正文',
@@ -35,6 +62,7 @@ export default function LlmCallLogsPage() {
       auto_extract_debrief: '自动复盘：提取人物/故事线变化与章节索引',
     }
     if (!op) return '未标注作用'
+    if (op.startsWith('bootstrap.')) return `Bootstrap 流程任务：${op.replace('bootstrap.', '')}`
     return m[op] ?? `未登记作用：${op}`
   }
 
@@ -116,7 +144,7 @@ export default function LlmCallLogsPage() {
       key: 'operation',
       width: 300,
       render: (_, row) => {
-        const op = String(row.context?.operation || '')
+        const op = resolveOperationKey(row)
         return (
           <Space direction="vertical" size={0}>
             <Text strong>{op || 'unknown'}</Text>
@@ -237,7 +265,7 @@ export default function LlmCallLogsPage() {
           <Space direction="vertical" style={{ width: '100%' }} size="middle">
             <div>
               <Text strong>接口作用：</Text>
-              <Text>{operationLabel(String(detailRow.context?.operation || ''))}</Text>
+              <Text>{operationLabel(resolveOperationKey(detailRow))}</Text>
             </div>
             <div>
               <Text strong>上下文（全量）</Text>

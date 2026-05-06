@@ -158,7 +158,7 @@ def get_project_insights(project_id: str, db: Session = Depends(get_db)):
     """
     返回 Bootstrap 生成后写入 Project.extra 的编辑视角洞察数据：
     - consistency_issues：全局一致性扫描结果（Step 12）
-    - opening_contract：开局前10章追读承诺清单（Step 13）
+    - opening_contract：开局前10章追读承诺清单（Step 12）
     调用方：Bootstrap 完成页、项目概览、写前预警。
     """
     project = db.query(Project).filter(Project.id == project_id).first()

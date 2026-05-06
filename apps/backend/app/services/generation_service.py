@@ -19,10 +19,11 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.services.ai_service import AIService
 from app.services.genre_kit import get_genre_kit, normalize_genre, render_kit_for_prompt
+from app.utils.chapter_numbering import normalize_chapter_plan_title
 from app.models import (
     Project, WorldSetting, Character, CharacterRelationship,
     OutlineNode, MemoryChunk, PowerSystem, StoryLine,
-    Faction, Skill, Item
+    Faction, Skill, Item, ReaderPromise, Scene
 )
 
 
@@ -429,17 +430,8 @@ class GenerationService:
             rels = await self._gen_relations(project, chars, ctx)
             yield _sse("step_done", step="relations", count=len(rels))
 
-            # Step 12 — 全局一致性扫描（交叉核验所有生成物的关键字段）
-            yield _sse("step_start", step="consistency", label="全局一致性扫描...")
-            consistency_issues = await self._gen_consistency_scan(project, ctx)
-            yield _sse(
-                "step_done",
-                step="consistency",
-                count=len(consistency_issues),
-                preview=f"发现{len(consistency_issues)}处需确认项" if consistency_issues else "无明显矛盾",
-            )
-
-            # Step 13 — 开局前十章追读承诺清单
+            # Step 12 — 开局前十章追读承诺清单
+            # ⚠️ 必须在 vol1_chapters（Step 12.5）之前运行：chapter_plan 生成需要读取承诺节点
             yield _sse("step_start", step="opening_contract", label="规划开局追读承诺...")
             opening_contract = await self._gen_opening_contract(project, ctx)
             yield _sse(
@@ -447,6 +439,39 @@ class GenerationService:
                 step="opening_contract",
                 count=1,
                 preview=opening_contract.get("chapter1_hook", "")[:30] if opening_contract else "",
+            )
+
+            # Step 12.5 — 第一卷章级大纲（chapter_plan OutlineNode）
+            # 位于关系生成（relation_triggers）和承诺清单（opening_contract）之后，
+            # 两者都已写入 ctx，chapter_plan 可以按章号精确锚定冲突节点和钩子要求
+            yield _sse("step_start", step="vol1_chapters", label="生成第一卷章级大纲...")
+            vol1_plans = await self._gen_vol1_chapter_plans(project, nodes, ctx)
+            yield _sse(
+                "step_done",
+                step="vol1_chapters",
+                count=len(vol1_plans),
+                preview=f"第一卷共{len(vol1_plans)}章蓝图" if vol1_plans else "生成失败",
+            )
+
+            # Step 13 — 第1章场景蓝图（Scene records）
+            # 依赖 vol1_plans[0]（第1章 OutlineNode）；chapter_id=null，写章时再绑定
+            yield _sse("step_start", step="ch1_scenes", label="生成第1章场景蓝图...")
+            ch1_scenes = await self._gen_ch1_scenes(project, vol1_plans, ctx)
+            yield _sse(
+                "step_done",
+                step="ch1_scenes",
+                count=len(ch1_scenes),
+                preview=f"第1章共{len(ch1_scenes)}场" if ch1_scenes else "生成失败",
+            )
+
+            # Step 14 — 全局一致性扫描（交叉核验所有生成物的关键字段）
+            yield _sse("step_start", step="consistency", label="全局一致性扫描...")
+            consistency_issues = await self._gen_consistency_scan(project, ctx)
+            yield _sse(
+                "step_done",
+                step="consistency",
+                count=len(consistency_issues),
+                preview=f"发现{len(consistency_issues)}处需确认项" if consistency_issues else "无明显矛盾",
             )
 
             yield _sse("complete", project_id=str(project.id))
@@ -653,10 +678,14 @@ class GenerationService:
 
     async def _gen_factions(self, project: Project, ctx: dict):
         system = "你是网络小说世界构建专家。只返回JSON数组。"
-        prompt = f"""小说：《{ctx['project_title']}》({ctx['genre']})
+        kit_block = _get_genre_kit_block(ctx)
+        prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 创意：{ctx['logline']}
 世界观：{ctx['world_overview'][:300]}
 境界体系：{ctx.get('power_summary', '（未设定）')}
+
+【流派编辑手册约束】
+- 势力定位与冲突必须符合 genre_kit 的 satisfaction_tropes（玄幻多宗门/打脸、悬疑多嫌疑人互咬、言情多家族/情敌）
 
 生成本小说的主要势力/组织（4~6个），返回JSON数组：
 [
@@ -746,10 +775,14 @@ villain_timeline 对 antagonist 类势力为必填，要求具体到"第X卷前�
 
     async def _gen_key_skills(self, project: Project, ctx: dict):
         system = "你是网络小说世界构建专家。只返回JSON数组。"
-        prompt = f"""小说：《{ctx['project_title']}》({ctx['genre']})
+        kit_block = _get_genre_kit_block(ctx)
+        prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 主角：{ctx.get('protagonist', '主角')}
 境界体系：{ctx.get('power_summary', '（未设定）')}
 主要人物：{', '.join(ctx.get('char_names', [])[:6])}
+
+【流派编辑手册约束】
+- 技能效果与获取方式必须符合 genre_kit 的 satisfaction_tropes（玄幻强调金手指新用法，仙侠强调心魔/渡劫相关）
 
 生成本小说最关键的5~8个功法/技能，返回JSON数组：
 [
@@ -817,11 +850,15 @@ grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
 
     async def _gen_key_items(self, project: Project, ctx: dict):
         system = "你是网络小说世界构建专家。只返回JSON数组。"
-        prompt = f"""小说：《{ctx['project_title']}》({ctx['genre']})
+        kit_block = _get_genre_kit_block(ctx)
+        prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 主角：{ctx.get('protagonist', '主角')}
 境界体系：{ctx.get('power_summary', '（未设定）')}
 主要人物：{', '.join(ctx.get('char_names', [])[:6])}
 主要势力：{', '.join(ctx.get('faction_names', [])[:4])}
+
+【流派编辑手册约束】
+- 道具效果与获取必须符合 genre_kit 的 satisfaction_tropes（玄幻强调升级/打脸相关法宝）
 
 生成本小说最重要的5~8件道具/法宝，返回JSON数组：
 [
@@ -899,14 +936,25 @@ status 只能是: intact / damaged / destroyed / lost / unknown
         power_brief   = ctx.get("power_summary",   "（已独立生成境界体系）")
         setting_blueprints = _setting_blueprints_for_prompt()
 
-        prompt = f"""小说：《{ctx['project_title']}》({ctx['genre']})
+        # 把人物名与势力名注入设定 prompt，强制 who_knows_now 引用真实命名
+        char_names_hint = "、".join(ctx.get("char_names", []))
+        faction_names_hint = "、".join(ctx.get("faction_names", []))
+
+        kit_block = _get_genre_kit_block(ctx)
+        prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 创意：{ctx['logline']}
 立意与类型：{ctx.get('premise', '')[:1000] or '（未填写，请自动提炼）'}
 世界观：{ctx['world_overview'][:300]}
 
+【流派编辑手册约束】
+- 世界观必须体现流派特有的力量体系、势力格局、社会规则和读者期待（例：玄幻要强调金手指代价与升级仪式，悬疑要强调信息差与嫌疑人布局）
+- 禁忌边界必须参考 genre_kit 的 forbidden_examples
+
 已独立生成的结构化数据（设定卡不要重复这些内容）：
 - 境界体系：{power_brief}
 - 势力档案：{faction_brief}
+- 已确定人物（写 who_knows_now 时必须从此列表选名字）：{char_names_hint or '（尚未生成）'}
+- 已确定势力（写 who_knows_now 时可引用）：{faction_names_hint or '（尚未生成）'}
 
 请严格按【世界设定蓝图】生成完整的【纯叙事型】世界观设定卡，不要少卡、不要合并卡。
 世界设定蓝图：
@@ -1027,7 +1075,7 @@ status 只能是: intact / damaged / destroyed / lost / unknown
 6) 不要重复已有的境界体系或势力信息
 7) 每张卡必须在 extra 中填写两个揭示节奏字段：
    - reveal_timing：本设定何时、通过什么情节方式揭示给读者/主角（例：「第3卷主角发现禁忌遗迹时逐步揭示」）
-   - who_knows_now：故事开篇时已知晓这一设定的角色/势力（例：「上古三宗宗主、反派首领；主角完全不知」）
+   - who_knows_now：故事开篇时已知晓这一设定的角色与势力，**必须从上方"已确定人物"和"已确定势力"列表中选取真实名字**，禁止使用"反派首领""主角"等泛称；格式示例：「李长清、玄天宗知晓内情；叶凡完全不知」
 只返回JSON数组，不要解释。"""
 
         raw = await self._call_with_retry(system, prompt, task="bootstrap.settings")
@@ -1060,9 +1108,13 @@ status 只能是: intact / damaged / destroyed / lost / unknown
 
     async def _gen_power_systems(self, project: Project, ctx: dict):
         system = "你是网络小说世界构建专家。只返回JSON数组。"
-        prompt = f"""小说：《{ctx['project_title']}》({ctx['genre']})
+        kit_block = _get_genre_kit_block(ctx)
+        prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 创意：{ctx['logline']}
 世界观：{ctx['world_overview'][:300]}
+
+【流派编辑手册约束】
+- 境界体系必须符合 genre_kit 的 pacing_guide（玄幻要强调升级仪式与金手指代价，仙侠要强调心魔与渡劫）
 
 生成本小说的力量/境界体系，返回JSON数组（通常1~2套）：
 [
@@ -1154,10 +1206,15 @@ gatekeeper 必须具体（如"宗门首席×××"或"突破所需天材地宝被
 
     async def _gen_storylines(self, project: Project, ctx: dict):
         system = "你是网络小说叙事结构专家。只返回JSON数组。"
-        prompt = f"""小说：《{ctx['project_title']}》({ctx['genre']})
+        kit_block = _get_genre_kit_block(ctx)
+        prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 创意：{ctx['logline']}
 故事核：{ctx['story_core'].get('conflict', '')} | 主题：{ctx['story_core'].get('theme', '')}
 境界体系：{ctx.get('power_summary', '（未设定）')}
+
+【流派编辑手册约束】
+- 每条故事线的 core_conflict 和 resolution_direction 必须符合 genre_kit 的 satisfaction_tropes 和 pacing_guide
+- 主线冲突类型必须贴合流派（玄幻打脸/升级、悬疑信息差/嫌疑人、言情误会/追妻等）
 
 生成3~5条主要故事线，返回JSON数组：
 [
@@ -1217,10 +1274,16 @@ status 只能是: planned / active
             f"\n境界体系（current_realm 必须从此列表选择）：{ctx.get('power_summary', '')}"
             if ctx.get('power_level_names') else ""
         )
-        prompt = f"""小说：《{ctx['project_title']}》({ctx['genre']})
+        kit_block = _get_genre_kit_block(ctx)
+        prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 创意：{ctx['logline']}
 立意与类型：{ctx.get('premise', '')[:800] or '（未填写）'}
 故事核：冲突={ctx['story_core'].get('conflict','')}，主题={ctx['story_core'].get('theme','')}{power_hint}
+
+【流派编辑手册约束（必须严格遵守）】
+- 角色配额必须符合 genre_kit 的 side_character_quota
+- 说话风格必须符合 dialogue_tone 和 forbidden_examples（严禁出现本流派禁忌的开局/对白方式）
+- speech_kit 中的 signature_words / sample_dialogues 必须体现流派特有的咬字习惯和禁忌词
 
 ⚠️ 你正在生成"主线核心卡司（Core Cast）"——这8人是全书贯穿的主线角色，不是全书所有人物。
 后续章节写作时会按剧情需要动态补充配角，这里只需确定主线固定角色。
@@ -1237,13 +1300,13 @@ status 只能是: planned / active
     "arc": "人物弧线（从X到Y的成长）",
     "current_realm": "当前境界（或能力层级）",
     "speech_style": "说话风格（自由文本，一句话）",
-    "speech_kit": {
+    "speech_kit": {{
       "signature_words": ["最常说的1-3个标志性词语/口头禅"],
       "sentence_length_pref": "短句/中句/长句偏好",
       "taboo_words": ["绝对不会说的词或句式"],
       "sample_dialogues": ["5-8句典型台词，体现说话习惯"],
       "inner_monologue_style": "内心独白风格（克制/细腻/直白/诗化等）"
-    },
+    }},
     "values": "价值观",
     "fear": "最恐惧的东西——必须具体，且这个恐惧在故事中会被迫直面",
     "secrets": "不愿公开的秘密——必须具体，且这个秘密暴露后会引发实质性后果",
@@ -1261,7 +1324,31 @@ character_tier 代表该人物在全书中的叙事层级，只能是以下4个�
 - plot       = 剧情推手：短期出现以推进特定情节节点，之后退场
 - background = 背景填充：丰富世界厚度与氛围，无强情节绑定
 请根据每个人物在故事中的实际定位严格判断，不要全部填 core。
-debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对主角或某配角有欠债（仇怨或嫉妒型）；这些欠债要分散在不同卷引爆，制造持续的人物动力。"""
+debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对主角或某配角有欠债（仇怨或嫉妒型）；这些欠债要分散在不同卷引爆，制造持续的人物动力。
+
+---
+【第二部分】再追加生成5个「开局配角」（仅第一卷活跃，character_tier 固定为 "plot"）：
+这些人物丰富开局前30章的世界厚度，无需长线设计，但每人在卷一必须有具体的情节功能。
+典型角色类型（按需选用）：反派爪牙/小Boss、同辈竞争者/欺凌者、商人/情报贩子、门派长老/考官、普通市民/路人甲（提供信息或见证主角爆发）。
+
+每个配角只需填写精简字段：
+{{
+  "name": "姓名",
+  "role": "supporting 或 antagonist",
+  "character_tier": "plot",
+  "gender": "性别",
+  "age": "年龄",
+  "faction": "所属势力（已有势力名或留空）",
+  "personality": "性格一句话",
+  "motivation": "在卷一的行为动机（一句话）",
+  "current_realm": "当前境界（与已有境界体系一致）",
+  "vol1_function": "在第一卷30章内的具体剧情功能（必须具体：如'第5章欺凌主角引发第一次反击'、'第12章提供关键情报后消失'）",
+  "debt_to": "",
+  "detonation_vol": 0,
+  "speech_kit": {{"signature_words": [], "sentence_length_pref": "短句", "taboo_words": [], "sample_dialogues": [], "inner_monologue_style": "直白"}},
+  "values": "", "fear": "", "secrets": "", "strengths": [], "weaknesses": [], "special_traits": []
+}}
+请将这5个配角追加到同一JSON数组末尾，不要分开返回。"""
 
         raw = await self._call_with_retry(system, prompt, task="bootstrap.characters")
         data = _parse_json(raw)
@@ -1283,6 +1370,10 @@ debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对�
             det_vol = _safe_int(det_vol_raw, default=0)
             if det_vol and det_vol > 0:
                 char_extra["detonation_vol"] = det_vol
+            # plot 档配角：保存卷一功能说明
+            vol1_func = (item.get("vol1_function") or "").strip()
+            if vol1_func:
+                char_extra["vol1_function"] = vol1_func
             c = Character(
                 project_id=project.id,
                 name=item.get("name", "未命名"),
@@ -1318,6 +1409,16 @@ debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对�
         }
         # ★ 修复：名字→UUID 映射，供 Skill/Item 存真实 character_id
         ctx["char_name_to_id"] = {c.name: str(c.id) for c in results}
+        # 仅 core/arc 层级参与关系图（plot 档配角不做全连接，避免组合爆炸）
+        ctx["core_char_names"] = [
+            c.name for c in results if c.character_tier in ("core", "arc")
+        ]
+        # plot 档配角摘要：供 vol1_chapter_plans 等步骤引用
+        ctx["plot_npc_summary"] = "; ".join(
+            f"{c.name}（{c.extra.get('vol1_function', '') if c.extra else ''}）"
+            for c in results
+            if c.character_tier == "plot" and c.extra and c.extra.get("vol1_function")
+        )
         return results
 
     # ══════════════════════════════════════════════════════════
@@ -1354,10 +1455,21 @@ debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对�
             )
         kit_block = _get_genre_kit_block(ctx)
 
+        # 反派时间线摘要 → 卷规划约束：dark_hour / climax 的触发依据
+        villain_timelines = ctx.get("villain_timelines", [])
+        villain_block = ""
+        if villain_timelines:
+            villain_block = (
+                "\n【反派行动时间线（卷级 phase 必须与之对齐）】\n"
+                + "\n".join(f"- {vt}" for vt in villain_timelines)
+                + "\n⚠️ 对齐规则：反派明显占优/主角处于劣势的卷 → phase=dark_hour；\n"
+                "反派计划被终结/代价完全兑现的卷 → phase=climax。\n"
+            )
+
         prompt = f"""小说：《{ctx['project_title']}》主角：{ctx['protagonist']}
 创意：{ctx['logline']}
 立意与类型：{ctx.get('premise', '')[:700] or '（未填写）'}
-设定摘要：{ctx['settings_summary']}{storyline_hint}{positioning_block}{kit_block}
+设定摘要：{ctx['settings_summary']}{storyline_hint}{villain_block}{positioning_block}{kit_block}
 
 主线核心角色（固定卡司，非全书全部人物）：{', '.join(ctx.get('char_names', []))}
 ⚠️ 以上只是主线人物。每卷 summary/conflict 允许并鼓励提及未命名配角（如"某城守将""地下情报商""宗门长老"等职能角色），章节细化时会按需正式创建他们。
@@ -1498,15 +1610,21 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         if len(chars) < 2:
             return []
 
-        name_map = {c.name: c for c in chars}
+        # 只对 core / arc 层角色做全连接关系图；plot 档配角不参与，避免组合爆炸
+        core_names = set(ctx.get("core_char_names", [c.name for c in chars]))
+        relation_chars = [c for c in chars if c.name in core_names]
+        if len(relation_chars) < 2:
+            relation_chars = chars  # 兜底：若过滤后不足2人，仍用全部
+
+        name_map = {c.name: c for c in chars}  # 全量 map 供解析用
         # 把欠债信息汇总给关系生成，让 AI 设计互相呼应的张力
         debt_summary = "; ".join(
             f"{c.name}→欠债:{c.extra.get('debt_to','')}(第{c.extra.get('detonation_vol',0)}卷引爆)"
-            for c in chars
+            for c in relation_chars
             if c.extra and c.extra.get("debt_to", "").strip()
         )
         system = "你是人物关系设计专家。只返回JSON数组。"
-        prompt = f"""人物列表：{', '.join(ctx['char_names'])}
+        prompt = f"""人物列表：{', '.join(c.name for c in relation_chars)}
 创意：{ctx['logline']}
 已知欠债关系（请让关系设计与欠债相互呼应）：{debt_summary or '（无）'}
 
@@ -1560,10 +1678,352 @@ unresolved_tension 和 trigger_event 为必填，不能为空或敷衍。"""
             results.append(rel)
 
         self.db.commit()
+
+        # 关系张力摘要 → 供 Step 11.5 生成第一卷章级大纲时引用
+        ctx["relation_triggers"] = "; ".join(
+            f"{item.get('from_name','?')}↔{item.get('to_name','?')}[{item.get('trigger_event','')}]"
+            for item in data
+            if item.get("trigger_event", "").strip()
+        )
+
         return results
 
     # ══════════════════════════════════════════════════════════
-    #  Step 12 — 全局一致性扫描
+    #  Step 11.5 — 第一卷章级大纲（OutlineNode chapter_plan）
+    # ══════════════════════════════════════════════════════════
+
+    async def _gen_vol1_chapter_plans(self, project: Project, volumes: list, ctx: dict) -> list:
+        """利用 Bootstrap 全量上下文为第一卷生成 chapter_plan 级 OutlineNode。
+
+        此步骤在 Step 11（人物关系）之后触发，可以使用全部已积累的：
+        人物档案、欠债引爆节点、关系触发事件、反派时间线、故事线、开局承诺、境界体系。
+
+        Args:
+            project: 当前项目。
+            volumes: Step 9 生成的卷级 OutlineNode 列表（取 sort_order=0 的第一卷）。
+            ctx: Bootstrap 上下文字典。
+
+        Returns:
+            生成的 OutlineNode（chapter_plan）列表；失败时返回空列表。
+        """
+        if not volumes:
+            return []
+
+        vol1 = next((v for v in volumes if v.sort_order == 0), volumes[0])
+        planned = (vol1.extra or {}).get("planned_chapters", 30)
+        if planned not in (30, 60):
+            planned = 30
+
+        system = "你是网络小说结构策划专家，擅长将宏观设定转化为可执行的章节级写作蓝图。只返回JSON数组。"
+
+        # ── 压缩上下文 ──────────────────────────────────────────
+        # 人物摘要：名字 + 层级 + 欠债引爆卷
+        char_lines = []
+        for name in ctx.get("char_names", []):
+            tier = "plot" if name not in ctx.get("core_char_names", []) else "core"
+            realm = ctx.get("char_realms", {}).get(name, "")
+            char_lines.append(f"{name}({tier},{realm})")
+        char_snapshot = "、".join(char_lines)
+
+        # 欠债引爆信息（核心驱动力）
+        debt_lines = []
+        for name in ctx.get("core_char_names", []):
+            pass  # debt is already in char_extra, summarised below via relation_triggers
+
+        # 故事线
+        storyline_summary = ctx.get("storyline_summary", "（未设定）")
+        # 关系触发事件
+        relation_triggers = ctx.get("relation_triggers", "（无）")
+        # 反派时间线
+        villain_timelines = ctx.get("villain_timelines", [])
+        villain_hint = "；".join(villain_timelines) if villain_timelines else "（无）"
+        # 开局承诺：优先从 ctx 读（Step 12 已将其写入 ctx['opening_contract']），
+        # 兜底再查 project.extra（单步重跑场景下可能没有 ctx）
+        opening_contract = ctx.get("opening_contract") or (project.extra or {}).get("opening_contract", {})
+        contract_hint = ""
+        if opening_contract:
+            contract_hint = (
+                f"\n【已有开局承诺（章级大纲必须兑现）】\n"
+                f"  第1章末钩子：{opening_contract.get('chapter1_hook','')}\n"
+                f"  第3章爽点：{opening_contract.get('chapter3_payoff','')}\n"
+                f"  第5章伏笔：{opening_contract.get('chapter5_foreshadow','')}\n"
+                f"  第10章订阅钩：{opening_contract.get('chapter10_subscribe_reason','')}\n"
+                f"  节奏规划：{opening_contract.get('chapter_rhythm','')}\n"
+            )
+
+        # plot NPC 简介
+        plot_npc_hint = ctx.get("plot_npc_summary", "")
+
+        # 定位爽点
+        positioning = ctx.get("positioning") or {}
+        tropes = "、".join(positioning.get("tropes", []))
+        pace_type = positioning.get("pace_type", "medium")
+
+        # 境界突破预算：第一卷内主角应完成几个境界
+        power_level_names = ctx.get("power_level_names", [])
+        power_hint = ""
+        if power_level_names:
+            power_hint = f"\n境界体系层级：{' → '.join(power_level_names[:6])}（如有更多则省略）"
+
+        # opening 期字数标准
+        words_per_chapter = 2200  # opening phase 标准字数
+
+        # ── 分批生成（60章拆两批）──────────────────────────────
+        all_results: list[OutlineNode] = []
+
+        batch_ranges = [(1, min(30, planned))]
+        if planned > 30:
+            batch_ranges.append((31, planned))
+
+        for batch_start, batch_end in batch_ranges:
+            batch_count = batch_end - batch_start + 1
+            prev_summary = ""
+            if all_results:
+                # 前一批末尾3章摘要作为续写上下文
+                prev_summary = "\n【前批末尾3章摘要（续写衔接用）】\n" + "\n".join(
+                    f"  第{n.sort_order + 1}章：{n.summary or ''}"
+                    for n in all_results[-3:]
+                )
+
+            prompt = f"""小说：《{ctx.get('project_title', '')}》  主角：{ctx.get('protagonist', '主角')}
+创意：{ctx.get('logline', '')}
+{vol1.title}（phase={vol1.phase}，共{planned}章）
+卷摘要：{vol1.summary or ''}  核心冲突：{vol1.conflict or ''}
+
+【人物阵容】{char_snapshot}
+【开局配角功能】{plot_npc_hint or '（无）'}
+【故事线】{storyline_summary}
+【关系触发事件（可在对应章节引爆）】{relation_triggers}
+【反派时间线】{villain_hint}
+【核心爽点类型】{tropes or '（未设定）'}  节奏类型：{pace_type}{power_hint}{contract_hint}{prev_summary}
+
+请为本卷第{batch_start}～{batch_end}章生成{batch_count}个章节计划，返回JSON数组：
+[
+  {{
+    "chapter_number": {batch_start},
+    "title": "第X章：章节标题（有画面感，≤12字）",
+    "summary": "本章主要情节（≤50字，具体到人物+事件+结果）",
+    "conflict": "本章核心矛盾（≤25字）",
+    "hook": "章末钩子（≤20字，让读者必须看下一章）",
+    "involved_characters": ["人物名1", "人物名2"],
+    "storyline_refs": ["故事线名称（从已有故事线中选）"],
+    "pacing": "fast/normal/slow/climax（章节节奏）",
+    "emotional_tone": "exciting/tense/sad/romantic/mysterious/funny/epic/calm",
+    "power_milestone": "若本章有境界突破/技能习得则描述，否则填空字符串",
+    "has_face_slap": false,
+    "has_emotional_beat": false,
+    "expected_words": {words_per_chapter}
+  }}
+]
+⚠️ 强制要求：
+1. involved_characters 只能使用上方已知人物名，不要发明新名字
+2. 前5章：每章必须有一个具体悬念收尾（hook 不能是"主角沉思"之类的废话）
+3. 第1章和第3章必须对应 chapter1_hook / chapter3_payoff 的要求（若有）
+4. 若 planned=60，前30章节奏偏快（以爽点和信息密度驱动），后30章可有1-2章慢节奏铺垫
+5. opening phase 每3章内至少有1次有感知的主角胜利或资源获取
+6. storyline_refs 要交叉出现，不要只推进主线
+只返回JSON数组，不要解释。"""
+
+            try:
+                raw = await self._call_with_retry(
+                    system, prompt, task="bootstrap.vol1_chapters", max_tokens=4096
+                )
+                batch_data = _parse_json(raw)
+                if not isinstance(batch_data, list):
+                    batch_data = batch_data.get("chapters", [])
+            except Exception:
+                continue  # 本批失败不阻断整体
+
+            char_name_to_id = ctx.get("char_name_to_id", {})
+            storyline_ids_map = ctx.get("storyline_ids", {})
+
+            for item in batch_data:
+                ch_num = item.get("chapter_number", batch_start)
+                # involved_characters → UUID 列表
+                involved_ids = [
+                    char_name_to_id[n]
+                    for n in item.get("involved_characters", [])
+                    if n in char_name_to_id
+                ]
+                # storyline_refs → UUID 列表
+                sl_ids = [
+                    storyline_ids_map[n]
+                    for n in item.get("storyline_refs", [])
+                    if n in storyline_ids_map
+                ]
+                node = OutlineNode(
+                    project_id=project.id,
+                    parent_id=vol1.id,
+                    node_type="chapter_plan",
+                    title=normalize_chapter_plan_title(ch_num, item.get("title")),
+                    summary=item.get("summary"),
+                    conflict=item.get("conflict"),
+                    hook=item.get("hook"),
+                    phase=vol1.phase,
+                    pacing=item.get("pacing", "normal"),
+                    emotional_tone=item.get("emotional_tone"),
+                    power_milestone=item.get("power_milestone") or None,
+                    involved_character_ids=involved_ids,
+                    storyline_ids=sl_ids,
+                    expected_words=item.get("expected_words", words_per_chapter),
+                    sort_order=ch_num - 1,
+                    extra={
+                        "has_face_slap": item.get("has_face_slap", False),
+                        "has_emotional_beat": item.get("has_emotional_beat", False),
+                        "bootstrap_generated": True,
+                    },
+                )
+                self.db.add(node)
+                all_results.append(node)
+
+        if all_results:
+            self.db.commit()
+
+        ctx["vol1_chapter_count"] = len(all_results)
+        return all_results
+
+    # ══════════════════════════════════════════════════════════
+    #  Step 13 — 第1章场景蓝图（Scene records）
+    # ══════════════════════════════════════════════════════════
+
+    async def _gen_ch1_scenes(
+        self, project: Project, vol1_plans: list, ctx: dict
+    ) -> list:
+        """为第1章生成 3-5 个 Scene（分场）蓝图，写入数据库。
+
+        依赖 vol1_plans[0]（第1章 chapter_plan OutlineNode）；
+        chapter_id=null，写章时再绑定；status="planned"，content=null。
+
+        Args:
+            project: 当前项目。
+            vol1_plans: Step 12.5 生成的第一卷 chapter_plan 节点列表。
+            ctx: Bootstrap 上下文字典。
+
+        Returns:
+            生成的 Scene 列表；失败时返回空列表。
+        """
+        if not vol1_plans:
+            return []
+
+        ch1_node = vol1_plans[0]  # 第1章 OutlineNode（sort_order=0）
+
+        system = "你是网络小说分场设计专家。只返回JSON数组。"
+
+        # 读取第1章节点信息
+        ch1_summary = ch1_node.summary or ""
+        ch1_conflict = ch1_node.conflict or ""
+        ch1_hook = ch1_node.hook or ""
+
+        # 开局承诺对第1章的要求
+        opening_contract = ctx.get("opening_contract") or {}
+        first_200 = opening_contract.get("first_200_words_test", "")
+        ch1_hook_req = opening_contract.get("chapter1_hook", "")
+
+        # 主角与世界设定锚点（供场景选择地点和感官焦点）
+        protagonist = ctx.get("protagonist", "主角")
+        world_hint = ctx.get("world_overview", "")[:200]
+        power_hint = ctx.get("power_summary", "")[:100]
+        positioning = ctx.get("positioning") or {}
+        pace_type = positioning.get("pace_type", "medium")
+
+        # opening phase 字数：第1章约 2200 字，3-4 场每场约 500-700 字
+        words_per_scene = 550
+
+        prompt = f"""小说：《{ctx.get('project_title', '')}》  主角：{protagonist}
+创意：{ctx.get('logline', '')}
+世界背景（供选择地点）：{world_hint}
+境界提示：{power_hint}
+
+【第1章节点信息】
+摘要：{ch1_summary}
+核心冲突：{ch1_conflict}
+章末钩子：{ch1_hook}
+
+【开局承诺对第1章的要求】
+前200字必须完成：{first_200 or '（未设定）'}
+章末必须埋下的钩子：{ch1_hook_req or '（未设定）'}
+节奏类型：{pace_type}
+
+请为第1章设计 3-5 个分场（Scene），返回JSON数组：
+[
+  {{
+    "order": 1,
+    "title": "场标题（可选，≤10字）",
+    "time": "故事内时间（如"第1日·晨"）",
+    "location_name": "具体地点（结合世界背景，≤15字）",
+    "pov_character": "视点人物名（通常是主角）",
+    "characters_on_stage": ["在场人物名1", "在场人物名2"],
+    "goal": "本场角色想达成的目标（≤20字）",
+    "conflict": "阻碍目标实现的障碍或对立（≤20字）",
+    "turn": "本场发生的关键转变（≤20字）",
+    "hook": "场末留下的疑问或紧张（≤15字，最后一场写章末大钩）",
+    "hook_strength": 4,
+    "word_budget": {words_per_scene},
+    "pacing": "fast/mid/slow",
+    "sensory_focus": "sight/sound/smell/taste/touch/mixed"
+  }}
+]
+⚠️ 要求：
+1. 第1场必须在前100字内建立主角处境的压力或不公（不要废话开场）
+2. 至少有1场包含主角的主动行动（不能全是被动被安排）
+3. 最后一场的 hook 必须对应上方「章末必须埋下的钩子」要求
+4. pov_character 和 characters_on_stage 中只能用上方已知的人物名
+5. 各场字数预算之和约为 2000-2400 字（opening 期标准）
+只返回JSON数组，不要解释。"""
+
+        try:
+            raw = await self._call_with_retry(system, prompt, task="bootstrap.ch1_scenes")
+            data = _parse_json(raw)
+            if not isinstance(data, list):
+                data = data.get("scenes", [])
+        except Exception:
+            return []
+
+        char_name_to_id = ctx.get("char_name_to_id", {})
+        results: list = []
+
+        for item in data:
+            pov_name = item.get("pov_character", protagonist)
+            pov_id = char_name_to_id.get(pov_name)
+
+            on_stage_ids = [
+                char_name_to_id[n]
+                for n in item.get("characters_on_stage", [])
+                if n in char_name_to_id
+            ]
+
+            scene = Scene(
+                project_id=project.id,
+                chapter_id=None,          # 章节未写，待写章时绑定
+                outline_node_id=ch1_node.id,
+                order=item.get("order", len(results) + 1),
+                title=item.get("title") or None,
+                time=item.get("time") or None,
+                location_name=item.get("location_name") or None,
+                pov_character_id=pov_id,
+                characters_on_stage=on_stage_ids,
+                goal=item.get("goal"),
+                conflict=item.get("conflict"),
+                turn=item.get("turn"),
+                hook=item.get("hook"),
+                hook_strength=int(item.get("hook_strength", 3)),
+                word_budget=int(item.get("word_budget", words_per_scene)),
+                pacing=item.get("pacing", "mid"),
+                sensory_focus=item.get("sensory_focus", "mixed"),
+                status="planned",
+                content=None,
+                extra={"bootstrap_generated": True},
+            )
+            self.db.add(scene)
+            results.append(scene)
+
+        if results:
+            self.db.commit()
+
+        return results
+
+    # ══════════════════════════════════════════════════════════
+    #  Step 14 — 全局一致性扫描
     # ══════════════════════════════════════════════════════════
 
     async def _gen_consistency_scan(self, project, ctx: dict) -> list:
@@ -1660,7 +2120,7 @@ unresolved_tension 和 trigger_event 为必填，不能为空或敷衍。"""
         return issues
 
     # ══════════════════════════════════════════════════════════
-    #  Step 13 — 开局前十章追读承诺清单
+    #  Step 12 — 开局前十章追读承诺清单
     # ══════════════════════════════════════════════════════════
 
     async def _gen_opening_contract(self, project, ctx: dict) -> dict:
@@ -1715,7 +2175,7 @@ unresolved_tension 和 trigger_event 为必填，不能为空或敷衍。"""
         except Exception:
             contract = {}
 
-        # 写入 Project.extra
+        # 写入 Project.extra（兼容保留，原有读取路径不受影响）
         try:
             extra = project.extra or {}
             extra["opening_contract"] = contract
@@ -1723,6 +2183,89 @@ unresolved_tension 和 trigger_event 为必填，不能为空或敷衍。"""
             self.db.commit()
         except Exception:
             pass
+
+        # 同时写入 ctx，供 Step 12.5（_gen_vol1_chapter_plans）直接读取，
+        # 无需再从 project.extra 回查——避免首次运行时时序错位导致联动为空
+        ctx["opening_contract"] = contract
+
+        # ── 里程碑字段映射 → ReaderPromise 表 ──────────────────────
+        # 将结构化里程碑字段逐条写入 ReaderPromise，供写章 prompt 按章号查询注入，
+        # 避免每次都解析 JSON 字段；保留 extra.opening_contract 作为只读原始存档。
+        #
+        # 映射规则：
+        #   chapter1_hook          → source_ch=1,  window=2,  type=chapter_ending   (引导到第3章)
+        #   chapter3_payoff        → source_ch=0,  window=3,  type=protagonist_claim (前3章内兑现)
+        #   chapter5_foreshadow    → source_ch=5,  window=25, type=chapter_ending   (追到第30章)
+        #   chapter10_subscribe    → source_ch=10, window=1,  type=chapter_ending   (钩到第11章)
+        #   first_200_words_test   → source_ch=1,  window=0,  type=name_implication (写作指引)
+        if contract:
+            milestone_map = [
+                {
+                    "key": "chapter1_hook",
+                    "promise_type": "chapter_ending",
+                    "source_chapter_number": 1,
+                    "expected_chapter_window": 2,
+                    "priority": 5,
+                    "audience_aware": 4,
+                },
+                {
+                    "key": "chapter3_payoff",
+                    "promise_type": "protagonist_claim",
+                    "source_chapter_number": 0,
+                    "expected_chapter_window": 3,
+                    "priority": 4,
+                    "audience_aware": 3,
+                },
+                {
+                    "key": "chapter5_foreshadow",
+                    "promise_type": "chapter_ending",
+                    "source_chapter_number": 5,
+                    "expected_chapter_window": 25,
+                    "priority": 3,
+                    "audience_aware": 2,
+                },
+                {
+                    "key": "chapter10_subscribe_reason",
+                    "promise_type": "chapter_ending",
+                    "source_chapter_number": 10,
+                    "expected_chapter_window": 1,
+                    "priority": 5,
+                    "audience_aware": 5,
+                },
+                {
+                    "key": "first_200_words_test",
+                    "promise_type": "name_implication",
+                    "source_chapter_number": 1,
+                    "expected_chapter_window": 0,
+                    "priority": 2,
+                    "audience_aware": 1,
+                },
+            ]
+            try:
+                for m in milestone_map:
+                    text = contract.get(m["key"])
+                    if not text:
+                        continue
+                    # opening_traps_to_avoid 是数组，跳过（不适合单条 promise）
+                    if isinstance(text, list):
+                        text = "；".join(str(t) for t in text if t)
+                    if not text.strip():
+                        continue
+                    rp = ReaderPromise(
+                        project_id=project.id,
+                        promise_text=str(text).strip(),
+                        promise_type=m["promise_type"],
+                        source_chapter_number=m["source_chapter_number"],
+                        expected_chapter_window=m["expected_chapter_window"],
+                        priority=m["priority"],
+                        audience_aware=m["audience_aware"],
+                        status="open",
+                        extra={"origin": "bootstrap_opening_contract", "contract_key": m["key"]},
+                    )
+                    self.db.add(rp)
+                self.db.commit()
+            except Exception:
+                pass  # ReaderPromise 写入失败不阻断主流程
 
         return contract
 

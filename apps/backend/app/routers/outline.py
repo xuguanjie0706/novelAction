@@ -34,7 +34,7 @@ from app.services.outline_planning import (
     normalize_volume_plan,
 )
 from app.services.workflow_graph import WorkflowGraph, WorkflowNode, workflow_runs
-from app.utils.chapter_numbering import display_chapter_number
+from app.utils.chapter_numbering import display_chapter_number, normalize_chapter_plan_title
 
 router = APIRouter(prefix="/projects/{project_id}/outline", tags=["outline"])
 
@@ -3327,7 +3327,10 @@ async def ai_full_generate_outline(
                 project_id=project_id,
                 parent_id=target_node.id,
                 node_type="chapter_plan",
-                title=f"第{ch.get('number', chapter_offset + ci + 1)}章：{ch.get('title', '未命名')}",
+                title=normalize_chapter_plan_title(
+                    ch.get("number", chapter_offset + ci + 1),
+                    ch.get("title"),
+                ),
                 summary=ch.get("core_event"),
                 hook=ch.get("opening_hook"),
                 highlight=ch.get("end_hook"),
@@ -3767,7 +3770,7 @@ def commit_expand(
             project_id=project_id,
             parent_id=parent.id,
             node_type="chapter_plan",
-            title=f"第{safe_ch.get('number', i + 1)}章：{safe_ch.get('title', '未命名')}",
+            title=normalize_chapter_plan_title(safe_ch.get("number", i + 1), safe_ch.get("title")),
             summary=safe_ch.get("core_event"),
             hook=safe_ch.get("opening_hook"),
             highlight=safe_ch.get("end_hook"),    # 章末钩子放 highlight 字段

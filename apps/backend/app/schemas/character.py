@@ -87,6 +87,7 @@ class CharacterUpdate(BaseModel):
 
     personality: Optional[str] = None
     speech_style: Optional[str] = None
+    speech_kit: Optional[dict] = None
     values: Optional[str] = None
 
     background: Optional[str] = None
@@ -137,6 +138,7 @@ class CharacterOut(BaseModel):
 
     personality: Optional[str]
     speech_style: Optional[str]
+    speech_kit: Optional[dict]
     values: Optional[str]
 
     background: Optional[str]

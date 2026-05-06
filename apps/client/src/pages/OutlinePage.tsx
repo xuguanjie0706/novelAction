@@ -1621,10 +1621,27 @@ function NodeDetailPanel({
     emotional_tone: node.emotional_tone ?? '',
     involved_character_ids: (node.involved_character_ids ?? []).map(String),
     storyline_ids: (node.storyline_ids ?? []).map(String),
+    // P2 新增
+    pov_character_id: node.pov_character_id ?? undefined,
+    character_screen_time: node.character_screen_time ?? {},
   })
 
   useEffect(() => {
     setActiveTab('overview')
+    // 重置表单（包含 P2 新字段）
+    setForm({
+      title: node.title ?? '',
+      summary: node.summary ?? '',
+      hook: node.hook ?? '',
+      highlight: node.highlight ?? '',
+      conflict: node.conflict ?? '',
+      power_milestone: node.power_milestone ?? '',
+      emotional_tone: node.emotional_tone ?? '',
+      involved_character_ids: (node.involved_character_ids ?? []).map(String),
+      storyline_ids: (node.storyline_ids ?? []).map(String),
+      pov_character_id: node.pov_character_id ?? undefined,
+      character_screen_time: node.character_screen_time ?? {},
+    })
   }, [node.id])
 
   const handleSave = async () => {
@@ -1643,6 +1660,9 @@ function NodeDetailPanel({
         payload.emotional_tone = form.emotional_tone || null
         payload.involved_character_ids = form.involved_character_ids
         payload.storyline_ids = form.storyline_ids
+        // P2 新增
+        payload.pov_character_id = form.pov_character_id || null
+        payload.character_screen_time = form.character_screen_time || {}
       }
       const res = await outlineApi.update(projectId, node.id, payload)
       onSaved(res.data)
@@ -1847,6 +1867,112 @@ function NodeDetailPanel({
                 </div>
               )}
             </div>
+
+          {/* P2 新增：主要 POV */}
+          <div>
+            <div className="flex items-center gap-1.5 mb-2">
+              <Users size={12} className="text-purple-500 shrink-0" />
+              <label className="text-xs font-medium text-gray-600">主要 POV</label>
+              <span className="text-[10px] text-gray-400">本章强制视点角色</span>
+            </div>
+            {editing ? (
+              <div className="flex flex-wrap gap-1.5">
+                {characters.map(c => {
+                  const selected = form.pov_character_id === String(c.id)
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => setForm(f => ({ ...f, pov_character_id: selected ? undefined : String(c.id) }))}
+                      className={clsx(
+                        'text-xs px-2.5 py-1 rounded-full border transition-all',
+                        selected
+                          ? 'bg-purple-500 border-purple-500 text-white'
+                          : 'border-gray-200 text-gray-600 hover:border-purple-300 hover:text-purple-600',
+                      )}
+                    >
+                      {c.name}
+                      {c.current_realm && <span className="ml-1 opacity-70 text-[10px]">{c.current_realm}</span>}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="text-sm">
+                {form.pov_character_id ? (
+                  (() => {
+                    const povChar = characters.find(x => String(x.id) === form.pov_character_id)
+                    return povChar ? (
+                      <span className="px-2.5 py-1 rounded-full bg-purple-50 border border-purple-200 text-purple-700 text-xs">
+                        {povChar.name}
+                      </span>
+                    ) : <span className="text-gray-400 italic">—</span>
+                  })()
+                ) : (
+                  <span className="text-xs text-gray-400 italic">未指定（默认全知）</span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* P2 新增：戏份预算 */}
+          <div>
+            <div className="flex items-center gap-1.5 mb-2">
+              <Target size={12} className="text-orange-500 shrink-0" />
+              <label className="text-xs font-medium text-gray-600">戏份预算</label>
+              <span className="text-[10px] text-gray-400">各角色本章出镜占比</span>
+            </div>
+            {editing ? (
+              <div className="space-y-2 text-sm">
+                {characters.map(c => {
+                  const pct = (form.character_screen_time as any)?.[String(c.id)] ?? 0
+                  return (
+                    <div key={c.id} className="flex items-center gap-3">
+                      <div className="w-20 truncate text-gray-600">{c.name}</div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={5}
+                        value={pct}
+                        onChange={e => {
+                          const val = parseInt(e.target.value)
+                          setForm(f => ({
+                            ...f,
+                            character_screen_time: {
+                              ...(f.character_screen_time as any),
+                              [String(c.id)]: val
+                            }
+                          }))
+                        }}
+                        className="flex-1"
+                      />
+                      <div className="w-10 text-right text-gray-600">{pct}%</div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="text-sm space-y-1">
+                {form.character_screen_time && Object.keys(form.character_screen_time).length > 0 ? (
+                  Object.entries(form.character_screen_time as Record<string, number>).map(([id, pct]) => {
+                    const c = characters.find(x => String(x.id) === id)
+                    return c ? (
+                      <div key={id} className="flex items-center gap-2 text-xs">
+                        <span className="text-gray-600 w-16 truncate">{c.name}</span>
+                        <div className="flex-1 h-1.5 bg-gray-200 rounded">
+                          <div className="h-1.5 bg-orange-400 rounded" style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="w-8 text-right text-gray-600">{pct}%</span>
+                      </div>
+                    ) : null
+                  })
+                ) : (
+                  <span className="text-xs text-gray-400 italic">未设置戏份预算</span>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* 关联故事线 */}
             <div>

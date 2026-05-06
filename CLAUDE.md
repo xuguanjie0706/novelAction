@@ -201,16 +201,19 @@ logline
   → [Step9  卷骨架]            # _gen_volumes 同时填 phase
   → [Step10 记忆]
   → [Step11 关系]
-  → [Step12 全局一致性扫描]    # _gen_consistency_scan，结果写 Project.extra.consistency_issues
-  → [Step13 开局追读承诺清单]  # 生成前十章的 ReaderPromise 种子
+  → [Step12 开局追读承诺清单]  # _gen_opening_contract：写 Project.extra + ReaderPromise 种子
+  → [Step12.5 第一卷章级大纲] # _gen_vol1_chapter_plans：生成 chapter_plan OutlineNode
+  → [Step13 第1章场景蓝图]    # _gen_ch1_scenes：生成 Scene records
+  → [Step14 全局一致性扫描]   # _gen_consistency_scan，结果写 Project.extra.consistency_issues
 ```
 
 - 每步独立 prompt，上下文逐步累积（压缩摘要 + 立项定位传入）
 - 单步失败重试 1 次，不影响其他步骤
 - SSE 每步推送 `step_start` / `step_done` / `error`
 - **Step 0 是新增的"立项会议"**：从一句话推导目标读者画像、爽点类型、打脸频率、情感线占比、节奏类型，作为后续各步的全局约束注入到所有 prompt。这是网文系统区别于"AI 自由发挥"的关键防线。
-- **Step 12** 交叉核验所有生成物的关键字段，矛盾列表写入 `Project.extra.consistency_issues`，供前端展示"X 处需确认项"。
-- **Step 13** 为开局前十章生成 `ReaderPromise` 种子，让写章路径从第一章就有承诺台账可读。
+- **Step 12** 为开局前十章生成追读承诺：保留 `Project.extra.opening_contract`，并写入 `ReaderPromise` 种子供写章查询。
+- **Step 12.5 + Step 13** 把设定落成可执行写作计划：先生成第一卷章节级 `chapter_plan`，再生成第1章场景级 `Scene` 蓝图。
+- **Step 14** 交叉核验所有生成物的关键字段，矛盾列表写入 `Project.extra.consistency_issues`，供前端展示"X 处需确认项"。
 
 ### 方案 B：单次全量（Single-shot）— 适合大 context 模型（Gemini）
 
@@ -228,6 +231,27 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 { "logline": "...", "mode": "sequential" }   // 串行，适合生成更多的内容
 { "logline": "...", "mode": "single_shot" }  // 单次全量，适合大上下文远程模型
 ```
+
+### Bootstrap 步骤映射表（防漂移）
+
+| 文档步骤 | SSE `step` | 后端函数 |
+|---|---|---|
+| Step 0 立项会议 | `positioning` | `_gen_positioning` |
+| Step 1 项目 | `project` | `_gen_project` |
+| Step 2 境界体系 | `power_systems` | `_gen_power_systems` |
+| Step 3 势力 | `factions` | `_gen_factions` |
+| Step 4 故事线 | `storylines` | `_gen_storylines` |
+| Step 5 人物 | `characters` | `_gen_characters` |
+| Step 6 技能 | `skills` | `_gen_key_skills` |
+| Step 7 道具 | `items` | `_gen_key_items` |
+| Step 8 设定卡 | `settings` | `_gen_settings` |
+| Step 9 卷骨架 | `volumes` | `_gen_volumes` |
+| Step 10 记忆 | `memory` | `_gen_memory` |
+| Step 11 关系 | `relations` | `_gen_relations` |
+| Step 12 开局承诺 | `opening_contract` | `_gen_opening_contract` |
+| Step 12.5 第一卷章纲 | `vol1_chapters` | `_gen_vol1_chapter_plans` |
+| Step 13 第1章场景 | `ch1_scenes` | `_gen_ch1_scenes` |
+| Step 14 一致性扫描 | `consistency` | `_gen_consistency_scan` |
 
 ---
 
@@ -257,8 +281,10 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 | 卷级大纲 + phase | `OutlineNode`（volume） + `phase` | Step 9 `_gen_volumes` |
 | 记忆种子 | `MemoryChunk` | Step 10 `_gen_memory` |
 | 人物关系 | `CharacterRelationship` | Step 11 `_gen_relations` |
-| 一致性矛盾列表 | `Project.extra.consistency_issues` | Step 12 `_gen_consistency_scan` |
-| 开局追读承诺 | `ReaderPromise` | Step 13（前十章承诺种子） |
+| 开局追读承诺 | `Project.extra.opening_contract` + `ReaderPromise` | Step 12 `_gen_opening_contract` |
+| 第一卷章节蓝图 | `OutlineNode`（chapter_plan） | Step 12.5 `_gen_vol1_chapter_plans` |
+| 第1章场景蓝图 | `Scene` | Step 13 `_gen_ch1_scenes` |
+| 一致性矛盾列表 | `Project.extra.consistency_issues` | Step 14 `_gen_consistency_scan` |
 
 `WorldSetting` 只存**无专属结构化表的纯叙事内容**：作品立意、世界底层规则、历史谜团、地理格局、文化风俗。不再用文字卡存境界体系或势力描述（这些有专属表）。
 
@@ -275,18 +301,21 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 - [x] 一句话生成（方案A串行 + 方案B单次）
 - [x] 故事线/境界体系/技能/道具/势力前端 UI（WorldBuildingPage 五标签页）
 - [x] Bootstrap 生成时结构化生成势力（Faction）、核心技能（Skill）、关键道具（Item）
-- [x] Bootstrap Step 12：全局一致性扫描（`_gen_consistency_scan`，结果存 `Project.extra.consistency_issues`）
-- [x] Bootstrap Step 13：开局追读承诺清单（生成前十章 `ReaderPromise` 种子）
+- [x] Bootstrap Step 12：开局追读承诺清单（`_gen_opening_contract`，写 `Project.extra` + `ReaderPromise` 种子）
+- [x] Bootstrap Step 12.5：第一卷章级大纲（`_gen_vol1_chapter_plans`，生成 `chapter_plan`）
+- [x] Bootstrap Step 13：第1章场景蓝图（`_gen_ch1_scenes`，生成 `Scene` records）
+- [x] Bootstrap Step 14：全局一致性扫描（`_gen_consistency_scan`，结果存 `Project.extra.consistency_issues`）
 - [x] 伏笔台账（`Foreshadow` 模型 + router）
 - [x] 质检欠债记录（`QualityDebt` 模型 + router）
 - [x] 封面图生成日志（`CoverImageCallLog` 模型 + router）
-- [x] Scene / ReaderPromise 模型 + Alembic migration（表已建，router 待实现）
+- [x] Scene / ReaderPromise 模型 + router + Alembic migration
 - [x] 任务级采样配置（`llm_task_profiles.py`，quality/draft/bootstrap 分档温度）
+- [x] **Bootstrap 流派分流增强（2026-05-06）**：`_get_genre_kit_block` 注入 `_gen_characters`、` _gen_settings`、` _gen_storylines`、` _gen_power_systems`、` _gen_factions`、` _gen_key_skills`、` _gen_key_items` 七个步骤；前端角色页支持 `speech_kit` 结构化展示（标志性词语、样本台词、内心独白等）；大纲章节节点支持 POV + 戏份预算（`character_screen_time`、`pov_character_id`）展示与编辑。
 
 ## 待完成功能
 
-- [ ] Scene router + 三层调度（章纲 → 分场 → 逐场正文 → stitch）
-- [ ] ReaderPromise router + 写章时承诺注入 + 复盘自动检测回收
+- [ ] Scene 三层调度全链路（章纲 → 分场 → 逐场正文 → stitch）
+- [ ] ReaderPromise 深度闭环（写章时承诺注入 + 复盘自动检测回收）
 - [ ] Location 模型（当前 Scene.location_name 文本字段，location_id 已注释预留，P2-W7）
 - [ ] 人物关系图可视化（ReactFlow）
 - [ ] pgvector 语义记忆检索（`MemoryChunk.embedding` 字段已预留）

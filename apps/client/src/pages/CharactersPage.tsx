@@ -335,6 +335,59 @@ function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
               <Field label="说话风格与口头禅">
                 <TArea value={form.speech_style ?? ''} onChange={f('speech_style')} rows={3} placeholder="说话方式、语气、惯用词、沉默还是话多？" />
               </Field>
+
+              {/* P2 结构化语风指纹展示 */}
+              <div className="mt-4 border-t pt-4">
+                <div className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                  <NotebookPen size={16} /> 结构化语风指纹（AI 生成）
+                </div>
+                {form.speech_kit && typeof form.speech_kit === 'object' ? (
+                  <div className="space-y-3 text-sm">
+                    {/* 标志性词语 */}
+                    {(form.speech_kit as any).signature_words?.length > 0 && (
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1">标志性词语 / 口头禅</div>
+                        <div className="flex flex-wrap gap-1">
+                          {(form.speech_kit as any).signature_words.map((w: string, i: number) => (
+                            <span key={i} className="inline-block px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-xs">{w}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 句式偏好 */}
+                    {(form.speech_kit as any).sentence_length_pref && (
+                      <div>
+                        <div className="text-xs text-gray-500">句式偏好</div>
+                        <div className="text-gray-700">{(form.speech_kit as any).sentence_length_pref}</div>
+                      </div>
+                    )}
+
+                    {/* 典型台词样本 */}
+                    {(form.speech_kit as any).sample_dialogues?.length > 0 && (
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1">典型台词样本</div>
+                        <ul className="list-disc list-inside text-gray-600 space-y-0.5 pl-1">
+                          {(form.speech_kit as any).sample_dialogues.slice(0, 4).map((d: string, i: number) => (
+                            <li key={i} className="line-clamp-2">「{d}」</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* 内心独白风格 */}
+                    {(form.speech_kit as any).inner_monologue_style && (
+                      <div>
+                        <div className="text-xs text-gray-500">内心独白风格</div>
+                        <div className="text-gray-700">{(form.speech_kit as any).inner_monologue_style}</div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-400">暂无结构化语风数据（生成后会自动填充）</div>
+                )}
+              </div>
+
               <SaveBtn />
             </div>
           )}

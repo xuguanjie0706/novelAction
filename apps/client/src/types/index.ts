@@ -54,6 +54,15 @@ export interface Character {
   // 性格
   personality?: string
   speech_style?: string
+  /** 结构化语风指纹（P2 新增） */
+  speech_kit?: {
+    signature_words?: string[]
+    sentence_length_pref?: string
+    taboo_words?: string[]
+    sample_dialogues?: string[]
+    inner_monologue_style?: string
+    recent_evolution_notes?: Array<{ chapter_id: string; chapter_title: string; note: string }>
+  }
   values?: string
   // 背景
   background?: string
@@ -242,6 +251,9 @@ export interface OutlineNode {
   power_milestone?: string
   foreshadows_laid?: Array<{ id?: string; description: string }>
   foreshadows_resolved?: Array<{ id?: string; description: string }>
+  // P2 三层调度新增
+  character_screen_time?: Record<string, number>   // { character_id: 百分比 }
+  pov_character_id?: string
 }
 
 // ── Chapter ───────────────────────────────────────────

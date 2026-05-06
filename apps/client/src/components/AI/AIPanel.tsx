@@ -378,12 +378,15 @@ export default function AIPanel({ projectId }: Props) {
                   <div>
                     <div className="text-xs font-semibold text-gray-700 mb-2">优化建议</div>
                     <ul className="space-y-1">
-                      {report.suggestions.map((s, i) => (
-                        <li key={i} className="text-xs text-gray-600 flex gap-1.5">
-                          <span className="text-amber-500 shrink-0">•</span>
-                          {s}
-                        </li>
-                      ))}
+                      {report.suggestions.map((s, i) => {
+                        const text = typeof s === 'string' ? s : s && typeof s === 'object' ? (s.comment || s.description || JSON.stringify(s)) : String(s ?? '')
+                        return (
+                          <li key={i} className="text-xs text-gray-600 flex gap-1.5">
+                            <span className="text-amber-500 shrink-0">•</span>
+                            {text}
+                          </li>
+                        )
+                      })}
                     </ul>
                   </div>
                 )}

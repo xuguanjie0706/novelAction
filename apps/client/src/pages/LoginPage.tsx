@@ -50,132 +50,41 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
-      {/* 背景装饰 */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-96 h-96 rounded-full bg-indigo-900/20 blur-3xl" />
-        <div className="absolute -bottom-40 -left-40 w-96 h-96 rounded-full bg-purple-900/20 blur-3xl" />
-      </div>
+    <div className="min-h-screen bg-[#0C111C] flex flex-col md:flex-row overflow-hidden">
+      {/* Left: Ancient study illustration (CSS scene) */}
+      <div className="relative md:w-[55%] h-[200px] md:h-auto bg-[#121B22] flex items-center justify-center overflow-hidden">
+        {/* Background layers for depth */}
+        <div className="absolute inset-0 bg-[radial-gradient(#3A2F2A_0.8px,transparent_1px)] bg-[length:4px_4px] opacity-30" />
 
-      <div className="relative w-full max-w-md">
-        {/* Logo / 标题 */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-indigo-600 mb-4 shadow-lg shadow-indigo-900/50">
-            <span className="text-2xl">📖</span>
+        {/* Wooden desk surface */}
+        <div className="absolute bottom-0 left-0 right-0 h-2/5 bg-[#2C2522] shadow-[inset_0_40px_40px_-20px_#1C2526]" />
+
+        {/* Oil lamp with warm glow */}
+        <div className="absolute left-1/3 top-1/3 w-16 h-16">
+          <div className="absolute inset-0 bg-[#C9A227] rounded-full blur-2xl opacity-40 animate-[pulse_2.5s_ease-in-out_infinite]" />
+          <div className="relative w-16 h-16 flex items-end justify-center">
+            {/* Lamp base (simplified) */}
+            <div className="w-8 h-6 bg-[#5C5240] rounded-full" />
+            {/* Flame */}
+            <div className="absolute -top-3 w-3 h-5 bg-[#F5E8C7] rounded-full animate-[pulse_1.8s_ease-in-out_infinite] shadow-[0_0_12px_#C9A227]" />
           </div>
-          <h1 className="text-2xl font-bold text-white">NovelAction</h1>
-          <p className="text-gray-400 text-sm mt-1">AI 驱动的网络小说创作系统</p>
         </div>
 
-        {/* 卡片 */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl p-8">
-          {/* Tab 切换 */}
-          <div className="flex mb-6 bg-gray-800 rounded-xl p-1">
-            <button
-              type="button"
-              onClick={() => { setMode('login'); setError(null) }}
-              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all ${
-                mode === 'login'
-                  ? 'bg-indigo-600 text-white shadow'
-                  : 'text-gray-400 hover:text-gray-200'
-              }`}
-            >
-              登录
-            </button>
-            <button
-              type="button"
-              onClick={() => { setMode('register'); setError(null) }}
-              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all ${
-                mode === 'register'
-                  ? 'bg-indigo-600 text-white shadow'
-                  : 'text-gray-400 hover:text-gray-200'
-              }`}
-            >
-              注册
-            </button>
-          </div>
+        {/* Scattered papers */}
+        <div className="absolute right-1/4 top-1/4 w-20 h-24 rotate-[-12deg] border border-[#3A2F2A] bg-[#F5E8C7]/10 rounded-sm shadow-inner" />
+        <div className="absolute right-1/3 bottom-1/3 w-16 h-20 rotate-[18deg] border border-[#3A2F2A] bg-[#F5E8C7]/10 rounded-sm" />
+        {/* Ink lines on paper */}
+        <div className="absolute right-[26%] top-[27%] w-12 h-[1px] bg-[#3A2F2A]/40" />
+        <div className="absolute right-[26%] top-[32%] w-10 h-[1px] bg-[#3A2F2A]/40" />
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* 用户名（仅注册） */}
-            {mode === 'register' && (
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1.5">
-                  用户名 <span className="text-gray-500 font-normal">（可选）</span>
-                </label>
-                <input
-                  type="text"
-                  value={username}
-                  onChange={e => setUsername(e.target.value)}
-                  placeholder="留空则使用邮箱前缀"
-                  className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
-                />
-              </div>
-            )}
+        {/* Subtle bamboo curtain hint (right edge) */}
+        <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-[#1C2526]/60 to-transparent" />
+      </div>
 
-            {/* 邮箱 */}
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1.5">
-                邮箱
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="your@email.com"
-                required
-                autoComplete="email"
-                className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
-              />
-            </div>
-
-            {/* 密码 */}
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1.5">
-                密码 {mode === 'register' && <span className="text-gray-500 font-normal">（至少 6 位）</span>}
-              </label>
-              <input
-                type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder={mode === 'register' ? '至少 6 位' : '请输入密码'}
-                required
-                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
-              />
-            </div>
-
-            {/* 错误提示 */}
-            {error && (
-              <div className="flex items-start gap-2 bg-red-900/30 border border-red-700/50 rounded-xl px-4 py-3">
-                <span className="text-red-400 text-sm flex-shrink-0 mt-0.5">✕</span>
-                <p className="text-red-300 text-sm">{error}</p>
-              </div>
-            )}
-
-            {/* 提交按钮 */}
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 disabled:cursor-not-allowed text-white font-medium py-2.5 rounded-xl text-sm transition-colors shadow-lg shadow-indigo-900/30 mt-2"
-            >
-              {loading
-                ? (mode === 'login' ? '登录中…' : '注册中…')
-                : (mode === 'login' ? '登录' : '注册并登录')
-              }
-            </button>
-          </form>
-
-          {/* 底部切换提示 */}
-          <p className="text-center text-gray-500 text-xs mt-6">
-            {mode === 'login' ? '还没有账号？' : '已有账号？'}
-            <button
-              type="button"
-              onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(null) }}
-              className="text-indigo-400 hover:text-indigo-300 ml-1 transition-colors"
-            >
-              {mode === 'login' ? '立即注册' : '去登录'}
-            </button>
-          </p>
+      {/* Right: Frosted form card */}
+      <div className="md:w-[45%] flex items-center justify-center px-6 py-10 md:py-0">
+        <div className="w-full max-w-[420px] bg-[#1C2526]/70 backdrop-blur-2xl border border-[#3A2F2A] rounded-2xl shadow-2xl shadow-black/40 p-10">
+          {/* Content will be added in later tasks */}
         </div>
       </div>
     </div>

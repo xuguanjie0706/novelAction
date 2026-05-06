@@ -84,7 +84,40 @@ export default function LoginPage() {
       {/* Right: Frosted form card */}
       <div className="md:w-[45%] flex items-center justify-center px-6 py-10 md:py-0">
         <div className="w-full max-w-[420px] bg-[#1C2526]/70 backdrop-blur-2xl border border-[#3A2F2A] rounded-2xl shadow-2xl shadow-black/40 p-10">
-          {/* Content will be added in later tasks */}
+          {/* Logo / Title */}
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-[#C9A227] mb-4 shadow-lg shadow-[#C9A227]/30">
+              <span className="text-2xl">📖</span>
+            </div>
+            <h1 className="text-2xl font-bold text-[#F5E8C7] tracking-wide">NovelAction</h1>
+            <p className="text-[#A8B0B8] text-sm mt-1.5">AI 驱动的古典小说创作空间</p>
+          </div>
+
+          {/* Tab 切换 */}
+          <div className="flex mb-8 bg-[#121B22] rounded-xl p-1 border border-[#3A2F2A]">
+            <button
+              type="button"
+              onClick={() => { setMode('login'); setError(null) }}
+              className={`flex-1 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${
+                mode === 'login'
+                  ? 'bg-[#C9A227] text-[#0C111C] shadow'
+                  : 'text-[#A8B0B8] hover:text-[#F5E8C7]'
+              }`}
+            >
+              登录
+            </button>
+            <button
+              type="button"
+              onClick={() => { setMode('register'); setError(null) }}
+              className={`flex-1 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${
+                mode === 'register'
+                  ? 'bg-[#C9A227] text-[#0C111C] shadow'
+                  : 'text-[#A8B0B8] hover:text-[#F5E8C7]'
+              }`}
+            >
+              注册
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -7,8 +7,10 @@ import ProjectDetailPage from './pages/ProjectDetailPage'
 import AppLayout from './components/Layout/AppLayout'
 import ProjectCachedViews from './pages/ProjectCachedViews'
 import ChapterCoherencePage from './pages/ChapterCoherencePage'
+import LoginPage from './pages/LoginPage'
 import { projectsApi } from './api/client'
 import { useAppStore } from './store'
+import { useAuthStore } from './store/authStore'
 
 // 进入项目时加载当前项目信息
 function ProjectLoader() {
@@ -24,16 +26,118 @@ function ProjectLoader() {
   return null
 }
 
+/**
+ * 路由守卫：未登录时跳转到 /login，已登录时渲染子路由。
+ * 依赖 useAuthStore.initializing 避免初始化未完成时误跳。
+ */
+function PrivateRoute({ children }: { children: React.ReactNode }) {
+  const { token, initializing } = useAuthStore()
+
+  // 应用初始化（校验本地 token）期间显示空白，避免闪烁跳转
+  if (initializing) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="text-gray-500 text-sm">加载中…</div>
+      </div>
+    )
+  }
+
+  if (!token) {
+    return <Navigate to="/login" replace />
+  }
+
+  return <>{children}</>
+}
+
+/**
+ * 已登录时访问 /login 自动跳回首页。
+ */
+function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
+  const { token, initializing } = useAuthStore()
+
+  if (initializing) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        <div className="text-gray-500 text-sm">加载中…</div>
+      </div>
+    )
+  }
+
+  if (token) {
+    return <Navigate to="/" replace />
+  }
+
+  return <>{children}</>
+}
+
+/**
+ * 应用初始化：从 localStorage 读取 token 并调用 /auth/me 验证有效性。
+ * 挂载一次即可，不产生额外渲染。
+ */
+function AuthInitializer() {
+  const { initialize } = useAuthStore()
+  useEffect(() => { initialize() }, [])
+  return null
+}
+
 export default function App() {
   return (
     <BrowserRouter>
+      <AuthInitializer />
       <Toaster position="top-right" toastOptions={{ duration: 3000 }} />
       <Routes>
-        <Route path="/" element={<ProjectsPage />} />
-        <Route path="/bookshelf" element={<BookshelfPage />} />
-        <Route path="/bookshelf/:projectId" element={<ProjectDetailPage />} />
-        <Route path="/coherence-check" element={<ChapterCoherencePage />} />
-        <Route path="/project/:projectId" element={<><ProjectLoader /><AppLayout /></>}>
+        {/* 公开路由：已登录时自动跳回首页 */}
+        <Route
+          path="/login"
+          element={
+            <PublicOnlyRoute>
+              <LoginPage />
+            </PublicOnlyRoute>
+          }
+        />
+
+        {/* 受保护路由：未登录时跳转 /login */}
+        <Route
+          path="/"
+          element={
+            <PrivateRoute>
+              <ProjectsPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/bookshelf"
+          element={
+            <PrivateRoute>
+              <BookshelfPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/bookshelf/:projectId"
+          element={
+            <PrivateRoute>
+              <ProjectDetailPage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/coherence-check"
+          element={
+            <PrivateRoute>
+              <ChapterCoherencePage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/project/:projectId"
+          element={
+            <PrivateRoute>
+              <ProjectLoader />
+              <AppLayout />
+            </PrivateRoute>
+          }
+        >
           <Route index element={<Navigate to="outline" replace />} />
           <Route path=":tab" element={<ProjectCachedViews />} />
         </Route>

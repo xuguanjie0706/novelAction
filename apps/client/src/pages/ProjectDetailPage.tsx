@@ -21,7 +21,7 @@ import {
   X,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { coverApi, projectsApi } from '../api/client'
+import { coverApi, projectsApi, type WritingConfig } from '../api/client'
 import { useAppStore } from '../store'
 import type { ImageProviderBrief, Project } from '../types'
 
@@ -468,6 +468,153 @@ function statusColor(s: Project['status']) {
   }[s] ?? 'bg-gray-100 text-gray-600 border-gray-200'
 }
 
+// ── 写作质量门控配置面板 ────────────────────────────────────────────────────
+/**
+ * 写作质量门控配置区块，嵌入项目详情页。
+ *
+ * 读取 /projects/{id}/writing-config，展示可调节的门控参数。
+ * 每个参数独立保存（失焦或直接点击时 PATCH）。
+ *
+ * @param projectId - 当前项目 UUID
+ */
+function WritingConfigPanel({ projectId }: { projectId: string }) {
+  const [cfg, setCfg] = useState<WritingConfig | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    projectsApi.getWritingConfig(projectId)
+      .then(res => setCfg(res.data.writing_config))
+      .catch(() => { /* 静默失败，不影响主页渲染 */ })
+  }, [projectId])
+
+  const save = async (patch: Partial<typeof cfg>) => {
+    if (!cfg) return
+    const next = { ...cfg, ...patch }
+    setCfg(next)
+    setSaving(true)
+    try {
+      await projectsApi.updateWritingConfig(projectId, patch as any)
+    } catch {
+      toast.error('保存写作配置失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!cfg) return null
+
+  return (
+    <section className="mt-8">
+      <h2 className="mb-4 flex items-center gap-2 text-lg font-bold text-gray-900">
+        <Target size={18} className="text-amber-400" />
+        写作质量门控
+        {saving && <Loader2 size={14} className="ml-1 animate-spin text-gray-400" />}
+      </h2>
+      <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm space-y-5">
+        {/* 开关 */}
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-800">启用质量门控循环</p>
+            <p className="mt-0.5 text-xs text-gray-500">
+              开启后每次写章节将自动质检；未达标时按策略重写，最多重试 {cfg.max_rewrite_attempts} 次
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => save({ auto_quality_gate: !cfg.auto_quality_gate })}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+              cfg.auto_quality_gate ? 'bg-amber-400' : 'bg-gray-200'
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                cfg.auto_quality_gate ? 'translate-x-6' : 'translate-x-1'
+              }`}
+            />
+          </button>
+        </div>
+
+        {cfg.auto_quality_gate && (
+          <>
+            {/* 综合分 */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-sm font-medium text-gray-700">综合质检分下限</label>
+                <span className="text-sm font-semibold text-amber-600 w-8 text-right">
+                  {cfg.min_overall_score.toFixed(1)}
+                </span>
+              </div>
+              <input
+                type="range" min="0" max="10" step="0.5"
+                value={cfg.min_overall_score}
+                onChange={e => setCfg(c => c ? { ...c, min_overall_score: parseFloat(e.target.value) } : c)}
+                onMouseUp={e => save({ min_overall_score: parseFloat((e.target as HTMLInputElement).value) })}
+                onTouchEnd={e => save({ min_overall_score: parseFloat((e.target as HTMLInputElement).value) })}
+                className="w-full accent-amber-400"
+              />
+              <div className="flex justify-between text-xs text-gray-400 mt-0.5">
+                <span>0 宽松</span>
+                <span className="text-gray-500">建议 6.0–7.5</span>
+                <span>10 严格</span>
+              </div>
+            </div>
+
+            {/* 订阅意愿分 */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-sm font-medium text-gray-700">章末订阅意愿分下限</label>
+                <span className="text-sm font-semibold text-amber-600 w-8 text-right">
+                  {cfg.min_subscribe_intent.toFixed(1)}
+                </span>
+              </div>
+              <input
+                type="range" min="0" max="10" step="0.5"
+                value={cfg.min_subscribe_intent}
+                onChange={e => setCfg(c => c ? { ...c, min_subscribe_intent: parseFloat(e.target.value) } : c)}
+                onMouseUp={e => save({ min_subscribe_intent: parseFloat((e.target as HTMLInputElement).value) })}
+                onTouchEnd={e => save({ min_subscribe_intent: parseFloat((e.target as HTMLInputElement).value) })}
+                className="w-full accent-amber-400"
+              />
+              <div className="flex justify-between text-xs text-gray-400 mt-0.5">
+                <span>0 宽松</span>
+                <span className="text-gray-500">独立门槛（章末钩子）</span>
+                <span>10 严格</span>
+              </div>
+            </div>
+
+            {/* 最大重写次数 */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-sm font-medium text-gray-700">最大重写次数</label>
+                <span className="text-sm font-semibold text-amber-600">{cfg.max_rewrite_attempts} 次</span>
+              </div>
+              <div className="flex gap-2">
+                {[1, 2, 3, 4, 5].map(n => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => save({ max_rewrite_attempts: n })}
+                    className={`flex-1 rounded-lg border py-1.5 text-sm font-medium transition-colors ${
+                      cfg.max_rewrite_attempts === n
+                        ? 'border-amber-400 bg-amber-50 text-amber-700'
+                        : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 text-xs text-gray-400">
+                第1次：初稿 · 第2次：定点修复 · 第3次及以上：全量重写。超出次数后章节置为「待审阅」。
+              </p>
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  )
+}
+
 // ── 主页面 ─────────────────────────────────────────────────────────────────
 export default function ProjectDetailPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -672,6 +819,9 @@ export default function ProjectDetailPage() {
             </div>
           </section>
         )}
+
+        {/* 写作质量门控配置 */}
+        <WritingConfigPanel projectId={project.id} />
 
         {/* 底部快速操作 */}
         <div className="mt-12 rounded-2xl border border-amber-100 bg-gradient-to-br from-amber-50 to-orange-50 p-6">

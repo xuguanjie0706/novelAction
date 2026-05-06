@@ -1,3 +1,12 @@
+"""
+draft_routes.py — 章节起笔 / 续写相关 AI 路由
+
+资源边界：本模块仅负责「章节正文生成」类端点（draft-assist/stream、gated-draft-stream
+已移至 gated_draft_routes.py、scene-plan）。质检、复盘、记忆等业务在各自模块。
+
+公共辅助函数 `_build_draft_context` 被 gated_draft_routes 复用；
+修改此函数时须同步确认 gated 端点行为不变。
+"""
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,35 +39,33 @@ from app.routers.ai.text_utils import plain_text, strip_tail_meta_lines, truncat
 router = APIRouter()
 
 
-@router.post("/draft-assist/stream")
-async def draft_assist_stream(
+# ═══════════════════════════════════════════════════════════════
+# 共享上下文构建器
+# ═══════════════════════════════════════════════════════════════
+
+def _build_draft_context(
+    db: Session,
     project_id: str,
-    req: DraftAssistRequest,
-    db: Session = Depends(get_db),
-):
+    chapter: Chapter,
+    project: Project,
+    large_context: bool,
+) -> dict:
     """
-    根据章节大纲计划 + 世界观 + 人物 + 记忆库 + 前章结尾，
-    流式生成本章起笔或续写建议。
-    像一位有 30 年经验的作家：把设定、人物弧、伏笔自然织入正文。
+    组装起笔/续写所需的全部上下文字段，返回 dict。
+
+    被 draft-assist/stream 与 gated-draft-stream 共享调用，避免重复代码。
+    调用方保证 chapter 和 project 均已从 DB 加载，large_context 已确定。
+
+    @returns 包含所有 draft_assist_stream kwargs 所需字段的字典：
+        chapter_title, outline_hook, outline_summary, outline_conflict,
+        outline_highlight, outline_foreshadow, outline_power_milestone,
+        outline_emotional_tone, story_day, chapter_manifest, prev_chapter_tail,
+        world_summary, character_summary, storyline_summary, memory_summary,
+        existing_content, premise, continuity_context, chapter_index_context,
+        quality_debt_context, writing_brief_context, plot_dossier_context,
+        word_target, phase, positioning, genre, pov_character_name,
+        character_screen_time
     """
-    chapter = db.query(Chapter).filter(
-        Chapter.id == req.chapter_id, Chapter.project_id == project_id
-    ).first()
-    if not chapter:
-        raise HTTPException(404, "Chapter not found")
-
-    if req.replace_existing:
-        from app.routers.chapters import clear_chapter_rewrite_derivatives
-
-        clear_chapter_rewrite_derivatives(db, project_id, req.chapter_id)
-        db.commit()
-        db.refresh(chapter)
-
-    project = db.query(Project).filter(Project.id == project_id).first()
-    if not project:
-        raise HTTPException(404, "Project not found")
-    large_context = req.model_profile == "gemini"
-
     outline_node = None
     if chapter.outline_node_id:
         outline_node = db.query(OutlineNode).filter(
@@ -193,37 +200,28 @@ async def draft_assist_stream(
     narr_existing, _ = split_plain_manuscript_and_index_block(existing_content)
     if narr_existing.strip():
         existing_content = narr_existing.strip()
+
     continuity_context = build_continuity_context(
-        db=db,
-        project_id=project_id,
-        chapter=chapter,
-        outline_node=outline_node,
+        db=db, project_id=project_id, chapter=chapter, outline_node=outline_node,
     )
     chapter_index_context = build_chapter_index_context(
-        db=db,
-        project_id=project_id,
-        chapter=chapter,
+        db=db, project_id=project_id, chapter=chapter,
     )
     writing_brief_context = build_writing_brief_context(
-        db=db,
-        project_id=project_id,
-        chapter=chapter,
-        outline_node=outline_node,
-        large_context=large_context,
+        db=db, project_id=project_id, chapter=chapter,
+        outline_node=outline_node, large_context=large_context,
     )
     plot_dossier_context = build_plot_dossier_context(
         db, project_id, chapter, large_context=large_context
     )
     quality_debt_context = build_quality_debt_context(
         pending_quality_debts_for_chapter(
-            db=db,
-            project_id=project_id,
-            chapter=chapter,
+            db=db, project_id=project_id, chapter=chapter,
             limit=12 if large_context else 6,
         )
     )
 
-    def _fmt_foreshadows_for_stream(node) -> str:
+    def _fmt_foreshadows(node) -> str:
         if not node:
             return ""
         laid = node.foreshadows_laid or []
@@ -247,7 +245,6 @@ async def draft_assist_stream(
                 return legacy
         return "  ".join(parts)
 
-    outline_foreshadow_str = _fmt_foreshadows_for_stream(outline_node)
     story_day_str = (outline_node.extra or {}).get("story_day", "") if outline_node else ""
     if outline_node:
         word_target_val = int(
@@ -257,15 +254,31 @@ async def draft_assist_stream(
         )
     else:
         word_target_val = 2300
-    chapter_title_str = chapter.title or ""
-    outline_hook_str = outline_node.hook or "" if outline_node else ""
-    outline_summary_str = outline_node.summary or "" if outline_node else ""
-    outline_conflict_str = outline_node.conflict or "" if outline_node else ""
-    outline_highlight_str = outline_node.highlight or "" if outline_node else ""
-    outline_power_milestone_str = outline_node.power_milestone or "" if outline_node else ""
-    outline_emotional_tone_str = outline_node.emotional_tone or "" if outline_node else ""
-    premise_str = project.premise or ""
-    user_prompt_str = (req.user_prompt or "").strip()
+
+    # ── 卷阶段（phase）解析 ─────────────────────────────────────────────
+    phase_value: str | None = None
+    if outline_node is not None:
+        phase_value = getattr(outline_node, "phase", None)
+        if not phase_value:
+            phase_value = (outline_node.extra or {}).get("phase")
+        if not phase_value and outline_node.parent_id is not None:
+            volume = db.query(OutlineNode).filter(OutlineNode.id == outline_node.parent_id).first()
+            if volume is not None:
+                phase_value = getattr(volume, "phase", None) or (volume.extra or {}).get("phase")
+
+    # ── 立项定位（positioning）：兼容多处来源 ──────────────────────────
+    positioning_value: dict | None = None
+    project_extra = getattr(project, "extra", None) or {}
+    if isinstance(project_extra, dict):
+        pos = project_extra.get("positioning")
+        if isinstance(pos, dict) and pos:
+            positioning_value = pos
+    if positioning_value is None:
+        story_core = getattr(project, "story_core", None) or {}
+        if isinstance(story_core, dict):
+            pos = story_core.get("positioning")
+            if isinstance(pos, dict) and pos:
+                positioning_value = pos
 
     # P2-W5-2 提取戏份预算与强制 POV
     pov_character_name = ""
@@ -274,6 +287,75 @@ async def draft_assist_stream(
         if outline_node.pov_character:
             pov_character_name = outline_node.pov_character.name
         character_screen_time = outline_node.character_screen_time or {}
+
+    return dict(
+        chapter_title=chapter.title or "",
+        outline_hook=outline_node.hook or "" if outline_node else "",
+        outline_summary=outline_node.summary or "" if outline_node else "",
+        outline_conflict=outline_node.conflict or "" if outline_node else "",
+        outline_highlight=outline_node.highlight or "" if outline_node else "",
+        outline_foreshadow=_fmt_foreshadows(outline_node),
+        outline_power_milestone=outline_node.power_milestone or "" if outline_node else "",
+        outline_emotional_tone=outline_node.emotional_tone or "" if outline_node else "",
+        story_day=story_day_str,
+        chapter_manifest=chapter_manifest_names,
+        prev_chapter_tail=prev_tail,
+        world_summary=world_summary,
+        character_summary=char_summary,
+        storyline_summary=storyline_summary,
+        memory_summary=memory_summary,
+        existing_content=existing_content,
+        premise=project.premise or "",
+        continuity_context=continuity_context,
+        chapter_index_context=chapter_index_context,
+        quality_debt_context=quality_debt_context,
+        writing_brief_context=writing_brief_context,
+        plot_dossier_context=plot_dossier_context,
+        word_target=word_target_val,
+        phase=phase_value,
+        positioning=positioning_value,
+        genre=project.genre or "",
+        pov_character_name=pov_character_name,
+        character_screen_time=character_screen_time,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 端点：draft-assist/stream（普通起笔/续写，不带质量门控）
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/draft-assist/stream")
+async def draft_assist_stream(
+    project_id: str,
+    req: DraftAssistRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    根据章节大纲计划 + 世界观 + 人物 + 记忆库 + 前章结尾，
+    流式生成本章起笔或续写建议。
+    像一位有 30 年经验的作家：把设定、人物弧、伏笔自然织入正文。
+    """
+    chapter = db.query(Chapter).filter(
+        Chapter.id == req.chapter_id, Chapter.project_id == project_id
+    ).first()
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+
+    if req.replace_existing:
+        from app.routers.chapters import clear_chapter_rewrite_derivatives
+        clear_chapter_rewrite_derivatives(db, project_id, req.chapter_id)
+        db.commit()
+        db.refresh(chapter)
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+    large_context = req.model_profile == "gemini"
+
+    ctx = _build_draft_context(db, project_id, chapter, project, large_context)
+
+    user_prompt_str = (req.user_prompt or "").strip()
+
     if req.focus_quality_debt_id:
         debt = (
             db.query(QualityDebt)
@@ -307,36 +389,8 @@ async def draft_assist_stream(
             "若整章重写，须保留章末追读钩子。"
         )
         user_prompt_str = (user_prompt_str + focus_block).strip()
+
     stream_log_ctx = {"project_id": str(project_id), "chapter_id": str(req.chapter_id)}
-
-    # ── 卷阶段（phase）解析 ─────────────────────────────────────────────
-    # 章节计划节点优先取自身 phase；缺省则回溯所属卷的 phase（一卷一阶段是常态，
-    # 章节级 override 仅在跨阶段过渡章使用）。
-    phase_value: str | None = None
-    if outline_node is not None:
-        phase_value = getattr(outline_node, "phase", None)
-        if not phase_value:
-            phase_value = (outline_node.extra or {}).get("phase")
-        if not phase_value and outline_node.parent_id is not None:
-            volume = db.query(OutlineNode).filter(OutlineNode.id == outline_node.parent_id).first()
-            if volume is not None:
-                phase_value = getattr(volume, "phase", None) or (volume.extra or {}).get("phase")
-
-    # ── 立项定位（positioning）：兼容多处来源 ──────────────────────────
-    # 优先 Project.extra.positioning（Step 0 写入），回退 Project.story_core.positioning
-    # （旧版本兼容 / 兜底放置）；都没有则不注入。
-    positioning_value: dict | None = None
-    project_extra = getattr(project, "extra", None) or {}
-    if isinstance(project_extra, dict):
-        pos = project_extra.get("positioning")
-        if isinstance(pos, dict) and pos:
-            positioning_value = pos
-    if positioning_value is None:
-        story_core = getattr(project, "story_core", None) or {}
-        if isinstance(story_core, dict):
-            pos = story_core.get("positioning")
-            if isinstance(pos, dict) and pos:
-                positioning_value = pos
 
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
@@ -347,37 +401,10 @@ async def draft_assist_stream(
     async def event_stream():
         try:
             async for chunk in svc.draft_assist_stream(
-                chapter_title=chapter_title_str,
-                outline_hook=outline_hook_str,
-                outline_summary=outline_summary_str,
-                outline_conflict=outline_conflict_str,
-                outline_highlight=outline_highlight_str,
-                outline_foreshadow=outline_foreshadow_str,
-                outline_power_milestone=outline_power_milestone_str,
-                outline_emotional_tone=outline_emotional_tone_str,
-                story_day=story_day_str,
-                chapter_manifest=chapter_manifest_names,
-                prev_chapter_tail=prev_tail,
-                world_summary=world_summary,
-                character_summary=char_summary,
-                storyline_summary=storyline_summary,
-                memory_summary=memory_summary,
-                existing_content=existing_content,
-                premise=premise_str,
+                **ctx,
                 user_prompt=user_prompt_str,
                 replace_existing=req.replace_existing,
-                continuity_context=continuity_context,
-                chapter_index_context=chapter_index_context,
-                quality_debt_context=quality_debt_context,
-                writing_brief_context=writing_brief_context,
-                plot_dossier_context=plot_dossier_context,
-                word_target=word_target_val,
-                phase=phase_value,
-                positioning=positioning_value,
                 stream_log_context=stream_log_ctx,
-                genre=project.genre or "",
-                pov_character_name=pov_character_name,
-                character_screen_time=character_screen_time,
             ):
                 yield f"data: {json.dumps({'text': chunk})}\n\n"
         except Exception as e:
@@ -411,18 +438,19 @@ async def scene_plan_endpoint(
     if not project:
         raise HTTPException(404, "Project not found")
 
-    # 收集当前主要角色（供 scene_plan 参考 POV 分配）
     chars = db.query(Character).filter(Character.project_id == project_id).limit(12).all()
     existing_characters = [{"id": str(c.id), "name": c.name, "role": c.role} for c in chars]
 
-    # 读取上一章复盘指令（最高优先级）
     prev_directives = ""
     if req.outline_node_id:
         node = db.query(OutlineNode).filter(OutlineNode.id == req.outline_node_id).first()
         if node and node.extra:
             dirs = node.extra.get("directives_from_prev") or []
             if dirs:
-                prev_directives = "; ".join([d.get("patch", {}).get("adjust_pacing", "") or d.get("reason", "") for d in dirs[-2:]])
+                prev_directives = "; ".join([
+                    d.get("patch", {}).get("adjust_pacing", "") or d.get("reason", "")
+                    for d in dirs[-2:]
+                ])
 
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",

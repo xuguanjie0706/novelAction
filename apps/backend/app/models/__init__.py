@@ -27,6 +27,7 @@ from app.models.scene import Scene
 from app.models.reader_promise import ReaderPromise
 from app.models.chapter_analysis_record import ChapterAnalysisRecord
 from app.models.pre_write_warning_record import PreWriteWarningRecord
+from app.models.user import User
 
 __all__ = [
     "Project",
@@ -57,4 +58,5 @@ __all__ = [
     "ReaderPromise",
     "ChapterAnalysisRecord",
     "PreWriteWarningRecord",
+    "User",
 ]

@@ -64,6 +64,52 @@ type PreWriteWarnHistoryRow = {
   result: PreWriteWarnResult
 }
 
+/** 接口/DB 历史中的 result 可能缺字段，避免渲染时 .risks.length 抛错 */
+function normalizePreWriteWarnResult(raw: unknown): PreWriteWarnResult {
+  const r = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const risksRaw = r.risks
+  const risks: PreWriteWarnResult['risks'] = Array.isArray(risksRaw)
+    ? (risksRaw as unknown[]).filter(
+        (x): x is PreWriteWarnResult['risks'][number] =>
+          !!x &&
+          typeof x === 'object' &&
+          typeof (x as { description?: unknown }).description === 'string',
+      )
+    : []
+  const remindersRaw = r.reminders
+  const reminders: string[] = Array.isArray(remindersRaw)
+    ? remindersRaw.map((x) => String(x)).filter(Boolean)
+    : []
+  const risk_count = typeof r.risk_count === 'number' ? r.risk_count : risks.length
+  const ok =
+    typeof r.ok === 'boolean'
+      ? r.ok
+      : !risks.some((x) => x.severity === 'high' || x.severity === 'critical')
+  return {
+    ok,
+    risk_count,
+    risks,
+    reminders,
+    error: typeof r.error === 'string' ? r.error : undefined,
+    record_id: typeof r.record_id === 'string' ? r.record_id : undefined,
+  }
+}
+
+function parsePreWriteWarningHistoryPayload(data: unknown): PreWriteWarnHistoryRow[] {
+  if (!Array.isArray(data)) return []
+  return data
+    .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
+    .map((row) => ({
+      id: String(row.id ?? ''),
+      chapter_number: typeof row.chapter_number === 'number' ? row.chapter_number : 0,
+      chapter_plan_summary: typeof row.chapter_plan_summary === 'string' ? row.chapter_plan_summary : '',
+      model_profile: typeof row.model_profile === 'string' ? row.model_profile : 'local',
+      created_at: row.created_at == null ? null : String(row.created_at),
+      result: normalizePreWriteWarnResult(row.result),
+    }))
+    .filter((row) => row.id.length > 0)
+}
+
 type AutoDebriefResponse = {
   character_updates: Array<{
     character_id: string
@@ -206,6 +252,14 @@ export default function ChapterEditor({
     upsertChapter, removeChapter, setActiveChapterId,
     chapters, characters, storyLines, setStoryLines, setMemories, addGenTask,
   } = useAppStore()
+  /**
+   * 项目级写作质量门控配置，从 currentProject.extra.writing_config 读取。
+   * 用于判断「重新生成」按钮应走普通重写还是门控重写任务。
+   */
+  const writingConfig = useAppStore(s => {
+    const ex = (s.currentProject as any)?.extra
+    return (ex && typeof ex === 'object') ? (ex.writing_config ?? null) : null
+  })
   const genQueue = useAppStore(s => s.genQueue)
   const queueCommittedDebriefIds = useAppStore(s => s.queueCommittedDebriefIds)
   const queueDebriefSnapshot = useAppStore(s => s.queueDebriefUiSnapshotByChapterId[chapter.id])
@@ -307,32 +361,6 @@ export default function ChapterEditor({
       .then(r => setCurrentChIndex(r.data))
       .catch(() => setCurrentChIndex(null))
   }, [projectId, chapter.id])
-
-  useEffect(() => {
-    setWarnResult(null)
-    setWarnHistory([])
-    setSelectedWarnRecordId(null)
-  }, [chapter.id])
-
-  useEffect(() => {
-    if (contextTab !== 'warn' || !chapter.id || !projectId) return
-    let cancelled = false
-    void aiApi.preWriteWarningHistory(projectId, chapter.id).then((r) => {
-      if (!cancelled) setWarnHistory(r.data as PreWriteWarnHistoryRow[])
-    }).catch(() => {
-      if (!cancelled) setWarnHistory([])
-    })
-    return () => { cancelled = true }
-  }, [contextTab, chapter.id, projectId])
-
-  useEffect(() => {
-    if (contextTab !== 'warn') return
-    if (warnResult !== null) return
-    const first = warnHistory[0]
-    if (!first?.result) return
-    setWarnResult({ ...first.result })
-    setSelectedWarnRecordId(first.id)
-  }, [contextTab, warnHistory, warnResult])
 
   // ── 写作统计 ───────────────────────────────────────────────────────
   const sessionStartWords = useRef<number>(chapter.word_count)
@@ -444,6 +472,9 @@ export default function ChapterEditor({
     setHistoryOpen(false)
     setVersionsList([])
     setHistoryPreview(null)
+    setWarnResult(null)
+    setWarnHistory([])
+    setSelectedWarnRecordId(null)
   }, [chapter.id])
 
   useEffect(() => {
@@ -490,6 +521,28 @@ export default function ChapterEditor({
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
+
+  /** 写前预警：打开 Tab 时拉取本章历史（响应体非数组时安全降级） */
+  useEffect(() => {
+    if (contextTab !== 'warn' || !chapter.id || !projectId) return
+    let cancelled = false
+    void aiApi.preWriteWarningHistory(projectId, chapter.id).then((r) => {
+      if (!cancelled) setWarnHistory(parsePreWriteWarningHistoryPayload(r.data))
+    }).catch(() => {
+      if (!cancelled) setWarnHistory([])
+    })
+    return () => { cancelled = true }
+  }, [contextTab, chapter.id, projectId])
+
+  /** 有历史且当前无展示结果时，默认显示最新一条 */
+  useEffect(() => {
+    if (contextTab !== 'warn') return
+    if (warnResult !== null) return
+    const first = warnHistory[0]
+    if (!first?.id) return
+    setWarnResult(normalizePreWriteWarnResult(first.result))
+    setSelectedWarnRecordId(first.id)
+  }, [contextTab, warnHistory, warnResult])
 
   // ─────────────────────────────────────────────────────────────────
   // Handlers
@@ -623,10 +676,14 @@ export default function ChapterEditor({
     if (opts?.replaceExisting) {
       if (!window.confirm('「重新生成本章」将按大纲替换当前正文；若有旧稿会在保存前自动留版本快照。确定继续？')) return
       const route = useAppStore.getState().aiBackendRoute
+      // 若项目启用了质量门控（auto_quality_gate=true 且至少有一个非零门槛），走门控重写
+      const useGated =
+        writingConfig?.auto_quality_gate === true &&
+        (writingConfig.min_overall_score > 0 || writingConfig.min_subscribe_intent > 0)
       addGenTask({
-        type: 'rewrite_chapter',
+        type: useGated ? 'gated_rewrite_chapter' : 'rewrite_chapter',
         projectId,
-        label: `重写《${chapter.title}》`,
+        label: useGated ? `门控重写《${chapter.title}》` : `重写《${chapter.title}》`,
         params: {
           chapterId: chapter.id,
           userPrompt: opts.overridePrompt ?? aiExtraPrompt.trim(),
@@ -634,7 +691,7 @@ export default function ChapterEditor({
           ...routeLlmProviderPayload(route),
         },
       })
-      toast.success('已加入 AI 队列：开始重写本章')
+      toast.success(useGated ? '已加入 AI 队列：质量门控写作（自动质检+重写）' : '已加入 AI 队列：开始重写本章')
       return
     }
     void (async () => {
@@ -1046,10 +1103,10 @@ export default function ChapterEditor({
         model_profile: modelProfileFromRoute(route),
         llm_provider_id: llmProviderIdFromRoute(route),
       })
-      setWarnResult(data)
+      setWarnResult(normalizePreWriteWarnResult(data))
       if (data.record_id) setSelectedWarnRecordId(data.record_id)
       void aiApi.preWriteWarningHistory(projectId, chapter.id).then((r) => {
-        setWarnHistory(r.data as PreWriteWarnHistoryRow[])
+        setWarnHistory(parsePreWriteWarningHistoryPayload(r.data))
       }).catch(() => {})
     } catch {
       toast.error('写前预警请求失败')
@@ -1840,7 +1897,7 @@ export default function ChapterEditor({
                           const row = warnHistory.find(h => h.id === id)
                           if (row) {
                             setSelectedWarnRecordId(id)
-                            setWarnResult({ ...row.result })
+                            setWarnResult(normalizePreWriteWarnResult(row.result))
                           }
                         }}
                         className="w-full text-xs rounded-lg border border-novel-border bg-novel-panel px-2 py-1.5 text-novel-ink"

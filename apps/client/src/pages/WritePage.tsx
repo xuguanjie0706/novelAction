@@ -193,7 +193,13 @@ export default function WritePage() {
   }, [activeChapter, chapters])
 
   const statusDot = (s: Chapter['status']) =>
-    ({ draft: 'bg-gray-300', writing: 'bg-blue-400', done: 'bg-green-400', reviewed: 'bg-amber-400' }[s])
+    ({
+      draft: 'bg-gray-300',
+      writing: 'bg-blue-400',
+      done: 'bg-green-400',
+      reviewed: 'bg-amber-400',
+      needs_review: 'bg-rose-400',   // 质量门控未达标，需人工审阅
+    }[s] ?? 'bg-gray-300')
 
   const renderNode = (node: OutlineNode, depth = 0): React.ReactNode => {
     if (node.node_type === 'chapter_plan') {

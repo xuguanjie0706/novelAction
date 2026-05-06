@@ -303,7 +303,7 @@ export interface MemoryChunk {
 
 // ── Generation Queue ──────────────────────────────────
 export type GenTaskStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled'
-export type GenTaskType = 'full_generate' | 'batch_expand' | 'outline_quality' | 'outline_repair' | 'continue_chapters' | 'rewrite_chapter'
+export type GenTaskType = 'full_generate' | 'batch_expand' | 'outline_quality' | 'outline_repair' | 'continue_chapters' | 'rewrite_chapter' | 'gated_rewrite_chapter'
 
 /** 大纲 AI 质检（与章节正文质检 QualityReport 结构不同） */
 export interface OutlinePlanQualityIssue {

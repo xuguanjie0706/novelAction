@@ -16,7 +16,21 @@ const api = axios.create({
 
 installLlmFetchLogger()
 
+/**
+ * 请求拦截器：
+ * 1. 注入 Authorization: Bearer <token>（若 authStore 有 token）
+ * 2. 记录 LLM 相关请求的调用 ID（用于耗时统计）
+ */
 api.interceptors.request.use((config) => {
+  // 注入 JWT token（从 localStorage 直接读，避免循环依赖 authStore）
+  try {
+    const token = localStorage.getItem('novelAction:auth-token')
+    if (token) {
+      config.headers = config.headers ?? {}
+      config.headers['Authorization'] = `Bearer ${token}`
+    }
+  } catch { /* ignore */ }
+
   const endpoint = config.url || ''
   if (isLlmRelatedEndpoint(endpoint)) {
     const callId = startLlmCall({
@@ -52,6 +66,19 @@ api.interceptors.response.use(
         error: err.response?.data?.detail || err.message || '请求失败',
       })
     }
+
+    // 401 未授权：清除 token 并跳转登录页（避免静默失效）
+    if (err.response?.status === 401) {
+      try {
+        localStorage.removeItem('novelAction:auth-token')
+      } catch { /* ignore */ }
+      // 非登录页才跳转，避免死循环
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login'
+      }
+      return Promise.reject(err)
+    }
+
     const msg = err.response?.data?.detail || err.message || '请求失败'
     toast.error(msg)
     return Promise.reject(err)
@@ -61,6 +88,18 @@ api.interceptors.response.use(
 export default api
 
 // ── Projects ──────────────────────────────────────────
+/** 写作质量门控配置 */
+export interface WritingConfig {
+  /** 是否启用质量门控循环（默认 true，但阈值极低不影响日常写作） */
+  auto_quality_gate: boolean
+  /** 综合质检分下限（0-10 scale，默认 6.0） */
+  min_overall_score: number
+  /** 章末订阅意愿分下限（独立门槛，默认 6.0） */
+  min_subscribe_intent: number
+  /** 最大重写次数（含首次，默认 3） */
+  max_rewrite_attempts: number
+}
+
 export const projectsApi = {
   list: () => api.get('/projects/'),
   create: (data: any) => api.post('/projects/', data),
@@ -75,6 +114,12 @@ export const projectsApi = {
     opening_contract: Record<string, any>
     positioning: Record<string, any>
   }>(`/projects/${id}/insights`),
+  /** 读取项目级写作质量门控配置（含系统默认值兜底） */
+  getWritingConfig: (id: string) =>
+    api.get<{ writing_config: WritingConfig }>(`/projects/${id}/writing-config`),
+  /** 部分更新写作质量门控配置（只传改变的字段） */
+  updateWritingConfig: (id: string, data: Partial<WritingConfig>) =>
+    api.patch<{ writing_config: WritingConfig }>(`/projects/${id}/writing-config`, data),
 }
 
 // ── Cover Generation ──────────────────────────────────
@@ -269,6 +314,11 @@ export const llmApi = {
 
 export const aiApi = {
   qualityCheck: (pid: string, data: any) => api.post(`/projects/${pid}/ai/quality-check`, data),
+  /**
+   * 质量门控写作流 URL（原生 fetch + SSE，不走 axios）。
+   * 对应后端 POST /ai/gated-draft-stream，事件协议见 draftAssistSse.ts。
+   */
+  gatedDraftStreamUrl: (pid: string) => `/api/v1/projects/${pid}/ai/gated-draft-stream`,
   /** 质量债务：模型给出原文摘录→替换文，服务端唯一匹配后写回（微调，非整章流式） */
   qualityDebtMicroFix: (
     pid: string,

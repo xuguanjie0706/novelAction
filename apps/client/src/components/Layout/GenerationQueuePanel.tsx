@@ -4,7 +4,7 @@
  * 特性：
  *  - 固定在右下角，始终可见（有任务时）
  *  - 点击展开/收起任务列表
- *  - 自动执行 pending 任务（full_generate / batch_expand / outline_quality / outline_repair / continue_chapters / rewrite_chapter）
+ *  - 自动执行 pending 任务（full_generate / batch_expand / outline_quality / outline_repair / continue_chapters / rewrite_chapter / gated_rewrite_chapter）
  *  - 实时 SSE 进度更新
  *  - 任务完成后触发大纲树刷新
  */
@@ -1141,6 +1141,209 @@ async function runRewriteChapter(
   }
 }
 
+// ── 质量门控写作任务执行器 ────────────────────────────────────────────────
+
+/**
+ * 执行 gated_rewrite_chapter 任务：调用 /ai/gated-draft-stream，
+ * 将结构化门控事件（attempt_start / qc_result / gate_passed / gate_failed）
+ * 转换为可读的进度行，服务端负责所有重写与质检循环。
+ *
+ * 与 runRewriteChapter 区别：章节正文由服务端保存；前端只负责展示进度
+ * 并在流结束后刷新章节数据。
+ */
+async function runGatedRewriteChapter(
+  task: GenTask,
+  pushProgress: (item: GenProgressItem) => void,
+  onComplete: (msg: string) => void,
+  onError: (msg: string) => void,
+  signal: AbortSignal,
+  upsertChapter: (chapter: Chapter) => void,
+) {
+  const { projectId, params } = task
+  const chapterId: string | undefined = typeof params.chapterId === 'string' ? params.chapterId : undefined
+  const userPrompt: string = typeof params.userPrompt === 'string' ? params.userPrompt : ''
+  const modelProfile: 'local' | 'gemini' = params.modelProfile ?? 'local'
+  const llmProviderId: string | undefined = params.llm_provider_id
+
+  if (!chapterId) {
+    onError('缺少章节 ID')
+    return
+  }
+
+  pushProgress({ step: 'start', label: '质量门控写作已开始…', done: false, error: false })
+
+  const strategyLabel: Record<string, string> = {
+    initial: '初稿',
+    patch: '定点修复',
+    full_rewrite: '全量重写',
+  }
+
+  let lastOverall = 0
+  let lastSubscribe = 0
+  let gateOutcome: 'passed' | 'failed' | null = null
+
+  try {
+    const res = await fetch(aiApi.gatedDraftStreamUrl(projectId), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chapter_id: chapterId,
+        model_profile: modelProfile,
+        ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
+        user_prompt: userPrompt.trim() || null,
+        replace_existing: true,
+      }),
+      signal,
+    })
+
+    if (!res.ok) throw new Error((await res.text().catch(() => '')).slice(0, 240) || `HTTP ${res.status}`)
+    if (!res.body) throw new Error('响应无流式内容')
+
+    const reader = res.body.getReader()
+    const dec = new TextDecoder()
+    let buf = ''
+    let currentAttempt = 1
+    let draftAccumulated = ''  // 当前轮次文字累积（显示字数用）
+
+    const processLine = (line: string) => {
+      const t = line.trim()
+      if (!t.startsWith('data:')) return
+      const raw = t.slice(5).trimStart()
+      if (raw === '[DONE]') return
+
+      let obj: Record<string, unknown>
+      try { obj = JSON.parse(raw) } catch { return }
+
+      if (obj.error) throw new Error(obj.error as string)
+
+      const ev = obj.event as string | undefined
+
+      // 结构化事件处理
+      if (ev === 'gate_config') {
+        pushProgress({
+          step: 'gate_config',
+          label: `门控配置：综合分≥${obj.min_overall_score} / 订阅意愿≥${obj.min_subscribe_intent}，最多${obj.max_rewrite_attempts}次`,
+          done: true,
+          error: false,
+        })
+        return
+      }
+
+      if (ev === 'attempt_start') {
+        currentAttempt = obj.attempt as number
+        draftAccumulated = ''
+        const strategy = strategyLabel[obj.strategy as string] ?? (obj.strategy as string)
+        pushProgress({
+          step: `attempt_${currentAttempt}_draft`,
+          label: `第 ${currentAttempt}/${obj.max_attempts} 轮 · ${strategy} · 正在起笔…`,
+          done: false,
+          error: false,
+        })
+        return
+      }
+
+      if (ev === 'attempt_done') {
+        pushProgress({
+          step: `attempt_${currentAttempt}_draft`,
+          label: `✓ 第 ${currentAttempt} 轮正文完成（${obj.words}字）`,
+          done: true,
+          error: false,
+        })
+        return
+      }
+
+      if (ev === 'qc_running') {
+        pushProgress({
+          step: `attempt_${currentAttempt}_qc`,
+          label: `第 ${currentAttempt} 轮质检中…`,
+          done: false,
+          error: false,
+        })
+        return
+      }
+
+      if (ev === 'qc_result') {
+        lastOverall = obj.overall_score as number
+        lastSubscribe = obj.subscribe_intent as number
+        const scoreLabel = `综合 ${(lastOverall).toFixed(1)} / 订阅 ${(lastSubscribe).toFixed(1)}`
+        pushProgress({
+          step: `attempt_${currentAttempt}_qc`,
+          label: `✓ 质检完成：${scoreLabel}`,
+          done: true,
+          error: false,
+        })
+        return
+      }
+
+      if (ev === 'gate_passed') {
+        gateOutcome = 'passed'
+        pushProgress({
+          step: 'gate_result',
+          label: `✅ 质量达标（第 ${obj.attempt} 轮）— 综合 ${(obj.overall_score as number).toFixed(1)} / 订阅 ${(obj.subscribe_intent as number).toFixed(1)}`,
+          done: true,
+          error: false,
+        })
+        return
+      }
+
+      if (ev === 'rewrite_queued') {
+        const nextStrategy = strategyLabel[obj.strategy as string] ?? (obj.strategy as string)
+        pushProgress({
+          step: `rewrite_queued_${obj.next_attempt}`,
+          label: `△ 未达标（综合 ${(obj.overall_score as number).toFixed(1)} / 订阅 ${(obj.subscribe_intent as number).toFixed(1)}），准备第 ${obj.next_attempt} 轮 · ${nextStrategy}`,
+          done: true,
+          error: false,
+        })
+        return
+      }
+
+      if (ev === 'gate_failed') {
+        gateOutcome = 'failed'
+        pushProgress({
+          step: 'gate_result',
+          label: `⏸ 达到最大次数仍未达标 — 综合 ${(obj.final_score as number).toFixed(1)} / 订阅 ${(obj.final_subscribe_intent as number).toFixed(1)}，章节已标记「待审阅」`,
+          done: true,
+          error: false,
+        })
+        return
+      }
+
+      // 普通文字 chunk — 追加字数显示
+      if (typeof obj.text === 'string') {
+        draftAccumulated += obj.text
+      }
+    }
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += dec.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      for (const line of lines) processLine(line)
+    }
+    for (const line of buf.split('\n')) processLine(line)
+
+    // 流结束后刷新章节
+    try {
+      const refreshed = await chaptersApi.get(projectId, chapterId)
+      upsertChapter(refreshed.data)
+    } catch { /* ignore */ }
+
+    if (gateOutcome === 'passed') {
+      onComplete(`质量门控写作完成（综合 ${lastOverall.toFixed(1)} / 订阅 ${lastSubscribe.toFixed(1)}）`)
+    } else if (gateOutcome === 'failed') {
+      onComplete(`写作已暂停，章节标记为「待审阅」（综合 ${lastOverall.toFixed(1)} / 订阅 ${lastSubscribe.toFixed(1)}）`)
+    } else {
+      onComplete('质量门控写作流程结束')
+    }
+  } catch (e: any) {
+    if (signal.aborted) return
+    pushProgress({ step: 'error', label: `门控写作失败：${formatApiError(e)}`, done: true, error: true })
+    onError(`门控写作失败：${formatApiError(e)}`)
+  }
+}
+
 // ── 单任务卡片 ─────────────────────────────────────────────
 
 function progressRowKey(p: GenProgressItem, idx: number) {
@@ -1376,6 +1579,8 @@ export default function GenerationQueuePanel() {
       await runContinueChapters(task, pushProgress, onComplete, onError, abort.signal, upsertChapter, setMemories, markChapterDebriefCommitted)
     } else if (task.type === 'rewrite_chapter') {
       await runRewriteChapter(task, pushProgress, onComplete, onError, abort.signal, upsertChapter, setMemories, markChapterDebriefCommitted)
+    } else if (task.type === 'gated_rewrite_chapter') {
+      await runGatedRewriteChapter(task, pushProgress, onComplete, onError, abort.signal, upsertChapter)
     } else {
       onError('未知任务类型')
     }

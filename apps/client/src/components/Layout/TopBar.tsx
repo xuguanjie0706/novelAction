@@ -1,7 +1,8 @@
 import React, { useState } from 'react'
-import { ArrowLeft, Sparkles, RotateCcw, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, Sparkles, RotateCcw, AlertTriangle, LogOut } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAppStore } from '../../store'
+import { useAuthStore } from '../../store/authStore'
 import { projectsApi, charactersApi } from '../../api/client'
 import clsx from 'clsx'
 import LlmAgentMenu from './LlmAgentMenu'
@@ -91,9 +92,15 @@ function ResetConfirmModal({
 
 export default function TopBar({ projectId }: Props) {
   const { currentProject, aiPanelOpen, setAiPanelOpen, setChapters, setMemories } = useAppStore()
+  const { logout, user } = useAuthStore()
   const navigate = useNavigate()
   const [showResetModal, setShowResetModal] = useState(false)
   const [resetting, setResetting] = useState(false)
+
+  const handleLogout = () => {
+    logout()
+    navigate('/login', { replace: true })
+  }
 
   const handleReset = async () => {
     setResetting(true)
@@ -162,6 +169,22 @@ export default function TopBar({ projectId }: Props) {
             <Sparkles size={14} />
             AI 助手
           </button>
+
+          {/* 用户信息 + 登出 */}
+          <div className="flex items-center gap-1.5 ml-1 pl-2 border-l border-gray-200">
+            {user && (
+              <span className="text-xs text-gray-400 max-w-[80px] truncate" title={user.email}>
+                {user.username || user.email}
+              </span>
+            )}
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+              title="退出登录"
+            >
+              <LogOut size={13} />
+            </button>
+          </div>
         </div>
       </header>
 

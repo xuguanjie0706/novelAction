@@ -55,6 +55,7 @@ from app.routers import storylines, power_systems, skills, items, factions
 from app.routers import foreshadows, quality_debts
 from app.routers import scenes, reader_promises
 from app.routers import cover as cover_router
+from app.routers import auth as auth_router
 from app.services.llm_config import seed_llm_from_env_if_empty
 from app.services.cover_storage import ensure_cover_storage_dir, resolved_cover_storage_dir
 
@@ -374,6 +375,7 @@ app.add_middleware(
 app.add_middleware(ForwardedHostASGIMiddleware)
 
 # 注册路由
+app.include_router(auth_router.router, prefix="/api/v1")
 app.include_router(projects.router, prefix="/api/v1")
 app.include_router(world_settings.router, prefix="/api/v1")
 app.include_router(characters.router, prefix="/api/v1")

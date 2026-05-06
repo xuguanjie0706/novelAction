@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from app.database import get_db
 from app.models import (
     Project,
@@ -151,6 +152,73 @@ def reset_writing_progress(project_id: str, db: Session = Depends(get_db)):
         ),
         "stats": stats,
     }
+
+
+class WritingConfigUpdate(BaseModel):
+    """PATCH /projects/{id}/writing-config 的请求体。所有字段可选，只更新传入的字段。"""
+    auto_quality_gate: Optional[bool] = None
+    min_overall_score: Optional[float] = Field(default=None, ge=0.0, le=10.0)
+    min_subscribe_intent: Optional[float] = Field(default=None, ge=0.0, le=10.0)
+    max_rewrite_attempts: Optional[int] = Field(default=None, ge=1, le=5)
+
+
+@router.patch("/{project_id}/writing-config")
+def update_writing_config(
+    project_id: str,
+    payload: WritingConfigUpdate,
+    db: Session = Depends(get_db),
+):
+    """
+    更新项目级写作配置（质量门控参数）。
+
+    配置存储于 Project.extra.writing_config，只更新请求体中明确传入的字段，
+    其余保持不变。返回更新后的完整 writing_config。
+
+    Args:
+        project_id: 项目 UUID
+        payload: 部分更新字段（auto_quality_gate / min_overall_score /
+                 min_subscribe_intent / max_rewrite_attempts）
+    Returns:
+        {"writing_config": {...}} — 更新后的完整配置
+    """
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    extra = dict(project.extra) if isinstance(project.extra, dict) else {}
+    cfg = dict(extra.get("writing_config") or {})
+
+    update_data = payload.model_dump(exclude_none=True)
+    cfg.update(update_data)
+
+    extra["writing_config"] = cfg
+    project.extra = extra
+    db.commit()
+    db.refresh(project)
+
+    return {"writing_config": (project.extra or {}).get("writing_config", {})}
+
+
+@router.get("/{project_id}/writing-config")
+def get_writing_config(project_id: str, db: Session = Depends(get_db)):
+    """
+    读取项目级写作配置，缺省字段返回系统默认值。
+
+    @returns {"writing_config": {...}}
+    """
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    defaults = {
+        "auto_quality_gate": True,
+        "min_overall_score": 6.0,
+        "min_subscribe_intent": 6.0,
+        "max_rewrite_attempts": 3,
+    }
+    stored = (project.extra or {}).get("writing_config") or {}
+    merged = {**defaults, **stored}
+    return {"writing_config": merged}
 
 
 @router.get("/{project_id}/insights")

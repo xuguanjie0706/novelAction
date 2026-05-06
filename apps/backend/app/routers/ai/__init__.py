@@ -17,6 +17,7 @@ from app.routers.ai import (  # noqa: E402
     coherence_routes,
     debrief_routes,
     draft_routes,
+    gated_draft_routes,
     memory_routes,
     quality_debt_fix_routes,
     quality_routes,
@@ -28,6 +29,7 @@ router.include_router(coherence_routes.router)
 router.include_router(chat_routes.router)
 router.include_router(memory_routes.router)
 router.include_router(draft_routes.router)
+router.include_router(gated_draft_routes.router)
 router.include_router(debrief_routes.router)
 router.include_router(quality_debt_fix_routes.router)
 router.include_router(reader_simulation_routes.router)

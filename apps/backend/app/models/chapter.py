@@ -18,7 +18,8 @@ class Chapter(Base):
     manuscript_raw_snapshot = Column(Text, nullable=True)  # AI 流式原始纯文本快照（含稿末标记），与 content 对照
     word_count = Column(Integer, default=0)  # 正文字数统计
     sort_order = Column(Integer, default=0)  # 全书排序序号（通常即章序）
-    status = Column(String(20), default="draft")  # draft / writing / done / reviewed
+    status = Column(String(20), default="draft")  # draft / writing / done / reviewed / needs_review（质量门控达到最大重写次数仍未达标时暂停）
+    gated_draft_attempts = Column(Integer, default=0)  # 质量门控已尝试次数（gated-draft-stream 循环计数）
 
     last_quality_score = Column(Float)  # 最近一次 AI 质检综合分
     last_quality_report = Column(JSON)  # 质检报告结构化结果

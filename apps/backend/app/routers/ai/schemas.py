@@ -97,6 +97,25 @@ class DraftAssistRequest(BaseModel):
     focus_quality_debt_id: Optional[UUID] = None
 
 
+class GatedDraftRequest(BaseModel):
+    """
+    质量门控写作请求。
+
+    后端会执行「起笔 → 自动质检 → 未达标则重写」循环，直至通过或达到
+    最大尝试次数。循环配置优先读 project.extra.writing_config，可在此
+    处传 override_config 临时覆盖（A/B 测试或单次调整用）。
+    """
+    chapter_id: str
+    model_profile: Literal["local", "gemini"] = "local"
+    llm_provider_id: Optional[UUID] = None
+    """作者补充说明：写作风格、情节走向等，注入每次起笔提示"""
+    user_prompt: Optional[str] = None
+    """是否整章重写；False 时若已有正文则追加，True 时清空重写"""
+    replace_existing: bool = True
+    """可选：临时覆盖项目级 writing_config 的部分字段"""
+    override_config: Optional[dict] = None
+
+
 class CharacterUpdate(BaseModel):
     character_id: str
     current_realm: Optional[str] = None

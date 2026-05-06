@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     # App
     SECRET_KEY: str = "change-me-in-production"
     DEBUG: bool = True
+
+    # JWT 认证
+    JWT_SECRET_KEY: str = "jwt-secret-change-me-in-production"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 默认 7 天
     CORS_ORIGINS: list[str] = [
         "http://localhost:3173",
         "http://127.0.0.1:3173",

@@ -1,7 +1,24 @@
 import React from 'react'
-import { Bell, ChevronDown, Search, Sun } from 'lucide-react'
+import { Bell, LogOut, Search, Sun } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { useAuthStore } from '../../store/authStore'
 
 export default function HomeTopBar() {
+  const { logout, user } = useAuthStore()
+  const navigate = useNavigate()
+
+  const handleLogout = () => {
+    logout()
+    navigate('/login', { replace: true })
+  }
+
+  /** 头像首字母：优先 username，回退邮箱首字符，再回退 "写" */
+  const avatarLetter = user
+    ? (user.username?.[0] ?? user.email?.[0] ?? '写').toUpperCase()
+    : '写'
+
+  const displayName = user?.username || user?.email || '写作者'
+
   return (
     <header className="flex h-[94px] shrink-0 items-center justify-between border-b border-gray-100 bg-white px-6 sm:px-8">
       <div className="flex h-12 w-full max-w-[468px] items-center gap-3 rounded-full border border-gray-200 bg-gray-50 px-5 text-gray-400 shadow-inner">
@@ -28,15 +45,29 @@ export default function HomeTopBar() {
         >
           <Bell size={21} />
         </button>
+
+        {/* 用户头像 + 名称 */}
+        <div className="flex items-center gap-2">
+          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-amber-100 text-base font-semibold text-amber-700 shadow-sm select-none">
+            {avatarLetter}
+          </div>
+          <span
+            className="hidden text-sm font-semibold text-gray-800 sm:inline max-w-[100px] truncate"
+            title={user?.email}
+          >
+            {displayName}
+          </span>
+        </div>
+
+        {/* 登出按钮 */}
         <button
           type="button"
-          className="flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors hover:bg-gray-50"
+          onClick={handleLogout}
+          aria-label="退出登录"
+          title="退出登录"
+          className="flex h-10 w-10 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-red-50 hover:text-red-500"
         >
-          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-amber-100 text-lg shadow-sm">
-            写
-          </div>
-          <span className="hidden text-sm font-semibold text-gray-800 sm:inline">写作者</span>
-          <ChevronDown size={16} className="hidden text-gray-500 sm:block" />
+          <LogOut size={18} />
         </button>
       </div>
     </header>

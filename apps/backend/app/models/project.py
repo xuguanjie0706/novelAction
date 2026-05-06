@@ -9,24 +9,20 @@ from app.database import Base
 class Project(Base):
     __tablename__ = "projects"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    title = Column(String(200), nullable=False)
-    genre = Column(String(100))                    # 玄幻/都市/科幻...
-    logline = Column(Text)                         # 一句话创意
-    premise = Column(Text)                         # 立意与类型：作品定位、主题命题、禁忌边界等
-    world_overview = Column(Text)                  # 世界观简述
-    story_core = Column(JSON, default=dict)        # 故事核: {drive, conflict, theme, ...}
-    status = Column(String(20), default="drafting") # drafting/writing/completed
-    target_words = Column(Integer, default=1200000)  # 目标字数（整数）
-    # 可为外链或 data URL（AI 封面 base64 很长，不能用 String(500)）
-    cover_url = Column(Text)
-    # 杂项扩展字段。当前已知键：
-    #   positioning: dict —— Step 0 立项会议产物（target_audience / tropes / face_slap_pattern 等）。
-    # 后续用于"作品级元设定"时优先放在这里，避免再起一张表。
-    extra = Column(JSON, default=dict)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键；被 chapters/characters/outline 等 FK 引用
+    title = Column(String(200), nullable=False)  # 书名/项目名
+    genre = Column(String(100))  # 题材标签，如玄幻/都市/科幻
+    logline = Column(Text)  # 一句话梗概（对外 pitch）
+    premise = Column(Text)  # 立意：定位、主题、禁忌边界
+    world_overview = Column(Text)  # 世界观简述（给 AI/作者速览）
+    story_core = Column(JSON, default=dict)  # 故事核 JSON：drive / conflict / theme 等
+    status = Column(String(20), default="drafting")  # 作品阶段: drafting / writing / completed
+    target_words = Column(Integer, default=1200000)  # 目标总字数
+    cover_url = Column(Text)  # 封面 URL 或 data URL（长 base64 故用 Text）
+    extra = Column(JSON, default=dict)  # JSON 扩展；如 positioning（受众/梗/打脸节奏等立项字段）
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间（UTC）
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())  # 更新时间（UTC）
 
     # Relationships
     world_settings = relationship("WorldSetting", back_populates="project", cascade="all, delete-orphan")

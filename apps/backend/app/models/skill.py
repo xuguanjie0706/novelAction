@@ -29,9 +29,9 @@ class Skill(Base):
     """
     __tablename__ = "skills"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
-    power_system_id = Column(UUID(as_uuid=True), ForeignKey("power_systems.id"), nullable=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)  # FK → projects.id
+    power_system_id = Column(UUID(as_uuid=True), ForeignKey("power_systems.id"), nullable=True)  # FK → power_systems.id，归属体系
 
     name = Column(String(100), nullable=False)           # 技能名，如"天火流星拳"
     skill_type = Column(String(20), default="combat")    # combat/defense/movement/support/bloodline/special
@@ -46,20 +46,17 @@ class Skill(Base):
     description = Column(Text)                          # 功法/技能完整描述
     effects = Column(Text)                              # 使用效果
     limitations = Column(Text)                          # 限制与副作用（如消耗、反噬、禁忌）
-    mastery_stages = Column(JSON, default=list)
-    # 修炼阶段：[{stage: "入门", effect: "威力30%"}, {stage: "大成", effect: "威力100%"}]
+    mastery_stages = Column(JSON, default=list)  # [{stage, effect}, ...] 熟练度阶段
 
-    # 掌握此技能的人物（character_id 列表）
-    mastered_by_character_ids = Column(JSON, default=list)
+    mastered_by_character_ids = Column(JSON, default=list)  # 已掌握角色 UUID 列表（→ characters.id）
 
-    # 故事中首次出现的章节
-    first_appearance_chapter = Column(Integer)
+    first_appearance_chapter = Column(Integer)  # 设定上首次在剧情出现的章号
 
-    sort_order = Column(Integer, default=0)
-    extra = Column(JSON, default=dict)
+    sort_order = Column(Integer, default=0)  # 列表排序
+    extra = Column(JSON, default=dict)  # JSON 扩展字段
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间（UTC）
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())  # 更新时间（UTC）
 
     project = relationship("Project", back_populates="skills")
     power_system = relationship("PowerSystem", back_populates="skills")

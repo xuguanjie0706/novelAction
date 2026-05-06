@@ -31,8 +31,8 @@ class Item(Base):
     """
     __tablename__ = "items"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)  # FK → projects.id
 
     name = Column(String(100), nullable=False)           # 道具名称，如"混沌玉简"
     item_type = Column(String(20), default="artifact")   # weapon/armor/pill/artifact/material/scroll/beast/other
@@ -44,10 +44,10 @@ class Item(Base):
     limitations = Column(Text)                           # 使用限制（境界要求、次数、副作用）
 
     # 当前持有者（character UUID）
-    current_owner_id = Column(UUID(as_uuid=True), ForeignKey("characters.id"), nullable=True)
+    current_owner_id = Column(UUID(as_uuid=True), ForeignKey("characters.id"), nullable=True)  # FK → characters.id，当前持有者
 
     # 持有历史记录：[{owner_name, chapter, event_description}]
-    ownership_history = Column(JSON, default=list)
+    ownership_history = Column(JSON, default=list)  # [{owner_name, chapter, event_description}, ...]
 
     # 道具在故事中的作用
     story_significance = Column(Text)                   # 在故事中的重要性/象征意义
@@ -56,11 +56,11 @@ class Item(Base):
     # 道具状态
     status = Column(String(20), default="intact")       # intact=完整 damaged=受损 destroyed=毁灭 lost=遗失 unknown=下落不明
 
-    sort_order = Column(Integer, default=0)
-    extra = Column(JSON, default=dict)
+    sort_order = Column(Integer, default=0)  # 列表排序
+    extra = Column(JSON, default=dict)  # JSON 扩展字段
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间（UTC）
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())  # 更新时间（UTC）
 
     project = relationship("Project", back_populates="items")
     current_owner = relationship("Character", foreign_keys=[current_owner_id])

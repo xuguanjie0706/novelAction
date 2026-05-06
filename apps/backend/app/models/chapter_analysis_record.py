@@ -27,9 +27,9 @@ class ChapterAnalysisRecord(Base):
 
     __tablename__ = "chapter_analysis_records"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
-    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False, index=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键；单次「分析」一条记录
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)  # FK → projects.id
+    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False, index=True)  # FK → chapters.id，被分析的章
 
     # ── 追读模拟字段 ─────────────────────────────────────────────────────────
     score = Column(Integer, nullable=False)              # 1-10，均值的基础
@@ -47,4 +47,4 @@ class ChapterAnalysisRecord(Base):
     hook_suggestions = Column(JSONB, default=list)       # List[str]，最多 3 条
     matched_promises_json = Column(JSONB, default=list)  # List[MatchedPromise dict] 快照
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)  # 分析写入时间（UTC）

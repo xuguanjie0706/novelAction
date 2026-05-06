@@ -10,8 +10,8 @@ class Foreshadow(Base):
     """全局伏笔管理表 — 跨章节追踪所有伏笔的埋设与回收状态。"""
     __tablename__ = "foreshadows"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)  # FK → projects.id
 
     # 基础信息
     code = Column(String(20))             # 自动编号，如 F-001
@@ -19,11 +19,11 @@ class Foreshadow(Base):
     description = Column(Text)
 
     # 埋设章节
-    laid_chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)
+    laid_chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)  # FK → chapters.id，埋下伏笔的章
     laid_chapter_number = Column(Integer)   # 冗余，便于查询排序
 
     # 回收章节
-    resolved_chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)
+    resolved_chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)  # FK → chapters.id，回收伏笔的章
     resolved_chapter_number = Column(Integer)   # 冗余
     planned_resolve_chapter = Column(Integer)   # 预计回收章节号
     planned_action = Column(String(20), default="resolve")  # resolve / develop
@@ -40,8 +40,8 @@ class Foreshadow(Base):
     audience_aware = Column(Integer, default=3)           # 读者感知度 0-5（埋时读者是否明显感觉到是承诺）
     volume_budget = Column(JSON, default=dict)            # {volume: {"must_recover": N, "must_lay": M}} 每卷预算
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间（UTC）
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())  # 更新时间（UTC）
 
     laid_chapter = relationship("Chapter", foreign_keys=[laid_chapter_id], lazy="select")
     resolved_chapter = relationship("Chapter", foreign_keys=[resolved_chapter_id], lazy="select")

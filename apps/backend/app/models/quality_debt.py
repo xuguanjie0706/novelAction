@@ -14,21 +14,20 @@ class QualityDebt(Base):
         UniqueConstraint("project_id", "fingerprint", name="uq_quality_debt_project_fingerprint"),
     )
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
-    # 删章或「解除绑定」时置空；source_chapter_number 仍保留来源章号
-    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)  # FK → projects.id
+    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)  # FK → chapters.id；删章/解绑可空，章号仍见 source_chapter_number
 
-    source_chapter_number = Column(Integer, nullable=False)
-    issue_type = Column(String(80), nullable=False)
-    severity = Column(String(20), nullable=False, default="medium")
-    status = Column(String(20), nullable=False, default="pending")
-    summary = Column(Text, nullable=False)
-    suggested_fix = Column(Text)
-    author_notes = Column(Text)  # 作者手动修复说明（不覆盖质检 suggested_fix）
-    fingerprint = Column(String(64), nullable=False)
+    source_chapter_number = Column(Integer, nullable=False)  # 问题发现时章节序号（冗余，chapter_id 空时仍可用）
+    issue_type = Column(String(80), nullable=False)  # 问题分类（与质检逻辑约定）
+    severity = Column(String(20), nullable=False, default="medium")  # 严重度：如 low / medium / high
+    status = Column(String(20), nullable=False, default="pending")  # pending / resolved / ignored 等
+    summary = Column(Text, nullable=False)  # 问题摘要（给作者与后续生成约束）
+    suggested_fix = Column(Text)  # AI/质检建议修复方向
+    author_notes = Column(Text)  # 作者处理备注（不覆盖 suggested_fix）
+    fingerprint = Column(String(64), nullable=False)  # 与 project_id 组成唯一键，去重同一问题
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间（UTC）
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())  # 更新时间（UTC）
 
     chapter = relationship("Chapter")

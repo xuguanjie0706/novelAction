@@ -19,15 +19,12 @@ from app.database import Base
 class ChapterDebriefUndo(Base):
     __tablename__ = "chapter_debrief_undos"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False, unique=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)  # FK → projects.id
+    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False, unique=True)  # FK → chapters.id；每章最多一条回滚快照
 
-    # [{ "character_id": "...", "current_realm": "筑基期", "current_location": "...",
-    #    "current_status": "alive", "realm_rank": 3 }, ...]
-    char_states = Column(JSON, nullable=False, default=list)
+    char_states = Column(JSON, nullable=False, default=list)  # 复盘提交前人物关键字段快照 [{character_id, current_realm, current_location, current_status, realm_rank}, ...]
 
-    # [{ "storyline_id": "...", "status": "ongoing" }, ...]
-    storyline_statuses = Column(JSON, nullable=False, default=list)
+    storyline_statuses = Column(JSON, nullable=False, default=list)  # 提交前故事线状态 [{storyline_id, status}, ...]
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 快照生成时间（UTC）

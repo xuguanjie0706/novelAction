@@ -9,8 +9,8 @@ from app.database import Base
 class Character(Base):
     __tablename__ = "characters"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键；被 scene/关系表等 FK 引用
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)  # FK → projects.id
 
     # ── 基础信息 ──────────────────────────────────────────────
     name = Column(String(100), nullable=False)
@@ -21,9 +21,9 @@ class Character(Base):
     # arc        = 弧线支柱：某卷/某段主导剧情，随弧线完结淡出
     # plot       = 剧情推手：短期内推进特定剧情节点后退场
     # background = 背景填充：增加世界厚度，无强情节绑定
-    gender = Column(String(20))
-    age = Column(String(50))
-    avatar_url = Column(String(500))
+    gender = Column(String(20))  # 性别或表述
+    age = Column(String(50))  # 年龄或「外貌年龄」文本
+    avatar_url = Column(String(500))  # 头像图 URL
 
     # ── 归属 ──────────────────────────────────────────────────
     faction = Column(String(100))                    # 所属势力名（快速引用）
@@ -37,7 +37,7 @@ class Character(Base):
 
     # ── 能力与境界 ────────────────────────────────────────────
     current_realm = Column(String(100))              # 当前境界，如"斗者七星"
-    power_system_id = Column(UUID(as_uuid=True), ForeignKey("power_systems.id"), nullable=True)
+    power_system_id = Column(UUID(as_uuid=True), ForeignKey("power_systems.id"), nullable=True)  # FK → power_systems.id，所属力量体系
     realm_rank = Column(Integer)                     # 对应境界体系中的 rank 数字（便于排序比较）
 
     # ── 性格与说话风格 ────────────────────────────────────────
@@ -76,10 +76,10 @@ class Character(Base):
     # ── 作者备注 ──────────────────────────────────────────────
     author_notes = Column(Text)                       # 作者内部备注（剧情提醒、避免前后矛盾）
 
-    extra = Column(JSON, default=dict)
+    extra = Column(JSON, default=dict)  # JSON 扩展字段
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间（UTC）
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())  # 更新时间（UTC）
 
     project = relationship("Project", back_populates="characters")
     faction_obj = relationship("Faction", foreign_keys=[faction_id])
@@ -99,17 +99,16 @@ class Character(Base):
 class CharacterRelationship(Base):
     __tablename__ = "character_relationships"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
-    from_character_id = Column(UUID(as_uuid=True), ForeignKey("characters.id"), nullable=False)
-    to_character_id = Column(UUID(as_uuid=True), ForeignKey("characters.id"), nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)  # FK → projects.id（与人物同属一书）
+    from_character_id = Column(UUID(as_uuid=True), ForeignKey("characters.id"), nullable=False)  # FK → characters.id，关系起点
+    to_character_id = Column(UUID(as_uuid=True), ForeignKey("characters.id"), nullable=False)  # FK → characters.id，关系终点
 
-    relation_type = Column(String(50))    # 师徒 / 敌对 / 恋人 / 兄弟 / 主从 ...
-    description = Column(Text)
-    intensity = Column(Integer, default=5)    # 1-10 关系强度
-    is_dynamic = Column(String(20), default="stable")  # stable/evolving/deteriorating/broken
-    # 关系的演变轨迹描述
-    evolution_note = Column(Text)
+    relation_type = Column(String(50))  # 关系类型：师徒/敌对/恋人/兄弟/主从等
+    description = Column(Text)  # 关系说明（自由文本）
+    intensity = Column(Integer, default=5)  # 1–10 关系强度
+    is_dynamic = Column(String(20), default="stable")  # stable / evolving / deteriorating / broken
+    evolution_note = Column(Text)  # 关系随剧情变化的轨迹备注
 
     from_character = relationship("Character", foreign_keys=[from_character_id])
     to_character = relationship("Character", foreign_keys=[to_character_id])

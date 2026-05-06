@@ -14,11 +14,11 @@ class ChapterDebriefApplyRecord(Base):
 
     __tablename__ = "chapter_debrief_apply_records"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
-    apply_source = Column(String(32), nullable=False, default="manual_tab")
-    content_hash = Column(String(64), nullable=True)
-    payload = Column(JSON, nullable=False, default=dict)
-    result_message = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)  # FK → projects.id
+    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)  # FK → chapters.id，复盘目标章
+    apply_source = Column(String(32), nullable=False, default="manual_tab")  # 提交来源：如 manual_tab / queue_auto 等
+    content_hash = Column(String(64), nullable=True)  # 提交内容哈希，用于判重或对照缓存
+    payload = Column(JSON, nullable=False, default=dict)  # 当时提交的完整复盘载荷快照
+    result_message = Column(Text, nullable=True)  # 服务端处理结果说明（成功/失败原因）
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 提交成功时间（UTC）

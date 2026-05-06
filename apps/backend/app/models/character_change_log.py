@@ -19,23 +19,21 @@ class CharacterChangeLog(Base):
     """
     __tablename__ = "character_change_logs"
 
-    id         = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
-    character_id   = Column(UUID(as_uuid=True), ForeignKey("characters.id", ondelete="CASCADE"), nullable=False)
-    character_name = Column(String(100), nullable=False)          # 冗余，人物改名后历史仍可读
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)  # FK → projects.id
+    character_id = Column(UUID(as_uuid=True), ForeignKey("characters.id", ondelete="CASCADE"), nullable=False)  # FK → characters.id，被改人物
+    character_name = Column(String(100), nullable=False)  # 冗余姓名（改名后历史仍可读）
 
-    # 关联章节（手动编辑时为空）
-    chapter_id     = Column(UUID(as_uuid=True), ForeignKey("chapters.id", ondelete="SET NULL"), nullable=True)
-    chapter_number = Column(String(50),  nullable=True)           # 如「第15章」，冗余存储
-    chapter_title  = Column(String(200), nullable=True)
+    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id", ondelete="SET NULL"), nullable=True)  # FK → chapters.id；复盘触发时有值，纯手动编辑可空
+    chapter_number = Column(String(50), nullable=True)  # 冗余章号展示，如「第15章」
+    chapter_title = Column(String(200), nullable=True)  # 冗余章标题
 
-    source  = Column(String(20), nullable=False, default="debrief")  # debrief / manual / bootstrap
-    summary = Column(Text, nullable=True)                             # 一句话总结
+    source = Column(String(20), nullable=False, default="debrief")  # debrief / manual / bootstrap
+    summary = Column(Text, nullable=True)  # 本次变更一句话摘要
 
-    # 变更列表，每条：{"field": "current_realm", "label": "境界", "before": "x", "after": "y"}
-    changes = Column(JSON, default=list)
+    changes = Column(JSON, default=list)  # [{"field","label","before","after"}, ...] 字段级 diff
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 写入时间（UTC）
 
     __table_args__ = (
         Index("ix_char_changelog_character", "character_id"),

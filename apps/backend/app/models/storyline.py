@@ -21,8 +21,8 @@ class StoryLine(Base):
     """
     __tablename__ = "story_lines"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键；复盘 undo 里存 storyline_id
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)  # FK → projects.id
 
     name = Column(String(100), nullable=False)           # 故事线名称，如"主线：逆天改命"
     line_type = Column(String(30), default="main")       # main/sub/romance/growth/mystery/faction/antagonist
@@ -34,19 +34,19 @@ class StoryLine(Base):
     end_chapter = Column(Integer)                        # 预计在第几章结束
 
     # 关联人物（存 character_id UUID 列表）
-    related_character_ids = Column(JSON, default=list)
+    related_character_ids = Column(JSON, default=list)  # 关联人物 UUID 列表（→ characters.id）
 
-    # 关键节拍 — 每个元素：{chapter_range: "1-20", beat: "描述", milestone: "里程碑名"}
-    key_beats = Column(JSON, default=list)
+    # 关键节拍 — 每个元素：{chapter_range, beat, milestone}
+    key_beats = Column(JSON, default=list)  # 结构化节拍与里程碑
 
     # 故事线的核心冲突与解决方向
     core_conflict = Column(Text)                         # 核心矛盾是什么
     resolution_direction = Column(Text)                  # 预计如何解决
 
-    sort_order = Column(Integer, default=0)
-    extra = Column(JSON, default=dict)
+    sort_order = Column(Integer, default=0)  # 列表排序
+    extra = Column(JSON, default=dict)  # JSON 扩展字段
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间（UTC）
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())  # 更新时间（UTC）
 
     project = relationship("Project", back_populates="story_lines")

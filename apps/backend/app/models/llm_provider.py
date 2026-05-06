@@ -12,18 +12,17 @@ class LlmProvider(Base):
 
     __tablename__ = "llm_providers"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(200), nullable=False)
-    base_url = Column(String(2000), nullable=False)
-    api_key = Column(Text, nullable=True)
-    model_name = Column(String(200), nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键；cover_image_call_logs 等 FK 引用
+    name = Column(String(200), nullable=False)  # 展示名（创作端列表）
+    base_url = Column(String(2000), nullable=False)  # OpenAI 兼容网关 base URL
+    api_key = Column(Text, nullable=True)  # API Key（可空表示环境变量或未配置）
+    model_name = Column(String(200), nullable=False)  # 默认模型 id
 
-    # text = 文本生成（默认）；image = 图片生成（DALL-E / Flux 等兼容 /v1/images/generations）
-    provider_type = Column(String(20), default="text", nullable=False, server_default="text")
+    provider_type = Column(String(20), default="text", nullable=False, server_default="text")  # text=补全；image=生图网关
 
-    enabled = Column(Boolean, default=True, nullable=False)
-    is_default = Column(Boolean, default=False, nullable=False)
-    sort_order = Column(Integer, default=0, nullable=False)
+    enabled = Column(Boolean, default=True, nullable=False)  # 是否在前端可选
+    is_default = Column(Boolean, default=False, nullable=False)  # 是否默认远程提供者
+    sort_order = Column(Integer, default=0, nullable=False)  # 列表排序
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间（UTC）
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())  # 更新时间（UTC）

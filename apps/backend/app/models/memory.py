@@ -20,15 +20,14 @@ class MemoryChunk(Base):
     """
     __tablename__ = "memory_chunks"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
-    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)  # FK → projects.id
+    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)  # FK → chapters.id；提取该章时的出处（可空）
 
     # 记忆类型
-    memory_type = Column(String(30), default="event")
-    # event=事件, character_state=人物状态, foreshadow=伏笔, setting=设定确认, conflict=冲突
+    memory_type = Column(String(30), default="event")  # event / character_state / foreshadow / setting / conflict
 
-    title = Column(String(200))
+    title = Column(String(200))  # 记忆条目标题（检索展示）
     content = Column(Text, nullable=False)         # 记忆正文
     chapter_number = Column(Integer)               # 发生在第几章
     tags = Column(JSON, default=list)              # ["林默", "青云宗", "关键伏笔"]
@@ -36,8 +35,8 @@ class MemoryChunk(Base):
     # pgvector embedding — 维度由 EMBEDDING_DIM 配置项决定（nomic-embed-text = 768）
     # 如果 pgvector 未安装则跳过
     if HAS_PGVECTOR:
-        embedding = Column(Vector(settings.EMBEDDING_DIM))
+        embedding = Column(Vector(settings.EMBEDDING_DIM))  # pgvector 向量；维度见 EMBEDDING_DIM
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 写入时间（UTC）
 
     project = relationship("Project", back_populates="memory_chunks")

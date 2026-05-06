@@ -22,10 +22,10 @@ from app.database import Base
 class Scene(Base):
     __tablename__ = "scenes"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
-    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)  # 写完后绑定
-    outline_node_id = Column(UUID(as_uuid=True), ForeignKey("outline_nodes.id"), nullable=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)  # FK → projects.id
+    chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id"), nullable=True)  # FK → chapters.id；成稿后绑定章节
+    outline_node_id = Column(UUID(as_uuid=True), ForeignKey("outline_nodes.id"), nullable=True)  # FK → outline_nodes.id，对应大纲节点
 
     order = Column(Integer, nullable=False)           # 场次 1..N
     title = Column(String(200))                       # 场标题（可选）
@@ -38,7 +38,7 @@ class Scene(Base):
     location_name = Column(String(200))               # 冗余，当前自由文本
 
     # 视点与角色
-    pov_character_id = Column(UUID(as_uuid=True), ForeignKey("characters.id"), nullable=True)
+    pov_character_id = Column(UUID(as_uuid=True), ForeignKey("characters.id"), nullable=True)  # FK → characters.id，本场 POV
     characters_on_stage = Column(JSON, default=list)  # [char_id, ...] 本场在场角色
 
     # 戏剧元素
@@ -58,9 +58,9 @@ class Scene(Base):
     status = Column(String(20), default="planned")    # planned / written / reviewed
     content = Column(Text)                            # 本场正文（写完后存）
 
-    extra = Column(JSON, default=dict)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    extra = Column(JSON, default=dict)  # JSON 扩展字段
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间（UTC）
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())  # 更新时间（UTC）
 
     project = relationship("Project", back_populates="scenes")
     chapter = relationship("Chapter", back_populates="scenes")

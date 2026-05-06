@@ -27,12 +27,11 @@ class PowerSystem(Base):
     """
     __tablename__ = "power_systems"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键；Skill/Character 引用
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)  # FK → projects.id
 
     name = Column(String(100), nullable=False)           # 体系名称，如"斗气大陆修炼体系"
-    system_type = Column(String(30), default="cultivation")
-    # cultivation=修炼/境界  magic=魔法  ability=能力  tech=科技  hybrid=混合
+    system_type = Column(String(30), default="cultivation")  # cultivation / magic / ability / tech / hybrid
 
     description = Column(Text)                           # 体系整体简介与世界观地位
     levels = Column(JSON, default=list)                  # 境界列表（见上方结构说明）
@@ -46,11 +45,11 @@ class PowerSystem(Base):
     protagonist_current_rank = Column(Integer)           # 主角当前在第几境界（rank 数字）
     protagonist_end_rank = Column(Integer)               # 主角预计终点境界
 
-    sort_order = Column(Integer, default=0)
-    extra = Column(JSON, default=dict)
+    sort_order = Column(Integer, default=0)  # 多体系时排序
+    extra = Column(JSON, default=dict)  # JSON 扩展字段
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间（UTC）
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())  # 更新时间（UTC）
 
     project = relationship("Project", back_populates="power_systems")
     skills = relationship("Skill", back_populates="power_system")

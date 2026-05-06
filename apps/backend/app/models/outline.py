@@ -14,9 +14,9 @@ class OutlineNode(Base):
     """
     __tablename__ = "outline_nodes"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
-    parent_id = Column(UUID(as_uuid=True), ForeignKey("outline_nodes.id"), nullable=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键；子节点 parent_id、章节 outline_node_id 引用
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)  # FK → projects.id
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("outline_nodes.id"), nullable=True)  # FK → outline_nodes.id，父节点；None=卷根
 
     node_type = Column(String(20), default="arc")  # volume / arc / chapter_plan
     title = Column(String(300), nullable=False)
@@ -51,8 +51,7 @@ class OutlineNode(Base):
     # ── P2 戏份预算与强制 POV（三层调度核心）────────────────────
     character_screen_time = Column(JSON, default=dict)
     # {character_id: 百分比} 本章各角色戏份预算（必须遵守 genre_kit quota）
-    pov_character_id = Column(UUID(as_uuid=True), ForeignKey("characters.id"), nullable=True)
-    # 本章主要 POV 角色（强制视点，禁止全知）
+    pov_character_id = Column(UUID(as_uuid=True), ForeignKey("characters.id"), nullable=True)  # FK → characters.id，本章主 POV
 
     # ── 卷阶段标记（OPEN / RISING / TURNING / DARK_HOUR / CLIMAX / ENDING）─
     # 用于章节起草 prompt 模板分流与采样档位选择；章节级允许 override，但通常一卷一阶段。
@@ -75,10 +74,10 @@ class OutlineNode(Base):
     foreshadows_resolved = Column(JSON, default=list)
     # 本章回收的伏笔：[{id: "foreshadow_key", description: "..."}]
 
-    extra = Column(JSON, default=dict)
+    extra = Column(JSON, default=dict)  # JSON 扩展字段
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间（UTC）
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())  # 更新时间（UTC）
 
     project = relationship("Project", back_populates="outline_nodes")
     parent = relationship("OutlineNode", remote_side=[id], back_populates="children")

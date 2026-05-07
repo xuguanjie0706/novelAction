@@ -1,6 +1,6 @@
 """Add version (optimistic lock) and deleted_at (soft delete) to chapters
 
-Revision ID: f7a8b9c0d1e2
+Revision ID: f7a8b9c0d1e3
 Revises: e6f7a8b9c0d1
 Create Date: 2026-05-07 11:36:00
 """
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision = 'f7a8b9c0d1e2'
+revision = 'f7a8b9c0d1e3'
 down_revision = 'e6f7a8b9c0d1'
 branch_labels = None
 depends_on = None

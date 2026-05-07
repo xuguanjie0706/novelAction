@@ -10,6 +10,7 @@ SSE 事件格式:
   {"event": "complete",   "project_id": "uuid"}
   {"event": "error",      "step": "characters", "message": "..."}
 """
+import asyncio
 import json
 import re
 from typing import AsyncGenerator, Literal, Optional
@@ -399,19 +400,19 @@ class GenerationService:
             yield _sse("step_done", step="characters", count=len(chars),
                        preview="、".join(c.name for c in chars[:3]))
 
-            # Step 6 — 核心技能/功法
+            # Step 6-8 — 并行生成：核心技能/道具/世界设定（三者无相互依赖，可并发加速 bootstrap）
             yield _sse("step_start", step="skills", label="生成核心功法技能...")
-            skills = await self._gen_key_skills(project, ctx)
-            yield _sse("step_done", step="skills", count=len(skills))
-
-            # Step 7 — 关键道具/法宝
             yield _sse("step_start", step="items", label="生成关键道具法宝...")
-            items = await self._gen_key_items(project, ctx)
-            yield _sse("step_done", step="items", count=len(items))
-
-            # Step 8 — 世界观设定卡（纯叙事类，无专属表的内容）
             yield _sse("step_start", step="settings", label="生成世界观设定卡...")
-            settings = await self._gen_settings(project, ctx)
+
+            skills, items, settings = await asyncio.gather(
+                self._gen_key_skills(project, ctx),
+                self._gen_key_items(project, ctx),
+                self._gen_settings(project, ctx),
+            )
+
+            yield _sse("step_done", step="skills", count=len(skills))
+            yield _sse("step_done", step="items", count=len(items))
             yield _sse("step_done", step="settings", count=len(settings))
 
             # Step 9 — 卷级骨架

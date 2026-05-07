@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Any, Dict, List
+from datetime import datetime, timezone
 from app.database import get_db
 from app.models import (
     CharacterChangeLog,
@@ -15,6 +16,7 @@ from app.models import (
     MemoryChunk,
     Project,
     QualityDebt,
+    Scene,
     StoryLine,
 )
 from app.schemas import (
@@ -44,13 +46,19 @@ def resolve_quality_debts_detaching_chapter(db: Session, project_id: str, chapte
 
 
 def count_words(text: str) -> int:
-    """简易中文字数统计（去 HTML 标签）"""
+    """改进的中文字数统计：先剥离 HTML 标签，再统计 CJK 字符 + 英文/数字单词。"""
     import re
-    clean = re.sub(r"<[^>]+>", "", text or "")
-    # 中文字符 + 英文单词
-    chinese = len(re.findall(r"[一-鿿]", clean))
-    english = len(re.findall(r"[a-zA-Z]+", clean))
-    return chinese + english
+    import html
+    if not text:
+        return 0
+    # 解码 HTML 实体
+    decoded = html.unescape(text)
+    # 剥离 HTML 标签
+    clean = re.sub(r"<[^>]+>", "", decoded)
+    # 统计：CJK 统一表意文字（含扩展）+ 英文/数字单词
+    cjk = len(re.findall(r"[\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df]", clean))
+    words = len(re.findall(r"[a-zA-Z0-9]+", clean))
+    return cjk + words
 
 
 def delete_chapter_artifacts(
@@ -197,9 +205,11 @@ def clear_chapter_rewrite_derivatives(db: Session, project_id: str, chapter_id: 
 def normalize_chapter_sort_orders(db: Session, project_id: str) -> None:
     """
     统一章节排序为连续整数，避免历史数据出现重复/空洞 sort_order 导致前端显示错乱。
+    软删除章节不参与排序重整。
     """
     chapters = db.query(Chapter).filter(
-        Chapter.project_id == project_id
+        Chapter.project_id == project_id,
+        Chapter.deleted_at.is_(None)
     ).order_by(Chapter.sort_order, Chapter.created_at, Chapter.id).all()
     changed = False
     for index, chapter in enumerate(chapters):
@@ -210,12 +220,44 @@ def normalize_chapter_sort_orders(db: Session, project_id: str) -> None:
         db.commit()
 
 
+def build_scene_writing_outline(scenes: list["Scene"]) -> dict:
+    """从 Scene 列表构建结构化写作提纲，持久化到 chapter.extra.scene_writing_outline。
+    前端/AI 可直接使用此提纲生成正文或展示分场指导。
+    """
+    items = []
+    for s in scenes:
+        pov_name = None
+        if s.pov_character:
+            pov_name = s.pov_character.name
+        items.append({
+            "order": s.order,
+            "title": s.title or f"第{s.order}场",
+            "time": s.time,
+            "location": s.location_name,
+            "pov_character_id": str(s.pov_character_id) if s.pov_character_id else None,
+            "pov_name": pov_name,
+            "goal": s.goal,
+            "conflict": s.conflict,
+            "turn": s.turn,
+            "hook": s.hook,
+            "hook_strength": s.hook_strength,
+            "word_budget": s.word_budget,
+            "pacing": s.pacing,
+        })
+    return {
+        "scenes": items,
+        "total_scenes": len(items),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @router.get("", response_model=List[ChapterOut], include_in_schema=False)
 @router.get("/", response_model=List[ChapterOut])
 def list_chapters(project_id: str, db: Session = Depends(get_db)):
     normalize_chapter_sort_orders(db, project_id)
     return db.query(Chapter).filter(
-        Chapter.project_id == project_id
+        Chapter.project_id == project_id,
+        Chapter.deleted_at.is_(None)  # 软删除过滤
     ).order_by(Chapter.sort_order).all()
 
 
@@ -224,19 +266,32 @@ def list_chapters(project_id: str, db: Session = Depends(get_db)):
 def create_chapter(project_id: str, payload: ChapterCreate, db: Session = Depends(get_db)):
     normalize_chapter_sort_orders(db, project_id)
     last = db.query(Chapter).filter(
-        Chapter.project_id == project_id
+        Chapter.project_id == project_id, Chapter.deleted_at.is_(None)
     ).order_by(Chapter.sort_order.desc()).first()
     next_sort_order = (last.sort_order + 1) if last else 0
 
     chapter = Chapter(
         project_id=project_id,
         word_count=count_words(payload.content),
+        version=1,
         **payload.model_dump(exclude={"sort_order"}),
         sort_order=next_sort_order,
     )
     db.add(chapter)
     db.commit()
     db.refresh(chapter)
+
+    # 创建后立即尝试绑定场景提纲（若有匹配的 Scene）
+    if chapter.outline_node_id:
+        related_scenes = db.query(Scene).filter(
+            (Scene.chapter_id == chapter.id) | (Scene.outline_node_id == chapter.outline_node_id)
+        ).order_by(Scene.order).all()
+        if related_scenes:
+            outline = build_scene_writing_outline(related_scenes)
+            chapter.extra = {"scene_writing_outline": outline}
+            db.commit()
+            db.refresh(chapter)
+
     return chapter
 
 
@@ -318,7 +373,7 @@ def list_chapter_debrief_apply_records(
 @router.get("/{chapter_id}", response_model=ChapterOut)
 def get_chapter(project_id: str, chapter_id: str, db: Session = Depends(get_db)):
     chapter = db.query(Chapter).filter(
-        Chapter.id == chapter_id, Chapter.project_id == project_id
+        Chapter.id == chapter_id, Chapter.project_id == project_id, Chapter.deleted_at.is_(None)
     ).first()
     if not chapter:
         raise HTTPException(404, "Chapter not found")
@@ -328,15 +383,39 @@ def get_chapter(project_id: str, chapter_id: str, db: Session = Depends(get_db))
 @router.patch("/{chapter_id}", response_model=ChapterOut)
 def update_chapter(project_id: str, chapter_id: str, payload: ChapterUpdate, db: Session = Depends(get_db)):
     chapter = db.query(Chapter).filter(
-        Chapter.id == chapter_id, Chapter.project_id == project_id
+        Chapter.id == chapter_id, Chapter.project_id == project_id, Chapter.deleted_at.is_(None)
     ).first()
     if not chapter:
         raise HTTPException(404, "Chapter not found")
+
     data = payload.model_dump(exclude_unset=True)
+
+    # 乐观锁检查
+    if "version" in data and data["version"] != chapter.version:
+        raise HTTPException(409, "Chapter has been modified by another process. Please refresh and retry.")
+
     if "content" in data:
         data["word_count"] = count_words(data["content"])
-    for field, value in data.items():
-        setattr(chapter, field, value)
+
+    # 使用嵌套事务包裹多表操作（清理派生数据 + 更新章节）
+    with db.begin_nested():
+        for field, value in data.items():
+            if field != "version":  # version 由系统自增
+                setattr(chapter, field, value)
+        chapter.version = (chapter.version or 1) + 1
+        db.flush()  # 确保 version 更新在事务内
+
+        # 场景-章节联动：若本章有 Scene 蓝图且尚未生成写作提纲，则自动构建并持久化
+        if "content" in data and (not chapter.extra or not chapter.extra.get("scene_writing_outline")):
+            related_scenes = db.query(Scene).filter(
+                (Scene.chapter_id == chapter.id) | (Scene.outline_node_id == chapter.outline_node_id)
+            ).order_by(Scene.order).all()
+            if related_scenes:
+                outline = build_scene_writing_outline(related_scenes)
+                current_extra = dict(chapter.extra or {})
+                current_extra["scene_writing_outline"] = outline
+                chapter.extra = current_extra
+
     db.commit()
     normalize_chapter_sort_orders(db, project_id)
     db.refresh(chapter)
@@ -346,14 +425,21 @@ def update_chapter(project_id: str, chapter_id: str, payload: ChapterUpdate, db:
 @router.delete("/{chapter_id}", status_code=204)
 def delete_chapter(project_id: str, chapter_id: str, db: Session = Depends(get_db)):
     chapter = db.query(Chapter).filter(
-        Chapter.id == chapter_id, Chapter.project_id == project_id
+        Chapter.id == chapter_id, Chapter.project_id == project_id, Chapter.deleted_at.is_(None)
     ).first()
     if not chapter:
         raise HTTPException(404, "Chapter not found")
-    # 含复盘缓存、本章伏笔与 resolved 外键等；质量债务改为已修复并解除 chapter_id，不硬删
-    clear_chapter_rewrite_derivatives(db, project_id, chapter_id)
-    resolve_quality_debts_detaching_chapter(db, project_id, chapter_id)
-    db.delete(chapter)
+
+    # 软删除 + 清理派生数据（使用嵌套事务保证原子性）
+    with db.begin_nested():
+        from datetime import datetime, timezone
+        chapter.deleted_at = datetime.now(timezone.utc)
+        chapter.version = (chapter.version or 1) + 1
+        # 清理派生数据（记忆、索引、质量债务解绑等）
+        clear_chapter_rewrite_derivatives(db, project_id, chapter_id)
+        resolve_quality_debts_detaching_chapter(db, project_id, chapter_id)
+        db.flush()
+
     db.commit()
     normalize_chapter_sort_orders(db, project_id)
 

@@ -21,6 +21,10 @@ class Chapter(Base):
     status = Column(String(20), default="draft")  # draft / writing / done / reviewed / needs_review（质量门控达到最大重写次数仍未达标时暂停）
     gated_draft_attempts = Column(Integer, default=0)  # 质量门控已尝试次数（gated-draft-stream 循环计数）
 
+    version = Column(Integer, default=1, nullable=False)  # 乐观锁版本号
+    deleted_at = Column(DateTime(timezone=True), nullable=True)  # 软删除时间戳（None 表示未删除）
+    extra = Column(JSON, default=dict)  # 扩展元数据：scene_writing_outline、AI 生成提示等
+
     last_quality_score = Column(Float)  # 最近一次 AI 质检综合分
     last_quality_report = Column(JSON)  # 质检报告结构化结果
     quality_checked_at = Column(DateTime(timezone=True))  # 最近一次质检时间

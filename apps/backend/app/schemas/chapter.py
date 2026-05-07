@@ -34,6 +34,8 @@ class ChapterOut(BaseModel):
     quality_checked_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime]
+    version: int = 1
+    extra: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True

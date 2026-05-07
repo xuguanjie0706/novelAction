@@ -233,6 +233,9 @@ class ChapterIndexPayload(BaseModel):
     story_day: Optional[str] = None
     core_events: List[dict | str] = []
     first_appearances: List[dict] = []
+    # 新格式：AI 输出统一数组，后端解析层按 action 拆分后填入下方两字段
+    foreshadow_updates: List[dict] = []
+    # 下游消费字段（由 _split_foreshadow_updates 填充，或前端直接提交时使用）
     actual_foreshadows_laid: List[dict] = []
     actual_foreshadows_resolved: List[dict] = []
     ending_hook: Optional[str] = None
@@ -276,6 +279,9 @@ class ChapterDebriefRequest(BaseModel):
     speech_kit_updates: List[dict] = []  # [{character_id, new_signature_words, new_sample_dialogues, evolution_note}]
     #: 读者期待管理：本章新做出的承诺（章末预告、卷末预告、名字暗示等）
     new_reader_promises: List[dict] = []  # [{promise_text, promise_type, expected_within_chapters, priority}]
+    #: 承诺兑现闭环：本章已兑现的承诺原文（由 auto_debrief 提取，经前端确认后提交）
+    #: apply_debrief 将对 open ReaderPromise 做模糊匹配并标记 fulfilled。
+    fulfilled_promise_texts: List[str] = []
 
 
 class AutoDebriefRequest(BaseModel):

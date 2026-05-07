@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Any, Dict, List
 from datetime import datetime, timezone
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models import (
     CharacterChangeLog,
     Chapter,
@@ -256,90 +256,6 @@ def bind_scenes_to_chapter(db: Session, project_id: str, chapter: "Chapter") -> 
     return len(unbound_scenes)
 
 
-def detect_fulfilled_promises(
-    db: Session,
-    project_id: str,
-    chapter: "Chapter",
-) -> int:
-    """
-    解析章节速查索引中的「兑现承诺」条目，将匹配的 open ReaderPromise 标记为 fulfilled。
-
-    匹配策略（宽松模糊匹配，优先长词重叠）：
-    1. 索引条目完整包含在承诺原文中，或承诺原文前 20 字包含在条目中
-    2. 索引条目为"无"或空时跳过
-
-    副作用：
-    - ReaderPromise.status = "fulfilled"
-    - ReaderPromise.fulfilled_chapter_id = chapter.id
-    - ReaderPromise.fulfilled_chapter_number = chapter.sort_order
-
-    @returns 实际标记为 fulfilled 的承诺数量。
-    """
-    import re
-    from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
-
-    content = chapter.content or ""
-    # 剥离 HTML 标签，提取纯文本
-    import html
-    plain = re.sub(r"<[^>]+>", "", html.unescape(content))
-
-    _, index_block = split_plain_manuscript_and_index_block(plain)
-    if not index_block:
-        return 0
-
-    # 解析「**兑现承诺**：xxx」或「兑现承诺：xxx」行，支持多条（逗号/顿号/换行分隔）
-    raw_entries: list[str] = re.findall(
-        r"\*{0,2}兑现承诺\*{0,2}[：:]\s*(.+)", index_block
-    )
-    fulfilled_texts: list[str] = []
-    for entry in raw_entries:
-        # 按逗号、顿号、分号拆分，过滤"无"和空串
-        parts = re.split(r"[,，；;、]", entry)
-        for p in parts:
-            p = p.strip().strip("「」『』《》【】""''")
-            if p and p not in ("无", "无。", "暂无"):
-                fulfilled_texts.append(p)
-
-    if not fulfilled_texts:
-        return 0
-
-    open_promises: list[ReaderPromise] = (
-        db.query(ReaderPromise)
-        .filter(
-            ReaderPromise.project_id == project_id,
-            ReaderPromise.status == "open",
-        )
-        .all()
-    )
-
-    def _promise_fuzzy_match(ft: str, promise_text: str, ngram: int = 4) -> bool:
-        """
-        宽松匹配：
-        1. 精确子串：ft 包含在 promise_text 中，或 promise_text 前 20 字包含在 ft 中
-        2. 4-gram 重叠：ft 中任意 ngram 长度的子串出现在 promise_text 里（处理 AI 轻微改写）
-        """
-        if ft in promise_text or promise_text[:20] in ft:
-            return True
-        if len(ft) >= ngram:
-            for i in range(len(ft) - ngram + 1):
-                if ft[i:i + ngram] in promise_text:
-                    return True
-        return False
-
-    count = 0
-    for promise in open_promises:
-        promise_key = promise.promise_text or ""
-        for ft in fulfilled_texts:
-            if _promise_fuzzy_match(ft, promise_key):
-                promise.status = "fulfilled"
-                promise.fulfilled_chapter_id = chapter.id
-                promise.fulfilled_chapter_number = chapter.sort_order
-                count += 1
-                break  # 一条承诺只匹配一次
-
-    return count
-
-
 def build_scene_writing_outline(scenes: list["Scene"]) -> dict:
     """从 Scene 列表构建结构化写作提纲，持久化到 chapter.extra.scene_writing_outline。
     前端/AI 可直接使用此提纲生成正文或展示分场指导。
@@ -528,7 +444,12 @@ def update_chapter(project_id: str, chapter_id: str, payload: ChapterUpdate, db:
         # 场景-章节联动：保存内容时同步执行两个闭环操作
         if "content" in data:
             # ① 绑定 Scene.chapter_id + 更新 Scene.status（planned → written）
-            bind_scenes_to_chapter(db, project_id, chapter)
+            # 仅当正文已有实质性内容（去 HTML 纯文本 > 800 字符）时才绑定，
+            # 避免自动保存草稿阶段就把 Scene 标记为 written。
+            import re as _re, html as _html
+            _plain = _re.sub(r"<[^>]+>", "", _html.unescape(chapter.content or "")).strip()
+            if len(_plain) > 800:
+                bind_scenes_to_chapter(db, project_id, chapter)
 
             # ② 构建/更新写作提纲（前端展示用，仅在尚未生成时构建）
             if not chapter.extra or not chapter.extra.get("scene_writing_outline"):
@@ -545,18 +466,10 @@ def update_chapter(project_id: str, chapter_id: str, payload: ChapterUpdate, db:
     normalize_chapter_sort_orders(db, project_id)
     db.refresh(chapter)
 
-    # ③ 兑现承诺检测：解析索引块中的「兑现承诺」，更新 ReaderPromise 状态
-    #    置于 commit 之后，确保 chapter.content 已持久化；不进入嵌套事务，失败不回滚主流程
-    if "content" in data and chapter.content:
-        try:
-            fulfilled_count = detect_fulfilled_promises(db, project_id, chapter)
-            if fulfilled_count > 0:
-                db.commit()
-        except Exception:  # noqa: BLE001
-            pass  # 承诺检测失败不影响章节保存
-
-    # 写章后异步生成 embedding（章节语义检索），不阻塞响应
+    # ③ 写章后异步生成 embedding（章节语义检索），不阻塞响应
     # 注意：传入 SessionLocal（不是 get_db），_do_embed_entity 内部直接实例化 session
+    # 承诺兑现检测已迁移至复盘 apply_debrief（从结构化 fulfilled_promise_texts 读取），
+    # 不再在 update_chapter 阶段从正文字符串解析。
     if "content" in data and chapter.content:
         try:
             embed_entity_async("chapter", chapter.id, chapter.content, SessionLocal)

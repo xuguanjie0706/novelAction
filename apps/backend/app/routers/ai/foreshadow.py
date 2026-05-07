@@ -9,8 +9,17 @@ from app.routers.ai.schemas import ChapterIndexPayload
 from app.utils.chapter_numbering import display_chapter_number
 
 # 中文与 F 之间没有空格时，`\b` 词边界不成立，会导致「回收F-003」类文本漏提编号。
+# 末尾 `(?![0-9\-_])` 确保 `F-020-01` / `F-020_2` 这类 AI 自创的"子编号"格式
+# 不会被截取出父编号 `F-020` 而错走 update 分支（详见 2026-05-07 修复记录）。
 _F_CODE_IN_PROSE_RE = re.compile(
-    r"(?<![A-Za-z0-9_])F[-_ ]?(\d{1,4})(?![0-9])",
+    r"(?<![A-Za-z0-9_])F[-_ ]?(\d{1,4})(?![0-9\-_])",
+    flags=re.IGNORECASE,
+)
+
+# 描述前缀清洗用：允许可选的 `-NN` / `_NN` 子编号一并剥离，
+# 避免 `F-020-01：xxx` 经过清洗后残留成 `01：xxx`。
+_F_CODE_DESC_PREFIX_RE = re.compile(
+    r"^\s*F[-_ ]?\d{1,4}(?:[-_]\d{1,4})?\s*[:：\-—]\s*",
     flags=re.IGNORECASE,
 )
 
@@ -58,19 +67,23 @@ def foreshadow_payload_from_index_item(item: dict, default_status: str = "open")
     if not text:
         return None
 
-    code = None
-    code_match = _F_CODE_IN_PROSE_RE.search(text)
-    if code_match:
-        code = f"F-{int(code_match.group(1)):03d}"
+    # 优先读显式 code 字段（新格式，_split_foreshadow_updates 已规范化为 F-NNN）；
+    # 仅当显式字段缺失时，才从 description 文本中用正则提取（兼容旧缓存/手动编辑路径）。
+    explicit_code = item.get("code")
+    if explicit_code and str(explicit_code).strip():
+        m = _F_CODE_IN_PROSE_RE.search(str(explicit_code).strip())
+        code = f"F-{int(m.group(1)):03d}" if m else None
+    else:
+        code = None
+        code_match = _F_CODE_IN_PROSE_RE.search(text)
+        if code_match:
+            code = f"F-{int(code_match.group(1)):03d}"
 
-    description = re.sub(
-        r"^\s*F[-_ ]?\d{1,4}\s*[:：\-—]\s*",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    ).strip()
+    description = _F_CODE_DESC_PREFIX_RE.sub("", text).strip()
     description = description or text
 
+    # planned_action：新格式中 _split_foreshadow_updates 已按 action 字段赋值；
+    # 旧格式走原有逻辑（文本推断）兜底。
     planned_action = str(item.get("planned_action") or "").strip().lower()
     if planned_action not in {"resolve", "develop"}:
         planned_action = "develop" if "铺垫" in text else "resolve"

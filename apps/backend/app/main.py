@@ -414,7 +414,7 @@ async def _on_startup() -> None:
     sync 路由通过 run_coroutine_threadsafe 将 embedding 协程提交到此 loop。
     """
     from app.services.embedding_service import set_main_event_loop
-    set_main_event_loop(asyncio.get_event_loop())
+    set_main_event_loop(asyncio.get_running_loop())
 
 
 app.add_middleware(

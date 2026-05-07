@@ -1478,43 +1478,17 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             if parts:
                 positioning_brief = "【作品基本面（必须每章贯彻）】\n" + "\n".join(parts)
 
+        # ── system 瘦身：只保留身份 + 核心原则；硬约束（钩子/严禁/截图/POV/quota）下沉到 ──
+        # ── user prompt 末尾的「写作前最后重读」块，紧贴生成指令，遵从率显著高于堆在 system 顶部 ──
         system = """你是拥有30年经验的网络小说作家，文笔老练，深谙追读节奏。
-你的任务是根据章节计划和故事背景，为作者提供一段高质量的正文文字。
+你的任务是根据章节计划与故事背景，输出一段高质量的本章正文。
 
-写作原则：
-1. 严格遵循「开篇钩子」意图，第一句话就要抓人
-2. 世界观、人物当前境界和状态要自然融入，不要与已知人物设定矛盾
-3. 人物的行动和心理要符合其弧线和动机
-4. 注意上一章结尾的衔接，保持情感和节奏的连续性
-5. 如果本章有实力里程碑（如突破境界），要让这一刻有分量
-6. 故事线进展要顺势推进，切勿无视当前活跃的冲突线
-7. 每一场戏都必须服务作品基本面：读者定位、核心命题、爽点承诺、禁忌边界
-8. 写完正文后，必须追加「章节速查索引」区块，使用固定模板，便于后续复盘与连续性追踪
-9. 直接给出正文，不要解释、不要旁白、不要说"好的"之类的废话
-
-【章末钩子硬约束（必须遵守）】
-- 章节最后一段（不超过 80 字）必须满足以下之一：
-  A) 出现新的未解之谜或揭示
-  B) 强敌 / 关键 NPC 登场但未交手
-  C) 关键人物开口未说完，话被掐断
-  D) 主角被推到决策悬崖（必须立刻选）
-- 严禁章末用总结句、抒情句、陈述性收束（如"夜更深了""一切归于平静"）
-- 钩子必须紧贴正文事件，不允许另起一段意义不明的"画外音"
-
-【反面例子 / 严禁清单】
-- 严禁流水账连接词："然后……接着……于是……此时……"
-- 严禁排比式抒情开篇："少年抬头望向天空""天地间一片寂静""时间仿佛静止"
-- 严禁单段心理独白超过 200 字
-- 严禁解释性旁白连续 3 句以上（让事件本身说话）
-- 严禁滥用"突然"作为段落起点
-- 严禁出现 AI 自指词（"作为一个 AI""根据您的要求""我来为您"）
-
-【截图时刻硬要求（每章至少1处）】
-每章必须设计至少一处「截图时刻」——让读者忍不住截图转发的句子。三种档次任选其一：
-A) 狠话档：主角或反派说出一句话，读者觉得"这句话太绝了"（要有力度，不要矫情）
-B) 细节档：一个让人背脊发凉或忍俊不禁的环境/动作细节，五感具象
-C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，信息量大
-「截图时刻」不需要另起一段标注，自然融入正文即可。"""
+【核心写作原则】
+1. 严格落实「开篇钩子」意图，第一句话就要抓人
+2. 世界观与人物当前境界、状态、技能须与既有设定吻合，不得矛盾
+3. 人物的行动、心理须符合其弧线、动机、价值观；既有故事线必须顺势推进
+4. 上一章结尾、本章实力里程碑、情感基调要有分量地接续
+5. 直接给出正文：不要解释、不要旁白、不要"好的"之类的废话；不要追加任何索引/总结/元信息块；不要 AI 自指词"""
 
         genre_gr = genre_guardrail_text(genre)
         if genre_gr.strip():
@@ -1527,17 +1501,45 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
         if prev_directives.strip():
             system = system + "\n\n【上一章复盘闭环指令（最高优先级，必须先满足再写正文）】\n" + prev_directives.strip()
 
-        # P2-W5-2 戏份预算 + 强制 POV 硬约束（三层调度核心）
-        pov_constraint = ""
+        # ── 写作硬约束：拼成 final_reminder 块，放在 user prompt 末尾紧贴生成指令 ──
+        # 这些是「高频违反 / 必须看见」的规则，放 system 容易被中段稀释；移到末尾后召回率更高。
+        final_reminder = """【⚠️ 写作前最后重读（违反任意一条视为本章不合格）】
+
+▍章末钩子（最后一段 ≤80 字，必须满足以下之一）
+A) 出现新的未解之谜或揭示
+B) 强敌 / 关键 NPC 登场但未交手
+C) 关键人物开口未说完，话被掐断
+D) 主角被推到决策悬崖
+严禁章末用总结句、抒情句、陈述性收束（如「夜更深了」「一切归于平静」）；钩子必须紧贴正文事件，不允许另起一段意义不明的「画外音」。
+
+▍严禁清单
+- 流水账连接词：「然后…接着…于是…此时…」
+- 排比式抒情开篇：「少年抬头望向天空」「天地间一片寂静」「时间仿佛静止」
+- 单段心理独白超过 200 字
+- 解释性旁白连续 3 句以上（让事件本身说话）
+- 滥用「突然」作为段落起点
+- AI 自指词（「作为一个 AI」「根据您的要求」「我来为您」）
+
+▍截图时刻（每章至少 1 处，自然融入正文，不需要另起段落标注）
+A) 狠话档：主角或反派一句话让读者觉得「太绝了」（要有力度，不要矫情）
+B) 细节档：让人背脊发凉或忍俊不禁的五感具象细节
+C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
+
+▍每一场戏都必须服务作品基本面：读者定位、核心命题、爽点承诺、禁忌边界。"""
+
+        # P2-W5-2 三层调度硬约束按需追加
         if pov_character_name:
-            pov_constraint = f"\n【强制 POV】本章必须严格使用 {pov_character_name} 的第一人称/第三人称有限视点写作，严禁全知视角或切换到其他角色 POV。"
-        screen_time_constraint = ""
+            final_reminder += (
+                f"\n\n▍强制 POV：{pov_character_name}\n"
+                "必须使用该角色的第一人称或第三人称有限视点，严禁全知视角或中途切换 POV。"
+            )
         if character_screen_time:
-            st = ", ".join([f"{k}:{v}%" for k, v in character_screen_time.items()])
-            screen_time_constraint = f"\n【戏份预算（必须严格遵守）】{st}。若某角色戏份偏差超过 ±5%，本章判不合格。"
-        quota_constraint = "\n【配角配额硬约束】本章在场命名角色不得超过 genre_kit 规定的 quota（主1 + 核心配角3 + 反派2 + 师长2）。多余角色必须合并或用无名路人处理。"
-        if pov_constraint or screen_time_constraint:
-            system = system + "\n\n【P2 三层调度硬约束】" + pov_constraint + screen_time_constraint + quota_constraint
+            st = "、".join(f"{k} {v}%" for k, v in character_screen_time.items())
+            final_reminder += f"\n\n▍戏份预算（建议在 ±5% 内）：{st}"
+        final_reminder += (
+            "\n\n▍配角配额：本章在场命名角色 ≤ 主1 + 核心配角3 + 反派2 + 师长2；"
+            "多余角色合并或用无名路人（如「一名弟子」「路人」）处理。"
+        )
 
         # 根据大纲 word_target 动态计算续写字数
         full_target = max(1500, int(word_target or 2300))
@@ -1636,25 +1638,22 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
         if user_prompt and user_prompt.strip():
             extra = f"\n\n【作者补充要求】\n{self._clip_context(user_prompt, 800, 4000)}"
 
-        # 分场蓝图：有数据时以独立区块注入，覆盖平铺式单字段描述的细节不足
-        scene_blueprint_part = (
-            f"\n{self._clip_context(scene_blueprint, 800, 6000)}"
-            if scene_blueprint and scene_blueprint.strip()
-            else ""
-        )
+        # ── 分场蓝图：有数据时以「权威结构」标签注入，并提示下方 outline 平铺字段降级为风格参考 ──
+        # 当前 Bootstrap 仅为第 1 章生成 Scene 记录；其余章节 blueprint 为空，回退到 outline 平铺。
+        # 通过显式 authority 声明，避免 AI 在两套结构间漂移。
+        has_blueprint = bool(scene_blueprint and scene_blueprint.strip())
+        if has_blueprint:
+            scene_blueprint_part = (
+                "\n【⚡ 本章权威结构 · 分场计划（必须按场号顺序逐场推进，每场字数预算 ±15% 内）】\n"
+                f"{self._clip_context(scene_blueprint, 800, 6000)}"
+            )
+            outline_authority_note = "  （已提供分场计划，下列字段仅供风格/方向参考，结构请以分场计划为准）"
+        else:
+            scene_blueprint_part = ""
+            outline_authority_note = ""
 
-        index_template = """
-【章节速查索引输出模板（必须追加在正文结尾）】
-### ch_章节号（3位补零）　章节标题
-**核心事件**：
-1. 事件1
-2. 事件2
-3. 事件3
-**首次出场**：角色A（身份）
-**章末钩子强度**：⭐到⭐⭐⭐⭐⭐（并在括号内写一句钩子描述）
-**伏笔埋设**：F-编号（伏笔描述，ch_回收章号回收）
-**兑现承诺**：（本章兑现的读者承诺，逐条写承诺原文；若本章无兑现则写「无」）
-"""
+        # 注：章节速查索引区块由复盘环节（auto_extract_debrief）统一产出，写正文阶段不再追加模板，
+        # 把 token 预算和模型注意力全部留给正文质量。
 
         prompt = f"""【立意与类型 / PREMISE】
 {premise_part}
@@ -1671,7 +1670,7 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
 {plot_dossier_part}
 {quality_debt_part}
 {reader_promise_part}
-【本章大纲计划】
+【本章大纲计划】{outline_authority_note}
 标题：{chapter_title}{day_part}
 开篇钩子：{outline_hook or "（未填写）"}
 核心事件：{outline_summary or "（未填写）"}
@@ -1679,8 +1678,9 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
 章末方向：{outline_highlight or "（未填写）"}{milestone_part}{tone_part}
 {f"伏笔管理：{outline_foreshadow}" if outline_foreshadow else ""}{manifest_constraint}
 {scene_blueprint_part}
-{task_line}
-{index_template}{extra}"""
+{task_line}{extra}
+
+{final_reminder}"""
 
         max_tok = max_tokens_draft_stream(large_context)
         stream_ctx: dict = {
@@ -1702,6 +1702,80 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
             yield chunk
 
     # ── 自动复盘提取 ──────────────────────────────────
+
+    @staticmethod
+    def _split_foreshadow_updates(chapter_index: dict) -> dict:
+        """将 AI 输出的 foreshadow_updates（统一格式）拆分为下游所需的两个数组。
+
+        新格式：每条带显式 action（lay/develop/resolve）和 code 字段。
+        兼容旧格式：若 foreshadow_updates 为空，则回退读取 actual_foreshadows_laid /
+        actual_foreshadows_resolved（旧版 AI 输出或缓存数据）。
+
+        返回键：actual_foreshadows_laid、actual_foreshadows_resolved
+        两数组的 item 均携带显式 code 字段（可为 None），供 foreshadow_payload_from_index_item 优先读取。
+        """
+        laid: list[dict] = []
+        resolved: list[dict] = []
+
+        raw_updates = chapter_index.get("foreshadow_updates") or []
+        if raw_updates and isinstance(raw_updates, list):
+            for item in raw_updates[:15]:
+                if not isinstance(item, dict):
+                    continue
+                desc = (item.get("description") or "").strip()
+                if not desc:
+                    continue
+                action = str(item.get("action") or "lay").strip().lower()
+                # 显式 code 字段：统一规范化为 F-NNN 或 None
+                raw_code = item.get("code")
+                code: str | None = None
+                if raw_code:
+                    import re as _re_fs
+                    m = _re_fs.search(r"F[-_ ]?(\d{1,4})", str(raw_code).strip(), flags=_re_fs.IGNORECASE)
+                    code = f"F-{int(m.group(1)):03d}" if m else None
+
+                entry: dict = {
+                    "code": code,
+                    "title": (item.get("title") or "").strip()[:100] or None,
+                    "description": desc,
+                }
+                if action in ("lay",):
+                    dc = item.get("deadline_chapter")
+                    entry["deadline_chapter"] = int(dc) if isinstance(dc, (int, float)) else 0
+                    entry["status"] = "open"
+                    laid.append(entry)
+                else:
+                    # develop / resolve 都归入已回收/推进数组，由 foreshadow.py 按 planned_action 处理
+                    entry["planned_action"] = "resolve" if action == "resolve" else "develop"
+                    resolved.append(entry)
+        else:
+            # ── 兼容旧格式（缓存或老版 AI 输出）──
+            for item in (chapter_index.get("actual_foreshadows_laid") or [])[:10]:
+                if not isinstance(item, dict) or not item.get("description"):
+                    continue
+                dc = item.get("deadline_chapter")
+                laid.append({
+                    "code": item.get("code") or None,
+                    "title": (item.get("title") or "").strip()[:100] or None,
+                    "description": item.get("description", ""),
+                    "status": item.get("status", "open"),
+                    "deadline_chapter": int(dc) if isinstance(dc, (int, float)) else 0,
+                })
+            for item in (chapter_index.get("actual_foreshadows_resolved") or [])[:10]:
+                if not isinstance(item, dict) or not item.get("description"):
+                    continue
+                resolved.append({
+                    "code": item.get("code") or None,
+                    "title": (item.get("title") or "").strip()[:100] or None,
+                    "description": item.get("description", ""),
+                    "planned_action": item.get("planned_action", "resolve"),
+                })
+
+        return {
+            "actual_foreshadows_laid": laid,
+            "actual_foreshadows_resolved": resolved,
+        }
+
     async def auto_extract_debrief(
         self,
         chapter_content: str,
@@ -1764,7 +1838,7 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
 2. 哪些人物习得了新技能
 3. 哪些故事线有了推进（节拍）
 4. 哪些信息来源需要记录，避免后文凭空知道信息
-5. 哪些伏笔被埋下或回收，避免后文突然出现无前因的设定（chapter_index 中回收条目须在 description 内写明全局伏笔编号 **F-xxx**，以便更新伏笔管理表；新埋伏笔建议同样带 **F-编号：** 前缀以便对齐）
+5. 哪些伏笔被埋下、推进或回收，避免后文突然出现无前因的设定（在 chapter_index.foreshadow_updates 中用显式 "code" 字段标注全局伏笔编号，回收/推进条目必须填 code，新埋伏笔 code 可为 null 由系统分配）
 6. 哪些新道具/法宝、功法/技能、势力需要收入系统，或已有资产状态发生变化
 7. 生成章节索引（chapter_index）：完全依据上方叙事正文归纳；须与正文事实一致
 8. 本章是否出现了不在现有角色库中、且值得长期追踪的新角色（new_characters）
@@ -1928,9 +2002,30 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
     "story_day": "故事内时间（简体中文），如「第8日」「首日（夜→晨）」；未知则为空字符串",
     "core_events": ["本章实际发生的核心事件1", "核心事件2"],
     "first_appearances": [{{"character_id": "可为空", "name": "首次出场人物名"}}],
-    "actual_foreshadows_laid": [{{"description": "实际写进正文的新伏笔；建议「F-编号：悬念描述」，全新伏笔也可仅写描述由系统分配编号", "status": "open", "deadline_chapter": 0}}],
-    "actual_foreshadows_resolved": [{{"description": "本章回收的伏笔；每条必须以「F-编号：」开头（引用伏笔表中待回收条目），勿省略编号"}}],
-    （deadline_chapter 填写规则：以「多少章之内必须回收」来估算最晚章号；短伏笔（悬念型）<=3章内，中伏笔（设定型）<=15章，长伏笔（主线型）<=全卷章数；0表示不限期，但强烈建议每条伏笔都有明确 deadline。）
+    "foreshadow_updates": [
+      {{
+        "action": "lay",
+        "code": null,
+        "title": "简短标题（5字以内）",
+        "description": "伏笔内容",
+        "deadline_chapter": 5
+      }},
+      {{
+        "action": "develop",
+        "code": "F-007",
+        "title": "简短标题",
+        "description": "本章如何进一步铺垫/加深的"
+      }},
+      {{
+        "action": "resolve",
+        "code": "F-003",
+        "title": "简短标题",
+        "description": "本章以何种方式完整回收的"
+      }}
+    ],
+    （action 枚举：lay=本章新埋，develop=推进已有伏笔但未收尾，resolve=本章完整回收。
+      code 规则：lay 时可为 null 由系统分配编号；develop/resolve 必须填写伏笔表中已有的 F-xxx 编号，勿省略。
+      deadline_chapter 仅 lay 时填写，以全书章号估算最晚回收章；0 表示不限期。）
     "ending_hook": "章末钩子描述",
     "hook_strength": 1,
     "continuity_notes": [{{"severity": "low/medium/high", "note": "生成或正文中发现的连续性风险"}}]
@@ -1955,6 +2050,9 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
       "priority": 5,
       "audience_aware": 4
     }}
+  ],
+  "fulfilled_promise_texts": [
+    "本章已兑现的承诺原文或提炼（每条一个字符串）；正文中以具体行动/对话/事件落实了之前的章末预告/主角宣言/名字暗示等，则视为兑现。若本章无兑现则留空数组 []。"
   ],
   "next_chapter_directives": [
     {{
@@ -2063,19 +2161,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                     item for item in (chapter_index.get("first_appearances") or [])[:8]
                     if isinstance(item, dict) and (item.get("name") or item.get("character_id"))
                 ],
-                "actual_foreshadows_laid": [
-                    {
-                        "description": item.get("description", ""),
-                        "status": item.get("status", "open"),
-                        "deadline_chapter": int(item["deadline_chapter"]) if isinstance(item.get("deadline_chapter"), (int, float)) else 0,
-                    }
-                    for item in (chapter_index.get("actual_foreshadows_laid") or [])[:10]
-                    if isinstance(item, dict) and item.get("description")
-                ],
-                "actual_foreshadows_resolved": [
-                    item for item in (chapter_index.get("actual_foreshadows_resolved") or [])[:10]
-                    if isinstance(item, dict) and item.get("description")
-                ],
+                **self._split_foreshadow_updates(chapter_index),
                 "ending_hook": (chapter_index.get("ending_hook") or "").strip(),
                 "hook_strength": hook_strength,
                 "continuity_notes": [

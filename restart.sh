@@ -62,6 +62,14 @@ else
   exit 1
 fi
 
+EXPECTED_PYTHON_VERSION="3.12.7"
+ACTUAL_PYTHON_VERSION="$("${VENV_PYTHON}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")')"
+if [[ "${ACTUAL_PYTHON_VERSION}" != "${EXPECTED_PYTHON_VERSION}" ]]; then
+  echo "错误: 当前后端虚拟环境 Python 版本为 ${ACTUAL_PYTHON_VERSION}，必须为 ${EXPECTED_PYTHON_VERSION}。"
+  echo "请执行: BOOTSTRAP_RECREATE_VENV=1 bash bootstrap.sh"
+  exit 1
+fi
+
 if [[ ! -d "${ROOT}/apps/client/node_modules" ]] || [[ ! -d "${ROOT}/apps/frontend/node_modules" ]]; then
   echo "提示: 未找到 apps/client 或 apps/frontend 的 node_modules。"
   echo "  请在仓库根目录执行: bash bootstrap.sh"

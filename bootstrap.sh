@@ -42,20 +42,16 @@ read_embed_python_version() {
   echo "3.12.7"
 }
 
-# 后端依赖（psycopg2-binary 等）按 CPython 3.12 验证；3.13+ 常出现编译/API 错误
+# 后端统一强制 CPython 3.12.7，避免团队环境漂移（尤其是误用 3.9）
 normalize_backend_python_version() {
   local v="${1:-}"
-  if [ -z "$v" ]; then
+  if [ "$v" = "3.12.7" ]; then
     echo "3.12.7"
     return 0
   fi
-  case "$v" in
-    3.12*)
-      echo "$v"
-      return 0
-      ;;
-  esac
-  warn "Python ${v} 与当前 apps/backend/requirements.txt 不兼容，改用 3.12.7。"
+  if [ -n "$v" ]; then
+    warn "Python ${v} 不符合统一版本要求，改用 3.12.7。"
+  fi
   echo "3.12.7"
 }
 
@@ -202,7 +198,7 @@ ensure_brew_package() {
   brew install "$package_name"
 }
 
-# macOS：用于引导 venv 的 Python 3.12（与 .python-version / Docker 3.12 一致）
+# macOS：用于引导 venv 的 Python 3.12.7（与 .python-version 一致）
 ensure_python312_darwin() {
   if [ -n "${BOOTSTRAP_PYTHON312:-}" ] && [ -x "${BOOTSTRAP_PYTHON312}" ]; then
     success "使用 BOOTSTRAP_PYTHON312=${BOOTSTRAP_PYTHON312}"
@@ -216,9 +212,9 @@ ensure_python312_darwin() {
   )
 
   for p in "${candidates[@]}"; do
-    if command -v "$p" >/dev/null 2>&1 && "$p" -c 'import sys; assert sys.version_info[:2] == (3, 12)' >/dev/null 2>&1; then
+    if command -v "$p" >/dev/null 2>&1 && "$p" -c 'import sys; assert sys.version_info[:3] == (3, 12, 7)' >/dev/null 2>&1; then
       export BOOTSTRAP_PYTHON312="$(command -v "$p")"
-      success "检测到 Python 3.12: ${BOOTSTRAP_PYTHON312}"
+      success "检测到 Python 3.12.7: ${BOOTSTRAP_PYTHON312}"
       return 0
     fi
   done
@@ -233,7 +229,7 @@ ensure_python312_darwin() {
   fi
 
   if [ "${BOOTSTRAP_SKIP_PYTHON312_INSTALL:-0}" = "1" ]; then
-    error "未找到 Python 3.12。请安装 python@3.12 或设置 BOOTSTRAP_PYTHON312。"
+    error "未找到 Python 3.12.7。请安装 python@3.12（3.12.7）或设置 BOOTSTRAP_PYTHON312。"
     exit 1
   fi
 
@@ -244,7 +240,7 @@ ensure_python312_darwin() {
     exit 1
   fi
   export BOOTSTRAP_PYTHON312="${prefix}/bin/python3.12"
-  success "已安装并选用 Python 3.12: ${BOOTSTRAP_PYTHON312}"
+  success "已安装并选用 Python 3.12.7: ${BOOTSTRAP_PYTHON312}"
 }
 
 ensure_python312_linux() {
@@ -252,12 +248,12 @@ ensure_python312_linux() {
     success "使用 BOOTSTRAP_PYTHON312=${BOOTSTRAP_PYTHON312}"
     return 0
   fi
-  if command -v python3.12 >/dev/null 2>&1 && python3.12 -c 'import sys; assert sys.version_info[:2] == (3, 12)' >/dev/null 2>&1; then
+  if command -v python3.12 >/dev/null 2>&1 && python3.12 -c 'import sys; assert sys.version_info[:3] == (3, 12, 7)' >/dev/null 2>&1; then
     export BOOTSTRAP_PYTHON312="$(command -v python3.12)"
-    success "检测到 Python 3.12: ${BOOTSTRAP_PYTHON312}"
+    success "检测到 Python 3.12.7: ${BOOTSTRAP_PYTHON312}"
     return 0
   fi
-  error "未找到 python3.12。请用发行版包管理器安装 Python 3.12 后重试，或设置 BOOTSTRAP_PYTHON312。"
+  error "未找到 python3.12.7。请用发行版包管理器安装 Python 3.12.7 后重试，或设置 BOOTSTRAP_PYTHON312。"
   exit 1
 }
 
@@ -267,22 +263,14 @@ resolve_windows_bootstrap_python() {
     return 0
   fi
   if command -v py >/dev/null 2>&1; then
-    if py -3.12 -c "import sys" >/dev/null 2>&1; then
+    if py -3.12 -c "import sys; assert sys.version_info[:3] == (3, 12, 7)" >/dev/null 2>&1; then
       py -3.12 -c "import sys; print(sys.executable)"
       return 0
     fi
-    if py -3 -c "import sys; assert sys.version_info[:2]>=(3,12)" >/dev/null 2>&1; then
+    if py -3 -c "import sys; assert sys.version_info[:3] == (3, 12, 7)" >/dev/null 2>&1; then
       py -3 -c "import sys; print(sys.executable)"
       return 0
     fi
-  fi
-  if command -v python3 >/dev/null 2>&1; then
-    command -v python3
-    return 0
-  fi
-  if command -v python >/dev/null 2>&1; then
-    command -v python
-    return 0
   fi
   return 1
 }
@@ -291,7 +279,7 @@ install_backend_penv_windows() {
   local py_boot ver venv_py clear_flag
 
   py_boot="$(resolve_windows_bootstrap_python)" || {
-    error "Windows 上未找到可用的 Python（尝试 py -3.12 / python3）。请先安装 Python 3.12。"
+    error "Windows 上未找到可用的 Python 3.12.7（尝试 py -3.12）。请先安装 Python 3.12.7。"
     exit 1
   }
 

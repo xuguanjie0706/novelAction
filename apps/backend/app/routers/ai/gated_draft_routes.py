@@ -479,6 +479,10 @@ async def gated_draft_stream(
         user_prompt_str = (req.user_prompt or "").strip()
         last_qc: dict | None = None
         passed = False
+        # 跨轮复用上下文：多轮间项目静态数据/上一章状态/承诺/伏笔/质检债务全部不变；
+        # 而 gated 始终 replace_existing=True，draft_assist_stream 内部不读 existing_content。
+        # 仅第 1 轮构建一次，后续轮直接复用，省 DB 查询 + 拼接开销。
+        ctx: dict | None = None
 
         for attempt in range(1, cfg["max_rewrite_attempts"] + 1):
             # ── 决定本轮策略 ───────────────────────────────────────────
@@ -506,15 +510,15 @@ async def gated_draft_stream(
                 "strategy": strategy,
             })
 
-            # ── 刷新章节（确保 existing_content 是最新的）─────────────
+            # ── 刷新章节实体（保存正文用，仍每轮做）；上下文仅第 1 轮构建 ──
             db.refresh(chapter)
 
-            # ── 构建起笔上下文 ─────────────────────────────────────────
-            try:
-                ctx = _build_draft_context(db, project_id, chapter, project, large_context)
-            except Exception as e:
-                yield _sse({"error": f"上下文构建失败：{e}"})
-                return
+            if ctx is None:
+                try:
+                    ctx = _build_draft_context(db, project_id, chapter, project, large_context)
+                except Exception as e:
+                    yield _sse({"error": f"上下文构建失败：{e}"})
+                    return
 
             # ── 流式生成正文，同时累积到 accumulated ──────────────────
             accumulated = ""

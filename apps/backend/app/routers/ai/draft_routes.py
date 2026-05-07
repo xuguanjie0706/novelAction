@@ -126,7 +126,10 @@ def _build_reader_promise_context(
         for p in can_fulfill:
             lines.append(_fmt(p, show_deadline=True))
 
-    lines.append("若本章有兑现，请在章节速查索引中标注「兑现承诺：<承诺原文>」。")
+    lines.append(
+        "兑现要求：在正文中以具体行动/对话/事件落实承诺，不要口号式敷衍；"
+        "复盘环节会自动检测兑现情况并更新承诺状态，不需要在正文里追加任何标注。"
+    )
     return "\n".join(lines)
 
 
@@ -407,6 +410,22 @@ def _build_draft_context(
     if narr_existing.strip():
         existing_content = narr_existing.strip()
 
+    # ── 卷阶段（phase）解析：提前到 context 构造之前，用于按阶段裁剪 context 预算 ──
+    phase_value: str | None = None
+    if outline_node is not None:
+        phase_value = getattr(outline_node, "phase", None)
+        if not phase_value:
+            phase_value = (outline_node.extra or {}).get("phase")
+        if not phase_value and outline_node.parent_id is not None:
+            volume = db.query(OutlineNode).filter(OutlineNode.id == outline_node.parent_id).first()
+            if volume is not None:
+                phase_value = getattr(volume, "phase", None) or (volume.extra or {}).get("phase")
+
+    phase_lower = (phase_value or "").strip().lower() if phase_value else ""
+    # 开局期：伏笔台账与质检债务几乎为空，跳过查询节省开销；
+    # 其他阶段仍全量拼装（后续如需可进一步分 phase 动态调预算）。
+    is_opening = phase_lower in ("opening", "开局期", "新手村")
+
     continuity_context = build_continuity_context(
         db=db, project_id=project_id, chapter=chapter, outline_node=outline_node,
     )
@@ -417,15 +436,21 @@ def _build_draft_context(
         db=db, project_id=project_id, chapter=chapter,
         outline_node=outline_node, large_context=large_context,
     )
-    plot_dossier_context = build_plot_dossier_context(
-        db, project_id, chapter, large_context=large_context
-    )
-    quality_debt_context = build_quality_debt_context(
-        pending_quality_debts_for_chapter(
-            db=db, project_id=project_id, chapter=chapter,
-            limit=12 if large_context else 6,
+
+    if is_opening:
+        # 开局期跳过伏笔台账 / 质检债务查询（该阶段双表几乎为空，DB 查询 + prompt 拼接都是浪费）
+        plot_dossier_context = ""
+        quality_debt_context = ""
+    else:
+        plot_dossier_context = build_plot_dossier_context(
+            db, project_id, chapter, large_context=large_context
         )
-    )
+        quality_debt_context = build_quality_debt_context(
+            pending_quality_debts_for_chapter(
+                db=db, project_id=project_id, chapter=chapter,
+                limit=12 if large_context else 6,
+            )
+        )
 
     def _fmt_foreshadows(node) -> str:
         if not node:
@@ -460,17 +485,6 @@ def _build_draft_context(
         )
     else:
         word_target_val = 2300
-
-    # ── 卷阶段（phase）解析 ─────────────────────────────────────────────
-    phase_value: str | None = None
-    if outline_node is not None:
-        phase_value = getattr(outline_node, "phase", None)
-        if not phase_value:
-            phase_value = (outline_node.extra or {}).get("phase")
-        if not phase_value and outline_node.parent_id is not None:
-            volume = db.query(OutlineNode).filter(OutlineNode.id == outline_node.parent_id).first()
-            if volume is not None:
-                phase_value = getattr(volume, "phase", None) or (volume.extra or {}).get("phase")
 
     # ── 立项定位（positioning）：兼容多处来源 ──────────────────────────
     positioning_value: dict | None = None

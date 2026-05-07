@@ -60,14 +60,15 @@ docker-compose restart backend
 
 **一键启动（后端 + 创作端 + 管理后台）**：`./restart.sh`（端口见 `env.local.ports.example`，需已安装 **pnpm**，推荐 `corepack enable && corepack prepare pnpm@9 --activate`）。
 
-依赖与环境可执行 **`bash bootstrap.sh`**：在 **Windows** 上会使用 [penv](https://github.com/hmasdev/penv) 创建 `apps/backend/.venv`；在 **macOS / Linux** 上默认使用 **[uv](https://github.com/astral-sh/uv)**（安装解释器、建 `apps/backend/.venv`、按 `requirements.txt` 装包）。若不想用 uv，可执行 `BOOTSTRAP_USE_UV=0 bash bootstrap.sh`，将回退到 **`python3.12 -m venv` + pip**。前端在存在 **`pnpm-workspace.yaml`** 时于**仓库根目录**执行一次 **`pnpm install`**（含创作端与管理后台）；也可手动执行 **`pnpm install`** 后使用根目录脚本 **`pnpm dev:admin`** 等。
+依赖与环境可执行 **`bash bootstrap.sh`**：在 **Windows** 上会使用 [penv](https://github.com/hmasdev/penv) 创建 `apps/backend/.venv`；在 **macOS / Linux** 上默认使用 **[uv](https://github.com/astral-sh/uv)**（安装解释器、建 `apps/backend/.venv`、按 `requirements.txt` 装包）。后端统一强制 **Python `3.12.7`**（拒绝 `3.9` 等其他版本）；若不想用 uv，可执行 `BOOTSTRAP_USE_UV=0 bash bootstrap.sh`，将回退到 **`python3.12 -m venv` + pip**。前端在存在 **`pnpm-workspace.yaml`** 时于**仓库根目录**执行一次 **`pnpm install`**（含创作端与管理后台）；也可手动执行 **`pnpm install`** 后使用根目录脚本 **`pnpm dev:admin`** 等。
 
 **后端**
 
 ```bash
 cd apps/backend
-python -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
+python -V                       # 需输出 3.12.7
 pip install -r requirements.txt
 cp .env.example .env            # 填入 API Key 和数据库配置
 uvicorn app.main:app --reload --port 9000

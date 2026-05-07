@@ -327,6 +327,8 @@ def chapter_debrief(
                     ChapterIndex.chapter_id == req.chapter_id,
                 ).first()
                 data = req.chapter_index.model_dump()
+                # ChapterIndex ORM 不接收中间态字段，只落库拆分后的结果字段。
+                data.pop("foreshadow_updates", None)
                 data["hook_strength"] = hook_strength
                 data["chapter_number"] = display_chapter_number(chapter.title, chapter.sort_order)
                 if data.get("story_day"):
@@ -590,6 +592,38 @@ def chapter_debrief(
             except Exception:
                 continue
 
+    # P1-6：承诺兑现闭环（fulfilled_promise_texts → ReaderPromise.status = fulfilled）
+    # 数据来源：auto_debrief 从正文结构化提取，前端确认后随复盘一同提交。
+    # 匹配策略：精确子串优先，回退 4-gram 重叠（容忍 AI 轻微改写）。
+    promises_fulfilled = 0
+    if req.fulfilled_promise_texts:
+        def _fuzzy_match(query: str, target: str, ngram: int = 4) -> bool:
+            if query in target or target[:20] in query:
+                return True
+            if len(query) >= ngram:
+                for i in range(len(query) - ngram + 1):
+                    if query[i:i + ngram] in target:
+                        return True
+            return False
+
+        open_promises = (
+            db.query(ReaderPromise)
+            .filter(
+                ReaderPromise.project_id == project_id,
+                ReaderPromise.status == "open",
+            )
+            .all()
+        )
+        for promise in open_promises:
+            for ft in req.fulfilled_promise_texts:
+                ft = ft.strip()
+                if ft and _fuzzy_match(ft, promise.promise_text or ""):
+                    promise.status = "fulfilled"
+                    promise.fulfilled_chapter_id = req.chapter_id
+                    promise.fulfilled_chapter_number = chapter.sort_order
+                    promises_fulfilled += 1
+                    break  # 一条承诺只匹配一次
+
     return {
         "ok": True,
         "updated_characters": updated_chars,
@@ -603,6 +637,7 @@ def chapter_debrief(
         "directives_applied": directives_applied,
         "speech_kit_updated_count": speech_kit_updated_count,
         "promises_created": promises_created,
+        "promises_fulfilled": promises_fulfilled,
         "message": result_message,
     }
 

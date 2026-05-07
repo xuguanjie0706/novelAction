@@ -1,7 +1,7 @@
 """JWT 认证工具函数。
 
 职责：密码哈希/验证、JWT access token 生成与解码。
-所有加密操作集中于此，router 层只调用此处公共函数，不直接依赖 jose/passlib。
+所有加密操作集中于此，router 层只调用此处公共函数；密码使用 bcrypt 标准库式 API，避免 passlib 与新版本 bcrypt 不兼容。
 
 使用方:
     from app.utils.auth import hash_password, verify_password, create_access_token, decode_access_token
@@ -10,13 +10,10 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.config import settings
-
-# bcrypt 上下文；schemes 列表末尾的 deprecated="auto" 允许未来无缝迁移算法
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # JWT 算法与过期时长（分钟），从 settings 读取以便测试覆盖
 _ALGORITHM = "HS256"
@@ -31,7 +28,7 @@ def hash_password(plain: str) -> str:
     Returns:
         bcrypt 哈希字符串，可安全落库。
     """
-    return _pwd_context.hash(plain)
+    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
@@ -44,7 +41,10 @@ def verify_password(plain: str, hashed: str) -> bool:
     Returns:
         True 表示密码正确，False 表示不匹配。
     """
-    return _pwd_context.verify(plain, hashed)
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except ValueError:
+        return False
 
 
 def create_access_token(sub: str, expires_minutes: Optional[int] = None) -> str:

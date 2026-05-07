@@ -834,28 +834,13 @@ async function runContinueChapters(
       upsertChapter(updateRes.data)
       pushProgress({ step: phaseStep('save'), label: `✓ ${stepLabel} 已保存（仅叙事；稿末见模型调用记录）`, done: true, error: false })
 
+      // 读取项目质量门槛（writing_config.min_overall_score，默认 0 即始终入库）
+      const minOverallScore = (() => {
+        const ex = (useAppStore.getState().currentProject as any)?.extra
+        const cfg = (ex && typeof ex === 'object') ? (ex as Record<string, any>).writing_config : null
+        return typeof cfg?.min_overall_score === 'number' ? cfg.min_overall_score : 0
+      })()
       let indexPersistedFromDraft = false
-      if (indexMarkdown) {
-        pushProgress({ step: phaseStep('index'), label: `正在写入 ChapterIndex ${stepLabel}…`, done: false, error: false })
-        try {
-          const parsed = parseChapterIndexMarkdown(indexMarkdown)
-          const chapter_index = parsed ?? fallbackChapterIndexFromRawMarkdown(indexMarkdown)
-          await aiApi.chapterDebrief(projectId, {
-            chapter_id: chapterId,
-            chapter_index,
-            apply_source: 'queue_auto',
-          })
-          indexPersistedFromDraft = true
-          pushProgress({ step: phaseStep('index'), label: '✓ 索引已从流式稿末解析入库', done: true, error: false })
-        } catch (e: any) {
-          pushProgress({
-            step: phaseStep('index'),
-            label: `索引解析入库失败：${formatApiError(e)}`,
-            done: true,
-            error: true,
-          })
-        }
-      }
 
       pushProgress({ step: phaseStep('quality'), label: `正在质检 ${stepLabel}…`, done: false, error: false })
       try {
@@ -873,6 +858,36 @@ async function runContinueChapters(
         })
         const refreshedChapter = await chaptersApi.get(projectId, chapterId)
         upsertChapter(refreshedChapter.data)
+
+        // 质检通过阈值后才解析稿末索引入库，避免低分稿污染 ChapterIndex
+        if (indexMarkdown && Number.isFinite(score) && score >= minOverallScore) {
+          pushProgress({ step: phaseStep('index'), label: `正在写入 ChapterIndex ${stepLabel}…`, done: false, error: false })
+          try {
+            const parsed = parseChapterIndexMarkdown(indexMarkdown)
+            const chapter_index = parsed ?? fallbackChapterIndexFromRawMarkdown(indexMarkdown)
+            await aiApi.chapterDebrief(projectId, {
+              chapter_id: chapterId,
+              chapter_index,
+              apply_source: 'queue_auto',
+            })
+            indexPersistedFromDraft = true
+            pushProgress({ step: phaseStep('index'), label: `✓ 索引已从流式稿末解析入库（质检 ${score.toFixed(1)} ≥ ${minOverallScore}）`, done: true, error: false })
+          } catch (e: any) {
+            pushProgress({
+              step: phaseStep('index'),
+              label: `索引解析入库失败：${formatApiError(e)}`,
+              done: true,
+              error: true,
+            })
+          }
+        } else if (indexMarkdown && Number.isFinite(score) && score < minOverallScore) {
+          pushProgress({
+            step: phaseStep('index'),
+            label: `跳过索引入库（质检 ${score.toFixed(1)} < 阈值 ${minOverallScore}，重写通过后再入库）`,
+            done: true,
+            error: false,
+          })
+        }
       } catch (e: any) {
         pushProgress({
           step: phaseStep('quality'),
@@ -1038,28 +1053,13 @@ async function runRewriteChapter(
     upsertChapter(updateRes.data)
     pushProgress({ step: 'save', label: '✓ 已保存叙事正文（稿末见模型调用记录）', done: true, error: false })
 
+    // 读取项目质量门槛（writing_config.min_overall_score，默认 0 即始终入库）
+    const minOverallScore = (() => {
+      const ex = (useAppStore.getState().currentProject as any)?.extra
+      const cfg = (ex && typeof ex === 'object') ? (ex as Record<string, any>).writing_config : null
+      return typeof cfg?.min_overall_score === 'number' ? cfg.min_overall_score : 0
+    })()
     let indexPersistedFromDraft = false
-    if (indexMarkdown) {
-      pushProgress({ step: 'index', label: '正在写入 ChapterIndex…', done: false, error: false })
-      try {
-        const parsed = parseChapterIndexMarkdown(indexMarkdown)
-        const chapter_index = parsed ?? fallbackChapterIndexFromRawMarkdown(indexMarkdown)
-        await aiApi.chapterDebrief(projectId, {
-          chapter_id: chapterId,
-          chapter_index,
-          apply_source: 'queue_auto',
-        })
-        indexPersistedFromDraft = true
-        pushProgress({ step: 'index', label: '✓ 索引已从流式稿末解析入库', done: true, error: false })
-      } catch (e: any) {
-        pushProgress({
-          step: 'index',
-          label: `索引解析入库失败：${formatApiError(e)}`,
-          done: true,
-          error: true,
-        })
-      }
-    }
 
     pushProgress({ step: 'quality', label: '正在质检重写后的章节…', done: false, error: false })
     try {
@@ -1077,6 +1077,36 @@ async function runRewriteChapter(
       })
       const refreshedChapter = await chaptersApi.get(projectId, chapterId)
       upsertChapter(refreshedChapter.data)
+
+      // 质检通过阈值后才解析稿末索引入库，避免低分稿污染 ChapterIndex
+      if (indexMarkdown && Number.isFinite(score) && score >= minOverallScore) {
+        pushProgress({ step: 'index', label: '正在写入 ChapterIndex…', done: false, error: false })
+        try {
+          const parsed = parseChapterIndexMarkdown(indexMarkdown)
+          const chapter_index = parsed ?? fallbackChapterIndexFromRawMarkdown(indexMarkdown)
+          await aiApi.chapterDebrief(projectId, {
+            chapter_id: chapterId,
+            chapter_index,
+            apply_source: 'queue_auto',
+          })
+          indexPersistedFromDraft = true
+          pushProgress({ step: 'index', label: `✓ 索引已从流式稿末解析入库（质检 ${score.toFixed(1)} ≥ ${minOverallScore}）`, done: true, error: false })
+        } catch (e: any) {
+          pushProgress({
+            step: 'index',
+            label: `索引解析入库失败：${formatApiError(e)}`,
+            done: true,
+            error: true,
+          })
+        }
+      } else if (indexMarkdown && Number.isFinite(score) && score < minOverallScore) {
+        pushProgress({
+          step: 'index',
+          label: `跳过索引入库（质检 ${score.toFixed(1)} < 阈值 ${minOverallScore}，重写通过后再入库）`,
+          done: true,
+          error: false,
+        })
+      }
     } catch (e: any) {
       pushProgress({
         step: 'quality',
@@ -1203,7 +1233,8 @@ async function runGatedRewriteChapter(
     const dec = new TextDecoder()
     let buf = ''
     let currentAttempt = 1
-    let draftAccumulated = ''  // 当前轮次文字累积（显示字数用）
+    let draftAccumulated = ''     // 当前轮次文字累积（显示字数用）
+    let lastPassedDraft = ''      // 最终通过质检的那轮完整原始文本（含稿末索引块）
 
     const processLine = (line: string) => {
       const t = line.trim()
@@ -1277,6 +1308,7 @@ async function runGatedRewriteChapter(
 
       if (ev === 'gate_passed') {
         gateOutcome = 'passed'
+        lastPassedDraft = draftAccumulated  // 保存通过质检的那轮完整原始文本，供流结束后解析索引
         pushProgress({
           step: 'gate_result',
           label: `✅ 质量达标（第 ${obj.attempt} 轮）— 综合 ${(obj.overall_score as number).toFixed(1)} / 订阅 ${(obj.subscribe_intent as number).toFixed(1)}`,
@@ -1329,6 +1361,27 @@ async function runGatedRewriteChapter(
       const refreshed = await chaptersApi.get(projectId, chapterId)
       upsertChapter(refreshed.data)
     } catch { /* ignore */ }
+
+    // 质检通过后：从通过轮次的原始文本中解析稿末索引入库
+    // 门控流程由后端负责多轮重写，前端在 gate_passed 确认后才入库，避免中间失败稿污染索引
+    if (gateOutcome === 'passed' && lastPassedDraft) {
+      const { indexMarkdown: passedIndex } = splitStreamedDraftText(lastPassedDraft)
+      if (passedIndex) {
+        pushProgress({ step: 'index', label: '正在写入 ChapterIndex（质量门控通过）…', done: false, error: false })
+        try {
+          const parsed = parseChapterIndexMarkdown(passedIndex)
+          const chapter_index = parsed ?? fallbackChapterIndexFromRawMarkdown(passedIndex)
+          await aiApi.chapterDebrief(projectId, {
+            chapter_id: chapterId,
+            chapter_index,
+            apply_source: 'queue_auto',
+          })
+          pushProgress({ step: 'index', label: `✓ 索引已入库（综合 ${lastOverall.toFixed(1)}）`, done: true, error: false })
+        } catch (e: any) {
+          pushProgress({ step: 'index', label: `索引入库失败：${formatApiError(e)}`, done: true, error: true })
+        }
+      }
+    }
 
     if (gateOutcome === 'passed') {
       onComplete(`质量门控写作完成（综合 ${lastOverall.toFixed(1)} / 订阅 ${lastSubscribe.toFixed(1)}）`)

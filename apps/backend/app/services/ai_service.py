@@ -1387,6 +1387,11 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         scene_blueprint: str = "",
         # 读者承诺台账：当前章节窗口内的 open ReaderPromise，分必须/可以兑现两级
         reader_promise_context: str = "",
+        # 写前简报（由 pre_write_warning 生成）：主角状态锁定 + 本章写法指导 + 必发事件 + 幻觉预防。
+        # 独立于 user_prompt（800字上限），享有 2500 字专属预算，位置优先于"作者补充要求"。
+        # 仅在门控写作且 pre_write_warning_enabled=True 时由 gated_draft_routes 填入；
+        # 普通 draft-assist/stream 调用传空字符串即可（默认值）。
+        pre_write_brief: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
@@ -1403,6 +1408,9 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
                 节奏类型。用于把作品基本面注入正文 prompt，避免每章独立漂移。
         """
         from app.services.llm_task_profiles import phase_to_draft_task
+
+        # P2.5: 每次起笔开始前清空截断警告，供调用方在流结束后通过 svc._truncation_warnings 读取本次结果
+        self._truncation_warnings = []
 
         has_content = bool(
             not replace_existing and existing_content and len(existing_content.strip()) > 50
@@ -1638,6 +1646,16 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
         if user_prompt and user_prompt.strip():
             extra = f"\n\n【作者补充要求】\n{self._clip_context(user_prompt, 800, 4000)}"
 
+        # 写前简报：独立 2500 字预算，优先级高于"作者补充要求"。
+        # 由门控写作路径在 pre_write_warning_enabled=True 时注入；普通续写为空。
+        pre_write_brief_part = ""
+        if pre_write_brief and pre_write_brief.strip():
+            pre_write_brief_part = (
+                "\n\n===【写前简报·主编锁定（最高优先级，写正文前必须逐条对照）】===\n"
+                + self._clip_context(pre_write_brief.strip(), 2500, None, field_name="pre_write_brief")
+                + "\n==="
+            )
+
         # ── 分场蓝图：有数据时以「权威结构」标签注入，并提示下方 outline 平铺字段降级为风格参考 ──
         # 当前 Bootstrap 仅为第 1 章生成 Scene 记录；其余章节 blueprint 为空，回退到 outline 平铺。
         # 通过显式 authority 声明，避免 AI 在两套结构间漂移。
@@ -1651,6 +1669,21 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
         else:
             scene_blueprint_part = ""
             outline_authority_note = ""
+
+        # ── outline 四字段全空兜底：避免 AI 在「全是（未填写）」的情况下凭空发挥引入新主线 ──
+        # 触发条件：hook / summary / conflict / highlight 四字段均为空串或仅空白。
+        all_outline_empty = not any(
+            (s or "").strip()
+            for s in (outline_hook, outline_summary, outline_conflict, outline_highlight)
+        )
+        if all_outline_empty and not has_blueprint:
+            outline_empty_fallback = (
+                "\n⚠️ 本章大纲未规划：请严格基于【上章结尾】与【情节档案】自然推进，"
+                "不得引入新主线冲突或新主要角色；聚焦已在场人物的状态变化与现有矛盾的延续，"
+                "章末留一个与当前线索直接相关的小钩子。"
+            )
+        else:
+            outline_empty_fallback = ""
 
         # 注：章节速查索引区块由复盘环节（auto_extract_debrief）统一产出，写正文阶段不再追加模板，
         # 把 token 预算和模型注意力全部留给正文质量。
@@ -1676,8 +1709,8 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
 核心事件：{outline_summary or "（未填写）"}
 人物变化：{outline_conflict or "（未填写）"}
 章末方向：{outline_highlight or "（未填写）"}{milestone_part}{tone_part}
-{f"伏笔管理：{outline_foreshadow}" if outline_foreshadow else ""}{manifest_constraint}
-{scene_blueprint_part}
+{f"伏笔管理：{outline_foreshadow}" if outline_foreshadow else ""}{manifest_constraint}{outline_empty_fallback}
+{scene_blueprint_part}{pre_write_brief_part}
 {task_line}{extra}
 
 {final_reminder}"""
@@ -2229,10 +2262,23 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
         continuity_state: str = "",          # 滚动连续性账本
         foreshadow_ledger: str = "",         # 伏笔台账
         character_states: str = "",          # 主要角色当前状态快照
+        power_systems_summary: str = "",     # 境界体系摘要（含各阶名称与规则）
+        outline_context: str = "",           # 本章大纲五要素（hook/summary/conflict/highlight/milestone）
+        phase: str = "",                     # 章节所在阶段（opening/rising/turning/dark_hour/climax/ending）
     ) -> dict:
         """
-        写前预警：根据本章计划对照记忆/状态库，输出潜在矛盾风险，让作者在动笔前发现问题。
-        返回结构：{"risks": [...], "reminders": [...], "ok": bool}
+        写前预警：像一位有30年经验的网文主编，在落笔前把本章的「坑、约束、写法」全交代清楚。
+
+        不仅排雷（连续性/伏笔/设定/OOC/节奏），还输出：
+        - protagonist_fact_sheet：主角此刻的精确状态锁定（境界/位置/技能/道具），防止幻觉
+        - writing_brief：本章应该怎么写（开篇策略/冲突结构/章末钩子）
+        - must_events：本章必须发生的事件（剧情硬约束）
+        - hallucination_traps：写这类章节时 AI 最容易犯的错误清单
+
+        Returns:
+            dict with keys: ok, risk_count, risks, reminders,
+                            protagonist_fact_sheet, writing_brief,
+                            must_events, hallucination_traps
         """
         # 拼接记忆摘要，按类型分组
         mem_lines: list[str] = []
@@ -2243,45 +2289,112 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
             mem_lines.append(f"[{mt}] {title}：{content}")
         mem_block = "\n".join(mem_lines) if mem_lines else "（无记忆条目）"
 
-        system = "你是资深网络小说编辑，专门在写章节前帮作者排雷。严格返回JSON，不要额外文字。"
+        phase_hint = {
+            "opening":   "开局期：爽点密集，钩子3章一次，字数偏短，不要铺垫过重",
+            "rising":    "起飞期：势力扩张，感情线接入，可以开始拉长单章字数",
+            "turning":   "转折期：矛盾升级，代价兑现，节奏可稍微放缓以铺陈",
+            "dark_hour": "至暗期：允许「虐」，允许主角吃亏，节奏放慢，心理戏加重",
+            "climax":    "高潮期：伏笔回收，爆点拉满，爽感最大化，章末钩子必须炸裂",
+            "ending":    "收束期：留悬念种子，给读者追读下一卷的理由",
+        }.get((phase or "").lower().strip(), "")
+
+        system = (
+            "你是拥有三十年经验的网络小说主编，精通玄幻、修仙、都市等各类型。"
+            "你的职责是在作者落笔前，像老编辑审稿一样，把这一章的「坑、约束、写法」全部交代清楚，"
+            "让写正文的 AI 无法出现幻觉和逻辑错误。严格返回 JSON，不要任何额外文字。"
+        )
+
         prompt = f"""小说：《{project_title}》（{genre}）
+{f'当前阶段：{phase_hint}' if phase_hint else ''}
 
-【本章计划】
-{self._clip_context(chapter_plan_summary, 1200, None, field_name="chapter_plan")}
+══════════════════════════════════════
+【本章计划（大纲五要素）】
+{self._clip_context(outline_context or chapter_plan_summary, 1500, None, field_name="outline")}
 
-【主要角色当前状态】
+══════════════════════════════════════
+【主要角色当前状态（精确到境界/位置/技能/持有物）】
 {self._clip_context(character_states, 1200, None, field_name="char_states") or "（未提供）"}
 
-【滚动连续性账本】
+【境界体系规则（防止境界幻觉）】
+{self._clip_context(power_systems_summary, 800, None, field_name="power_systems") or "（未提供）"}
+
+【滚动连续性账本（最近章节状态）】
 {self._clip_context(continuity_state, 2000, None, field_name="continuity") or "（未提供）"}
 
-【伏笔台账（含未收束条目）】
-{self._clip_context(foreshadow_ledger, 1500, None, field_name="foreshadow_ledger") or "（未提供）"}
+【伏笔台账（含未收束条目与逾期警告）】
+{self._clip_context(foreshadow_ledger, 1500, None, field_name="foreshadow_ledger") or "（无伏笔记录）"}
 
-【历史记忆库（事件/状态/伏笔/设定/冲突）】
-{self._clip_context(mem_block, 3000, None, field_name="memory_chunks")}
+【历史记忆库（事件/状态/冲突）】
+{self._clip_context(mem_block, 2500, None, field_name="memory_chunks")}
 
-根据本章计划，逐条对照上述资料，识别以下类型的潜在问题：
-1. 连续性矛盾：本章计划与已发生事件、人物状态、位置不符
-2. 伏笔违约：本章计划中回收了不存在的伏笔，或应在此章回收的伏笔被遗漏
-3. 设定违规：计划中出现的境界/势力/道具与世界观设定矛盾
-4. 人物OOC：本章人物行为与已建立的性格/价值观/心理创伤明显冲突
-5. 节奏预警：计划节奏与前章章末钩子的期望落差（如钩子承诺了高潮但本章是过渡章）
+══════════════════════════════════════
+请以「三十年主编」的视角完成以下四件事，**全部输出到 JSON**：
 
-返回JSON：
+① 主角状态锁定（protagonist_fact_sheet）
+   核对上述资料，锁定本章开笔时主角的精确状态，AI 写正文必须严格遵守这份清单：
+   - realm：当前境界名称（精确，不可升级或缩写）
+   - location：当前所在位置
+   - key_skills：本章可以合理使用的技能/功法（各1句话说明来源）
+   - key_items：当前持有的关键道具/法宝（各1句话）
+   - forbidden：本章绝对不能出现的能力/道具/状态（还未习得/已损毁/不在身边）
+
+② 本章写作简报（writing_brief）
+   给写章 AI 的具体写法指导，像导演给演员的场景说明：
+   - opening_strategy：开篇第一段应该怎么切入（人物/动作/对话/环境？为什么？）
+   - conflict_structure：本章冲突如何分层递进（给出2-3个节拍）
+   - closing_hook：最后一段的钩子设计（悬念/爽感/伏笔引爆？具体怎么收？）
+   - word_rhythm：字数与节奏建议（哪些场景应该详写/略写）
+
+③ 本章必发事件（must_events）
+   根据大纲计划，列出本章必须在正文中落地的关键事件（2-4条，每条一句话）。
+   不在大纲里但记忆库/伏笔台账要求必须处理的，也列进来。
+
+④ 幻觉预防清单（hallucination_traps）
+   针对这一章的具体内容，列出写 AI 最容易犯的错误（3-5条），格式：「陷阱描述 → 正确做法」
+
+⑤ 风险扫描（risks）
+   逐条对照资料，发现以下类型的潜在问题：
+   - continuity：连续性矛盾（人物状态/位置/事件顺序）
+   - foreshadow：伏笔违约（漏收/误收）
+   - setting：设定违规（境界/势力/道具与世界观矛盾）
+   - ooc：人物OOC（行为与性格/价值观/创伤明显冲突）
+   - pacing：节奏预警（与前章钩子期望落差）
+
+返回 JSON（所有字段必须存在，无内容填空数组/空字符串）：
 {{
   "ok": true,
   "risk_count": 0,
+  "protagonist_fact_sheet": {{
+    "realm": "精确境界名",
+    "location": "当前位置",
+    "key_skills": ["技能A（来源/原因）", "技能B（来源/原因）"],
+    "key_items": ["道具A（来源/当前状态）"],
+    "forbidden": ["不能使用X（原因）", "不能出现Y（原因）"]
+  }},
+  "writing_brief": {{
+    "opening_strategy": "具体的开篇切入建议，一到两句话",
+    "conflict_structure": "节拍1 → 节拍2 → 节拍3（每个节拍一句话描述）",
+    "closing_hook": "章末钩子的具体设计，一到两句话",
+    "word_rhythm": "哪段详写、哪段略写的建议"
+  }},
+  "must_events": [
+    "本章必须发生的事件1",
+    "本章必须发生的事件2"
+  ],
+  "hallucination_traps": [
+    "陷阱：AI 容易写出X → 正确做法：应该Y",
+    "陷阱：AI 容易忽略Z → 正确做法：需要W"
+  ],
   "risks": [
     {{
       "type": "continuity/foreshadow/setting/ooc/pacing",
       "severity": "low/medium/high/critical",
-      "description": "具体说明矛盾点，精确到涉及的条目和章节",
-      "suggested_fix": "建议的解决方案"
+      "description": "具体矛盾点，精确到涉及条目和章节",
+      "suggested_fix": "建议解决方案"
     }}
   ],
   "reminders": [
-    "写作前必须注意的提醒（如：本章应回收F-03伏笔、本章主角境界是XX不能使用YY技能）"
+    "一句话写作提醒（如：本章主角境界是X，不能使用Y技能）"
   ]
 }}
 若无风险则 risks 为空数组，ok=true；有 high/critical 风险则 ok=false。"""
@@ -2289,7 +2402,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
         response = await self._call_ai(
             system,
             prompt,
-            max_tokens=1500,
+            max_tokens=2500,
             context={"operation": "pre_write_warning", "chapter_plan": chapter_plan_summary[:80]},
             task="quality.check",
         )
@@ -2307,14 +2420,55 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
             risks = [r for r in (data.get("risks") or []) if isinstance(r, dict) and r.get("description")]
             reminders = [str(r) for r in (data.get("reminders") or []) if r]
             has_critical = any(r.get("severity") in ("high", "critical") for r in risks)
+
+            # 提取新增字段，做基础类型保护
+            def _str(v, fallback="") -> str:
+                return str(v).strip() if v else fallback
+
+            def _strlist(v) -> list[str]:
+                if isinstance(v, list):
+                    return [str(x).strip() for x in v if x]
+                return []
+
+            protagonist_fact_sheet = data.get("protagonist_fact_sheet") or {}
+            if not isinstance(protagonist_fact_sheet, dict):
+                protagonist_fact_sheet = {}
+
+            writing_brief_raw = data.get("writing_brief") or {}
+            if not isinstance(writing_brief_raw, dict):
+                writing_brief_raw = {}
+            writing_brief = {
+                "opening_strategy": _str(writing_brief_raw.get("opening_strategy")),
+                "conflict_structure": _str(writing_brief_raw.get("conflict_structure")),
+                "closing_hook": _str(writing_brief_raw.get("closing_hook")),
+                "word_rhythm": _str(writing_brief_raw.get("word_rhythm")),
+            }
+
             return {
                 "ok": not has_critical,
                 "risk_count": len(risks),
+                "protagonist_fact_sheet": {
+                    "realm": _str(protagonist_fact_sheet.get("realm")),
+                    "location": _str(protagonist_fact_sheet.get("location")),
+                    "key_skills": _strlist(protagonist_fact_sheet.get("key_skills")),
+                    "key_items": _strlist(protagonist_fact_sheet.get("key_items")),
+                    "forbidden": _strlist(protagonist_fact_sheet.get("forbidden")),
+                },
+                "writing_brief": writing_brief,
+                "must_events": _strlist(data.get("must_events")),
+                "hallucination_traps": _strlist(data.get("hallucination_traps")),
                 "risks": risks[:15],
                 "reminders": reminders[:10],
             }
         except Exception as e:
-            return {"ok": True, "risk_count": 0, "risks": [], "reminders": [], "error": str(e), "raw": response[:300]}
+            return {
+                "ok": True, "risk_count": 0,
+                "protagonist_fact_sheet": {"realm": "", "location": "", "key_skills": [], "key_items": [], "forbidden": []},
+                "writing_brief": {"opening_strategy": "", "conflict_structure": "", "closing_hook": "", "word_rhythm": ""},
+                "must_events": [], "hallucination_traps": [],
+                "risks": [], "reminders": [],
+                "error": str(e), "raw": response[:300],
+            }
 
     # ── 三层调度：章纲 → 分场（Scene Plan）─────────────────────────────────
     async def scene_plan(

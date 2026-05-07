@@ -98,6 +98,12 @@ export interface WritingConfig {
   min_subscribe_intent: number
   /** 最大重写次数（含首次，默认 3） */
   max_rewrite_attempts: number
+  /**
+   * 写前预警：开启后每次门控写作前先以「三十年主编」视角生成简报，
+   * 包含主角状态锁定、本章写法指导、必发事件和幻觉预防清单，注入正文 prompt。
+   * 默认 false（关闭）。
+   */
+  pre_write_warning_enabled: boolean
 }
 
 export const projectsApi = {

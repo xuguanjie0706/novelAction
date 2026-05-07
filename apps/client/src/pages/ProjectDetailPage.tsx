@@ -480,6 +480,12 @@ function statusColor(s: Project['status']) {
 function WritingConfigPanel({ projectId }: { projectId: string }) {
   const [cfg, setCfg] = useState<WritingConfig | null>(null)
   const [saving, setSaving] = useState(false)
+  /**
+   * 写配置保存后需同步更新 store，确保 ChapterEditor 从 currentProject.extra.writing_config
+   * 读到的 writingConfig（包括 pre_write_warning_enabled）是最新值，不需要刷新页面才生效。
+   */
+  const currentProject = useAppStore(s => s.currentProject)
+  const setCurrentProject = useAppStore(s => s.setCurrentProject)
 
   useEffect(() => {
     projectsApi.getWritingConfig(projectId)
@@ -493,7 +499,17 @@ function WritingConfigPanel({ projectId }: { projectId: string }) {
     setCfg(next)
     setSaving(true)
     try {
-      await projectsApi.updateWritingConfig(projectId, patch as any)
+      const res = await projectsApi.updateWritingConfig(projectId, patch as any)
+      // 同步更新 store，让 ChapterEditor 的 writingConfig 立即感知新配置
+      if (currentProject) {
+        setCurrentProject({
+          ...currentProject,
+          extra: {
+            ...((currentProject.extra as Record<string, unknown>) ?? {}),
+            writing_config: res.data.writing_config,
+          } as typeof currentProject.extra,
+        })
+      }
     } catch {
       toast.error('保存写作配置失败')
     } finally {
@@ -607,6 +623,40 @@ function WritingConfigPanel({ projectId }: { projectId: string }) {
               <p className="mt-1.5 text-xs text-gray-400">
                 第1次：初稿 · 第2次：定点修复 · 第3次及以上：全量重写。超出次数后章节置为「待审阅」。
               </p>
+            </div>
+
+            {/* 分隔线 */}
+            <div className="border-t border-gray-100 pt-1" />
+
+            {/* 写前预警开关 */}
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1">
+                <p className="text-sm font-medium text-gray-800 flex items-center gap-1.5">
+                  写前预警
+                  <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 border border-rose-200">
+                    实验性
+                  </span>
+                </p>
+                <p className="mt-0.5 text-xs text-gray-500 leading-relaxed">
+                  开启后，每次门控写作前以「三十年主编」视角生成写前简报：锁定主角境界/位置/技能，给出开篇策略、冲突节拍、章末钩子设计和幻觉预防清单，注入正文 prompt。
+                </p>
+                <p className="mt-1 text-xs text-amber-600">
+                  ⚠️ 会额外消耗一次 AI 调用，小模型/本地模型效果有限，推荐配合 Gemini 线路使用。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => save({ pre_write_warning_enabled: !cfg.pre_write_warning_enabled })}
+                className={`relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none ${
+                  cfg.pre_write_warning_enabled ? 'bg-rose-400' : 'bg-gray-200'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                    cfg.pre_write_warning_enabled ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
             </div>
           </>
         )}

@@ -15,7 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Chapter, Character, MemoryChunk, OutlineNode, Project, QualityDebt, ReaderPromise, StoryLine, WorldSetting
+from app.models import Chapter, Character, ChapterIndex, MemoryChunk, OutlineNode, Project, QualityDebt, ReaderPromise, StoryLine, WorldSetting
 from app.services.ai_service import AIService
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 from app.utils.chapter_numbering import display_chapter_number
@@ -320,6 +320,45 @@ def _build_draft_context(
         chapter_manifest_names = [c.name for c in priority]
     else:
         display_chars = characters if large_context else characters[:6]
+
+    # ── manifest 兜底：outline_node 未填 involved_character_ids 时，从核心角色 + 最近 5 章首次出场凑一份 ──
+    # 避免 AI 失去人物清单硬约束后随意引入新路人/破坏演员连续性。
+    if not chapter_manifest_names:
+        seen: set[str] = set()
+        fallback_names: list[str] = []
+
+        # 1) 主线核心角色：protagonist / antagonist 或 character_tier=core
+        for c in characters:
+            if not c.name:
+                continue
+            is_core = c.role in ("protagonist", "antagonist") or (c.character_tier == "core")
+            if is_core and c.name not in seen:
+                fallback_names.append(c.name)
+                seen.add(c.name)
+
+        # 2) 最近 5 章 ChapterIndex 中的 first_appearances
+        if chapter.sort_order is not None and chapter.sort_order > 1:
+            recent_indexes = (
+                db.query(ChapterIndex)
+                .filter(
+                    ChapterIndex.project_id == project_id,
+                    ChapterIndex.chapter_number < chapter.sort_order,
+                    ChapterIndex.chapter_number >= max(1, chapter.sort_order - 5),
+                )
+                .order_by(ChapterIndex.chapter_number.desc())
+                .all()
+            )
+            for ci in recent_indexes:
+                for fa in (ci.first_appearances or [])[:8]:
+                    name = (fa.get("name") if isinstance(fa, dict) else "") or ""
+                    name = name.strip()
+                    if name and name not in seen:
+                        fallback_names.append(name)
+                        seen.add(name)
+                if len(fallback_names) >= 12:
+                    break
+
+        chapter_manifest_names = fallback_names[:12]
 
     char_lines = []
     for c in display_chars:
@@ -642,6 +681,10 @@ async def draft_assist_stream(
                 yield f"data: {json.dumps({'text': chunk})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        # P2.5: 暴露本次生成中发生的上下文截断警告，供前端展示「本次 X 处被截断」
+        warnings = getattr(svc, "_truncation_warnings", None) or []
+        if warnings:
+            yield f"data: {json.dumps({'event': 'truncation_warning', 'warnings': list(warnings)}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

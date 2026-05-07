@@ -2,22 +2,24 @@
 gated_draft_routes.py — 质量门控写作端点
 
 资源边界：
-  - 本模块负责「起笔 → 自动质检 → 未达标则重写 → 循环」的全链路编排。
+  - 本模块负责「写前预警 → 起笔 → 自动质检 → 未达标则重写 → 循环」的全链路编排。
   - 单次起笔/续写（无循环）仍走 draft_routes.draft-assist/stream。
   - 质检逻辑复用 AIService.quality_check；存库逻辑内联（避免额外 HTTP 跳转）。
 
 SSE 协议（JSON lines，prefix: ``data: ``）：
-  gate_config   — 循环开始前推送生效配置
-  attempt_start — 本轮起笔开始（strategy: initial | patch | full_rewrite）
-  text          — 正文片段（与普通 draft-assist 格式完全一致）
-  attempt_done  — 本轮起笔结束，附字数
-  qc_running    — 质检开始
-  qc_result     — 质检结果（passed / score / subscribe_intent / suggestions）
-  gate_passed   — 达标，循环结束
-  rewrite_queued— 未达标，即将进行下一轮（附策略）
-  gate_failed   — 达到最大次数仍未达标，章节置 needs_review
-  error         — 不可恢复错误
-  [DONE]        — 流结束标记
+  gate_config       — 循环开始前推送生效配置
+  pre_warn_running  — 写前预警开始（仅当 pre_write_warning_enabled=true）
+  pre_warn_done     — 写前预警完成，附 risk_count / ok / protagonist_fact_sheet / writing_brief
+  attempt_start     — 本轮起笔开始（strategy: initial | patch | full_rewrite）
+  text              — 正文片段（与普通 draft-assist 格式完全一致）
+  attempt_done      — 本轮起笔结束，附字数
+  qc_running        — 质检开始
+  qc_result         — 质检结果（passed / score / subscribe_intent / suggestions）
+  gate_passed       — 达标，循环结束
+  rewrite_queued    — 未达标，即将进行下一轮（附策略）
+  gate_failed       — 达到最大次数仍未达标，章节置 needs_review
+  error             — 不可恢复错误
+  [DONE]            — 流结束标记
 """
 from __future__ import annotations
 
@@ -37,6 +39,7 @@ from app.models import (
     Chapter,
     ChapterVersion,
     Character,
+    Foreshadow,
     MemoryChunk,
     OutlineNode,
     PowerSystem,
@@ -62,9 +65,10 @@ router = APIRouter()
 # ── 默认配置 ────────────────────────────────────────────────────
 _DEFAULT_CONFIG: dict = {
     "auto_quality_gate": True,
-    "min_overall_score": 6.0,       # 0-10；默认偏低，不干扰日常写作
-    "min_subscribe_intent": 6.0,    # 章末追读意愿；专项门槛，独立于 overall
-    "max_rewrite_attempts": 3,      # 最大尝试次数（含首次）
+    "min_overall_score": 6.0,            # 0-10；默认偏低，不干扰日常写作
+    "min_subscribe_intent": 6.0,         # 章末追读意愿；专项门槛，独立于 overall
+    "max_rewrite_attempts": 3,           # 最大尝试次数（含首次）
+    "pre_write_warning_enabled": False,  # 写前预警：开启后每次门控写作前先跑一次预警并注入 prompt
 }
 
 
@@ -77,7 +81,8 @@ def _get_writing_config(project: Project, override: dict | None = None) -> dict:
     @param project: 已加载的 Project ORM 对象
     @param override: 请求体中的临时覆盖字段（可为空）
     @returns 包含 auto_quality_gate / min_overall_score /
-             min_subscribe_intent / max_rewrite_attempts 的配置 dict
+             min_subscribe_intent / max_rewrite_attempts /
+             pre_write_warning_enabled 的配置 dict
     """
     cfg = dict(_DEFAULT_CONFIG)
     project_extra = getattr(project, "extra", None) or {}
@@ -91,6 +96,7 @@ def _get_writing_config(project: Project, override: dict | None = None) -> dict:
     cfg["min_overall_score"] = max(0.0, min(10.0, float(cfg["min_overall_score"])))
     cfg["min_subscribe_intent"] = max(0.0, min(10.0, float(cfg["min_subscribe_intent"])))
     cfg["max_rewrite_attempts"] = max(1, min(5, int(cfg["max_rewrite_attempts"])))
+    cfg["pre_write_warning_enabled"] = bool(cfg.get("pre_write_warning_enabled", False))
     return cfg
 
 
@@ -100,6 +106,215 @@ def _count_words_plain(text: str) -> int:
     chinese = len(re.findall(r"[一-鿿]", clean))
     english = len(re.findall(r"[a-zA-Z]+", clean))
     return chinese + english
+
+
+async def _run_pre_write_warning_inline(
+    db: Session,
+    chapter: Chapter,
+    project: Project,
+    project_id: str,
+    svc: AIService,
+) -> dict:
+    """
+    在门控写作开始前内联执行写前预警，不走 HTTP 路由。
+
+    组装与 quality_routes.pre_write_warning 端点相同的上下文（记忆/伏笔/人物/境界），
+    调用 AIService.pre_write_warning，返回结果 dict（含 protagonist_fact_sheet /
+    writing_brief / must_events / hallucination_traps / risks / reminders）。
+
+    @param db: SQLAlchemy Session
+    @param chapter: 已加载的 Chapter 对象
+    @param project: 已加载的 Project 对象
+    @param project_id: 项目 UUID 字符串
+    @param svc: 已初始化的 AIService 实例
+    @returns pre_write_warning 返回的 dict
+    @raises Exception: AI 调用失败时向上抛出
+    """
+    # 记忆
+    memories = (
+        db.query(MemoryChunk)
+        .filter(MemoryChunk.project_id == project_id)
+        .order_by(MemoryChunk.chapter_number.asc())
+        .limit(40)
+        .all()
+    )
+    memory_chunks = [
+        {"title": m.title or "", "content": m.content or "", "memory_type": m.memory_type or "event"}
+        for m in memories
+    ]
+
+    # 未回收伏笔
+    open_foreshadows = (
+        db.query(Foreshadow)
+        .filter(Foreshadow.project_id == project_id, Foreshadow.status == "open")
+        .order_by(Foreshadow.priority.desc())
+        .limit(30)
+        .all()
+    )
+    foreshadow_lines = []
+    ch_no = chapter.sort_order or 0
+    for f in open_foreshadows:
+        code = f.code or "—"
+        overdue = "【⚠️已逾期】" if (f.planned_resolve_chapter and ch_no > 0 and f.planned_resolve_chapter <= ch_no) else ""
+        foreshadow_lines.append(
+            f"{overdue}{code} {f.title or ''} | 预计第{f.planned_resolve_chapter or '?'}章回收 | {(f.description or '')[:100]}"
+        )
+    foreshadow_ledger = "\n".join(foreshadow_lines)
+
+    # 人物状态（含技能/道具）
+    characters = db.query(Character).filter(Character.project_id == project_id).all()
+
+    def _names_brief(lst, key: str) -> str:
+        if not lst:
+            return ""
+        return "、".join(
+            (x.get(key, "") if isinstance(x, dict) else str(x))
+            for x in lst[:6] if x
+        )
+
+    char_lines = []
+    for c in characters[:12]:
+        line = f"{c.name}：境界={c.current_realm or '?'}，位置={c.current_location or '?'}，状态={c.current_status or 'alive'}"
+        sk = _names_brief(c.known_skills, "skill_name")
+        if sk:
+            line += f"，技能=[{sk}]"
+        it = _names_brief(c.owned_items, "item_name")
+        if it:
+            line += f"，持有=[{it}]"
+        char_lines.append(line)
+    character_states = "\n".join(char_lines)
+
+    # 境界体系摘要
+    power_systems = db.query(PowerSystem).filter(PowerSystem.project_id == project_id).all()
+    ps_lines = []
+    for ps in power_systems:
+        levels = []
+        for lv in (ps.levels or [])[:20]:
+            levels.append(lv.get("name") or "" if isinstance(lv, dict) else str(lv))
+        rule = ps.special_rules or ps.breakthrough_condition or ps.description or ""
+        ps_lines.append(
+            f"{ps.name}：境界序列=[{' < '.join(l for l in levels if l)}]；"
+            f"主角当前={ps.protagonist_current_rank or '未知'}；规则={rule[:120]}"
+        )
+    power_systems_summary = "\n".join(ps_lines)
+
+    # 大纲五要素
+    outline_context = ""
+    phase = ""
+    outline_node: OutlineNode | None = None
+    if chapter.outline_node_id:
+        outline_node = db.query(OutlineNode).filter(OutlineNode.id == chapter.outline_node_id).first()
+        if outline_node:
+            parts = []
+            if outline_node.summary:
+                parts.append(f"概述：{outline_node.summary}")
+            if outline_node.hook:
+                parts.append(f"开篇钩子：{outline_node.hook}")
+            if outline_node.conflict:
+                parts.append(f"核心冲突：{outline_node.conflict}")
+            if outline_node.highlight:
+                parts.append(f"章末方向：{outline_node.highlight}")
+            if outline_node.power_milestone:
+                parts.append(f"实力里程碑：{outline_node.power_milestone}")
+            if outline_node.emotional_tone:
+                parts.append(f"情感基调：{outline_node.emotional_tone}")
+            outline_context = "\n".join(parts)
+            phase = getattr(outline_node, "phase", None) or (outline_node.extra or {}).get("phase") or ""
+    if not phase and outline_node and outline_node.parent_id:
+        vol = db.query(OutlineNode).filter(OutlineNode.id == outline_node.parent_id).first()
+        if vol:
+            phase = getattr(vol, "phase", None) or (vol.extra or {}).get("phase") or ""
+
+    # 连续性账本
+    story_core = project.story_core if isinstance(project.story_core, dict) else {}
+    continuity_state = str(story_core.get("rolling_continuity_state", ""))
+
+    # 大纲五要素兜底（无 outline_node 时用章节标题）
+    chapter_plan_summary = outline_context or f"第{chapter.sort_order or '?'}章《{chapter.title}》"
+
+    return await svc.pre_write_warning(
+        project_title=project.title,
+        genre=project.genre or "玄幻",
+        chapter_plan_summary=chapter_plan_summary,
+        memory_chunks=memory_chunks,
+        continuity_state=continuity_state,
+        foreshadow_ledger=foreshadow_ledger,
+        character_states=character_states,
+        power_systems_summary=power_systems_summary,
+        outline_context=outline_context,
+        phase=phase,
+    )
+
+
+def _build_pre_warn_prompt_block(warn_result: dict) -> str:
+    """
+    将写前预警结果格式化为注入首次起笔 prompt 的「写前简报」块。
+
+    不重复向 AI 展示完整的 JSON，只提取对写正文最关键的信息：
+    - 主角状态锁定（protagonist_fact_sheet）
+    - 本章写法简报（writing_brief）
+    - 必发事件（must_events）
+    - 幻觉预防清单（hallucination_traps）
+    - 高危/中危风险（risks severity>=medium）
+
+    @param warn_result: pre_write_warning 返回的 dict
+    @returns 格式化文本块（用于拼入 user_prompt）
+    """
+    lines: list[str] = ["\n\n===【写前简报（由30年主编生成，写正文时必须严格遵守）】==="]
+
+    # ① 主角状态锁定
+    pfs = warn_result.get("protagonist_fact_sheet") or {}
+    if isinstance(pfs, dict):
+        lines.append("\n▍主角状态锁定（本章开笔时的精确状态，不得幻觉升级或改动）")
+        if pfs.get("realm"):
+            lines.append(f"  境界：{pfs['realm']}")
+        if pfs.get("location"):
+            lines.append(f"  位置：{pfs['location']}")
+        if pfs.get("key_skills"):
+            lines.append("  本章可用技能：" + "；".join(pfs["key_skills"][:5]))
+        if pfs.get("key_items"):
+            lines.append("  持有道具：" + "；".join(pfs["key_items"][:5]))
+        if pfs.get("forbidden"):
+            lines.append("  ⛔ 本章禁止出现：" + "；".join(pfs["forbidden"][:5]))
+
+    # ② 本章写作简报
+    wb = warn_result.get("writing_brief") or {}
+    if isinstance(wb, dict) and any(wb.values()):
+        lines.append("\n▍本章写作指导")
+        if wb.get("opening_strategy"):
+            lines.append(f"  开篇策略：{wb['opening_strategy']}")
+        if wb.get("conflict_structure"):
+            lines.append(f"  冲突节拍：{wb['conflict_structure']}")
+        if wb.get("closing_hook"):
+            lines.append(f"  章末钩子：{wb['closing_hook']}")
+        if wb.get("word_rhythm"):
+            lines.append(f"  字数节奏：{wb['word_rhythm']}")
+
+    # ③ 必发事件
+    must_events = warn_result.get("must_events") or []
+    if must_events:
+        lines.append("\n▍本章必须发生的事件（逐条落实，不得遗漏）")
+        for i, ev in enumerate(must_events[:4], 1):
+            lines.append(f"  {i}. {ev}")
+
+    # ④ 幻觉预防
+    traps = warn_result.get("hallucination_traps") or []
+    if traps:
+        lines.append("\n▍常见幻觉预防（逐条注意）")
+        for trap in traps[:5]:
+            lines.append(f"  • {trap}")
+
+    # ⑤ 高危/中危风险
+    risks = [r for r in (warn_result.get("risks") or []) if r.get("severity") in ("high", "critical", "medium")]
+    if risks:
+        lines.append("\n▍需处理的风险（severity medium/high/critical）")
+        for r in risks[:5]:
+            lines.append(f"  [{r.get('severity','?')}·{r.get('type','?')}] {r.get('description','')}")
+            if r.get("suggested_fix"):
+                lines.append(f"    建议：{r['suggested_fix']}")
+
+    lines.append("===")
+    return "\n".join(lines)
 
 
 def _plain_text_from_html(html: str) -> str:
@@ -320,10 +535,17 @@ def _check_passed(qc_result: dict, cfg: dict) -> tuple[bool, list[str]]:
     """
     判断质检是否通过门槛，返回 (passed, failing_dimension_names)。
 
+    当 auto_quality_gate=False 时：质检结果仍会推送给前端供参考，
+    但不触发重写循环（始终视为通过），避免只开预警却被强制重写。
+
     @param qc_result: quality_check 返回的完整结果 dict
-    @param cfg: 生效的 writing_config dict
+    @param cfg: 生效的 writing_config dict（需含 auto_quality_gate 键）
     @returns (True, []) 若通过；(False, [...]) 列出未达标维度名
     """
+    # auto_quality_gate 关闭时：仅做信息性质检，不触发重写
+    if not cfg.get("auto_quality_gate", True):
+        return (True, [])
+
     overall = float(qc_result.get("overall_score") or 0)
     dims = qc_result.get("dimensions") or {}
     subscribe_intent = float((dims.get("subscribe_intent") or {}).get("score") or 0)
@@ -371,46 +593,84 @@ def _build_rewrite_prompt(
     # 找出较好维度（≥ 8 分）
     strong_dims = [k for k, v in dims.items() if isinstance(v, dict) and float(v.get("score") or 0) >= 8]
 
+    # 按失分维度从建议列表里抽出最相关的那几条（匹配维度英文/中文关键词）
+    def _pick_dim_suggestions(weak_dim_keys: list[str], all_suggestions: list[str]) -> list[str]:
+        dim_keywords = {
+            "plot": ["情节", "剧情", "推进"],
+            "character": ["人物", "角色", "动机", "性格"],
+            "setting_consistency": ["境界", "位置", "设定", "一致"],
+            "pacing": ["节奏", "拖沓", "仓促"],
+            "hooks": ["钩子", "悬念", "章末"],
+            "outline_alignment": ["大纲", "目标"],
+            "face_slap_payoff": ["打脸", "爽点", "兑现"],
+            "emotional_resonance": ["情感", "揪心", "共鸣"],
+            "subscribe_intent": ["追读", "订阅", "翻页"],
+        }
+        matched: list[str] = []
+        seen_idx: set[int] = set()
+        for dk in weak_dim_keys:
+            for kw in dim_keywords.get(dk, [dk]):
+                for i, s in enumerate(all_suggestions):
+                    if i in seen_idx:
+                        continue
+                    if kw in s:
+                        matched.append(s)
+                        seen_idx.add(i)
+        # 补足：失分维度相关建议不足 3 条时，按顺序补
+        for i, s in enumerate(all_suggestions):
+            if len(matched) >= 4:
+                break
+            if i not in seen_idx:
+                matched.append(s)
+                seen_idx.add(i)
+        return matched[:4]
+
     if strategy == "patch":
+        weak_dim_keys = [k for k, v in dims.items() if isinstance(v, dict) and float(v.get("score") or 10) < 7]
+        targeted_suggestions = _pick_dim_suggestions(weak_dim_keys, suggestions)
         block = textwrap.dedent(f"""
 
-        ===【质量门控 · 第{attempt}轮 · 定点修复】===
-        上轮整体得分：{overall}/10，未达门槛，需要修复以下失分区域。
+        ===【质量门控 · 第{attempt}轮 · 定点修复 PATCH】===
+        上轮整体得分：{overall}/10，未达门槛。本轮只修**失分维度**，其余结构**原样保留**。
 
-        ▍需重点改善的维度：
-        {chr(10).join(f"  • {d}" for d in weak_dims) if weak_dims else "  （无明显失分维度，请整体提升）"}
+        ▍失分维度（本轮唯一修复目标）：
+        {chr(10).join(f"  • {d}" for d in weak_dims) if weak_dims else "  （无明显失分维度，仅做章末钩子强化）"}
 
-        ▍编辑具体建议（逐条落实）：
-        {chr(10).join(f"  {i+1}. {s}" for i, s in enumerate(suggestions[:5]))}
+        ▍针对失分维度的具体修复项（本轮只落实这几条，不要额外发挥）：
+        {chr(10).join(f"  {i+1}. {s}" for i, s in enumerate(targeted_suggestions)) if targeted_suggestions else "  （无定向建议，按失分描述微调）"}
 
-        ▍已发现的一致性/钩子问题：
+        ▍一致性/钩子问题：
         {chr(10).join(f"  • {iss.get('description', '')}" for iss in issues[:3]) if issues else "  （无）"}
 
-        ▍表现良好的维度（保持现有结构，不必推翻）：{', '.join(strong_dims) if strong_dims else '无'}
+        ▍强维度（禁止触动）：{', '.join(strong_dims) if strong_dims else '无'}
+        这些维度所在段落的人物对白/场景动作/世界观细节**逐字保留或等义改写**，不要重新构思。
 
-        写作要求：
-        - 重写时只针对失分原因修改对应段落，其余段落可沿用上轮结构
-        - 特别关注章末钩子（subscribe_intent）——最后一段必须制造悬念或爽感，让读者忍不住翻下一页
-        - 不要口号式敷衍：「林默内心一凛」之类的情绪标签无法替代具体的场景动作
+        PATCH 约束：
+        - 修改范围控制在失分段落；强维度段落的字句结构保持稳定
+        - 保持与上一轮相同的 POV、叙事节奏、人物口吻
+        - 章末钩子段落若在失分维度中，必须重写；否则保留
+        - 禁止在本轮引入新主线、新角色、新伏笔
         ===
         """)
     else:  # full_rewrite
         block = textwrap.dedent(f"""
 
-        ===【质量门控 · 第{attempt}轮 · 全量重写】===
-        上轮得分：{overall}/10，两次定点修复均未达标。
-        本轮请完整重写本章，以下为硬约束（每一条都必须体现在正文中）：
+        ===【质量门控 · 第{attempt}轮 · 全量重写 FULL REWRITE】===
+        ⚠️ 上轮得分 {overall}/10，前几轮定点修复均未达标。
+        **本轮请彻底重构本章结构**，允许推翻上一版的场景顺序、POV 切换点、章末钩子设计。
 
-        ▍必须解决的问题：
-        {chr(10).join(f"  • {iss.get('description', '')}" for iss in issues[:5]) if issues else "  （无）"}
+        ▍必须解决的全部问题：
+        {chr(10).join(f"  • {iss.get('description', '')}" for iss in issues[:6]) if issues else "  （无具体问题，请整体重构）"}
 
-        ▍全部编辑建议（本轮均须落实）：
-        {chr(10).join(f"  {i+1}. {s}" for i, s in enumerate(suggestions))}
+        ▍全部编辑建议（每一条都须在正文中有对应落地）：
+        {chr(10).join(f"  {i+1}. {s}" for i, s in enumerate(suggestions[:10]))}
 
-        ▍必须满足的硬性要求：
-        - 章末最后一段：制造追读钩子（悬念/爽感/伏笔揭开），不可以角色思考或旁白收尾
-        - 逻辑连续：人物位置、境界、持有技能须与上一章复盘记录完全吻合
-        - 打脸兑现：若本章大纲要求打脸/爽点，必须以具体场景动作落地，不可用「众人哗然」带过
+        ▍重构硬约束：
+        - 章末最后一段必须是强钩子：悬念揭开/爽感兑现/伏笔引爆——不得以角色思考或旁白收尾
+        - 人物境界/位置/持有物/已习得技能必须与【情节档案】完全吻合
+        - 打脸/爽点以具体场景动作落地（动作+表情+台词），不可用「众人哗然」「场面寂静」等概括词带过
+        - 允许调整分场顺序与详略分布，但必须服务于本章大纲的核心事件
+        - 不得扩写为两章；正文总字数控制在大纲预算 ±15% 内
         ===
         """)
 
@@ -474,6 +734,7 @@ async def gated_draft_stream(
             "min_subscribe_intent": cfg["min_subscribe_intent"],
             "max_rewrite_attempts": cfg["max_rewrite_attempts"],
             "auto_quality_gate": cfg["auto_quality_gate"],
+            "pre_write_warning_enabled": cfg["pre_write_warning_enabled"],
         })
 
         user_prompt_str = (req.user_prompt or "").strip()
@@ -483,6 +744,39 @@ async def gated_draft_stream(
         # 而 gated 始终 replace_existing=True，draft_assist_stream 内部不读 existing_content。
         # 仅第 1 轮构建一次，后续轮直接复用，省 DB 查询 + 拼接开销。
         ctx: dict | None = None
+
+        # ── 写前预警（仅首次，pre_write_warning_enabled=True 时执行）──────────
+        # 将预警结果格式化为「写前简报」块，通过 draft_assist_stream 的专属参数
+        # pre_write_brief 注入（独立 2500 字预算），不拼入 user_prompt（上限 800 字）。
+        # user_prompt_str 只保留用户/作者的补充指令，保持语义干净。
+        # 后续重写轮仍沿用同一份 pre_warn_brief_block（状态锁定在整轮写作期间不变）。
+        pre_warn_brief_block: str = ""
+        if cfg["pre_write_warning_enabled"]:
+            yield _sse({"event": "pre_warn_running"})
+            try:
+                db.refresh(chapter)
+                warn_result = await _run_pre_write_warning_inline(
+                    db=db, chapter=chapter, project=project,
+                    project_id=project_id, svc=svc,
+                )
+                # 格式化为简报块，通过专属参数传入（不污染 user_prompt）
+                pre_warn_brief_block = _build_pre_warn_prompt_block(warn_result)
+
+                yield _sse({
+                    "event": "pre_warn_done",
+                    "ok": warn_result.get("ok", True),
+                    "risk_count": warn_result.get("risk_count", 0),
+                    "protagonist_fact_sheet": warn_result.get("protagonist_fact_sheet") or {},
+                    "writing_brief": warn_result.get("writing_brief") or {},
+                    "must_events": warn_result.get("must_events") or [],
+                    "hallucination_traps": warn_result.get("hallucination_traps") or [],
+                    "risks": (warn_result.get("risks") or [])[:5],
+                    "reminders": (warn_result.get("reminders") or [])[:5],
+                })
+            except Exception as e:
+                # 预警失败不阻断写作，降级为无预警模式（pre_warn_brief_block 保持空字符串）
+                yield _sse({"event": "pre_warn_done", "ok": True, "risk_count": 0,
+                            "error": f"写前预警失败（已降级继续写作）：{e}"})
 
         for attempt in range(1, cfg["max_rewrite_attempts"] + 1):
             # ── 决定本轮策略 ───────────────────────────────────────────
@@ -526,6 +820,9 @@ async def gated_draft_stream(
                 async for chunk in svc.draft_assist_stream(
                     **ctx,
                     user_prompt=current_user_prompt,
+                    # 写前简报走独立通道（2500 字预算），不与 user_prompt 竞争截断配额；
+                    # 重写轮沿用首轮生成的同一份简报，保持状态锁定在整轮写作期间一致。
+                    pre_write_brief=pre_warn_brief_block,
                     replace_existing=True,  # 门控写作始终整章重写
                     stream_log_context={
                         "project_id": str(project_id),
@@ -538,6 +835,15 @@ async def gated_draft_stream(
             except Exception as e:
                 yield _sse({"error": f"起笔失败（第{attempt}轮）：{e}"})
                 return
+
+            # P2.5: 推送本轮截断警告（如有）
+            attempt_warnings = getattr(svc, "_truncation_warnings", None) or []
+            if attempt_warnings:
+                yield _sse({
+                    "event": "truncation_warning",
+                    "attempt": attempt,
+                    "warnings": list(attempt_warnings),
+                })
 
             # 提取叙事正文（去掉索引块）
             narr, _ = split_plain_manuscript_and_index_block(accumulated)

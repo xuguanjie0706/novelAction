@@ -7,7 +7,7 @@ url = "https://pypi.org/simple"
 verify_ssl = true
 
 [packages]
-fastapi = "==0.111.0"
+fastapi = "==0.118.0"
 uvicorn = { version = "==0.29.0", extras = ["standard"] }
 sqlalchemy = "==2.0.30"
 alembic = "==1.13.1"
@@ -15,6 +15,7 @@ psycopg2-binary = "==2.9.9"
 pgvector = "==0.2.5"
 pydantic = "==2.7.1"
 pydantic-settings = "==2.2.1"
+email-validator = ">=2.0.0"
 python-dotenv = "==1.0.1"
 redis = "==5.0.4"
 celery = "==5.4.0"

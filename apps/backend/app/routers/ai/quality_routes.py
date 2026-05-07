@@ -256,8 +256,8 @@ async def pre_write_warning(
     db: Session = Depends(get_db),
 ):
     """
-    写前预警：传入本章计划，对照记忆库/连续性账本/伏笔台账，输出潜在矛盾风险。
-    供写作页「动笔前」调用，让作者在落笔前发现连续性/伏笔/设定/人物OOC问题。
+    写前预警：传入本章计划，以「三十年主编」视角输出主角状态锁定、写作简报、必发事件、
+    幻觉预防清单和风险扫描，帮助写章 AI 在落笔前建立准确的世界模型。
     结果写入 pre_write_warning_records，可通过 GET history 再次查阅。
     """
     project = db.query(Project).filter(Project.id == project_id).first()
@@ -303,12 +303,86 @@ async def pre_write_warning(
         )
     foreshadow_ledger = "\n".join(foreshadow_lines)
 
-    # 加载人物状态
+    # 加载人物状态（含技能与持有物）
     characters = db.query(Character).filter(Character.project_id == project_id).all()
-    character_states = "\n".join(
-        f"{c.name}：境界={c.current_realm or '?'}，位置={c.current_location or '?'}，状态={c.current_status or 'alive'}"
-        for c in characters[:12]
-    )
+
+    def _skill_names_brief(known_skills) -> str:
+        if not known_skills:
+            return ""
+        names = [
+            (sk.get("skill_name", "") if isinstance(sk, dict) else str(sk))
+            for sk in known_skills[:6]
+        ]
+        return "、".join(n for n in names if n)
+
+    def _item_names_brief(owned_items) -> str:
+        if not owned_items:
+            return ""
+        names = [
+            (it.get("item_name", "") if isinstance(it, dict) else str(it))
+            for it in owned_items[:6]
+        ]
+        return "、".join(n for n in names if n)
+
+    character_lines = []
+    for c in characters[:12]:
+        parts = [f"{c.name}：境界={c.current_realm or '?'}，位置={c.current_location or '?'}，状态={c.current_status or 'alive'}"]
+        sk = _skill_names_brief(c.known_skills)
+        if sk:
+            parts.append(f"技能=[{sk}]")
+        it = _item_names_brief(c.owned_items)
+        if it:
+            parts.append(f"持有=[{it}]")
+        character_lines.append("，".join(parts))
+    character_states = "\n".join(character_lines)
+
+    # 境界体系摘要
+    from app.models import PowerSystem
+    power_systems = db.query(PowerSystem).filter(PowerSystem.project_id == project_id).all()
+    ps_lines = []
+    for ps in power_systems:
+        levels = []
+        for lv in (ps.levels or [])[:20]:
+            if isinstance(lv, dict):
+                levels.append(lv.get("name") or "")
+            else:
+                levels.append(str(lv))
+        rule = ps.special_rules or ps.breakthrough_condition or ps.description or ""
+        ps_lines.append(
+            f"{ps.name}：境界序列=[{' < '.join(l for l in levels if l)}]；"
+            f"主角当前={ps.protagonist_current_rank or '未知'}；规则={rule[:120]}"
+        )
+    power_systems_summary = "\n".join(ps_lines)
+
+    # 大纲上下文（五要素）
+    outline_context = ""
+    outline_node = None
+    if chapter.outline_node_id:
+        outline_node = db.query(OutlineNode).filter(OutlineNode.id == chapter.outline_node_id).first()
+        if outline_node:
+            parts = []
+            if outline_node.summary:
+                parts.append(f"概述：{outline_node.summary}")
+            if outline_node.hook:
+                parts.append(f"开篇钩子：{outline_node.hook}")
+            if outline_node.conflict:
+                parts.append(f"核心冲突：{outline_node.conflict}")
+            if outline_node.highlight:
+                parts.append(f"章末方向：{outline_node.highlight}")
+            if outline_node.power_milestone:
+                parts.append(f"实力里程碑：{outline_node.power_milestone}")
+            if outline_node.emotional_tone:
+                parts.append(f"情感基调：{outline_node.emotional_tone}")
+            outline_context = "\n".join(parts)
+
+    # 章节阶段（phase）
+    phase = ""
+    if outline_node:
+        phase = getattr(outline_node, "phase", None) or (outline_node.extra or {}).get("phase") or ""
+    if not phase and outline_node and outline_node.parent_id:
+        vol = db.query(OutlineNode).filter(OutlineNode.id == outline_node.parent_id).first()
+        if vol:
+            phase = getattr(vol, "phase", None) or (vol.extra or {}).get("phase") or ""
 
     # 取最近连续性账本（从项目 story_core 里读滚动状态）
     story_core = project.story_core if isinstance(project.story_core, dict) else {}
@@ -327,6 +401,9 @@ async def pre_write_warning(
         continuity_state=str(continuity_state) if continuity_state else "",
         foreshadow_ledger=foreshadow_ledger,
         character_states=character_states,
+        power_systems_summary=power_systems_summary,
+        outline_context=outline_context,
+        phase=phase,
     )
 
     ch_no = req.chapter_number if req.chapter_number > 0 else (chapter.sort_order or 0)

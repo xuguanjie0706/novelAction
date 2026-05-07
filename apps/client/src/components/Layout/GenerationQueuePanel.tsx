@@ -1251,11 +1251,39 @@ async function runGatedRewriteChapter(
 
       // 结构化事件处理
       if (ev === 'gate_config') {
+        const warnEnabled = obj.pre_write_warning_enabled === true
         pushProgress({
           step: 'gate_config',
-          label: `门控配置：综合分≥${obj.min_overall_score} / 订阅意愿≥${obj.min_subscribe_intent}，最多${obj.max_rewrite_attempts}次`,
+          label: `门控配置：综合分≥${obj.min_overall_score} / 订阅意愿≥${obj.min_subscribe_intent}，最多${obj.max_rewrite_attempts}次${warnEnabled ? ' · 写前预警已开启' : ''}`,
           done: true,
           error: false,
+        })
+        return
+      }
+
+      if (ev === 'pre_warn_running') {
+        pushProgress({
+          step: 'pre_warn',
+          label: '写前预警：30年主编正在审稿（主角状态/幻觉预防/写法简报）…',
+          done: false,
+          error: false,
+        })
+        return
+      }
+
+      if (ev === 'pre_warn_done') {
+        const ok = obj.ok !== false
+        const riskCount = typeof obj.risk_count === 'number' ? obj.risk_count : 0
+        const errMsg = typeof obj.error === 'string' ? obj.error : null
+        pushProgress({
+          step: 'pre_warn',
+          label: errMsg
+            ? `写前预警：${errMsg}`
+            : ok
+              ? `写前预警完成（发现 ${riskCount} 处风险，简报已注入 prompt）`
+              : `写前预警：发现 ${riskCount} 处风险需注意，简报已注入 prompt`,
+          done: true,
+          error: !!errMsg,
         })
         return
       }

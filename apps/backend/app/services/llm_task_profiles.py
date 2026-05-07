@@ -55,6 +55,27 @@ TASK_PROFILES: dict[str, dict] = {
         "frequency_penalty": 0.3,
         "presence_penalty": 0.2,
     },
+    "draft.rising": {
+        # 扩张期 / 起飞期：世界观推进需要一点稳定性，温度从 chapter 默认 0.9 降到 0.8
+        "temperature": 0.8,
+        "top_p": 0.92,
+        "frequency_penalty": 0.4,
+        "presence_penalty": 0.3,
+    },
+    "draft.turning": {
+        # 转折期：矛盾升级与代价兑现，需要重复关键意象/伏笔名词，降 frequency_penalty
+        "temperature": 0.85,
+        "top_p": 0.93,
+        "frequency_penalty": 0.2,
+        "presence_penalty": 0.3,
+    },
+    "draft.ending": {
+        # 收束期：留下一卷悬念种子，克制但不像 dark_hour 那么压抑
+        "temperature": 0.8,
+        "top_p": 0.92,
+        "frequency_penalty": 0.3,
+        "presence_penalty": 0.25,
+    },
     "suggest.stream": {
         # 写作建议：偏自由，但不要走偏
         "temperature": 0.8,
@@ -151,4 +172,10 @@ def phase_to_draft_task(phase: Optional[str]) -> str:
         return "draft.climax"
     if p in ("dark_hour", "darkhour", "至暗期"):
         return "draft.dark_hour"
+    if p in ("rising", "扩张期", "起飞期"):
+        return "draft.rising"
+    if p in ("turning", "转折期"):
+        return "draft.turning"
+    if p in ("ending", "收束期", "结局期"):
+        return "draft.ending"
     return "draft.chapter"

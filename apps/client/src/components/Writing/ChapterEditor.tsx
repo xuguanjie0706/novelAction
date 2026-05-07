@@ -52,6 +52,25 @@ type PreWriteWarnResult = {
   risk_count: number
   risks: Array<{ type: string; severity: string; description: string; suggested_fix: string }>
   reminders: string[]
+  /** 主角状态锁定：境界/位置/可用技能/持有道具/禁止项 */
+  protagonist_fact_sheet?: {
+    realm: string
+    location: string
+    key_skills: string[]
+    key_items: string[]
+    forbidden: string[]
+  }
+  /** 本章写作简报：开篇策略/冲突节拍/章末钩子/字数节奏 */
+  writing_brief?: {
+    opening_strategy: string
+    conflict_structure: string
+    closing_hook: string
+    word_rhythm: string
+  }
+  /** 本章必发事件列表 */
+  must_events?: string[]
+  /** 幻觉预防清单 */
+  hallucination_traps?: string[]
   error?: string
   record_id?: string
 }
@@ -85,11 +104,44 @@ function normalizePreWriteWarnResult(raw: unknown): PreWriteWarnResult {
     typeof r.ok === 'boolean'
       ? r.ok
       : !risks.some((x) => x.severity === 'high' || x.severity === 'critical')
+
+  // 主角状态锁定
+  const pfsRaw = r.protagonist_fact_sheet
+  const protagonist_fact_sheet: PreWriteWarnResult['protagonist_fact_sheet'] =
+    pfsRaw && typeof pfsRaw === 'object'
+      ? {
+          realm: String((pfsRaw as any).realm || ''),
+          location: String((pfsRaw as any).location || ''),
+          key_skills: Array.isArray((pfsRaw as any).key_skills) ? (pfsRaw as any).key_skills.map(String) : [],
+          key_items: Array.isArray((pfsRaw as any).key_items) ? (pfsRaw as any).key_items.map(String) : [],
+          forbidden: Array.isArray((pfsRaw as any).forbidden) ? (pfsRaw as any).forbidden.map(String) : [],
+        }
+      : undefined
+
+  // 写作简报
+  const wbRaw = r.writing_brief
+  const writing_brief: PreWriteWarnResult['writing_brief'] =
+    wbRaw && typeof wbRaw === 'object'
+      ? {
+          opening_strategy: String((wbRaw as any).opening_strategy || ''),
+          conflict_structure: String((wbRaw as any).conflict_structure || ''),
+          closing_hook: String((wbRaw as any).closing_hook || ''),
+          word_rhythm: String((wbRaw as any).word_rhythm || ''),
+        }
+      : undefined
+
+  const must_events = Array.isArray(r.must_events) ? r.must_events.map(String).filter(Boolean) : []
+  const hallucination_traps = Array.isArray(r.hallucination_traps) ? r.hallucination_traps.map(String).filter(Boolean) : []
+
   return {
     ok,
     risk_count,
     risks,
     reminders,
+    protagonist_fact_sheet,
+    writing_brief,
+    must_events,
+    hallucination_traps,
     error: typeof r.error === 'string' ? r.error : undefined,
     record_id: typeof r.record_id === 'string' ? r.record_id : undefined,
   }
@@ -676,14 +728,26 @@ export default function ChapterEditor({
     if (opts?.replaceExisting) {
       if (!window.confirm('「重新生成本章」将按大纲替换当前正文；若有旧稿会在保存前自动留版本快照。确定继续？')) return
       const route = useAppStore.getState().aiBackendRoute
-      // 若项目启用了质量门控（auto_quality_gate=true 且至少有一个非零门槛），走门控重写
+      // 满足以下任一条件时走门控路由（gated_rewrite_chapter）：
+      //   1. pre_write_warning_enabled=true：需要写前预警，必须走门控路由才能触发
+      //   2. auto_quality_gate=true 且至少一个门槛 > 0：需要质检循环
+      // 两者独立，均可单独启用；仅两者均关闭时才走轻量 rewrite_chapter。
       const useGated =
-        writingConfig?.auto_quality_gate === true &&
-        (writingConfig.min_overall_score > 0 || writingConfig.min_subscribe_intent > 0)
+        writingConfig?.pre_write_warning_enabled === true ||
+        (writingConfig?.auto_quality_gate === true &&
+          (writingConfig.min_overall_score > 0 || writingConfig.min_subscribe_intent > 0))
+      const gatedLabel = (() => {
+        const hasWarn = writingConfig?.pre_write_warning_enabled === true
+        const hasGate = writingConfig?.auto_quality_gate === true &&
+          (writingConfig.min_overall_score > 0 || writingConfig.min_subscribe_intent > 0)
+        if (hasWarn && hasGate) return `预警+门控重写《${chapter.title}》`
+        if (hasWarn) return `写前预警重写《${chapter.title}》`
+        return `门控重写《${chapter.title}》`
+      })()
       addGenTask({
         type: useGated ? 'gated_rewrite_chapter' : 'rewrite_chapter',
         projectId,
-        label: useGated ? `门控重写《${chapter.title}》` : `重写《${chapter.title}》`,
+        label: useGated ? gatedLabel : `重写《${chapter.title}》`,
         params: {
           chapterId: chapter.id,
           userPrompt: opts.overridePrompt ?? aiExtraPrompt.trim(),
@@ -691,7 +755,15 @@ export default function ChapterEditor({
           ...routeLlmProviderPayload(route),
         },
       })
-      toast.success(useGated ? '已加入 AI 队列：质量门控写作（自动质检+重写）' : '已加入 AI 队列：开始重写本章')
+      const toastMsg = (() => {
+        if (!useGated) return '已加入 AI 队列：开始重写本章'
+        const hasWarn = writingConfig?.pre_write_warning_enabled === true
+        const hasGate = writingConfig?.auto_quality_gate === true
+        if (hasWarn && hasGate) return '已加入 AI 队列：写前预警 + 质量门控写作'
+        if (hasWarn) return '已加入 AI 队列：写前预警写作（质检仅参考，不循环重写）'
+        return '已加入 AI 队列：质量门控写作（自动质检+重写）'
+      })()
+      toast.success(toastMsg)
       return
     }
     void (async () => {
@@ -1936,17 +2008,128 @@ export default function ChapterEditor({
                           ? 'bg-green-50 border border-green-200 text-green-700'
                           : 'bg-rose-50 border border-rose-200 text-rose-700',
                       )}>
-                        {warnResult.ok
-                          ? <ShieldCheck size={14} />
-                          : <ShieldAlert size={14} />}
+                        {warnResult.ok ? <ShieldCheck size={14} /> : <ShieldAlert size={14} />}
                         {warnResult.ok
                           ? `未发现高危风险，可以动笔`
                           : `发现 ${warnResult.risk_count} 处风险，建议先修正`}
                       </div>
 
-                      {/* 风险列表 */}
+                      {/* ── 主角状态锁定 ── */}
+                      {warnResult.protagonist_fact_sheet && (
+                        warnResult.protagonist_fact_sheet.realm ||
+                        warnResult.protagonist_fact_sheet.key_skills.length > 0 ||
+                        warnResult.protagonist_fact_sheet.forbidden.length > 0
+                      ) && (
+                        <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-2.5 space-y-1.5">
+                          <p className="text-[10px] font-semibold text-blue-700 uppercase tracking-wide flex items-center gap-1">
+                            <Target size={10} />主角状态锁定
+                          </p>
+                          {warnResult.protagonist_fact_sheet.realm && (
+                            <p className="text-xs text-blue-900">
+                              <span className="font-medium">境界：</span>{warnResult.protagonist_fact_sheet.realm}
+                              {warnResult.protagonist_fact_sheet.location && (
+                                <span className="ml-2 text-blue-700">／位置：{warnResult.protagonist_fact_sheet.location}</span>
+                              )}
+                            </p>
+                          )}
+                          {warnResult.protagonist_fact_sheet.key_skills.length > 0 && (
+                            <div className="text-xs text-blue-800 space-y-0.5">
+                              <span className="font-medium">可用技能：</span>
+                              {warnResult.protagonist_fact_sheet.key_skills.map((s, i) => (
+                                <div key={i} className="pl-2 text-blue-700 leading-relaxed">· {s}</div>
+                              ))}
+                            </div>
+                          )}
+                          {warnResult.protagonist_fact_sheet.key_items.length > 0 && (
+                            <div className="text-xs text-blue-800 space-y-0.5">
+                              <span className="font-medium">持有道具：</span>
+                              {warnResult.protagonist_fact_sheet.key_items.map((s, i) => (
+                                <div key={i} className="pl-2 text-blue-700 leading-relaxed">· {s}</div>
+                              ))}
+                            </div>
+                          )}
+                          {warnResult.protagonist_fact_sheet.forbidden.length > 0 && (
+                            <div className="text-xs space-y-0.5">
+                              <span className="font-medium text-rose-700">⛔ 本章禁止：</span>
+                              {warnResult.protagonist_fact_sheet.forbidden.map((s, i) => (
+                                <div key={i} className="pl-2 text-rose-600 leading-relaxed">· {s}</div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* ── 本章写作简报 ── */}
+                      {warnResult.writing_brief && (
+                        warnResult.writing_brief.opening_strategy ||
+                        warnResult.writing_brief.conflict_structure ||
+                        warnResult.writing_brief.closing_hook
+                      ) && (
+                        <div className="rounded-lg border border-purple-200 bg-purple-50/50 p-2.5 space-y-1.5">
+                          <p className="text-[10px] font-semibold text-purple-700 uppercase tracking-wide flex items-center gap-1">
+                            <Feather size={10} />本章写法简报
+                          </p>
+                          {warnResult.writing_brief.opening_strategy && (
+                            <div className="text-xs">
+                              <span className="font-medium text-purple-800">开篇策略：</span>
+                              <span className="text-purple-700 leading-relaxed">{warnResult.writing_brief.opening_strategy}</span>
+                            </div>
+                          )}
+                          {warnResult.writing_brief.conflict_structure && (
+                            <div className="text-xs">
+                              <span className="font-medium text-purple-800">冲突节拍：</span>
+                              <span className="text-purple-700 leading-relaxed">{warnResult.writing_brief.conflict_structure}</span>
+                            </div>
+                          )}
+                          {warnResult.writing_brief.closing_hook && (
+                            <div className="text-xs">
+                              <span className="font-medium text-purple-800">章末钩子：</span>
+                              <span className="text-purple-700 leading-relaxed">{warnResult.writing_brief.closing_hook}</span>
+                            </div>
+                          )}
+                          {warnResult.writing_brief.word_rhythm && (
+                            <div className="text-xs">
+                              <span className="font-medium text-purple-800">字数节奏：</span>
+                              <span className="text-purple-700 leading-relaxed">{warnResult.writing_brief.word_rhythm}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* ── 必发事件 ── */}
+                      {(warnResult.must_events?.length ?? 0) > 0 && (
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-semibold text-novel-ink-muted uppercase tracking-wide flex items-center gap-1">
+                            <CheckCircle size={10} className="text-emerald-500" />必发事件
+                          </p>
+                          {warnResult.must_events!.map((ev, i) => (
+                            <div key={i} className="flex items-start gap-1.5 text-xs text-novel-ink">
+                              <span className="text-emerald-500 shrink-0 mt-0.5 font-bold">{i + 1}.</span>
+                              <span className="leading-relaxed">{ev}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* ── 幻觉预防 ── */}
+                      {(warnResult.hallucination_traps?.length ?? 0) > 0 && (
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-semibold text-novel-ink-muted uppercase tracking-wide flex items-center gap-1">
+                            <ShieldAlert size={10} className="text-amber-500" />幻觉预防清单
+                          </p>
+                          {warnResult.hallucination_traps!.map((trap, i) => (
+                            <div key={i} className="flex items-start gap-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                              <span className="shrink-0 mt-0.5">⚠</span>
+                              <span className="leading-relaxed">{trap}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* ── 风险列表 ── */}
                       {warnResult.risks.length > 0 && (
                         <div className="space-y-2">
+                          <p className="text-[10px] font-semibold text-novel-ink-muted uppercase tracking-wide">风险扫描</p>
                           {warnResult.risks.map((risk, i) => (
                             <div key={i} className={clsx(
                               'rounded-lg border p-2.5 text-xs space-y-1',
@@ -1974,7 +2157,7 @@ export default function ChapterEditor({
                         </div>
                       )}
 
-                      {/* 写前提醒 */}
+                      {/* ── 写前提醒 ── */}
                       {warnResult.reminders.length > 0 && (
                         <div className="space-y-1">
                           <p className="text-[10px] font-semibold text-novel-ink-muted uppercase tracking-wide">写前提醒</p>

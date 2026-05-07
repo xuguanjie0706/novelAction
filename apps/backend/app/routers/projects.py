@@ -160,6 +160,7 @@ class WritingConfigUpdate(BaseModel):
     min_overall_score: Optional[float] = Field(default=None, ge=0.0, le=10.0)
     min_subscribe_intent: Optional[float] = Field(default=None, ge=0.0, le=10.0)
     max_rewrite_attempts: Optional[int] = Field(default=None, ge=1, le=5)
+    pre_write_warning_enabled: Optional[bool] = None
 
 
 @router.patch("/{project_id}/writing-config")
@@ -215,6 +216,7 @@ def get_writing_config(project_id: str, db: Session = Depends(get_db)):
         "min_overall_score": 6.0,
         "min_subscribe_intent": 6.0,
         "max_rewrite_attempts": 3,
+        "pre_write_warning_enabled": False,
     }
     stored = (project.extra or {}).get("writing_config") or {}
     merged = {**defaults, **stored}

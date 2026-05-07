@@ -16,6 +16,7 @@ from app.models import (
     MemoryChunk,
     Project,
     QualityDebt,
+    ReaderPromise,
     Scene,
     StoryLine,
 )
@@ -28,6 +29,7 @@ from app.schemas import (
     ChapterVersionTimelineItemOut,
 )
 from app.schemas.character_change_log import CharacterChangeLogOut
+from app.services.embedding_service import embed_entity_async
 
 router = APIRouter(prefix="/projects/{project_id}/chapters", tags=["chapters"])
 
@@ -220,6 +222,124 @@ def normalize_chapter_sort_orders(db: Session, project_id: str) -> None:
         db.commit()
 
 
+def bind_scenes_to_chapter(db: Session, project_id: str, chapter: "Chapter") -> int:
+    """
+    将大纲节点关联的 Scene 记录绑定到已写完的章节，并更新 Scene 状态。
+
+    绑定条件：
+    - `chapter.outline_node_id` 存在
+    - Scene.chapter_id 为 null（避免重复绑定）
+
+    副作用：
+    - Scene.chapter_id = chapter.id
+    - Scene.status: "planned" → "written"
+
+    @returns 实际绑定的 Scene 数量；outline_node_id 缺失时返回 0。
+    """
+    if not chapter.outline_node_id:
+        return 0
+
+    unbound_scenes = (
+        db.query(Scene)
+        .filter(
+            Scene.project_id == project_id,
+            Scene.outline_node_id == chapter.outline_node_id,
+            Scene.chapter_id.is_(None),
+        )
+        .all()
+    )
+    for sc in unbound_scenes:
+        sc.chapter_id = chapter.id
+        if sc.status == "planned":
+            sc.status = "written"
+
+    return len(unbound_scenes)
+
+
+def detect_fulfilled_promises(
+    db: Session,
+    project_id: str,
+    chapter: "Chapter",
+) -> int:
+    """
+    解析章节速查索引中的「兑现承诺」条目，将匹配的 open ReaderPromise 标记为 fulfilled。
+
+    匹配策略（宽松模糊匹配，优先长词重叠）：
+    1. 索引条目完整包含在承诺原文中，或承诺原文前 20 字包含在条目中
+    2. 索引条目为"无"或空时跳过
+
+    副作用：
+    - ReaderPromise.status = "fulfilled"
+    - ReaderPromise.fulfilled_chapter_id = chapter.id
+    - ReaderPromise.fulfilled_chapter_number = chapter.sort_order
+
+    @returns 实际标记为 fulfilled 的承诺数量。
+    """
+    import re
+    from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
+
+    content = chapter.content or ""
+    # 剥离 HTML 标签，提取纯文本
+    import html
+    plain = re.sub(r"<[^>]+>", "", html.unescape(content))
+
+    _, index_block = split_plain_manuscript_and_index_block(plain)
+    if not index_block:
+        return 0
+
+    # 解析「**兑现承诺**：xxx」或「兑现承诺：xxx」行，支持多条（逗号/顿号/换行分隔）
+    raw_entries: list[str] = re.findall(
+        r"\*{0,2}兑现承诺\*{0,2}[：:]\s*(.+)", index_block
+    )
+    fulfilled_texts: list[str] = []
+    for entry in raw_entries:
+        # 按逗号、顿号、分号拆分，过滤"无"和空串
+        parts = re.split(r"[,，；;、]", entry)
+        for p in parts:
+            p = p.strip().strip("「」『』《》【】""''")
+            if p and p not in ("无", "无。", "暂无"):
+                fulfilled_texts.append(p)
+
+    if not fulfilled_texts:
+        return 0
+
+    open_promises: list[ReaderPromise] = (
+        db.query(ReaderPromise)
+        .filter(
+            ReaderPromise.project_id == project_id,
+            ReaderPromise.status == "open",
+        )
+        .all()
+    )
+
+    def _promise_fuzzy_match(ft: str, promise_text: str, ngram: int = 4) -> bool:
+        """
+        宽松匹配：
+        1. 精确子串：ft 包含在 promise_text 中，或 promise_text 前 20 字包含在 ft 中
+        2. 4-gram 重叠：ft 中任意 ngram 长度的子串出现在 promise_text 里（处理 AI 轻微改写）
+        """
+        if ft in promise_text or promise_text[:20] in ft:
+            return True
+        if len(ft) >= ngram:
+            for i in range(len(ft) - ngram + 1):
+                if ft[i:i + ngram] in promise_text:
+                    return True
+        return False
+
+    count = 0
+    for promise in open_promises:
+        promise_key = promise.promise_text or ""
+        for ft in fulfilled_texts:
+            if _promise_fuzzy_match(ft, promise_key):
+                promise.status = "fulfilled"
+                promise.fulfilled_chapter_id = chapter.id
+                promise.fulfilled_chapter_number = chapter.sort_order
+                count += 1
+                break  # 一条承诺只匹配一次
+
+    return count
+
+
 def build_scene_writing_outline(scenes: list["Scene"]) -> dict:
     """从 Scene 列表构建结构化写作提纲，持久化到 chapter.extra.scene_writing_outline。
     前端/AI 可直接使用此提纲生成正文或展示分场指导。
@@ -405,20 +525,44 @@ def update_chapter(project_id: str, chapter_id: str, payload: ChapterUpdate, db:
         chapter.version = (chapter.version or 1) + 1
         db.flush()  # 确保 version 更新在事务内
 
-        # 场景-章节联动：若本章有 Scene 蓝图且尚未生成写作提纲，则自动构建并持久化
-        if "content" in data and (not chapter.extra or not chapter.extra.get("scene_writing_outline")):
-            related_scenes = db.query(Scene).filter(
-                (Scene.chapter_id == chapter.id) | (Scene.outline_node_id == chapter.outline_node_id)
-            ).order_by(Scene.order).all()
-            if related_scenes:
-                outline = build_scene_writing_outline(related_scenes)
-                current_extra = dict(chapter.extra or {})
-                current_extra["scene_writing_outline"] = outline
-                chapter.extra = current_extra
+        # 场景-章节联动：保存内容时同步执行两个闭环操作
+        if "content" in data:
+            # ① 绑定 Scene.chapter_id + 更新 Scene.status（planned → written）
+            bind_scenes_to_chapter(db, project_id, chapter)
+
+            # ② 构建/更新写作提纲（前端展示用，仅在尚未生成时构建）
+            if not chapter.extra or not chapter.extra.get("scene_writing_outline"):
+                related_scenes = db.query(Scene).filter(
+                    (Scene.chapter_id == chapter.id) | (Scene.outline_node_id == chapter.outline_node_id)
+                ).order_by(Scene.order).all()
+                if related_scenes:
+                    outline = build_scene_writing_outline(related_scenes)
+                    current_extra = dict(chapter.extra or {})
+                    current_extra["scene_writing_outline"] = outline
+                    chapter.extra = current_extra
 
     db.commit()
     normalize_chapter_sort_orders(db, project_id)
     db.refresh(chapter)
+
+    # ③ 兑现承诺检测：解析索引块中的「兑现承诺」，更新 ReaderPromise 状态
+    #    置于 commit 之后，确保 chapter.content 已持久化；不进入嵌套事务，失败不回滚主流程
+    if "content" in data and chapter.content:
+        try:
+            fulfilled_count = detect_fulfilled_promises(db, project_id, chapter)
+            if fulfilled_count > 0:
+                db.commit()
+        except Exception:  # noqa: BLE001
+            pass  # 承诺检测失败不影响章节保存
+
+    # 写章后异步生成 embedding（章节语义检索），不阻塞响应
+    # 注意：传入 SessionLocal（不是 get_db），_do_embed_entity 内部直接实例化 session
+    if "content" in data and chapter.content:
+        try:
+            embed_entity_async("chapter", chapter.id, chapter.content, SessionLocal)
+        except Exception:  # noqa: BLE001
+            pass  # 静默失败，不影响主流程
+
     return chapter
 
 

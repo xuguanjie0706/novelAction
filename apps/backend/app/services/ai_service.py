@@ -1383,6 +1383,10 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         # P2-W5-2 戏份预算 + 强制 POV
         pov_character_name: str = "",
         character_screen_time: Optional[dict] = None,
+        # 三层调度：章纲 → 分场蓝图（Scene records 格式化后注入，无数据时为空字符串）
+        scene_blueprint: str = "",
+        # 读者承诺台账：当前章节窗口内的 open ReaderPromise，分必须/可以兑现两级
+        reader_promise_context: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
@@ -1392,6 +1396,9 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
             phase: 卷阶段，决定模板分支与采样档位。
                 可选：``opening`` / ``rising`` / ``turning`` / ``dark_hour`` / ``climax`` / ``ending``。
                 未提供时按"中段章节"模板写。
+            scene_blueprint: 由 _build_scene_blueprint 生成的分场蓝图文本；
+                有内容时注入【本章大纲计划】区域，替代平铺式单字段描述，
+                提供逐场 POV/冲突/转折/钩子/字数预算等精确指导。
             positioning: ``Project.extra.positioning`` JSON——读者画像 / 爽点类型 / 打脸频率 / 情感线占比 /
                 节奏类型。用于把作品基本面注入正文 prompt，避免每章独立漂移。
         """
@@ -1596,6 +1603,12 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
             if writing_brief_context
             else ""
         )
+        # 读者承诺：必须/可以兑现两级；放在质检债务之后，正文生成指令之前
+        reader_promise_part = (
+            f"\n{self._clip_context(reader_promise_context, 800, 6000)}\n"
+            if reader_promise_context and reader_promise_context.strip()
+            else ""
+        )
 
         # 故事线与本章特殊目标
         storyline_part = (
@@ -1623,6 +1636,13 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
         if user_prompt and user_prompt.strip():
             extra = f"\n\n【作者补充要求】\n{self._clip_context(user_prompt, 800, 4000)}"
 
+        # 分场蓝图：有数据时以独立区块注入，覆盖平铺式单字段描述的细节不足
+        scene_blueprint_part = (
+            f"\n{self._clip_context(scene_blueprint, 800, 6000)}"
+            if scene_blueprint and scene_blueprint.strip()
+            else ""
+        )
+
         index_template = """
 【章节速查索引输出模板（必须追加在正文结尾）】
 ### ch_章节号（3位补零）　章节标题
@@ -1633,6 +1653,7 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
 **首次出场**：角色A（身份）
 **章末钩子强度**：⭐到⭐⭐⭐⭐⭐（并在括号内写一句钩子描述）
 **伏笔埋设**：F-编号（伏笔描述，ch_回收章号回收）
+**兑现承诺**：（本章兑现的读者承诺，逐条写承诺原文；若本章无兑现则写「无」）
 """
 
         prompt = f"""【立意与类型 / PREMISE】
@@ -1649,7 +1670,7 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
 {chapter_index_part}
 {plot_dossier_part}
 {quality_debt_part}
-
+{reader_promise_part}
 【本章大纲计划】
 标题：{chapter_title}{day_part}
 开篇钩子：{outline_hook or "（未填写）"}
@@ -1657,7 +1678,7 @@ C) 反转档：前文铺垫，章末或中段一句话颠覆读者的判断，�
 人物变化：{outline_conflict or "（未填写）"}
 章末方向：{outline_highlight or "（未填写）"}{milestone_part}{tone_part}
 {f"伏笔管理：{outline_foreshadow}" if outline_foreshadow else ""}{manifest_constraint}
-
+{scene_blueprint_part}
 {task_line}
 {index_template}{extra}"""
 

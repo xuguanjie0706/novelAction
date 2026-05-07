@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -300,6 +302,45 @@ def _ensure_memory_embedding_column() -> None:
             pass  # 旧版 pgvector 无 HNSW，退化到 IVFFlat 或顺序扫描均可接受
 
 
+def _ensure_chapter_embedding_column() -> None:
+    """
+    开发环境兼容迁移：为已有 chapters 表添加 embedding 向量列，供章节语义检索使用。
+    维度与 EMBEDDING_DIM 保持一致；维度不匹配时删列重建（历史向量本就无效）。
+    pgvector 扩展不可用时静默跳过，语义检索降级到时间序。
+    """
+    from app.config import settings as app_settings
+
+    target_dim = app_settings.EMBEDDING_DIM
+
+    with engine.begin() as conn:
+        # pgvector 扩展必须已启用（由 _ensure_memory_embedding_column 负责创建）
+        row = conn.execute(text("""
+            SELECT 1 FROM pg_extension WHERE extname = 'vector'
+        """)).fetchone()
+        if not row:
+            return  # pgvector 未安装，跳过
+
+        existing = conn.execute(text("""
+            SELECT pg_catalog.format_type(atttypid, atttypmod)
+            FROM pg_attribute
+            WHERE attrelid = 'chapters'::regclass
+              AND attname  = 'embedding'
+              AND attnum   > 0
+              AND NOT attisdropped
+        """)).fetchone()
+
+        if existing is None:
+            conn.execute(text(
+                f"ALTER TABLE chapters ADD COLUMN IF NOT EXISTS embedding vector({target_dim})"
+            ))
+        elif f"vector({target_dim})" not in existing[0]:
+            # 维度不匹配（如旧库 1536 → 新 768）：删列重建
+            conn.execute(text("ALTER TABLE chapters DROP COLUMN embedding"))
+            conn.execute(text(
+                f"ALTER TABLE chapters ADD COLUMN embedding vector({target_dim})"
+            ))
+
+
 def _ensure_llm_provider_columns() -> None:
     """开发环境兼容迁移：为已有 llm_providers 表补齐 provider_type 列。"""
     with engine.begin() as conn:
@@ -352,6 +393,7 @@ _ensure_foreshadow_columns()
 _ensure_quality_debt_author_notes()
 _ensure_quality_debt_chapter_id_nullable()
 _ensure_memory_embedding_column()
+_ensure_chapter_embedding_column()
 _ensure_llm_provider_columns()
 _ensure_chapter_coherence_report_columns()
 _ensure_cover_image_call_logs_columns()
@@ -364,6 +406,16 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+@app.on_event("startup")
+async def _on_startup() -> None:
+    """
+    启动时保存 uvicorn 主事件循环，供 sync 路由（线程池）中的 embed_*_async 使用。
+    sync 路由通过 run_coroutine_threadsafe 将 embedding 协程提交到此 loop。
+    """
+    from app.services.embedding_service import set_main_event_loop
+    set_main_event_loop(asyncio.get_event_loop())
+
 
 app.add_middleware(
     CORSMiddleware,

@@ -5,6 +5,13 @@ from sqlalchemy.sql import func
 import uuid
 from app.database import Base
 
+try:
+    from pgvector.sqlalchemy import Vector as _Vector
+    from app.config import settings as _settings
+    _HAS_PGVECTOR = True
+except ImportError:
+    _HAS_PGVECTOR = False
+
 
 class Chapter(Base):
     __tablename__ = "chapters"
@@ -28,6 +35,11 @@ class Chapter(Base):
     last_quality_score = Column(Float)  # 最近一次 AI 质检综合分
     last_quality_report = Column(JSON)  # 质检报告结构化结果
     quality_checked_at = Column(DateTime(timezone=True))  # 最近一次质检时间
+
+    # pgvector 向量：用于章节语义检索，维度与 EMBEDDING_DIM 一致
+    # pgvector 未安装时跳过，语义检索自动降级到时间序
+    if _HAS_PGVECTOR:
+        embedding = Column(_Vector(_settings.EMBEDDING_DIM), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间（UTC）
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())  # 更新时间（UTC）

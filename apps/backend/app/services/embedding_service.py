@@ -2,15 +2,22 @@
 Embedding Service — 异步向量化 + pgvector 语义检索
 
 职责：
-  1. embed_texts()   — 调用 Ollama / OpenAI 兼容 /v1/embeddings，返回向量列表
-  2. embed_chunk()   — 单条 MemoryChunk 写入向量（后台 fire-and-forget）
-  3. embed_chunks_bulk() — Bootstrap / 批量补跑时使用
-  4. semantic_search() — 用 pgvector <=> 余弦距离召回最相关记忆
+  1. embed_texts()          — 调用 /v1/embeddings 返回向量
+  2. embed_entity_async()   — 通用单条向量化（支持 MemoryChunk / Scene / Chapter）
+  3. embed_chunks_bulk()    — 批量补全
+  4. semantic_search()      — 余弦距离召回 MemoryChunk
+  5. retrieve_relevant_memories_for_writing() — 写章节时自动拉取相关记忆片段
 
 设计原则：
-  - 不阻塞主流程：embed_chunk() 通过 asyncio.create_task 异步触发
-  - 向量生成失败只记 warning，不抛异常（记忆保存先行，向量是增强）
-  - 维度由 settings.EMBEDDING_DIM 统一管控，不硬编码
+  - fire-and-forget，不阻塞主请求
+  - pgvector 不可用时优雅降级
+  - 失败只 warning，不抛异常
+
+事件循环：
+  - 在 async 路由中调用时，asyncio.get_event_loop() 可直接拿到运行中的 loop
+  - 在 sync 路由（线程池）中调用时，需通过 set_main_event_loop() 预先保存主 loop，
+    之后使用 run_coroutine_threadsafe() 跨线程提交任务
+  - main.py startup 事件负责调用 set_main_event_loop()
 """
 from __future__ import annotations
 
@@ -25,6 +32,43 @@ from sqlalchemy.orm import Session
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# 主事件循环引用（由 main.py startup 写入，供 sync 路由线程使用）
+# ---------------------------------------------------------------------------
+
+_main_event_loop: asyncio.AbstractEventLoop | None = None
+
+
+def set_main_event_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """
+    在应用启动时由 main.py 调用，保存 uvicorn 主事件循环的引用。
+    sync 路由（跑在线程池）调用 embed_*_async 时，会通过 run_coroutine_threadsafe
+    将协程提交到此 loop，而不是在线程内自行创建新 loop。
+    """
+    global _main_event_loop
+    _main_event_loop = loop
+
+
+def _submit_to_event_loop(coro) -> None:
+    """
+    将协程安全地提交到 uvicorn 主事件循环。
+    - 若当前线程已有运行中的 loop（async 路由），直接 create_task
+    - 若在线程池中（sync 路由），通过 run_coroutine_threadsafe 跨线程提交
+    - 两者都不可用时记 warning，跳过 embedding（不影响主流程）
+    """
+    try:
+        # async 上下文：直接在当前 loop 创建 task
+        running_loop = asyncio.get_running_loop()
+        running_loop.create_task(coro)
+        return
+    except RuntimeError:
+        pass  # 不在 async 上下文，走下面的跨线程路径
+
+    if _main_event_loop is not None and _main_event_loop.is_running():
+        asyncio.run_coroutine_threadsafe(coro, _main_event_loop)
+    else:
+        logger.warning("No available event loop for embedding, task skipped")
 
 # ---------------------------------------------------------------------------
 # 底层：调用 /v1/embeddings 端点
@@ -96,15 +140,11 @@ async def _do_embed_chunk(chunk_id: UUID, text: str, db_factory) -> None:
 
 def embed_chunk_async(chunk_id: UUID, text: str, db_factory) -> None:
     """
-    非阻塞触发：在当前事件循环上创建后台任务。
-    调用方法：embed_chunk_async(chunk.id, chunk.content, get_db_factory())
+    非阻塞触发单条 MemoryChunk 向量化。
+    兼容 async 路由（create_task）与 sync 路由（run_coroutine_threadsafe）。
+    db_factory 应传入 SessionLocal（不是 get_db），内部直接实例化 session。
     """
-    try:
-        loop = asyncio.get_event_loop()
-        loop.create_task(_do_embed_chunk(chunk_id, text, db_factory))
-    except RuntimeError:
-        # 非异步上下文（不太可能，防御性兜底）
-        logger.warning("No running event loop, skipping embedding for chunk %s", chunk_id)
+    _submit_to_event_loop(_do_embed_chunk(chunk_id, text, db_factory))
 
 
 # ---------------------------------------------------------------------------
@@ -242,3 +282,82 @@ async def semantic_search(
     except Exception as exc:  # noqa: BLE001
         logger.warning("semantic_search pgvector query failed: %s — falling back to recency", exc)
         return _fallback_query()
+
+
+# ---------------------------------------------------------------------------
+# 通用实体向量化（支持 Scene / Chapter / MemoryChunk）
+# ---------------------------------------------------------------------------
+
+async def _do_embed_entity(entity_type: str, entity_id: UUID, text: str, db_factory) -> None:
+    """后台执行向量化并写回对应表的 embedding 字段。"""
+    try:
+        from pgvector.sqlalchemy import Vector
+    except ImportError:
+        logger.debug("pgvector not installed, skip embedding for %s %s", entity_type, entity_id)
+        return
+
+    if not text or not text.strip():
+        return
+
+    try:
+        vectors = await embed_texts([text[:4000]])  # 截断避免超长
+        if not vectors:
+            return
+        vec = vectors[0]
+
+        with db_factory() as db:
+            if entity_type == "memory":
+                from app.models.memory import MemoryChunk
+                obj = db.query(MemoryChunk).filter(MemoryChunk.id == entity_id).first()
+            elif entity_type == "scene":
+                from app.models.scene import Scene
+                obj = db.query(Scene).filter(Scene.id == entity_id).first()
+            elif entity_type == "chapter":
+                from app.models.chapter import Chapter
+                obj = db.query(Chapter).filter(Chapter.id == entity_id).first()
+            else:
+                return
+
+            if obj is None or not hasattr(obj, "embedding"):
+                return
+            obj.embedding = vec
+            db.commit()
+            logger.debug("Embedded %s %s (%d dims)", entity_type, entity_id, len(vec))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to embed %s %s: %s", entity_type, entity_id, exc)
+
+
+def embed_entity_async(entity_type: str, entity_id: UUID, text: str, db_factory) -> None:
+    """
+    非阻塞触发实体向量化。entity_type: 'memory' | 'scene' | 'chapter'
+    兼容 async 路由（create_task）与 sync 路由（run_coroutine_threadsafe）。
+    db_factory 应传入 SessionLocal（不是 get_db），内部直接实例化 session。
+    """
+    _submit_to_event_loop(_do_embed_entity(entity_type, entity_id, text, db_factory))
+
+
+# ---------------------------------------------------------------------------
+# 写章节时自动检索相关记忆
+# ---------------------------------------------------------------------------
+
+async def retrieve_relevant_memories_for_writing(
+    db: Session,
+    project_id: str | UUID,
+    chapter_content: str,
+    top_k: int = 5,
+    max_chapter: Optional[int] = None,
+) -> list:
+    """
+    写章节 / 复盘时自动拉取最相关的记忆片段。
+    取章节正文前 200 字作为 query，使用 semantic_search。
+    """
+    query = (chapter_content or "")[:200]
+    if not query.strip():
+        return []
+    return await semantic_search(
+        db,
+        project_id,
+        query,
+        top_k=top_k,
+        max_chapter=max_chapter,
+    )

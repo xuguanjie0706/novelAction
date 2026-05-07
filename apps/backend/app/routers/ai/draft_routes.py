@@ -15,7 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Chapter, Character, MemoryChunk, OutlineNode, Project, QualityDebt, StoryLine, WorldSetting
+from app.models import Chapter, Character, MemoryChunk, OutlineNode, Project, QualityDebt, ReaderPromise, StoryLine, WorldSetting
 from app.services.ai_service import AIService
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 from app.utils.chapter_numbering import display_chapter_number
@@ -37,6 +37,212 @@ from app.models import Scene
 from app.routers.ai.text_utils import plain_text, strip_tail_meta_lines, truncate
 
 router = APIRouter()
+
+
+# ═══════════════════════════════════════════════════════════════
+# ReaderPromise 写章注入辅助
+# ═══════════════════════════════════════════════════════════════
+
+def _build_reader_promise_context(
+    db: Session,
+    project_id: str,
+    chapter_sort_order: int,
+    lookahead: int = 5,
+) -> str:
+    """
+    查询当前章节覆盖窗口内 open 状态的读者承诺，格式化为写章约束文本。
+
+    分两级：
+    - **必须兑现**：承诺截止章号 ≤ 当前 sort_order（已到期）
+    - **可以兑现**：截止章号在 [当前+1, 当前+lookahead] 内，或 priority≥4 的无截止高优承诺
+
+    截止章号计算：
+    - 有 source_chapter_number：截止 = source_chapter_number + expected_chapter_window
+    - source_chapter_number 为 null：截止 = expected_chapter_window（视作绝对章号）
+    - expected_chapter_window 为 null 且 priority≥4：列入"可以兑现"
+
+    @returns 格式化文本；无匹配承诺时返回空字符串。
+    """
+    open_promises: list[ReaderPromise] = (
+        db.query(ReaderPromise)
+        .filter(
+            ReaderPromise.project_id == project_id,
+            ReaderPromise.status == "open",
+        )
+        .order_by(ReaderPromise.priority.desc())
+        .limit(40)
+        .all()
+    )
+    if not open_promises:
+        return ""
+
+    must_fulfill: list[ReaderPromise] = []
+    can_fulfill: list[ReaderPromise] = []
+
+    for p in open_promises:
+        # 计算截止章号
+        if p.expected_chapter_window is not None:
+            src = p.source_chapter_number or 0
+            deadline = src + p.expected_chapter_window
+        else:
+            deadline = None  # 无截止
+
+        if deadline is not None and deadline <= chapter_sort_order:
+            must_fulfill.append(p)
+        elif deadline is not None and chapter_sort_order < deadline <= chapter_sort_order + lookahead:
+            can_fulfill.append(p)
+        elif deadline is None and (p.priority or 3) >= 4:
+            can_fulfill.append(p)
+
+    if not must_fulfill and not can_fulfill:
+        return ""
+
+    type_zh = {
+        "chapter_ending": "章末预告",
+        "volume_ending": "卷末预告",
+        "name_implication": "名字/称号暗示",
+        "chapter_comment_consensus": "章评共识",
+        "protagonist_claim": "主角宣言",
+    }
+
+    def _fmt(p: ReaderPromise, show_deadline: bool = False) -> str:
+        ptype = type_zh.get(p.promise_type or "", p.promise_type or "承诺")
+        stars = "⭐" * min(max(p.priority or 3, 1), 5)
+        line = f"  [{ptype} {stars}] {p.promise_text}"
+        if show_deadline and p.expected_chapter_window is not None:
+            src = p.source_chapter_number or 0
+            line += f"  （截止第 {src + p.expected_chapter_window} 章）"
+        return line
+
+    lines: list[str] = ["【读者承诺台账（写章时必须对照）】"]
+
+    if must_fulfill:
+        lines.append(f"⚠️  本章【必须兑现】的承诺（共 {len(must_fulfill)} 条，已到期）：")
+        for p in must_fulfill:
+            lines.append(_fmt(p, show_deadline=True))
+
+    if can_fulfill:
+        lines.append(f"💡  本章【可以兑现】的承诺（共 {len(can_fulfill)} 条，即将到期或高优先级）：")
+        for p in can_fulfill:
+            lines.append(_fmt(p, show_deadline=True))
+
+    lines.append("若本章有兑现，请在章节速查索引中标注「兑现承诺：<承诺原文>」。")
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Scene 蓝图格式化辅助
+# ═══════════════════════════════════════════════════════════════
+
+def _build_scene_blueprint(
+    db: Session,
+    project_id: str,
+    chapter: "Chapter",
+    outline_node: "OutlineNode | None",
+) -> str:
+    """
+    查询本章对应的 Scene 记录，格式化为结构化分场蓝图文本。
+
+    查找顺序：
+    1. 按 outline_node_id 匹配（Bootstrap 生成的场景，chapter_id 暂为 null）
+    2. 按 chapter_id 匹配（已成稿绑定的场景）
+
+    @returns 格式化后的分场蓝图字符串；无 Scene 记录时返回空字符串。
+    """
+    scenes: list[Scene] = []
+
+    if outline_node is not None:
+        scenes = (
+            db.query(Scene)
+            .filter(
+                Scene.project_id == project_id,
+                Scene.outline_node_id == outline_node.id,
+            )
+            .order_by(Scene.order)
+            .all()
+        )
+
+    if not scenes and chapter.id is not None:
+        scenes = (
+            db.query(Scene)
+            .filter(
+                Scene.project_id == project_id,
+                Scene.chapter_id == chapter.id,
+            )
+            .order_by(Scene.order)
+            .all()
+        )
+
+    if not scenes:
+        return ""
+
+    # ── 构建人物 id → name 的快速查找表（仅限本章在场角色）─────────────
+    from app.models import Character as CharModel
+
+    char_ids: set = set()
+    for sc in scenes:
+        if sc.pov_character_id:
+            char_ids.add(str(sc.pov_character_id))
+        for cid in (sc.characters_on_stage or []):
+            char_ids.add(str(cid))
+
+    id_to_name: dict[str, str] = {}
+    if char_ids:
+        rows = (
+            db.query(CharModel.id, CharModel.name)
+            .filter(CharModel.id.in_(char_ids))
+            .all()
+        )
+        id_to_name = {str(r.id): r.name for r in rows}
+
+    total_budget = sum(sc.word_budget or 0 for sc in scenes)
+
+    lines: list[str] = [
+        f"【本章分场蓝图（共 {len(scenes)} 场，总预算约 {total_budget} 字）】",
+        "严格按此结构逐场写作，每场字数在预算 ±15% 内；每场以钩子收束，串联下一场。",
+        "",
+    ]
+
+    pacing_zh = {"fast": "快节奏", "mid": "中节奏", "slow": "慢节奏"}
+
+    for sc in scenes:
+        pov_name = id_to_name.get(str(sc.pov_character_id), "") if sc.pov_character_id else ""
+        on_stage = [id_to_name.get(str(cid), str(cid)) for cid in (sc.characters_on_stage or [])]
+        on_stage_str = "、".join(n for n in on_stage if n) or ""
+        pacing_str = pacing_zh.get(sc.pacing or "mid", sc.pacing or "mid")
+        hook_stars = "⭐" * min(max(sc.hook_strength or 3, 1), 5)
+        budget = sc.word_budget or 400
+
+        scene_lines = [
+            f"▶ 场 {sc.order}｜{sc.title or '（无标题）'}  （预算 {budget} 字，{pacing_str}）",
+        ]
+        if sc.location_name:
+            scene_lines.append(f"  地点：{sc.location_name}")
+        if sc.time:
+            scene_lines.append(f"  时间：{sc.time}")
+        if pov_name:
+            scene_lines.append(f"  POV：{pov_name}")
+        if on_stage_str:
+            scene_lines.append(f"  在场：{on_stage_str}")
+        if sc.goal:
+            scene_lines.append(f"  目标：{sc.goal}")
+        if sc.conflict:
+            scene_lines.append(f"  冲突：{sc.conflict}")
+        if sc.turn:
+            scene_lines.append(f"  转折：{sc.turn}")
+        if sc.hook:
+            scene_lines.append(f"  钩子：{sc.hook}（强度 {hook_stars}）")
+        if sc.sensory_focus and sc.sensory_focus != "mixed":
+            sense_zh = {
+                "sight": "视觉", "sound": "听觉", "smell": "嗅觉",
+                "taste": "味觉", "touch": "触觉",
+            }
+            scene_lines.append(f"  感官焦点：{sense_zh.get(sc.sensory_focus, sc.sensory_focus)}")
+
+        lines.extend(scene_lines)
+        lines.append("")  # 场间空行
+
+    return "\n".join(lines).rstrip()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -288,6 +494,17 @@ def _build_draft_context(
             pov_character_name = outline_node.pov_character.name
         character_screen_time = outline_node.character_screen_time or {}
 
+    # ── ReaderPromise 写章注入 ─────────────────────────────────────────────
+    # 查询当前章节窗口内 open 承诺，分必须/可以兑现两级注入写章 prompt
+    reader_promise_context = _build_reader_promise_context(
+        db, project_id, chapter.sort_order or 0
+    )
+
+    # ── Scene 蓝图注入（三层调度：章纲 → 分场 → 正文）─────────────────────
+    # 优先按 outline_node_id 查，fallback 按 chapter_id 查（已成稿绑定的场景）。
+    # 无 Scene 记录时静默降级为空字符串，不影响已有写作流程。
+    scene_blueprint = _build_scene_blueprint(db, project_id, chapter, outline_node)
+
     return dict(
         chapter_title=chapter.title or "",
         outline_hook=outline_node.hook or "" if outline_node else "",
@@ -317,6 +534,8 @@ def _build_draft_context(
         genre=project.genre or "",
         pov_character_name=pov_character_name,
         character_screen_time=character_screen_time,
+        scene_blueprint=scene_blueprint,
+        reader_promise_context=reader_promise_context,
     )
 
 

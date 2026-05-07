@@ -12,10 +12,14 @@ SSE 事件格式:
 """
 import asyncio
 import json
+import logging
 import re
+import uuid as _uuid_module
 from typing import AsyncGenerator, Literal, Optional
 from uuid import UUID
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.config import settings
 from app.services.ai_service import AIService
@@ -777,10 +781,14 @@ villain_timeline 对 antagonist 类势力为必填，要求具体到"第X卷前�
     async def _gen_key_skills(self, project: Project, ctx: dict):
         system = "你是网络小说世界构建专家。只返回JSON数组。"
         kit_block = _get_genre_kit_block(ctx)
+        # 提供 ID 列表供 AI 直接输出 UUID，强化外键关联（避免名称拼写错误）
+        char_id_hint = ", ".join(
+            f"{c['name']}（id={c['id']}）" for c in ctx.get("char_id_list", [])[:8]
+        ) or "（人物列表待生成）"
         prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 主角：{ctx.get('protagonist', '主角')}
 境界体系：{ctx.get('power_summary', '（未设定）')}
-主要人物：{', '.join(ctx.get('char_names', [])[:6])}
+主要人物（姓名+UUID）：{char_id_hint}
 
 【流派编辑手册约束】
 - 技能效果与获取方式必须符合 genre_kit 的 satisfaction_tropes（玄幻强调金手指新用法，仙侠强调心魔/渡劫相关）
@@ -796,7 +804,8 @@ villain_timeline 对 antagonist 类势力为必填，要求具体到"第X卷前�
     "description": "功法/技能描述（40字内）",
     "effects": "使用效果",
     "limitations": "使用限制或副作用",
-    "mastered_by": ["掌握此技能的人物名（从上面人物列表选）"],
+    "mastered_by_character_ids": ["直接填写上面人物的UUID字符串列表，优先使用id字段"],
+    "mastered_by_names": ["对应的人物姓名（可选，用于人工核对）"],
     "plot_hook": "这个技能/功法在故事中的剧情钩子：何时会被损毁/被夺走/被超越/失效/揭露禁忌代价？用一句话指明触发章节范围（如：「第2卷高潮时主角核心功法被反派破解，被迫觉醒隐藏传承」）"
   }}
 ]
@@ -811,16 +820,32 @@ grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
         if not isinstance(data, list):
             data = data.get("skills", [])
 
-        # ★ 修复：用名字→UUID 映射，mastered_by_character_ids 存真实 UUID
+        # ★ 强化外键：优先使用 AI 直接输出的 UUID 列表，其次回退到名字映射
         char_name_to_id: dict = ctx.get("char_name_to_id", {})
         results = []
         for i, item in enumerate(data):
-            # 将 AI 返回的人物名转换为对应的 character UUID 列表
-            mastered_ids = [
-                char_name_to_id[name]
-                for name in item.get("mastered_by", [])
-                if name in char_name_to_id
-            ]
+            # 优先取 mastered_by_character_ids（UUID 字符串列表），其次回退到名字映射
+            raw_ids = item.get("mastered_by_character_ids") or item.get("mastered_by", [])
+            mastered_ids = []
+            for val in raw_ids:
+                if isinstance(val, str):
+                    try:
+                        _uuid_module.UUID(val)  # 严格校验 UUID 格式
+                        mastered_ids.append(val)
+                    except ValueError:
+                        # AI 输出了名字而非 UUID：尝试名字映射回退
+                        mapped = char_name_to_id.get(val)
+                        if mapped:
+                            logger.warning(
+                                "Skill '%s' mastered_by: AI 输出名字 '%s' 而非 UUID，已回退映射到 %s",
+                                item.get("name", "?"), val, mapped,
+                            )
+                            mastered_ids.append(mapped)
+                        else:
+                            logger.warning(
+                                "Skill '%s' mastered_by: AI 输出 '%s' 既非 UUID 也不在人物列表，已丢弃",
+                                item.get("name", "?"), val,
+                            )
             skill_extra = {}
             if item.get("plot_hook"):
                 skill_extra["plot_hook"] = str(item["plot_hook"])[:300]
@@ -852,10 +877,14 @@ grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
     async def _gen_key_items(self, project: Project, ctx: dict):
         system = "你是网络小说世界构建专家。只返回JSON数组。"
         kit_block = _get_genre_kit_block(ctx)
+        # 提供 ID 列表供 AI 直接输出 current_owner_id，强化外键关联
+        char_id_hint = ", ".join(
+            f"{c['name']}（id={c['id']}）" for c in ctx.get("char_id_list", [])[:8]
+        ) or "（人物列表待生成）"
         prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 主角：{ctx.get('protagonist', '主角')}
 境界体系：{ctx.get('power_summary', '（未设定）')}
-主要人物：{', '.join(ctx.get('char_names', [])[:6])}
+主要人物（姓名+UUID）：{char_id_hint}
 主要势力：{', '.join(ctx.get('faction_names', [])[:4])}
 
 【流派编辑手册约束】
@@ -872,7 +901,8 @@ grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
     "effects": "核心能力效果",
     "limitations": "使用限制（境界要求、次数、副作用）",
     "story_significance": "在故事中的重要性/象征意义",
-    "current_owner": "当前持有人名（从人物列表选，或留空）",
+    "current_owner_id": "当前持有人UUID（优先从上面人物id列表直接填写，或留空）",
+    "current_owner_name": "当前持有人姓名（可选，用于人工核对）",
     "status": "intact",
     "plot_hook": "这件道具在故事中的剧情钩子：何时会被损毁/被夺走/持有者死亡/揭露隐藏能力/成为争夺焦点？用一句话指明触发章节范围（如：「第1卷末法宝被反派势力强夺，主角踏上复夺之路」）"
   }}
@@ -892,8 +922,33 @@ status 只能是: intact / damaged / destroyed / lost / unknown
         char_name_to_id: dict = ctx.get("char_name_to_id", {})
         results = []
         for i, item in enumerate(data):
-            owner_name = item.get("current_owner", "") or ""
-            owner_uuid_str = char_name_to_id.get(owner_name) if owner_name else None
+            # 强化外键：优先使用 AI 直接输出的 current_owner_id（严格 UUID 校验），其次回退到名字映射
+            owner_uuid_str = None
+            owner_id = item.get("current_owner_id")
+            if owner_id and isinstance(owner_id, str):
+                try:
+                    _uuid_module.UUID(owner_id)  # 严格校验 UUID 格式
+                    owner_uuid_str = owner_id
+                except ValueError:
+                    logger.warning(
+                        "Item '%s' current_owner_id: AI 输出 '%s' 不是有效 UUID，尝试名字映射",
+                        item.get("name", "?"), owner_id,
+                    )
+            if owner_uuid_str is None:
+                owner_name = item.get("current_owner_name") or item.get("current_owner", "") or ""
+                if owner_name:
+                    mapped = char_name_to_id.get(owner_name)
+                    if mapped:
+                        logger.warning(
+                            "Item '%s' current_owner: 已通过名字 '%s' 回退映射到 %s",
+                            item.get("name", "?"), owner_name, mapped,
+                        )
+                        owner_uuid_str = mapped
+                    else:
+                        logger.warning(
+                            "Item '%s' current_owner: '%s' 不在人物列表，owner_id 置空",
+                            item.get("name", "?"), owner_name,
+                        )
             item_extra = {}
             if item.get("plot_hook"):
                 item_extra["plot_hook"] = str(item["plot_hook"])[:300]
@@ -1410,6 +1465,8 @@ debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对�
         }
         # ★ 修复：名字→UUID 映射，供 Skill/Item 存真实 character_id
         ctx["char_name_to_id"] = {c.name: str(c.id) for c in results}
+        # 供 Prompt 直接引用：人物 ID 列表（AI 可输出 UUID 避免名称拼写错误）
+        ctx["char_id_list"] = [{"id": str(c.id), "name": c.name} for c in results]
         # 仅 core/arc 层级参与关系图（plot 档配角不做全连接，避免组合爆炸）
         ctx["core_char_names"] = [
             c.name for c in results if c.character_tier in ("core", "arc")
@@ -2310,6 +2367,15 @@ unresolved_tension 和 trigger_event 为必填，不能为空或敷衍。"""
                 sort_order=i,
             ))
 
+        # ── 预分配人物 UUID（供后续技能/道具外键关联使用）──────────────────────
+        # single_shot 中人物在技能/道具之后入库，需要提前分配 ID 以建立外键。
+        # Character 创建时复用此处的预分配 ID，保持一致性。
+        _ss_name_to_uuid: dict[str, str] = {}
+        for c in data.get("characters", []):
+            cname = c.get("name", "")
+            if cname:
+                _ss_name_to_uuid[cname] = str(_uuid_module.uuid4())
+
         # 势力
         for i, f in enumerate(data.get("factions", [])):
             self.db.add(Faction(
@@ -2347,8 +2413,29 @@ unresolved_tension 和 trigger_event 为必填，不能为空或敷衍。"""
                 sort_order=i,
             ))
 
-        # 技能
+        # 技能（single_shot）：使用预分配 UUID 映射校验 mastered_by
         for i, sk in enumerate(data.get("skills", [])):
+            raw_ids = sk.get("mastered_by_character_ids") or sk.get("mastered_by", [])
+            mastered_ids: list[str] = []
+            for val in raw_ids:
+                if not isinstance(val, str):
+                    continue
+                try:
+                    _uuid_module.UUID(val)
+                    mastered_ids.append(val)
+                except ValueError:
+                    mapped = _ss_name_to_uuid.get(val)
+                    if mapped:
+                        logger.warning(
+                            "[single_shot] Skill '%s' mastered_by: AI 输出名字 '%s'，已映射到预分配 UUID %s",
+                            sk.get("name", "?"), val, mapped,
+                        )
+                        mastered_ids.append(mapped)
+                    else:
+                        logger.warning(
+                            "[single_shot] Skill '%s' mastered_by: '%s' 不在人物列表，已丢弃",
+                            sk.get("name", "?"), val,
+                        )
             self.db.add(Skill(
                 project_id=project.id,
                 name=sk.get("name", f"功法{i+1}"),
@@ -2359,12 +2446,38 @@ unresolved_tension 和 trigger_event 为必填，不能为空或敷衍。"""
                 description=sk.get("description"),
                 effects=sk.get("effects"),
                 limitations=sk.get("limitations"),
-                mastered_by_character_ids=sk.get("mastered_by", []),
+                mastered_by_character_ids=mastered_ids,
                 sort_order=i,
             ))
 
-        # 道具
+        # 道具（single_shot）：使用预分配 UUID 映射校验 current_owner
         for i, it in enumerate(data.get("items", [])):
+            owner_uuid_str: str | None = None
+            owner_id = it.get("current_owner_id")
+            if owner_id and isinstance(owner_id, str):
+                try:
+                    _uuid_module.UUID(owner_id)
+                    owner_uuid_str = owner_id
+                except ValueError:
+                    logger.warning(
+                        "[single_shot] Item '%s' current_owner_id: '%s' 不是有效 UUID，尝试名字映射",
+                        it.get("name", "?"), owner_id,
+                    )
+            if owner_uuid_str is None:
+                owner_name = it.get("current_owner_name") or it.get("current_owner", "") or ""
+                if owner_name:
+                    mapped = _ss_name_to_uuid.get(owner_name)
+                    if mapped:
+                        logger.warning(
+                            "[single_shot] Item '%s' current_owner: 已通过名字 '%s' 映射到预分配 UUID %s",
+                            it.get("name", "?"), owner_name, mapped,
+                        )
+                        owner_uuid_str = mapped
+                    else:
+                        logger.warning(
+                            "[single_shot] Item '%s' current_owner: '%s' 不在人物列表，owner_id 置空",
+                            it.get("name", "?"), owner_name,
+                        )
             self.db.add(Item(
                 project_id=project.id,
                 name=it.get("name", f"道具{i+1}"),
@@ -2376,6 +2489,7 @@ unresolved_tension 和 trigger_event 为必填，不能为空或敷衍。"""
                 limitations=it.get("limitations"),
                 story_significance=it.get("story_significance"),
                 status=it.get("status", "intact"),
+                current_owner_id=UUID(owner_uuid_str) if owner_uuid_str else None,
                 sort_order=i,
             ))
 
@@ -2395,7 +2509,10 @@ unresolved_tension 和 trigger_event 为必填，不能为空或敷衍。"""
             _tier = c.get("character_tier", "core")
             if _tier not in _VALID_TIERS:
                 _tier = "core"
+            # 复用预分配 UUID，确保与技能/道具外键一致
+            _preassigned_id = _ss_name_to_uuid.get(c.get("name", ""))
             char = Character(
+                id=UUID(_preassigned_id) if _preassigned_id else _uuid_module.uuid4(),
                 project_id=project.id,
                 name=c.get("name", "未命名"),
                 role=c.get("role", "supporting"),

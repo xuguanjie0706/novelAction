@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { X, Zap, BookMarked, MessageSquare, SendHorizontal, Loader2 } from 'lucide-react'
 import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload, llmProviderIdFromRoute } from '../../store'
 import { aiApi } from '../../api/client'
+import { authFetch } from '../../api/authFetch'
 import { memoryDisplayChapter } from '../../utils/chapterNumber'
 import type { AiChatMessage, Chapter, QualityReport } from '../../types'
 import clsx from 'clsx'
@@ -218,7 +219,7 @@ export default function AIPanel({ projectId }: Props) {
     setChatLoading(true)
     try {
       const route = useAppStore.getState().aiBackendRoute
-      const response = await fetch(aiApi.chatStreamUrl(projectId), {
+      const response = await authFetch(aiApi.chatStreamUrl(projectId), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

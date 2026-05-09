@@ -19,6 +19,7 @@ import toast from 'react-hot-toast'
 import { useAppStore } from '../../store'
 import type { Chapter, GenTask, GenProgressItem, MemoryChunk, OutlinePlanQualityReport } from '../../types'
 import { aiApi, chaptersApi, outlineApi, projectsApi } from '../../api/client'
+import { authFetch, authQueryString } from '../../api/authFetch'
 import OutlinePlanQualityView from '../Outline/OutlinePlanQualityView'
 import {
   fetchOutlineExpandResult,
@@ -62,7 +63,11 @@ function parseSseDataLine(line: string): { text?: string; error?: string; done?:
 
 function toWsUrl(path: string) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${window.location.host}${path}`
+  // 浏览器 WebSocket 无法设自定义 header，把 JWT 拼到 query string 让后端自行鉴权。
+  const sep = path.includes('?') ? '&' : '?'
+  const auth = authQueryString().replace(/^\?/, '')
+  const suffix = auth ? `${sep}${auth}` : ''
+  return `${protocol}//${window.location.host}${path}${suffix}`
 }
 
 // ── 任务执行器 ─────────────────────────────────────────────
@@ -78,7 +83,7 @@ async function runFullGenerate(
   const { projectId, params } = task
   let res: Response
   try {
-    res = await fetch(`/api/v1/projects/${projectId}/outline/ai-full-generate`, {
+    res = await authFetch(`/api/v1/projects/${projectId}/outline/ai-full-generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
@@ -770,7 +775,7 @@ async function runContinueChapters(
 
     let accumulated = ''
     try {
-      const res = await fetch(`/api/v1/projects/${projectId}/ai/draft-assist/stream`, {
+      const res = await authFetch(`/api/v1/projects/${projectId}/ai/draft-assist/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -995,7 +1000,7 @@ async function runRewriteChapter(
   let accumulated = ''
   try {
     pushProgress({ step: 'draft', label: `正在重写《${chapter.title}》…`, done: false, error: false })
-    const res = await fetch(`/api/v1/projects/${projectId}/ai/draft-assist/stream`, {
+    const res = await authFetch(`/api/v1/projects/${projectId}/ai/draft-assist/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1213,7 +1218,7 @@ async function runGatedRewriteChapter(
   let gateOutcome: 'passed' | 'failed' | null = null
 
   try {
-    const res = await fetch(aiApi.gatedDraftStreamUrl(projectId), {
+    const res = await authFetch(aiApi.gatedDraftStreamUrl(projectId), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

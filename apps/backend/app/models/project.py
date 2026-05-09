@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, DateTime, JSON, Integer
+from sqlalchemy import Column, String, Text, DateTime, JSON, Integer, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -10,6 +10,9 @@ class Project(Base):
     __tablename__ = "projects"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)  # 主键；被 chapters/characters/outline 等 FK 引用
+    # 项目归属用户：多租户隔离的核心字段。NULL 仅出现在多租户上线前的遗留数据上，
+    # 启动迁移会把这类记录归到最早注册的 active 用户；新建项目此列必填。
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     title = Column(String(200), nullable=False)  # 书名/项目名
     genre = Column(String(100))  # 题材标签，如玄幻/都市/科幻
     logline = Column(Text)  # 一句话梗概（对外 pitch）

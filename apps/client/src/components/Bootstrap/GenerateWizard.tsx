@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Sparkles, X, CheckCircle, Loader, AlertCircle, ChevronRight, ShieldAlert, BookOpen } from 'lucide-react'
 import clsx from 'clsx'
 import { llmApi, projectsApi } from '../../api/client'
+import { authFetch } from '../../api/authFetch'
 import type { LlmOverview } from '../../types'
 import { llmProviderIdFromRoute, modelProfileFromRoute, routeLlmProviderPayload, useAppStore } from '../../store'
 import { TargetWordsInput } from '../TargetWordsInput'
@@ -19,7 +20,10 @@ interface Props {
   onClose: () => void
 }
 
-type StepKey = 'project' | 'settings' | 'characters' | 'outline' | 'memory' | 'relations' | 'all' | 'saving'
+type StepKey =
+  | 'project' | 'settings' | 'characters' | 'outline' | 'memory' | 'relations'
+  | 'opening_contract' | 'vol1_chapters' | 'ch1_scenes' | 'consistency'
+  | 'all' | 'saving'
 type StepStatus = 'pending' | 'running' | 'done' | 'error'
 
 interface StepState {
@@ -30,28 +34,37 @@ interface StepState {
 }
 
 const STEP_DEFS: { key: StepKey; label: string }[] = [
-  { key: 'project',    label: '项目基础信息' },
-  { key: 'settings',   label: '世界观设定卡' },
-  { key: 'characters', label: '人物库' },
-  { key: 'outline',    label: '大纲树（卷章动态规划）' },
-  { key: 'memory',     label: '记忆库种子' },
-  { key: 'relations',  label: '人物关系' },
+  { key: 'project',          label: '项目基础信息' },
+  { key: 'settings',         label: '世界观设定卡' },
+  { key: 'characters',       label: '人物库' },
+  { key: 'outline',          label: '卷级结构规划' },
+  { key: 'memory',           label: '记忆库种子' },
+  { key: 'relations',        label: '人物关系' },
+  { key: 'opening_contract', label: '开局追读承诺' },
+  { key: 'vol1_chapters',    label: '第一卷章级大纲' },
+  { key: 'ch1_scenes',       label: '第1章场景蓝图' },
+  { key: 'consistency',      label: '全局一致性扫描' },
 ]
 
 type Mode = 'sequential' | 'single_shot'
 
 const STEP_KEY_ALIAS: Record<string, StepKey> = {
-  // Step 0 立项会议：后端 step=positioning，UI 归到「项目基础信息」卡片（先后显示立项标签再进入生成项目）
+  // Step 0 立项会议：后端 step=positioning，UI 归到「项目基础信息」卡片
   positioning: 'project',
-  // 世界观相关结构化子步骤归并到“世界观设定卡”
+  // 世界观相关结构化子步骤归并到”世界观设定卡”
   power_systems: 'settings',
   factions: 'settings',
   storylines: 'settings',
   skills: 'settings',
   items: 'settings',
   settings: 'settings',
-  // 其它后端步骤对齐旧版前端卡片
+  // 其它后端步骤对齐前端卡片
   volumes: 'outline',
+  // Step 12-14：后端 step 名与前端 key 一致，toDisplayStepKey 会直接命中 STEP_DEFS，alias 仅作备份
+  opening_contract: 'opening_contract',
+  vol1_chapters:    'vol1_chapters',
+  ch1_scenes:       'ch1_scenes',
+  consistency:      'consistency',
 }
 
 function toDisplayStepKey(step: unknown): StepKey | null {
@@ -163,7 +176,7 @@ export default function GenerateWizard({ onClose }: Props) {
     abortRef.current = abort
 
     try {
-      const res = await fetch('/api/v1/bootstrap/stream', {
+      const res = await authFetch('/api/v1/bootstrap/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

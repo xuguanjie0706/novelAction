@@ -2,6 +2,8 @@ import { ConfigProvider, App as AntApp } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AdminLayout from './layouts/AdminLayout'
+import RequireAdminAuth from './components/RequireAdminAuth'
+import AdminLoginPage from './pages/AdminLoginPage'
 import LlmCallLogsPage from './pages/LlmCallLogsPage'
 import LlmProvidersPage from './pages/LlmProvidersPage'
 import ImageProvidersPage from './pages/ImageProvidersPage'
@@ -16,7 +18,15 @@ export default function App() {
       <AntApp>
         <BrowserRouter>
           <Routes>
-            <Route path="/" element={<AdminLayout />}>
+            <Route path="/login" element={<AdminLoginPage />} />
+            <Route
+              path="/"
+              element={
+                <RequireAdminAuth>
+                  <AdminLayout />
+                </RequireAdminAuth>
+              }
+            >
               <Route index element={<Navigate to="/novels" replace />} />
               <Route path="novels" element={<NovelManagementPage />} />
               <Route path="debriefs" element={<DebriefListPage />} />

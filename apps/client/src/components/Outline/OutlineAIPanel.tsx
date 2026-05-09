@@ -18,6 +18,7 @@ import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import type { OutlineNode } from '../../types'
 import { useAppStore, toOutlineApiModelProfile, routeLlmProviderPayload } from '../../store'
+import { authFetch } from '../../api/authFetch'
 
 // ── Types ─────────────────────────────────────────────
 
@@ -257,7 +258,7 @@ export default function OutlineAIPanel({ node, projectId, onCommitDone }: Props)
     try {
       const url = `/api/v1/projects/${projectId}/outline/ai-expand`
       const route = useAppStore.getState().aiBackendRoute
-      const res = await fetch(url, {
+      const res = await authFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -319,7 +320,7 @@ export default function OutlineAIPanel({ node, projectId, onCommitDone }: Props)
     if (!result) return
     setCommitting(true)
     try {
-      const res = await fetch(`/api/v1/projects/${projectId}/outline/ai-expand/commit`, {
+      const res = await authFetch(`/api/v1/projects/${projectId}/outline/ai-expand/commit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

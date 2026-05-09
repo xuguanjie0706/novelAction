@@ -47,34 +47,48 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(sub: str, expires_minutes: Optional[int] = None) -> str:
+def create_access_token(
+    sub: str,
+    expires_minutes: Optional[int] = None,
+    role: Optional[str] = None,
+) -> str:
     """生成 JWT access token。
 
     Args:
-        sub: token subject，通常为 user_id（str 形式的 UUID）。
+        sub: token subject。普通用户为 user_id (UUID 字符串)；管理员为 ADMIN_USERNAME。
         expires_minutes: 过期时长（分钟），默认读 settings.ACCESS_TOKEN_EXPIRE_MINUTES。
+        role: 角色 claim。None / "user" 为创作端用户；"admin" 为管理后台 token。
 
     Returns:
         签名后的 JWT 字符串。
     """
     minutes = expires_minutes if expires_minutes is not None else settings.ACCESS_TOKEN_EXPIRE_MINUTES
     expire = datetime.now(timezone.utc) + timedelta(minutes=minutes)
-    payload = {"sub": sub, "exp": expire}
+    payload: dict = {"sub": sub, "exp": expire}
+    if role:
+        payload["role"] = role
     return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=_ALGORITHM)
 
 
 def decode_access_token(token: str) -> Optional[str]:
-    """解码并验证 JWT，返回 sub（user_id）。
+    """解码并验证 JWT，返回 sub（user_id 或 admin username）。
 
-    Args:
-        token: 来自 Authorization: Bearer <token> 的 JWT 字符串。
+    向后兼容：仅返回 sub；如需 role 请改用 ``decode_access_token_full``。
+    """
+    payload = decode_access_token_full(token)
+    if not payload:
+        return None
+    sub = payload.get("sub")
+    return sub if sub else None
+
+
+def decode_access_token_full(token: str) -> Optional[dict]:
+    """解码并验证 JWT，返回完整 payload（含 sub / role / exp）。
 
     Returns:
-        token 中的 sub 字段（user_id），验签失败或过期时返回 None。
+        payload dict；验签失败或过期返回 None。
     """
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[_ALGORITHM])
-        sub: str = payload.get("sub")
-        return sub if sub else None
+        return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[_ALGORITHM])
     except JWTError:
         return None

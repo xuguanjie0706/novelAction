@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from uuid import UUID
 
 from app.database import get_db
+from app.dependencies import get_current_user
+from app.models.user import User
 from app.services.generation_service import GenerationService
 
 router = APIRouter(prefix="/bootstrap", tags=["bootstrap"])
@@ -24,6 +26,7 @@ class BootstrapRequest(BaseModel):
 async def bootstrap_stream(
     req: BootstrapRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     一句话创意 → 全量初始化小说（SSE 流式推送进度）
@@ -32,11 +35,14 @@ async def bootstrap_stream(
 
     mode="single_shot"（默认）单次大 JSON，适合远程大上下文。
     mode="sequential" 多步串行，同样完全遵循请求中的线路选择（兼容回退）。
+
+    新建的 Project 会自动绑定到 current_user，确保多用户隔离。
     """
     svc = GenerationService(
         db=db,
         model_profile=req.model_profile,
         llm_provider_id=req.llm_provider_id,
+        user_id=current_user.id,
     )
 
     async def event_stream():

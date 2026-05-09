@@ -570,6 +570,50 @@ export interface ChapterAnalysisResult {
   hook: HookCheckResult
 }
 
+// ── Dashboard 首页聚合 ─────────────────────────────────
+/** 七天柱状图单项 */
+export interface DashboardWeekDay {
+  /** YYYY-MM-DD（服务器时区） */
+  date: string
+  /** 周一 = 一，周日 = 日 */
+  weekday_label: string
+  /** 该日 ChapterVersion 增量字数总和 */
+  words: number
+  /** 柱高（像素，4-78），最大值映射到 78 */
+  height: number
+}
+
+/** 「最近编辑」单项；项目对象用于跳转 */
+export interface DashboardRecentChapter {
+  id: string
+  title: string
+  word_count: number
+  sort_order: number
+  /** 「第 N 章 标题」展示串 */
+  chapter_label: string
+  /** ISO 时间字符串 */
+  updated_at: string | null
+  project: Project
+}
+
+/** GET /api/v1/dashboard/home 返回结构 */
+export interface DashboardHome {
+  /** 问候语姓名（username 优先，回退邮箱前缀，再回退「写作者」） */
+  greeting_name: string
+  /** 跨项目章节字数总和 */
+  total_words: number
+  today_words: number
+  streak_days: number
+  /** 最近 7 天里有写作的天数 */
+  writing_days: number
+  /** 最近 7 天总字数 / writing_days，向下取整 */
+  average_words: number
+  /** 7 项，从 7 天前到今天 */
+  week: DashboardWeekDay[]
+  /** 最近编辑的章节，最多 5 条 */
+  recent_chapters: DashboardRecentChapter[]
+}
+
 /**
  * 章节分析均值统计——汇总该章所有历史分析记录的结果。
  *

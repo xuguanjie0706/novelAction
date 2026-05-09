@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     # JWT 认证
     JWT_SECRET_KEY: str = "jwt-secret-change-me-in-production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 默认 7 天
+
+    # 管理后台账号（apps/frontend，端口 3174；与创作端账号体系完全隔离）
+    # ADMIN_USERNAME/ADMIN_PASSWORD 任一为空 = 关闭管理后台登录入口（默认关闭，强制部署时显式开启）。
+    # 登录成功后签发 role=admin JWT，可跨用户访问所有 /api/v1/projects/*。
+    ADMIN_USERNAME: Optional[str] = None
+    ADMIN_PASSWORD: Optional[str] = None
     CORS_ORIGINS: list[str] = [
         "http://localhost:3173",
         "http://127.0.0.1:3173",

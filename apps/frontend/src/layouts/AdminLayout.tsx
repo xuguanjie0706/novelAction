@@ -1,21 +1,31 @@
-import { Layout, Menu, theme } from 'antd'
+import { Button, Layout, Menu, Popconfirm, Space, Typography, theme } from 'antd'
 import {
   BookOutlined,
   CheckSquareOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
   FileImageOutlined,
+  LogoutOutlined,
   PictureOutlined,
   ReadOutlined,
+  UserOutlined,
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useMemo } from 'react'
+
+import { clearAdminAuth, getAdminUsername } from '../api/auth'
 
 const { Header, Sider, Content } = Layout
 
 export default function AdminLayout() {
   const navigate = useNavigate()
   const loc = useLocation()
+  const username = getAdminUsername()
+
+  const handleLogout = () => {
+    clearAdminAuth()
+    navigate('/login', { replace: true })
+  }
   const {
     token: { colorBgContainer, borderRadiusLG },
   } = theme.useToken()
@@ -99,8 +109,27 @@ export default function AdminLayout() {
         />
       </Sider>
       <Layout style={{ minHeight: '100vh', overflow: 'hidden' }}>
-        <Header style={{ padding: '0 24px', background: colorBgContainer, lineHeight: '56px' }}>
+        <Header
+          style={{
+            padding: '0 24px',
+            background: colorBgContainer,
+            lineHeight: '56px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
           <span style={{ fontWeight: 600 }}>管理后台</span>
+          <Space>
+            <Typography.Text type="secondary">
+              <UserOutlined /> {username || '管理员'}
+            </Typography.Text>
+            <Popconfirm title="确认退出登录？" okText="退出" cancelText="取消" onConfirm={handleLogout}>
+              <Button type="text" icon={<LogoutOutlined />}>
+                退出
+              </Button>
+            </Popconfirm>
+          </Space>
         </Header>
         <Content style={{ flex: 1, minHeight: 0, padding: 24, overflow: 'hidden' }}>
           <div

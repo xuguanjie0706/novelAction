@@ -1,6 +1,6 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
-import type { AiChatMessage, Chapter, ChapterAnalysisResult, ChapterAnalysisStats, HookCheckResult, LlmOverview, ReaderSimulationResult, StorylineGapsResult } from '../types'
+import type { AiChatMessage, Chapter, ChapterAnalysisResult, ChapterAnalysisStats, DashboardHome, HookCheckResult, LlmOverview, ReaderSimulationResult, StorylineGapsResult } from '../types'
 import {
   extractUsage,
   finishLlmCall,
@@ -126,6 +126,12 @@ export const projectsApi = {
   /** 部分更新写作质量门控配置（只传改变的字段） */
   updateWritingConfig: (id: string, data: Partial<WritingConfig>) =>
     api.patch<{ writing_config: WritingConfig }>(`/projects/${id}/writing-config`, data),
+}
+
+// ── Dashboard 首页聚合（跨项目）───────────────────────
+export const dashboardApi = {
+  /** GET /api/v1/dashboard/home：首页所需的全量数据（写作统计 + 最近章节 + 问候语） */
+  home: () => api.get<DashboardHome>('/dashboard/home'),
 }
 
 // ── Cover Generation ──────────────────────────────────

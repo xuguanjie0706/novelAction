@@ -1,4 +1,5 @@
 import type { OutlineNode } from '../types'
+import { authFetch } from '../api/authFetch'
 
 /** 与 OutlineAIPanel / 后端约定一致 */
 export interface ExpandChapterCard {
@@ -65,7 +66,7 @@ export async function fetchOutlineExpandResult(
     model_profile: modelProfile,
   }
   if (llmProviderId) body.llm_provider_id = llmProviderId
-  const res = await fetch(`/api/v1/projects/${projectId}/outline/ai-expand`, {
+  const res = await authFetch(`/api/v1/projects/${projectId}/outline/ai-expand`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -111,7 +112,7 @@ export async function commitOutlineExpand(
   parentNodeId: string,
   chapters: ExpandChapterCard[]
 ): Promise<void> {
-  const res = await fetch(`/api/v1/projects/${projectId}/outline/ai-expand/commit`, {
+  const res = await authFetch(`/api/v1/projects/${projectId}/outline/ai-expand/commit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

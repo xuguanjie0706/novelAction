@@ -10,53 +10,15 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_current_user
 from app.models.user import User
 from app.schemas.user import UserRegisterRequest, UserLoginRequest, TokenResponse, UserOut
-from app.utils.auth import hash_password, verify_password, create_access_token, decode_access_token
+from app.utils.auth import hash_password, verify_password, create_access_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-# FastAPI 内置的 Bearer token 解析器；auto_error=False 让我们自定义 401 消息
-_bearer = HTTPBearer(auto_error=False)
-
-
-def _get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
-    db: Session = Depends(get_db),
-) -> User:
-    """依赖注入：从 Authorization: Bearer <token> 解析当前登录用户。
-
-    Args:
-        credentials: FastAPI 从请求头提取的 Bearer token；未携带时为 None。
-        db: 数据库 session。
-
-    Returns:
-        对应的 User ORM 实例。
-
-    Raises:
-        HTTPException 401: token 缺失、无效或用户不存在/已停用。
-    """
-    _unauthorized = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="未登录或 Token 已过期，请重新登录",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    if not credentials:
-        raise _unauthorized
-
-    user_id = decode_access_token(credentials.credentials)
-    if not user_id:
-        raise _unauthorized
-
-    user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
-    if not user:
-        raise _unauthorized
-
-    return user
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
@@ -120,7 +82,7 @@ def login(body: UserLoginRequest, db: Session = Depends(get_db)) -> TokenRespons
 
 
 @router.get("/me", response_model=UserOut)
-def get_me(current_user: User = Depends(_get_current_user)) -> UserOut:
+def get_me(current_user: User = Depends(get_current_user)) -> UserOut:
     """获取当前登录用户信息。
 
     需要在请求头携带：Authorization: Bearer <token>

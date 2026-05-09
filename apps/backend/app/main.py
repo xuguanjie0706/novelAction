@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
@@ -50,14 +50,19 @@ class ForwardedHostASGIMiddleware:
                     scope["server"] = parsed
                 break
         await self.app(scope, receive, send)
+
+
 from app.config import settings
 from app.database import engine, Base
+from app.dependencies import get_current_user, verify_project_access
 from app.routers import projects, world_settings, characters, outline, chapters, chapter_indexes, ai, generate, admin_llm, llm_public, admin_llm_calls, admin_cover_image_calls
 from app.routers import storylines, power_systems, skills, items, factions
 from app.routers import foreshadows, quality_debts
 from app.routers import scenes, reader_promises
 from app.routers import cover as cover_router
 from app.routers import auth as auth_router
+from app.routers import admin_auth as admin_auth_router
+from app.routers import dashboard as dashboard_router
 from app.services.llm_config import seed_llm_from_env_if_empty
 from app.services.cover_storage import ensure_cover_storage_dir, resolved_cover_storage_dir
 
@@ -154,6 +159,24 @@ def _ensure_project_columns() -> None:
     """
     ddl_statements = [
         "ALTER TABLE projects ADD COLUMN IF NOT EXISTS premise TEXT",
+        # 多用户隔离：项目归属用户。FK + 索引；旧数据保持 NULL，由 _claim_orphan_projects 回填。
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS user_id UUID",
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints
+                WHERE table_name = 'projects' AND constraint_name = 'fk_projects_user_id'
+            ) AND EXISTS (
+                SELECT 1 FROM information_schema.tables WHERE table_name = 'users'
+            ) THEN
+                ALTER TABLE projects
+                    ADD CONSTRAINT fk_projects_user_id
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+            END IF;
+        END $$;
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_projects_user_id ON projects (user_id)",
         # target_words 从 VARCHAR(20) 升级为 INTEGER，旧字符串值自动转换
         # USING 子句：把旧字符串强制转为 INTEGER（NULL 时保持 NULL）
         """
@@ -179,6 +202,36 @@ def _ensure_project_columns() -> None:
     with engine.begin() as conn:
         for ddl in ddl_statements:
             conn.execute(text(ddl))
+
+
+def _claim_orphan_projects() -> None:
+    """
+    多用户隔离一次性回填：把 user_id IS NULL 的历史项目归到最早注册的 active 用户。
+
+    场景：在引入 Project.user_id 之前创建的项目，列升级后默认 NULL，对所有人不可见；
+    本函数在没有任何 active 用户时不做任何动作（避免误归属）。该 UPDATE 幂等：
+    回填一次后，后续启动 NULL 行集合为空，不再触发。
+    """
+    with engine.begin() as conn:
+        # users 表必须存在；该函数在 create_all 之后调用
+        row = conn.execute(text(
+            "SELECT 1 FROM information_schema.tables WHERE table_name = 'users'"
+        )).fetchone()
+        if not row:
+            return
+        conn.execute(text(
+            """
+            UPDATE projects
+               SET user_id = (
+                     SELECT id FROM users
+                      WHERE is_active = TRUE
+                      ORDER BY created_at ASC
+                      LIMIT 1
+                   )
+             WHERE user_id IS NULL
+               AND EXISTS (SELECT 1 FROM users WHERE is_active = TRUE)
+            """
+        ))
 
 
 def _ensure_quality_debt_author_notes() -> None:
@@ -397,6 +450,7 @@ _ensure_chapter_embedding_column()
 _ensure_llm_provider_columns()
 _ensure_chapter_coherence_report_columns()
 _ensure_cover_image_call_logs_columns()
+_claim_orphan_projects()
 seed_llm_from_env_if_empty()
 
 app = FastAPI(
@@ -427,30 +481,47 @@ app.add_middleware(
 app.add_middleware(ForwardedHostASGIMiddleware)
 
 # 注册路由
+# auth：自身完成登录鉴权，不需要外层依赖。
 app.include_router(auth_router.router, prefix="/api/v1")
+
+# admin/auth：管理后台独立登录入口（与创作端用户体系隔离），自身处理鉴权。
+app.include_router(admin_auth_router.router, prefix="/api/v1")
+
+# projects：列表/创建只需 current_user；详情/PATCH/DELETE/子配置由路由内部 _owned_or_404 校验。
 app.include_router(projects.router, prefix="/api/v1")
-app.include_router(world_settings.router, prefix="/api/v1")
-app.include_router(characters.router, prefix="/api/v1")
-app.include_router(outline.router, prefix="/api/v1")
-app.include_router(chapters.router, prefix="/api/v1")
-app.include_router(chapter_indexes.router, prefix="/api/v1")
-app.include_router(ai.router, prefix="/api/v1")
-app.include_router(generate.router, prefix="/api/v1")
-app.include_router(admin_llm.router, prefix="/api/v1")
-app.include_router(admin_llm_calls.router, prefix="/api/v1")
-app.include_router(admin_cover_image_calls.router, prefix="/api/v1")
-app.include_router(llm_public.router, prefix="/api/v1")
-# 新增模块路由
-app.include_router(storylines.router, prefix="/api/v1")
-app.include_router(power_systems.router, prefix="/api/v1")
-app.include_router(skills.router, prefix="/api/v1")
-app.include_router(items.router, prefix="/api/v1")
-app.include_router(factions.router, prefix="/api/v1")
-app.include_router(foreshadows.router, prefix="/api/v1")
-app.include_router(quality_debts.router, prefix="/api/v1")
-app.include_router(scenes.router, prefix="/api/v1")
-app.include_router(reader_promises.router, prefix="/api/v1")
-app.include_router(cover_router.router, prefix="/api/v1")
+
+# bootstrap：仅需登录态，user_id 由路由从 current_user 注入到新建 Project。
+app.include_router(generate.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+
+# 全局只读/管理：需登录但不绑项目。
+app.include_router(admin_llm.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+app.include_router(admin_llm_calls.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+app.include_router(admin_cover_image_calls.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+app.include_router(llm_public.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+
+# 首页 dashboard：跨项目聚合，仅需登录态。
+app.include_router(dashboard_router.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+
+# 所有形如 /projects/{project_id}/... 的子资源：统一挂 verify_project_access 校验归属。
+_project_scoped_dep = [Depends(verify_project_access)]
+app.include_router(world_settings.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(characters.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(outline.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+# 大纲工作流 WS：handler 内部以 ?token= 自行鉴权，不能挂 verify_project_access。
+app.include_router(outline.ws_router, prefix="/api/v1")
+app.include_router(chapters.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(chapter_indexes.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(ai.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(storylines.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(power_systems.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(skills.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(items.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(factions.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(foreshadows.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(quality_debts.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(scenes.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(reader_promises.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(cover_router.router, prefix="/api/v1", dependencies=_project_scoped_dep)
 
 ensure_cover_storage_dir()
 app.mount(

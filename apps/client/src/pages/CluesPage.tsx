@@ -6,6 +6,7 @@ import {
   AlertTriangle, Star, Anchor, Wand2, ExternalLink, Save,
 } from 'lucide-react'
 import { foreshadowsApi, chapterIndexesApi, qualityDebtsApi, chaptersApi, aiApi } from '../api/client'
+import { authFetch } from '../api/authFetch'
 import type { Foreshadow, ChapterIndex, QualityDebt } from '../types'
 import { useAppStore, modelProfileFromRoute, llmProviderIdFromRoute } from '../store'
 import toast from 'react-hot-toast'
@@ -761,7 +762,7 @@ export default function CluesPage() {
           /* 快照失败不阻断 */
         }
       }
-      const res = await fetch(`/api/v1/projects/${projectId}/ai/draft-assist/stream`, {
+      const res = await authFetch(`/api/v1/projects/${projectId}/ai/draft-assist/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

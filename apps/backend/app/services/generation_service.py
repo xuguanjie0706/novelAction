@@ -331,8 +331,18 @@ class GenerationService:
         db: Session,
         model_profile: Literal["local", "gemini"] = "local",
         llm_provider_id: Optional[UUID] = None,
+        user_id: Optional[UUID] = None,
     ):
+        """
+        Args:
+            db: SQLAlchemy Session
+            model_profile: 远程或本地线路
+            llm_provider_id: 远程 provider 行 id；与 model_profile 解耦
+            user_id: 项目归属用户 id；多用户隔离的核心字段。新建 Project 时强制写入。
+                兼容老流程允许传 None，但生产路径（/bootstrap/stream）必传。
+        """
         self.db = db
+        self.user_id = user_id
         ai_profile = "default" if model_profile == "local" else "gemini"
         self.ai = AIService(profile=ai_profile, db=db, llm_provider_id=llm_provider_id)
 
@@ -661,6 +671,9 @@ class GenerationService:
         # Project.extra 列在 main.py 的兼容迁移里新增；旧库未迁移时跳过赋值
         if hasattr(Project, "extra") and positioning:
             project_kwargs["extra"] = {"positioning": positioning}
+        # 多用户隔离：新建项目必须绑定到发起 bootstrap 的用户
+        if self.user_id is not None:
+            project_kwargs["user_id"] = self.user_id
         project = Project(**project_kwargs)
         self.db.add(project)
         self.db.commit()
@@ -2334,7 +2347,7 @@ unresolved_tension 和 trigger_event 为必填，不能为空或敷衍。"""
     async def _save_all(self, data: dict, logline: str, premise: str = "", target_words: int = 1_200_000) -> Project:
         """把方案B生成的完整 JSON 一次性存库"""
         p = data["project"]
-        project = Project(
+        project_kwargs = dict(
             title=p["title"],
             genre=p.get("genre", "玄幻"),
             logline=logline,
@@ -2343,6 +2356,10 @@ unresolved_tension 和 trigger_event 为必填，不能为空或敷衍。"""
             story_core=p.get("story_core", {}),
             target_words=target_words,
         )
+        # 多用户隔离：与 _gen_project 路径保持一致，单次全量也绑定用户
+        if self.user_id is not None:
+            project_kwargs["user_id"] = self.user_id
+        project = Project(**project_kwargs)
         self.db.add(project)
         self.db.flush()
 

@@ -10,7 +10,7 @@ import {
   Timer,
   Wand2,
 } from 'lucide-react'
-import type { Project } from '../../types'
+import type { DashboardHome, Project } from '../../types'
 import { TargetWordsInput } from '../TargetWordsInput'
 import {
   HOME_INSPIRATION,
@@ -142,72 +142,112 @@ export function RecentEdits({ edits, onOpen, onViewAll }: { edits: RecentEdit[];
       </div>
 
       <div className="mt-3 rounded-lg border border-gray-100 bg-white px-4 py-2 shadow-sm">
-        {edits.map((edit, index) => (
-          <button
-            key={edit.id}
-            type="button"
-            onClick={() => onOpen(edit.project)}
-            className="flex w-full items-center gap-4 border-b border-gray-100 py-4 text-left last:border-b-0"
-          >
-            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-500">
-              <BookOpen size={22} />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-[15px] font-bold text-gray-950">{edit.title}</span>
-              <span className="mt-1 block truncate text-sm text-gray-500">
-                {edit.chapter} · {wordsLabel(edit.words)}
+        {edits.length === 0 ? (
+          <div className="py-8 text-center text-sm text-gray-400">还没有写作记录，先开个头吧</div>
+        ) : (
+          edits.map(edit => (
+            <button
+              key={edit.id}
+              type="button"
+              onClick={() => onOpen(edit.project)}
+              className="flex w-full items-center gap-4 border-b border-gray-100 py-4 text-left last:border-b-0"
+            >
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-500">
+                <BookOpen size={22} />
               </span>
-            </span>
-            <span className="shrink-0 text-sm text-gray-400">{index === 0 ? '刚刚' : edit.timeLabel}</span>
-          </button>
-        ))}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[15px] font-bold text-gray-950">{edit.title}</span>
+                <span className="mt-1 block truncate text-sm text-gray-500">
+                  {edit.chapter} · {wordsLabel(edit.words)}
+                </span>
+              </span>
+              <span className="shrink-0 text-sm text-gray-400">{edit.timeLabel}</span>
+            </button>
+          ))
+        )}
       </div>
     </section>
   )
 }
 
-export function WritingStatsPanel() {
+/**
+ * 写作数据面板。
+ *
+ * @param data 后端聚合数据 `dashboardApi.home()`；为 null 时退化到 mock，加载中显示 skeleton。
+ * @param loading 首次加载未完成；显示骨架屏避免白板闪烁。
+ */
+export function WritingStatsPanel({ data, loading = false }: { data?: DashboardHome | null; loading?: boolean }) {
+  // 兜底：未登录或网络异常时仍展示静态 mock，保持版面稳定
+  const stats = data ?? HOME_WRITING_STATS_FALLBACK
+
   return (
     <section className="rounded-lg border border-gray-100 bg-white p-5 shadow-sm">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-bold text-gray-950">写作数据</h2>
-        <button
-          type="button"
-          className="flex h-8 items-center gap-1 rounded-lg border border-gray-100 px-3 text-xs text-gray-500 transition-colors hover:border-gray-200 hover:text-gray-900"
-        >
+        <span className="flex h-8 items-center gap-1 rounded-lg border border-gray-100 px-3 text-xs text-gray-500">
           本周
           <ChevronRight size={13} className="rotate-90" />
-        </button>
+        </span>
       </div>
 
-      <div className="mt-7 grid grid-cols-2 gap-4">
-        <Metric value={HOME_WRITING_STATS.totalWords.toLocaleString()} label="总字数" suffix="字" />
-        <Metric value={String(HOME_WRITING_STATS.streakDays)} label="连续创作" suffix="天" />
-      </div>
-
-      <div className="mt-7 h-[118px] border-t border-gray-100 pt-3">
-        <div className="flex h-full items-end gap-4">
-          {HOME_WRITING_STATS.week.map(day => (
-            <div key={day.label} className="flex flex-1 flex-col items-center gap-2">
-              <div className="relative flex h-[78px] w-full items-end justify-center">
-                <div
-                  className="w-2 rounded-full bg-amber-500"
-                  title={`${day.words} 字`}
-                  style={{ height: day.height }}
-                />
-              </div>
-              <span className="text-xs text-gray-400">{day.label}</span>
-            </div>
-          ))}
+      {loading ? (
+        <div className="mt-7 space-y-5">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="h-12 animate-pulse rounded bg-gray-100" />
+            <div className="h-12 animate-pulse rounded bg-gray-100" />
+          </div>
+          <div className="h-[118px] animate-pulse rounded bg-gray-100" />
         </div>
-      </div>
+      ) : (
+        <>
+          <div className="mt-7 grid grid-cols-2 gap-4">
+            <Metric value={stats.total_words.toLocaleString()} label="总字数" suffix="字" />
+            <Metric value={String(stats.streak_days)} label="连续创作" suffix="天" />
+          </div>
 
-      <div className="mt-5 grid grid-cols-2 gap-5 border-t border-gray-100 pt-5">
-        <Metric value={HOME_WRITING_STATS.averageWords.toLocaleString()} label="平均字数" suffix="字" compact />
-        <Metric value={String(HOME_WRITING_STATS.writingDays)} label="创作天数" suffix="天" compact />
-      </div>
+          <div className="mt-7 h-[118px] border-t border-gray-100 pt-3">
+            <div className="flex h-full items-end gap-4">
+              {stats.week.map(day => (
+                <div key={day.date} className="flex flex-1 flex-col items-center gap-2">
+                  <div className="relative flex h-[78px] w-full items-end justify-center">
+                    <div
+                      className="w-2 rounded-full bg-amber-500"
+                      title={`${day.words.toLocaleString()} 字`}
+                      style={{ height: day.height }}
+                    />
+                  </div>
+                  <span className="text-xs text-gray-400">{day.weekday_label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-5 border-t border-gray-100 pt-5">
+            <Metric value={stats.average_words.toLocaleString()} label="平均字数" suffix="字" compact />
+            <Metric value={String(stats.writing_days)} label="创作天数" suffix="天" compact />
+          </div>
+        </>
+      )}
     </section>
   )
+}
+
+// 旧版 mock 数据（HOME_WRITING_STATS）字段名是 totalWords/streakDays/...，这里转成与
+// DashboardHome 一致的 snake_case 兜底，方便上方组件统一处理。后端不可用时使用。
+const HOME_WRITING_STATS_FALLBACK: Pick<
+  DashboardHome,
+  'total_words' | 'streak_days' | 'writing_days' | 'average_words' | 'week'
+> = {
+  total_words: HOME_WRITING_STATS.totalWords,
+  streak_days: HOME_WRITING_STATS.streakDays,
+  writing_days: HOME_WRITING_STATS.writingDays,
+  average_words: HOME_WRITING_STATS.averageWords,
+  week: HOME_WRITING_STATS.week.map(d => ({
+    date: d.label,
+    weekday_label: d.label,
+    words: d.words,
+    height: d.height,
+  })),
 }
 
 function Metric({ value, suffix, label, compact = false }: { value: string; suffix: string; label: string; compact?: boolean }) {

@@ -95,3 +95,8 @@ def max_tokens_extract_memory(profile: str) -> int:
         if _is_gemini(profile)
         else settings.LOCAL_EXTRACT_MEMORY_MAX_TOKENS
     )
+
+
+def max_tokens_bootstrap_completion() -> int:
+    """Bootstrap 串行各步大块 JSON 的 ``max_tokens``，读 ``Settings.BOOTSTRAP_COMPLETION_MAX_TOKENS``。"""
+    return int(settings.BOOTSTRAP_COMPLETION_MAX_TOKENS)

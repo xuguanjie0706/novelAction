@@ -62,8 +62,9 @@ export default function LlmCallLogsPage() {
       auto_extract_debrief: '自动复盘：提取人物/故事线变化与章节索引',
     }
     if (!op) return '未标注作用'
+    if (m[op]) return m[op]
     if (op.startsWith('bootstrap.')) return `Bootstrap 流程任务：${op.replace('bootstrap.', '')}`
-    return m[op] ?? `未登记作用：${op}`
+    return `未登记作用：${op}`
   }
 
   const prettyText = (v: unknown) => {

@@ -67,19 +67,22 @@ function readStoredGenQueueState(): StoredGenQueuePayload {
         && isValidTaskStatus((t as Partial<GenTask>).status)
       )
       .map((task) => {
-        // 页面重载后原 running 任务无法延续流连接，恢复为 pending 继续执行
+        // 页面重载后原 running 任务无法延续流连接，标记为 error 让用户手动重试。
+        // 历史行为曾自动恢复为 pending，但在项目被删除/重置/重启后会立即以旧
+        // project_id 重跑，导致"Project not found"等难以定位的错误。
         if (task.status !== 'running') return task
         const resumeProgress: GenProgressItem = {
           step: 'resume',
-          label: '已从上次会话恢复，准备继续执行',
-          done: false,
-          error: false,
+          label: '页面已重载，任务中断——请确认项目状态后手动重新排队',
+          done: true,
+          error: true,
         }
         const hasResumeMark = task.progress?.some((p) => p.step === 'resume')
         return {
           ...task,
-          status: 'pending' as const,
-          progress: hasResumeMark ? (task.progress ?? []) : [resumeProgress, ...(task.progress ?? [])],
+          status: 'error' as const,
+          errorMsg: '页面重载导致任务中断，请手动重新排队',
+          progress: hasResumeMark ? (task.progress ?? []) : [...(task.progress ?? []), resumeProgress],
         }
       })
     return { queue, open: !!parsed.open }

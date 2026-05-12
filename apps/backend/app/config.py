@@ -9,10 +9,9 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
 
-    # AI — 可选：本地 OpenAI 兼容端点（Ollama / vLLM 等）；未用 local 线路时可忽略，改用管理后台远程
+    # AI — 默认走远程（管理后台 LlmProvider 或 GEMINI_*）；下列为可选本地 OpenAI 兼容端点（遗留/开发机 Ollama 等）
     LLM_BASE_URL: str = "http://localhost:11434/v1"
     LLM_API_KEY: str = "ollama"
-    # 仅当前端选「本地」线路时需要；远程模型由管理后台 LlmProvider（或 GEMINI_*）决定，勿在此写死测试用模型名
     AI_MODEL: Optional[str] = None
     # OpenAI 兼容客户端超时（秒）：连接失败快速报错；读超时避免模型无响应时无限挂起
     LLM_HTTP_CONNECT_TIMEOUT: float = 30.0
@@ -25,7 +24,10 @@ class Settings(BaseSettings):
     # chat.completions max_tokens — 勿超过所用模型/网关的实际上限（见各云厂商文档）
     GEMINI_SINGLE_SHOT_MAX_TOKENS: int = 32768
     GEMINI_SETTING_COMPLETION_MAX_TOKENS: int = 16384
-    GEMINI_CHARACTER_COMPLETION_MAX_TOKENS: int = 6000
+    # Bootstrap 串行各步大块 JSON（人物、设定卡、势力/技能等）的 chat.completions max_tokens 统一上限
+    # 各步实际输出通常 2000-6000 token；65536 易超出模型/网关硬限导致拒绝并触发重试瀑布
+    # 本地模型建议 8192，远程大上下文模型可在 .env 中按需调高（如 16384）
+    BOOTSTRAP_COMPLETION_MAX_TOKENS: int = 8192
     GEMINI_EXPAND_OUTLINE_MAX_TOKENS: int = 20000
     GEMINI_OUTLINE_QUALITY_MAX_TOKENS: int = 8192
     GEMINI_CHAPTER_QUALITY_MAX_TOKENS: int = 8192

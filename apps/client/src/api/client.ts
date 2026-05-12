@@ -1,6 +1,6 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
-import type { AiChatMessage, Chapter, ChapterAnalysisResult, ChapterAnalysisStats, DashboardHome, HookCheckResult, LlmOverview, ReaderSimulationResult, StorylineGapsResult } from '../types'
+import type { AiChatMessage, Chapter, ChapterAnalysisResult, ChapterAnalysisStats, DashboardHome, HookCheckResult, LlmOverview, ReaderSimulationResult, StorylineGapsResult, WorldSetting } from '../types'
 import {
   extractUsage,
   finishLlmCall,
@@ -245,7 +245,7 @@ export const chapterIndexesApi = {
 // ── Quality Debts ─────────────────────────────────────
 export const qualityDebtsApi = {
   list: (pid: string, status?: string) =>
-    api.get(`/projects/${pid}/quality-debts${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+    api.get(`/projects/${pid}/quality-debts/${status ? `?status=${encodeURIComponent(status)}` : ''}`),
   update: (pid: string, id: string, data: any) =>
     api.patch(`/projects/${pid}/quality-debts/${id}`, data),
 }
@@ -326,6 +326,29 @@ export const llmApi = {
 
 export const aiApi = {
   qualityCheck: (pid: string, data: any) => api.post(`/projects/${pid}/ai/quality-check`, data),
+  /**
+   * 已有项目：AI 生成世界观设定卡（整套覆盖 / 仅补蓝图缺失 / 追加自拟标题卡）。
+   * 线路由 ``model_profile`` 与 ``llm_provider_id`` 决定，与 Bootstrap 一致。
+   *
+   * @param pid 项目 id
+   * @param data.mode ``blueprint_replace`` 会先删光本项目设定卡再按标准蓝图重建
+   */
+  generateWorldSettings: (
+    pid: string,
+    data: {
+      mode: 'blueprint_replace' | 'blueprint_fill_missing' | 'append'
+      user_hint?: string
+      append_count?: number
+      model_profile?: 'local' | 'gemini'
+      llm_provider_id?: string
+    },
+  ) =>
+    api.post<{
+      mode: string
+      created_count: number
+      message?: string | null
+      settings: WorldSetting[]
+    }>(`/projects/${pid}/ai/world-settings/generate`, data),
   /**
    * 质量门控写作流 URL（原生 fetch + SSE，不走 axios）。
    * 对应后端 POST /ai/gated-draft-stream，事件协议见 draftAssistSse.ts。

@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Trash2, Globe, Map, BookOpen, Landmark, Scale, Folder, Target, Compass, Flame, Eye, ShieldCheck, Flag, Sparkles } from 'lucide-react'
-import { projectsApi, settingsApi } from '../api/client'
-import { useAppStore } from '../store'
+import { Plus, Trash2, Globe, Map, BookOpen, Landmark, Scale, Folder, Target, Compass, Flame, Eye, ShieldCheck, Flag, Sparkles, Loader2, Wand2 } from 'lucide-react'
+import { aiApi, projectsApi, settingsApi } from '../api/client'
+import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload } from '../store'
 import type { WorldSetting } from '../types'
 import {
   getPremiseCoreFromExtra,
@@ -441,12 +441,16 @@ function SettingDetail({
 
 export default function SettingsPage() {
   const { projectId } = useParams<{ projectId: string }>()
+  const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
   const { currentProject, setCurrentProject, settings, setSettings, upsertSetting, removeSetting } = useAppStore()
   const [selected, setSelected] = useState<WorldSetting | null>(null)
   const [activeCat, setActiveCat] = useState<CategoryKey>('all')
   const [creating, setCreating] = useState(false)
   const [newTitle, setNewTitle] = useState('')
   const [newCat, setNewCat] = useState<Exclude<CategoryKey, 'all'>>('世界背景')
+  const [aiGenBusy, setAiGenBusy] = useState(false)
+  const [aiHint, setAiHint] = useState('')
+  const [appendCount, setAppendCount] = useState(6)
 
   useEffect(() => {
     if (!projectId) return
@@ -492,6 +496,35 @@ export default function SettingsPage() {
       removeSetting(id)
       toast.success('已删除')
     } catch { toast.error('删除失败') }
+  }
+
+  const runWorldSettingsAi = async (mode: 'blueprint_replace' | 'blueprint_fill_missing' | 'append') => {
+    if (!projectId || aiGenBusy) return
+    if (mode === 'blueprint_replace') {
+      if (!confirm('将删除本项目全部已有设定卡，并按标准蓝图重新生成。确定继续？')) return
+    }
+    setAiGenBusy(true)
+    const tid = toast.loading(mode === 'append' ? '正在追加设定…' : '正在生成设定卡…')
+    try {
+      const { data } = await aiApi.generateWorldSettings(projectId, {
+        mode,
+        user_hint: aiHint.trim(),
+        append_count: appendCount,
+        model_profile: modelProfileFromRoute(aiBackendRoute),
+        ...routeLlmProviderPayload(aiBackendRoute),
+      })
+      if (mode === 'blueprint_replace') {
+        setSettings(data.settings)
+      } else {
+        for (const s of data.settings) upsertSetting(s)
+      }
+      if (data.settings.length > 0) setSelected(data.settings[0])
+      toast.success(data.message?.trim() || `已生成 ${data.created_count} 张`, { id: tid })
+    } catch {
+      toast.error('生成失败', { id: tid })
+    } finally {
+      setAiGenBusy(false)
+    }
   }
 
   const orderedSettings = [...settings].sort((a, b) => {
@@ -595,6 +628,66 @@ export default function SettingsPage() {
       {/* 右栏 */}
       <div className="flex-1 overflow-auto bg-[#FAF8F4]">
         <div className="max-w-2xl mx-auto p-6">
+          <div className="mb-6 rounded-xl border border-amber-200/90 bg-gradient-to-br from-amber-50/90 to-white p-4 shadow-sm space-y-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+              <Wand2 size={16} className="text-amber-600 shrink-0" />
+              AI 生成世界观设定卡
+              <span className="text-xs font-normal text-gray-400">（沿用顶部「模型线路」）</span>
+            </div>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              整套重建会清空本项目已有设定卡；仅补缺失按标准蓝图标题跳过已有；追加则在保留旧卡基础上生成新标题的卡，适合测试补充。
+            </p>
+            <textarea
+              value={aiHint}
+              onChange={e => setAiHint(e.target.value)}
+              rows={2}
+              disabled={aiGenBusy}
+              placeholder="可选：追加方向或额外约束（如：侧重悬疑线索、补一条地下黑市规则）…"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-amber-400 resize-none disabled:opacity-50"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-xs text-gray-500 flex items-center gap-1.5">
+                追加张数
+                <input
+                  type="number"
+                  min={3}
+                  max={12}
+                  value={appendCount}
+                  onChange={e => setAppendCount(Math.min(12, Math.max(3, Number(e.target.value) || 6)))}
+                  disabled={aiGenBusy}
+                  className="w-14 border border-gray-200 rounded px-1.5 py-0.5 text-xs tabular-nums disabled:opacity-50"
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={aiGenBusy}
+                onClick={() => runWorldSettingsAi('blueprint_replace')}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50"
+              >
+                {aiGenBusy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                整套重建（覆盖）
+              </button>
+              <button
+                type="button"
+                disabled={aiGenBusy}
+                onClick={() => runWorldSettingsAi('blueprint_fill_missing')}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-amber-300 text-amber-800 bg-white hover:bg-amber-50 disabled:opacity-50"
+              >
+                仅补全缺失蓝图
+              </button>
+              <button
+                type="button"
+                disabled={aiGenBusy}
+                onClick={() => runWorldSettingsAi('append')}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-gray-200 text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+              >
+                追加设定
+              </button>
+            </div>
+          </div>
+
           {selected ? (
             <SettingDetail
               key={selected.id}

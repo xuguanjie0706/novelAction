@@ -22,6 +22,7 @@ from app.routers.ai import (  # noqa: E402
     quality_debt_fix_routes,
     quality_routes,
     reader_simulation_routes,
+    world_settings_generate_routes,
 )
 
 router.include_router(quality_routes.router)
@@ -33,6 +34,7 @@ router.include_router(gated_draft_routes.router)
 router.include_router(debrief_routes.router)
 router.include_router(quality_debt_fix_routes.router)
 router.include_router(reader_simulation_routes.router)
+router.include_router(world_settings_generate_routes.router)
 
 # --- 兼容旧单文件 `ai.py` 的导入（测试等） ---
 from app.routers.ai.context import (  # noqa: E402

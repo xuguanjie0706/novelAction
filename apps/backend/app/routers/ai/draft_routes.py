@@ -14,6 +14,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.services.embedding_service import semantic_search as _semantic_search
+
 from app.database import get_db
 from app.models import Chapter, Character, ChapterIndex, MemoryChunk, OutlineNode, Project, QualityDebt, ReaderPromise, StoryLine, WorldSetting
 from app.services.ai_service import AIService
@@ -252,7 +254,7 @@ def _build_scene_blueprint(
 # 共享上下文构建器
 # ═══════════════════════════════════════════════════════════════
 
-def _build_draft_context(
+async def _build_draft_context(
     db: Session,
     project_id: str,
     chapter: Chapter,
@@ -411,23 +413,45 @@ def _build_draft_context(
             for s in active_storylines_draft[:4]
         )
 
-    mem_rows_draft = (
-        db.query(MemoryChunk, Chapter)
-        .outerjoin(Chapter, Chapter.id == MemoryChunk.chapter_id)
+    # ── 语义记忆检索（outline 五要素为 query）+ 时序锚定 ────────────────────
+    # query 用 outline_node 的摘要/冲突/方向拼接，语义密度远优于章节标题；
+    # max_chapter=chapter.sort_order 防止当前章节之后的伏笔泄漏。
+    _mem_query = " ".join(filter(None, [
+        outline_node.summary if outline_node else None,
+        outline_node.conflict if outline_node else None,
+        outline_node.highlight if outline_node else None,
+    ])) or chapter.title or ""
+
+    _semantic_top_k = 74 if large_context else 10  # 为 recency 锚留位
+    _semantic_chunks = await _semantic_search(
+        db, project_id, _mem_query,
+        top_k=_semantic_top_k,
+        max_chapter=chapter.sort_order,
+    ) if _mem_query else []
+
+    # 时序锚定：补充最近 6 条，防止纯语义化丢失时间连续性
+    _recent_chunks = (
+        db.query(MemoryChunk)
         .filter(MemoryChunk.project_id == project_id)
-        .order_by(func.coalesce(Chapter.sort_order, MemoryChunk.chapter_number, -1).desc())
-        .limit(80 if large_context else 12)
+        .order_by(func.coalesce(MemoryChunk.chapter_number, 0).desc())
+        .limit(6)
         .all()
     )
+    _seen_ids = {c.id for c in _semantic_chunks}
+    _merged = _semantic_chunks + [c for c in _recent_chunks if c.id not in _seen_ids]
+
+    # 兼容下游 (m, ch) 解包格式；ch=None 时 display_chapter_number 回退到 chapter_number
+    mem_rows_draft: list[tuple] = [(m, None) for m in _merged]
+
     if large_context:
         memory_summary = "\n".join(
-            f"- 第{display_chapter_number(ch.title, ch.sort_order) if ch is not None else (m.chapter_number or '?')}章 "
+            f"- 第{(m.chapter_number or '?')}章 "
             f"{m.title or m.memory_type}: {truncate(m.content, 600)}"
-            for m, ch in mem_rows_draft
+            for m, _ in mem_rows_draft
         )
     else:
         memory_summary = " | ".join(
-            f"{m.title or m.memory_type}: {m.content[:60]}" for m, _ch in mem_rows_draft
+            f"{m.title or m.memory_type}: {m.content[:60]}" for m, _ in mem_rows_draft
         )
 
     prev_chapter = db.query(Chapter).filter(
@@ -624,7 +648,7 @@ async def draft_assist_stream(
         raise HTTPException(404, "Project not found")
     large_context = req.model_profile == "gemini"
 
-    ctx = _build_draft_context(db, project_id, chapter, project, large_context)
+    ctx = await _build_draft_context(db, project_id, chapter, project, large_context)
 
     user_prompt_str = (req.user_prompt or "").strip()
 

@@ -31,6 +31,8 @@ interface StepState {
   label: string
   status: StepStatus
   detail?: string   // count / preview
+  /** 当前仍在飞行中的子步骤数量（多个后端 step 合并到同一卡片时使用） */
+  inflight: number
 }
 
 const STEP_DEFS: { key: StepKey; label: string }[] = [
@@ -79,11 +81,11 @@ export default function GenerateWizard({ onClose }: Props) {
   const setAiBackendRoute = useAppStore(s => s.setAiBackendRoute)
   const [phase, setPhase] = useState<'input' | 'generating' | 'done'>('input')
   const [logline, setLogline] = useState('')
-  const [mode, setMode] = useState<Mode>('single_shot')
+  const [mode, setMode] = useState<Mode>('sequential')
   const [targetWords, setTargetWords] = useState(1200000)
   const [customWordMode, setCustomWordMode] = useState(false)
   const [steps, setSteps] = useState<StepState[]>(
-    STEP_DEFS.map(s => ({ ...s, status: 'pending' }))
+    STEP_DEFS.map(s => ({ ...s, status: 'pending', inflight: 0 }))
   )
   const [errorMsg, setErrorMsg] = useState('')
   const [projectId, setProjectId] = useState<string | null>(null)
@@ -165,11 +167,11 @@ export default function GenerateWizard({ onClose }: Props) {
     // 首步立刻标为 running：SSE 常被代理/缓冲，首个 step_start 可能在整段 AI 结束后才到，否则长时间只有空心圆、无转圈
     if (mode === 'single_shot') {
       setSteps([
-        { key: 'all',    label: 'AI 全量生成（单次调用）', status: 'running' },
-        { key: 'saving', label: '写入数据库',               status: 'pending' },
+        { key: 'all',    label: 'AI 全量生成（单次调用）', status: 'running',  inflight: 1 },
+        { key: 'saving', label: '写入数据库',               status: 'pending',  inflight: 0 },
       ])
     } else {
-      setSteps(STEP_DEFS.map((s, i) => ({ ...s, status: i === 0 ? 'running' : 'pending' })))
+      setSteps(STEP_DEFS.map((s, i) => ({ ...s, status: i === 0 ? 'running' : 'pending', inflight: i === 0 ? 1 : 0 })))
     }
 
     const abort = new AbortController()
@@ -237,8 +239,12 @@ export default function GenerateWizard({ onClose }: Props) {
 
     if (event === 'step_start') {
       if (!displayStep) return
+      // inflight +1：多个后端子步骤可能合并到同一张显示卡片（如 power_systems/factions/settings 全部→'settings'）
+      // 只要还有子步骤在飞行就保持 running，避免中途短暂显示 done 后又翻回 running
       setSteps(prev => prev.map(s =>
-        s.key === displayStep ? { ...s, status: 'running', label: label ?? s.label } : s
+        s.key === displayStep
+          ? { ...s, status: 'running', inflight: s.inflight + 1, label: label ?? s.label }
+          : s
       ))
     } else if (event === 'step_done') {
       if (!displayStep) return
@@ -246,14 +252,24 @@ export default function GenerateWizard({ onClose }: Props) {
         count != null ? `${count} 条` : '',
         preview ?? '',
       ].filter(Boolean).join(' · ')
-      setSteps(prev => prev.map(s =>
-        s.key === displayStep ? { ...s, status: 'done', detail } : s
-      ))
+      // inflight -1：只有归零时才真正标为 done，避免其他子步骤还在进行时提前完成
+      setSteps(prev => prev.map(s => {
+        if (s.key !== displayStep) return s
+        const nextInflight = Math.max(0, s.inflight - 1)
+        return {
+          ...s,
+          inflight: nextInflight,
+          status: nextInflight === 0 ? 'done' : 'running',
+          detail: detail || s.detail,
+        }
+      }))
     } else if (event === 'error') {
       const msg = typeof message === 'string' && message.trim() ? message : '生成失败'
       if (displayStep) {
         setSteps(prev => prev.map(s =>
-          s.key === displayStep ? { ...s, status: 'error', detail: msg } : s
+          s.key === displayStep
+            ? { ...s, status: 'error', inflight: Math.max(0, s.inflight - 1), detail: msg }
+            : s
         ))
         setErrorMsg(`[${displayStep}] ${msg}`)
       } else {
@@ -270,6 +286,10 @@ export default function GenerateWizard({ onClose }: Props) {
       streamCompleteRef.current = true
       setProjectId(project_id)
       setPhase('done')
+      // partial=true：流程中断但 project 已创建，提示内容不完整
+      if (evt.partial) {
+        setErrorMsg(prev => prev || '部分步骤未完成，已保存的内容可在工作台中查看和补全。')
+      }
       // 拉取 Bootstrap 后写入的编辑洞察数据
       if (project_id) {
         projectsApi.getInsights(project_id)
@@ -287,7 +307,7 @@ export default function GenerateWizard({ onClose }: Props) {
   // ── 渲染 ──────────────────────────────────────────────────
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh] overflow-hidden">
 
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
@@ -302,7 +322,7 @@ export default function GenerateWizard({ onClose }: Props) {
 
         {/* ── 输入阶段 ── */}
         {phase === 'input' && (
-          <div className="p-6 space-y-5">
+          <div className="p-6 space-y-5 overflow-y-auto flex-1">
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-2">
                 一句话创意 <span className="text-red-400">*</span>
@@ -360,10 +380,13 @@ export default function GenerateWizard({ onClose }: Props) {
                 >
                   <div className="text-sm font-semibold text-gray-800 mb-1">
                     方案 A · 串行步进
+                    {mode === 'sequential' && (
+                      <span className="ml-2 text-xs bg-amber-500 text-white px-1.5 py-0.5 rounded-full">推荐</span>
+                    )}
                   </div>
                   <div className="text-xs text-gray-500 leading-relaxed">
-                    多步分别调用，逐步可见进度；每步都走上方所选模型线路<br />
-                    仅作兼容回退，默认仍建议方案 B
+                    多步分别生成，含章级大纲 + 场景蓝图 + 一致性扫描<br />
+                    内容最完整，适合所有模型
                   </div>
                 </button>
                 <button
@@ -377,13 +400,10 @@ export default function GenerateWizard({ onClose }: Props) {
                 >
                   <div className="text-sm font-semibold text-gray-800 mb-1">
                     方案 B · 单次全量
-                    {mode === 'single_shot' && (
-                      <span className="ml-2 text-xs bg-blue-400 text-white px-1.5 py-0.5 rounded-full">推荐</span>
-                    )}
                   </div>
                   <div className="text-xs text-gray-500 leading-relaxed">
-                    1 次生成完整世界蓝图<br />
-                    适合已配置的远程大上下文模型
+                    1 次生成世界蓝图，速度快<br />
+                    适合大上下文远程模型，章级大纲需手动展开
                   </div>
                 </button>
               </div>
@@ -453,15 +473,17 @@ export default function GenerateWizard({ onClose }: Props) {
 
         {/* ── 生成中 ── */}
         {(phase === 'generating' || phase === 'done') && (
-          <div className="p-6">
-            {/* Logline 摘要 */}
-            <p className="text-xs text-gray-500 bg-gray-50 rounded-lg px-3 py-2 mb-5 leading-relaxed line-clamp-2">
-              "{logline}"
-            </p>
+          <div className="flex flex-col flex-1 overflow-hidden">
+            {/* 固定顶部：Logline 摘要 */}
+            <div className="px-6 pt-5 pb-3 shrink-0">
+              <p className="text-xs text-gray-500 bg-gray-50 rounded-lg px-3 py-2 leading-relaxed line-clamp-2">
+                "{logline}"
+              </p>
+            </div>
 
-            {/* 步骤列表 */}
-            <div className="space-y-2 mb-5">
-              {steps.map((step, idx) => (
+            {/* 可滚动步骤列表 */}
+            <div className="flex-1 overflow-y-auto px-6 py-1 space-y-2">
+              {steps.map(step => (
                 <div
                   key={step.key}
                   className={clsx(
@@ -472,7 +494,6 @@ export default function GenerateWizard({ onClose }: Props) {
                     step.status === 'pending' && 'opacity-40',
                   )}
                 >
-                  {/* 图标 */}
                   <div className="shrink-0 mt-0.5">
                     {step.status === 'pending' && (
                       <div className="w-5 h-5 rounded-full border-2 border-gray-200" />
@@ -487,7 +508,6 @@ export default function GenerateWizard({ onClose }: Props) {
                       <AlertCircle size={18} className="text-red-500" />
                     )}
                   </div>
-
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-gray-800">{step.label}</div>
                     {step.detail && (
@@ -498,76 +518,74 @@ export default function GenerateWizard({ onClose }: Props) {
               ))}
             </div>
 
-            {phase === 'generating' && waitSec >= 8 && !errorMsg && (
-              <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-4 leading-relaxed">
-                仍在等待模型返回…串行方案下每一步都会单独请求当前所选线路，耗时因模型与网络而异。
-                若长期无响应，请确认该线路接口可用；需要单次大 JSON 时更推荐「方案 B · 单次全量」。
-              </p>
-            )}
+            {/* 固定底部：提示 / 错误 / 洞察 / 按钮 */}
+            <div className="px-6 pb-6 pt-3 shrink-0 space-y-3">
+              {phase === 'generating' && waitSec >= 8 && !errorMsg && (
+                <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 leading-relaxed">
+                  仍在等待模型返回…串行方案下每一步都会单独请求当前所选线路，耗时因模型与网络而异。
+                  若长期无响应，请确认该线路接口可用；需要单次大 JSON 时更推荐「方案 B · 单次全量」。
+                </p>
+              )}
 
-            {/* 错误信息 */}
-            {errorMsg && (
-              <div className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-4">
-                {errorMsg}
-              </div>
-            )}
+              {errorMsg && (
+                <div className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                  {errorMsg}
+                </div>
+              )}
 
-            {/* 完成后：编辑洞察摘要卡 */}
-            {phase === 'done' && insights && (
-              <div className="space-y-2 mb-4">
-                {/* 一致性问题摘要 */}
-                {insights.consistency_issues.length > 0 && (
-                  <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-xs">
-                    <ShieldAlert size={14} className="text-amber-500 shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-medium text-amber-800">发现 {insights.consistency_issues.length} 处一致性待确认项</span>
-                      <p className="text-amber-700 mt-0.5 leading-relaxed">
-                        {insights.consistency_issues.slice(0, 2).map((issue: any) =>
-                          typeof issue === 'string' ? issue : (issue.description || issue.issue || '')
-                        ).filter(Boolean).join('；')}
-                        {insights.consistency_issues.length > 2 && `…等${insights.consistency_issues.length}项`}
-                      </p>
+              {/* 完成后：编辑洞察摘要卡 */}
+              {phase === 'done' && insights && (
+                <div className="space-y-2">
+                  {insights.consistency_issues.length > 0 && (
+                    <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-xs">
+                      <ShieldAlert size={14} className="text-amber-500 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-medium text-amber-800">发现 {insights.consistency_issues.length} 处一致性待确认项</span>
+                        <p className="text-amber-700 mt-0.5 leading-relaxed">
+                          {insights.consistency_issues.slice(0, 2).map((issue: any) =>
+                            typeof issue === 'string' ? issue : (issue.description || issue.issue || '')
+                          ).filter(Boolean).join('；')}
+                          {insights.consistency_issues.length > 2 && `…等${insights.consistency_issues.length}项`}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                )}
-                {/* 开局追读承诺摘要 */}
-                {insights.opening_contract?.chapter1_hook && (
-                  <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-xs">
-                    <BookOpen size={14} className="text-blue-500 shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-medium text-blue-800">开局追读承诺已生成</span>
-                      <p className="text-blue-700 mt-0.5 leading-relaxed line-clamp-2">
-                        第1章钩子：{insights.opening_contract.chapter1_hook}
-                      </p>
+                  )}
+                  {insights.opening_contract?.chapter1_hook && (
+                    <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-xs">
+                      <BookOpen size={14} className="text-blue-500 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-medium text-blue-800">开局追读承诺已生成</span>
+                        <p className="text-blue-700 mt-0.5 leading-relaxed line-clamp-2">
+                          第1章钩子：{insights.opening_contract.chapter1_hook}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
-            )}
+                  )}
+                </div>
+              )}
 
-            {/* 完成后的按钮 */}
-            {phase === 'done' && projectId && (
-              <button
-                onClick={() => {
-                  onClose()
-                  navigate(`/project/${projectId}/outline`)
-                }}
-                className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white font-semibold rounded-xl flex items-center justify-center gap-2 transition-colors"
-              >
-                进入工作台
-                <ChevronRight size={16} />
-              </button>
-            )}
+              {phase === 'done' && projectId && (
+                <button
+                  onClick={() => {
+                    onClose()
+                    navigate(`/project/${projectId}/outline`)
+                  }}
+                  className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white font-semibold rounded-xl flex items-center justify-center gap-2 transition-colors"
+                >
+                  进入工作台
+                  <ChevronRight size={16} />
+                </button>
+              )}
 
-            {/* 生成中可取消 */}
-            {phase === 'generating' && (
-              <button
-                onClick={cancel}
-                className="w-full py-2 text-sm text-gray-400 hover:text-gray-600"
-              >
-                取消
-              </button>
-            )}
+              {phase === 'generating' && (
+                <button
+                  onClick={cancel}
+                  className="w-full py-2 text-sm text-gray-400 hover:text-gray-600"
+                >
+                  取消
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>

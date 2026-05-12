@@ -54,6 +54,7 @@ from app.routers.ai.context import (
     format_world_setting_context,
 )
 from app.routers.ai.draft_routes import _build_draft_context
+from app.services.embedding_service import semantic_search as _semantic_search
 from app.routers.ai.quality_debt import sync_quality_debts
 from app.routers.ai.schemas import GatedDraftRequest
 from app.routers.ai.text_utils import plain_text
@@ -130,17 +131,26 @@ async def _run_pre_write_warning_inline(
     @returns pre_write_warning 返回的 dict
     @raises Exception: AI 调用失败时向上抛出
     """
-    # 记忆
-    memories = (
-        db.query(MemoryChunk)
-        .filter(MemoryChunk.project_id == project_id)
-        .order_by(MemoryChunk.chapter_number.asc())
-        .limit(40)
-        .all()
-    )
+    # 记忆：用章节 outline 摘要做语义检索，优先拉与本章相关的记忆；
+    # max_chapter=chapter.sort_order 防伏笔泄漏；semantic_search 内部已有时序兜底。
+    _outline_node = None
+    if chapter.outline_node_id:
+        from app.models import OutlineNode as _OutlineNode
+        _outline_node = db.query(_OutlineNode).filter(
+            _OutlineNode.id == chapter.outline_node_id
+        ).first()
+    _warn_query = " ".join(filter(None, [
+        _outline_node.summary if _outline_node else None,
+        _outline_node.conflict if _outline_node else None,
+    ])) or chapter.title or ""
+    _raw_mems = await _semantic_search(
+        db, project_id, _warn_query,
+        top_k=40,
+        max_chapter=chapter.sort_order,
+    ) if _warn_query else []
     memory_chunks = [
         {"title": m.title or "", "content": m.content or "", "memory_type": m.memory_type or "event"}
-        for m in memories
+        for m in _raw_mems
     ]
 
     # 未回收伏笔
@@ -809,7 +819,7 @@ async def gated_draft_stream(
 
             if ctx is None:
                 try:
-                    ctx = _build_draft_context(db, project_id, chapter, project, large_context)
+                    ctx = await _build_draft_context(db, project_id, chapter, project, large_context)
                 except Exception as e:
                     yield _sse({"error": f"上下文构建失败：{e}"})
                     return

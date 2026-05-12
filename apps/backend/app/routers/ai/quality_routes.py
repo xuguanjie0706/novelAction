@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.services.embedding_service import semantic_search as _semantic_search
+
 from app.database import get_db
 from app.models import (
     Chapter,
@@ -57,13 +59,17 @@ async def quality_check(
         raise HTTPException(404, "Project not found")
     large_context = req.model_profile == "gemini"
 
-    memory_query = (
-        db.query(MemoryChunk)
-        .outerjoin(Chapter, Chapter.id == MemoryChunk.chapter_id)
-        .filter(MemoryChunk.project_id == project_id)
-        .order_by(func.coalesce(Chapter.sort_order, MemoryChunk.chapter_number, 0).asc())
+    # 质检：用章节正文前 300 字做语义检索，拉取与本章内容最相关的记忆；
+    # 有上下文限制时（local），top_k 缩小；max_chapter 防泄漏。
+    _qc_plain = ""
+    if chapter.content:
+        import re as _re
+        _qc_plain = _re.sub(r"<[^>]+>", "", chapter.content or "")[:300]
+    memories = await _semantic_search(
+        db, project_id, _qc_plain or chapter.title or "",
+        top_k=200 if large_context else 50,
+        max_chapter=chapter.sort_order,
     )
-    memories = memory_query.limit(200 if large_context else 50).all()
 
     settings = db.query(WorldSetting).filter(
         WorldSetting.project_id == project_id
@@ -270,17 +276,15 @@ async def pre_write_warning(
     if not chapter:
         raise HTTPException(404, "Chapter not found")
 
-    # 加载记忆
-    memories = (
-        db.query(MemoryChunk)
-        .filter(MemoryChunk.project_id == project_id)
-        .order_by(MemoryChunk.chapter_number.asc())
-        .limit(40)
-        .all()
+    # 加载记忆：用 chapter_plan_summary（五要素）做语义检索，相关度远优于时序排列
+    _pw_mems = await _semantic_search(
+        db, project_id, req.chapter_plan_summary or chapter.title or "",
+        top_k=40,
+        max_chapter=req.chapter_number if req.chapter_number else None,
     )
     memory_chunks = [
         {"title": m.title or "", "content": m.content or "", "memory_type": m.memory_type or "event"}
-        for m in memories
+        for m in _pw_mems
     ]
 
     # 加载未回收伏笔台账

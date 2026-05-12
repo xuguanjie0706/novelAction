@@ -4,6 +4,7 @@ import { Toaster } from 'react-hot-toast'
 import ProjectsPage from './pages/ProjectsPage'
 import BookshelfPage from './pages/BookshelfPage'
 import ProjectDetailPage from './pages/ProjectDetailPage'
+import BookshelfDetailPage from './pages/BookshelfDetailPage'
 import AppLayout from './components/Layout/AppLayout'
 import ProjectCachedViews from './pages/ProjectCachedViews'
 import ChapterCoherencePage from './pages/ChapterCoherencePage'
@@ -110,6 +111,15 @@ export default function App() {
           element={
             <PrivateRoute>
               <BookshelfPage />
+            </PrivateRoute>
+          }
+        />
+        {/* 书架上的「小说详情」：封面、简介、生成 Run 日志、写作门控；结构化分区纪要在 /recap */}
+        <Route
+          path="/bookshelf/:projectId/recap"
+          element={
+            <PrivateRoute>
+              <BookshelfDetailPage />
             </PrivateRoute>
           }
         />

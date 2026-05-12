@@ -19,6 +19,7 @@ import {
   Target,
   Upload,
   X,
+  Layers,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import {
@@ -513,6 +514,7 @@ function eventText(ev: Record<string, any>) {
 }
 
 function GenerateJourneyPanel({ projectId }: { projectId: string }) {
+  const navigate = useNavigate()
   const [runs, setRuns] = useState<BootstrapRunHistoryItem[]>([])
   const [loadingRuns, setLoadingRuns] = useState(true)
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null)
@@ -612,10 +614,20 @@ function GenerateJourneyPanel({ projectId }: { projectId: string }) {
 
   return (
     <section className="mt-8">
-      <h2 className="mb-4 flex items-center gap-2 text-lg font-bold text-gray-900">
-        <RefreshCw size={18} className="text-amber-400" />
-        生成纪要
-      </h2>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="flex items-center gap-2 text-lg font-bold text-gray-900">
+          <RefreshCw size={18} className="text-amber-400" />
+          生成纪要
+        </h2>
+        <button
+          type="button"
+          onClick={() => navigate(`/bookshelf/${projectId}/recap`)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 transition-colors hover:bg-amber-100"
+        >
+          <Layers size={14} />
+          结构化分区浏览
+        </button>
+      </div>
       <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
         {loadingRuns ? (
           <div className="flex items-center gap-2 text-sm text-gray-500">
@@ -1042,6 +1054,14 @@ export default function ProjectDetailPage() {
                 className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-5 py-3 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:border-amber-200 hover:text-amber-600"
               >
                 角色设定
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate(`/bookshelf/${project.id}/recap`)}
+                className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-5 py-3 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:border-amber-200 hover:text-amber-600"
+              >
+                <Layers size={16} />
+                结构化纪要
               </button>
             </div>
           </div>

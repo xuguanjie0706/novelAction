@@ -4,7 +4,7 @@
  * 职责：
  * - 渲染「输入 → 生成中 → 闸门确认 → 完成」四阶段 UI
  * - SSE 业务状态委托给 useBootstrapStream hook
- * - 本文件 < 450 行
+ * - generating / done 阶段渲染时间轴纪要（BootstrapTimeline + BootstrapTimelineDetail）
  *
  * 阶段流转（由 hook 驱动）：
  *   input → generating → gate（立项定位确认）→ generating → done
@@ -13,14 +13,17 @@
  */
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, X, CheckCircle, Loader, AlertCircle, ChevronRight, ShieldAlert, BookOpen } from 'lucide-react'
+import { Sparkles, X } from 'lucide-react'
 import clsx from 'clsx'
 import { llmApi, projectsApi } from '../../api/client'
 import type { LlmOverview } from '../../types'
 import { llmProviderIdFromRoute, modelProfileFromRoute, useAppStore } from '../../store'
 import { TargetWordsInput } from '../TargetWordsInput'
 import { useBootstrapStream } from './hooks/useBootstrapStream'
+import type { StepKey } from './hooks/useBootstrapStream'
 import PositioningGatePanel from './PositioningGatePanel'
+import BootstrapTimeline from './BootstrapTimeline'
+import BootstrapTimelineDetail from './BootstrapTimelineDetail'
 
 // ── 字数目标选项 ──────────────────────────────────────────────
 const WORD_OPTIONS = [
@@ -44,9 +47,12 @@ export default function GenerateWizard({ onClose }: Props) {
 
   // ── Bootstrap SSE 状态（委托给 hook）──────────────────────────
   const {
-    phase, steps, errorMsg, projectId, positioningData,
+    phase, steps, errorMsg, projectId, positioningData, generationStartMs,
     startGenerate: hookStart, handleResume, cancel: hookCancel,
   } = useBootstrapStream()
+
+  /** 时间轴当前选中的步骤 key */
+  const [selectedStepKey, setSelectedStepKey] = useState<StepKey | null>(null)
 
   // ── 本地 UI 状态 ──────────────────────────────────────────────
   const [logline, setLogline]               = useState('')
@@ -151,18 +157,73 @@ export default function GenerateWizard({ onClose }: Props) {
     onClose()
   }
 
+  // ── 时间轴阶段自动选中第一个 running/done 步骤 ────────────────
+  const isTimelinePhase = phase === 'generating' || phase === 'done'
+  useEffect(() => {
+    if (!isTimelinePhase) return
+    if (selectedStepKey != null) return   // 已手动选中，不覆盖
+    const first = steps.find(s => s.status === 'running' || s.status === 'done')
+    if (first) setSelectedStepKey(first.key)
+  }, [isTimelinePhase, steps, selectedStepKey])
+
+  // 随着生成推进，自动跟进到当前运行中的步骤
+  useEffect(() => {
+    if (!isTimelinePhase) return
+    const running = steps.find(s => s.status === 'running')
+    if (running) setSelectedStepKey(running.key)
+  }, [steps]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── 渲染 ─────────────────────────────────────────────────────
+  const selectedStep = steps.find(s => s.key === selectedStepKey) ?? null
+
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh] overflow-hidden">
+    <div className={clsx(
+      'fixed inset-0 z-50 flex',
+      isTimelinePhase ? 'items-stretch' : 'items-center justify-center bg-black/40 backdrop-blur-sm p-4',
+    )}>
+      {/* 时间轴模式：全屏深色沉浸式；其他模式：居中白卡 */}
+      <div className={clsx(
+        'flex flex-col overflow-hidden',
+        isTimelinePhase
+          ? 'w-full h-full'
+          : 'bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh]',
+        phase === 'gate' && 'max-w-2xl',
+      )}
+        style={isTimelinePhase ? { background: '#0d0d12' } : undefined}
+      >
 
         {/* 标题栏 */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+        <div
+          className={clsx('flex items-center justify-between px-6 py-4 flex-shrink-0')}
+          style={isTimelinePhase
+            ? { background: '#13131a', borderBottom: '1px solid #2a2a3a' }
+            : { borderBottom: '1px solid #f3f4f6' }
+          }
+        >
           <div className="flex items-center gap-2">
-            <Sparkles size={18} className="text-amber-500" />
-            <span className="font-semibold text-gray-900">AI 一键生成小说</span>
+            <Sparkles size={18} className={isTimelinePhase ? 'text-purple-400' : 'text-amber-500'} />
+            <span
+              className="font-semibold"
+              style={isTimelinePhase ? { color: '#e2e2ec' } : { color: '#111827' }}
+            >
+              {phase === 'done' ? '生成纪要' : 'AI 一键生成小说'}
+            </span>
+            {isTimelinePhase && phase === 'done' && (
+              <span style={{ fontSize: 11, padding: '1px 8px', borderRadius: 20, border: '1px solid #22c55e50', color: '#22c55e', background: '#22c55e10', marginLeft: 4 }}>
+                ✓ 全部完成
+              </span>
+            )}
+            {isTimelinePhase && phase === 'generating' && (
+              <span style={{ fontSize: 11, padding: '1px 8px', borderRadius: 20, border: '1px solid #7c6af750', color: '#a78bfa', background: '#7c6af710', marginLeft: 4 }}>
+                生成中…
+              </span>
+            )}
           </div>
-          <button onClick={cancel} className="text-gray-400 hover:text-gray-600">
+          <button
+            onClick={cancel}
+            style={isTimelinePhase ? { color: '#5a5a78' } : { color: '#9ca3af' }}
+            className="hover:opacity-80 transition-opacity"
+          >
             <X size={18} />
           </button>
         </div>
@@ -315,105 +376,29 @@ export default function GenerateWizard({ onClose }: Props) {
           />
         )}
 
-        {/* ── 生成中 / 完成 ── */}
-        {(phase === 'generating' || phase === 'done') && (
-          <div className="flex flex-col flex-1 overflow-hidden">
-            {/* 固定顶部：Logline 摘要 */}
-            <div className="px-6 pt-5 pb-3 shrink-0">
-              <p className="text-xs text-gray-500 bg-gray-50 rounded-lg px-3 py-2 leading-relaxed line-clamp-2">
-                "{logline}"
-              </p>
-            </div>
-
-            {/* 可滚动步骤列表 */}
-            <div className="flex-1 overflow-y-auto px-6 py-1 space-y-2">
-              {steps.map(step => (
-                <div
-                  key={step.key}
-                  className={clsx(
-                    'flex items-start gap-3 p-3 rounded-lg transition-colors',
-                    step.status === 'running' && 'bg-amber-50',
-                    step.status === 'done'    && 'bg-green-50',
-                    step.status === 'error'   && 'bg-red-50',
-                    step.status === 'pending' && 'opacity-40',
-                  )}
-                >
-                  <div className="shrink-0 mt-0.5">
-                    {step.status === 'pending' && <div className="w-5 h-5 rounded-full border-2 border-gray-200" />}
-                    {step.status === 'running' && <Loader size={18} className="text-amber-500 animate-spin" />}
-                    {step.status === 'done'    && <CheckCircle size={18} className="text-green-500" />}
-                    {step.status === 'error'   && <AlertCircle size={18} className="text-red-500" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-gray-800">{step.label}</div>
-                    {step.detail && (
-                      <div className="text-xs text-gray-500 truncate mt-0.5">{step.detail}</div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* 固定底部：提示 / 错误 / 洞察 / 按钮 */}
-            <div className="px-6 pb-6 pt-3 shrink-0 space-y-3">
-              {phase === 'generating' && waitSec >= 8 && !errorMsg && (
-                <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 leading-relaxed">
-                  仍在等待模型返回…串行方案下每一步都会单独请求当前所选线路，耗时因模型与网络而异。
-                  若长期无响应，请确认该线路接口可用；需要单次大 JSON 时更推荐「方案 B · 单次全量」。
-                </p>
-              )}
-
-              {errorMsg && (
-                <div className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{errorMsg}</div>
-              )}
-
-              {/* 完成后：编辑洞察摘要卡 */}
-              {phase === 'done' && insights && (
-                <div className="space-y-2">
-                  {insights.consistency_issues.length > 0 && (
-                    <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-xs">
-                      <ShieldAlert size={14} className="text-amber-500 shrink-0 mt-0.5" />
-                      <div>
-                        <span className="font-medium text-amber-800">发现 {insights.consistency_issues.length} 处一致性待确认项</span>
-                        <p className="text-amber-700 mt-0.5 leading-relaxed">
-                          {insights.consistency_issues.slice(0, 2).map((issue: any) =>
-                            typeof issue === 'string' ? issue : (issue.description || issue.issue || '')
-                          ).filter(Boolean).join('；')}
-                          {insights.consistency_issues.length > 2 && `…等${insights.consistency_issues.length}项`}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                  {insights.opening_contract?.chapter1_hook && (
-                    <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-xs">
-                      <BookOpen size={14} className="text-blue-500 shrink-0 mt-0.5" />
-                      <div>
-                        <span className="font-medium text-blue-800">开局追读承诺已生成</span>
-                        <p className="text-blue-700 mt-0.5 leading-relaxed line-clamp-2">
-                          第1章钩子：{insights.opening_contract.chapter1_hook}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {phase === 'done' && projectId && (
-                <button
-                  onClick={() => { onClose(); navigate(`/project/${projectId}/outline`) }}
-                  className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white font-semibold rounded-xl flex items-center justify-center gap-2 transition-colors"
-                >
-                  进入工作台
-                  <ChevronRight size={16} />
-                </button>
-              )}
-
-              {phase === 'generating' && (
-                <button onClick={cancel} className="w-full py-2 text-sm text-gray-400 hover:text-gray-600">
-                  取消
-                </button>
-              )}
-            </div>
+        {/* ── 生成中 / 完成：时间轴纪要 ── */}
+        {isTimelinePhase && (
+          <div className="flex flex-1 overflow-hidden">
+            <BootstrapTimeline
+              steps={steps}
+              selectedKey={selectedStepKey}
+              onSelect={key => setSelectedStepKey(key)}
+              phase={phase}
+              logline={logline}
+              elapsedSec={waitSec}
+              generationStartMs={generationStartMs}
+            />
+            <BootstrapTimelineDetail
+              step={selectedStep}
+              positioningData={positioningData}
+              insights={insights}
+              generationStartMs={generationStartMs}
+              phase={phase}
+              projectId={projectId}
+              onNavigate={() => { onClose(); navigate(`/project/${projectId}/outline`) }}
+              onCancel={cancel}
+              errorMsg={errorMsg}
+            />
           </div>
         )}
       </div>

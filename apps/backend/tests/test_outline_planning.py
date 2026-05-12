@@ -11,7 +11,7 @@ from app.services.outline_planning import (
 import json
 import uuid
 
-from app.routers.outline import (
+from app.routers.outline.helpers_core import (
     build_protagonist_realm_timeline,
     merge_outline_and_debrief_realm_milestones,
     _build_realm_rank_map,

@@ -1,0 +1,17 @@
+"""大纲路由包：聚合子路由并保持 ``router`` / ``ws_router`` 对外兼容。"""
+
+from fastapi import APIRouter
+
+from app.routers.outline.routes_ai_expand import router as ai_expand_routes
+from app.routers.outline.routes_full_generate import router as full_generate_routes
+from app.routers.outline.routes_quality import router as quality_routes
+from app.routers.outline.routes_tree import router as tree_routes
+from app.routers.outline.routes_workflow_ws import ws_router
+
+router = APIRouter(prefix="/projects/{project_id}/outline", tags=["outline"])
+router.include_router(tree_routes)
+router.include_router(ai_expand_routes)
+router.include_router(full_generate_routes)
+router.include_router(quality_routes)
+
+__all__ = ["router", "ws_router"]

@@ -11,42 +11,16 @@ SSE 事件格式:
   {"event": "error",      "step": "characters", "message": "..."}
 """
 import asyncio
-import json
-import logging
-import re
-import uuid as _uuid_module
 from typing import AsyncGenerator, Literal, Optional
 from uuid import UUID
-from sqlalchemy.orm import Session
 
-logger = logging.getLogger(__name__)
+from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.services.ai_service import AIService
-from app.services.llm_token_budgets import max_tokens_bootstrap_completion
-from app.services.genre_kit import get_genre_kit, normalize_genre, render_kit_for_prompt
-from app.utils.chapter_numbering import normalize_chapter_plan_title
-from app.models import (
-    Project, WorldSetting, Character, CharacterRelationship,
-    OutlineNode, MemoryChunk, PowerSystem, StoryLine,
-    Faction, Skill, Item, ReaderPromise, Scene
-)
+from app.models import Project, WorldSetting
 
-# ─────────────────────────────────────────────────────────────
-#  Bootstrap 包模块级工具 / 常量 / prompt 构造（thin re-export）
-#
-#  本文件正在被拆分为 `services/bootstrap/` 子包（参见 CLAUDE.md「Service 拆分蓝图」）。
-#  Step A 已迁移：parse 工具、SSE、prompt 构造与蓝图常量。
-#  下列 `_前缀` 别名保留是为了**完全不破坏**外部 import 路径，例如：
-#      from app.services.generation_service import _parse_json
-#      generation_module.GEMINI_SETTING_BLUEPRINTS
-#      generation_module._single_shot_prompt(...)
-#  实现位置：
-#      apps/backend/app/services/bootstrap/parse.py
-#      apps/backend/app/services/bootstrap/sse.py
-#      apps/backend/app/services/bootstrap/prompts/{blueprints,word_budget,single_shot}.py
-# ─────────────────────────────────────────────────────────────
-
+# ── Bootstrap 子包：解析 / SSE / Prompt / 上下文 ────────────────────
 from app.services.bootstrap.parse import (
     parse_json as _parse_json,
     coerce_power_system_rank as _coerce_power_system_rank,
@@ -68,28 +42,11 @@ from app.services.bootstrap.prompts import (
     book_length_constraints_for_prompt as _book_length_constraints_for_prompt,
     single_shot_prompt as _single_shot_prompt,
 )
+from app.services.bootstrap.context import (
+    get_genre_kit_block as _get_genre_kit_block,
+    hydrate_ctx_from_project as _hydrate_ctx_from_project_impl,
+)
 
-
-def _get_genre_kit_block(ctx: dict) -> str:
-    """返回 genre_kit 的 prompt 注入块，若 ctx 中已有则直接使用。
-
-    暂留在此文件中（未迁入 bootstrap 包）：依赖 ctx 与 genre_kit 服务，与 step 实现强耦合，
-    将与 14 个 `_gen_*` 一起在 Step B 迁移到 `bootstrap/context.py`。
-    """
-    kit_prompt = ctx.get("genre_kit_prompt")
-    if kit_prompt:
-        return f"\n{kit_prompt}\n"
-    # 兜底：如果 ctx 里还没有（早期步骤），尝试从 genre 生成
-    genre = ctx.get("genre")
-    if genre:
-        from app.services.genre_kit import get_genre_guardrail
-        return "\n" + get_genre_guardrail(genre) + "\n"
-    return ""
-
-
-# ─────────────────────────────────────────────────────────────
-#  主服务类
-# ─────────────────────────────────────────────────────────────
 
 class GenerationService:
     def __init__(
@@ -113,75 +70,8 @@ class GenerationService:
         self.ai = AIService(profile=ai_profile, db=db, llm_provider_id=llm_provider_id)
 
     def hydrate_ctx_from_project(self, project: Project) -> dict:
-        """
-        从已落库项目拼装与 Bootstrap Step8 相近的 ctx，供「补生成设定卡」类接口复用。
-
-        不假设项目一定已有境界/势力/人物；缺失时写入占位说明，避免 prompt 空白。
-        """
-        sc = project.story_core
-        if not isinstance(sc, dict):
-            sc = {}
-        genre = project.genre or "玄幻"
-        ctx: dict = {
-            "logline": project.logline or "",
-            "premise": project.premise or "",
-            "target_words": int(project.target_words or 1_200_000),
-            "project_title": project.title or "未命名",
-            "genre": genre,
-            "world_overview": project.world_overview or "",
-            "story_core": sc,
-        }
-        kit = get_genre_kit(normalize_genre(genre))
-        ctx["genre_kit"] = kit
-        ctx["genre_kit_prompt"] = render_kit_for_prompt(kit)
-
-        pss = (
-            self.db.query(PowerSystem)
-            .filter(PowerSystem.project_id == project.id)
-            .order_by(PowerSystem.sort_order)
-            .all()
-        )
-        if pss:
-            main_ps = pss[0]
-            level_names = [
-                lv.get("name", "")
-                for lv in (main_ps.levels or [])
-                if isinstance(lv, dict) and lv.get("name")
-            ]
-            ctx["power_level_names"] = level_names
-            ctx["power_system_name"] = main_ps.name
-            ctx["power_summary"] = f"{main_ps.name}：" + " → ".join(level_names[:8])
-        else:
-            ctx["power_level_names"] = []
-            ctx["power_system_name"] = ""
-            ctx["power_summary"] = "（本项目尚未录入境界体系，设定卡可自行铺垫力量氛围，勿展开成完整境界表）"
-
-        facs = (
-            self.db.query(Faction)
-            .filter(Faction.project_id == project.id)
-            .order_by(Faction.sort_order)
-            .all()
-        )
-        if facs:
-            ctx["faction_summary"] = "、".join(
-                f"{f.name}（{f.alignment}，{(f.extra or {}).get('active_period', '')}期）"
-                for f in facs
-            )
-            ctx["faction_names"] = [f.name for f in facs]
-        else:
-            ctx["faction_summary"] = "（本项目尚未录入势力档案，勿整段复制势力全书式档案）"
-            ctx["faction_names"] = []
-
-        chars = (
-            self.db.query(Character)
-            .filter(Character.project_id == project.id)
-            .order_by(Character.created_at)
-            .all()
-        )
-        ctx["char_names"] = [c.name for c in chars[:40]]
-        protag = next((c.name for c in chars if c.role == "protagonist"), None)
-        ctx["protagonist"] = protag or (chars[0].name if chars else "主角")
-        return ctx
+        """从已落库项目拼装 ctx，供「补生成设定卡」类接口复用。"""
+        return _hydrate_ctx_from_project_impl(self.db, project)
 
     async def regenerate_world_settings(
         self,
@@ -191,27 +81,19 @@ class GenerationService:
         user_hint: str = "",
         append_count: int = 6,
     ) -> dict:
-        """
-        针对已有项目补写世界观设定卡（不落 Bootstrap SSE，仅单次写库）。
-
-        Args:
-            project: 已存在且归属校验过的项目。
-            mode: ``blueprint_replace`` 先清空本项目全部 WorldSetting 再按蓝图全套生成；
-                ``blueprint_fill_missing`` 仅生成标题尚未出现的蓝图卡；
-                ``append`` 按用户意图追加若干张自拟标题的叙事卡。
-            user_hint: ``append`` 时的额外说明；亦可给蓝图模式附加约束。
-            append_count: ``append`` 时张数，建议 3~12。
-        """
+        """针对已有项目补写世界观设定卡（不落 Bootstrap SSE，仅单次写库）。"""
         ctx = self.hydrate_ctx_from_project(project)
         addon = (user_hint or "").strip()
         prompt_addon = f"【作者/测试附加说明】\n{addon}\n" if addon else ""
+
+        from app.services.bootstrap.steps.settings import gen_settings, gen_settings_append
 
         if mode == "blueprint_replace":
             self.db.query(WorldSetting).filter(WorldSetting.project_id == project.id).delete(
                 synchronize_session=False
             )
             self.db.commit()
-            rows = await self._gen_settings(project, ctx, prompt_addon=prompt_addon)
+            rows = await gen_settings(self, project, ctx, prompt_addon=prompt_addon)
             return {"mode": mode, "created_count": len(rows), "settings": rows}
 
         if mode == "blueprint_fill_missing":
@@ -227,19 +109,15 @@ class GenerationService:
                     "message": "蓝图内标题均已存在，未生成新卡",
                     "settings": [],
                 }
-            rows = await self._gen_settings(
-                project, ctx, blueprints=missing, prompt_addon=prompt_addon
+            rows = await gen_settings(
+                self, project, ctx, blueprints=missing, prompt_addon=prompt_addon
             )
             return {"mode": mode, "created_count": len(rows), "settings": rows}
 
         n = max(3, min(12, int(append_count or 6)))
         hint = (user_hint or "").strip() or "补全世界观中尚未覆盖的细节，可与现有卡互补但不要逐句复述。"
-        rows = await self._gen_settings_append(project, ctx, user_hint=hint, count=n)
+        rows = await gen_settings_append(self, project, ctx, user_hint=hint, count=n)
         return {"mode": mode, "created_count": len(rows), "settings": rows}
-
-    # ══════════════════════════════════════════════════════════
-    #  入口：根据 mode 分发
-    # ══════════════════════════════════════════════════════════
 
     async def bootstrap(
         self,
@@ -255,18 +133,11 @@ class GenerationService:
             async for chunk in self._sequential(logline, premise, target_words=target_words):
                 yield chunk
 
-    # ══════════════════════════════════════════════════════════
-    #  方案 A：串行步进
-    # ══════════════════════════════════════════════════════════
-
     async def _sequential(self, logline: str, premise: str = "", target_words: int = 1_200_000) -> AsyncGenerator[str, None]:
-        ctx = {"logline": logline, "premise": premise, "target_words": target_words}   # 上下文在步骤间传递
-        project = None  # 提前声明，确保 except 块中可访问
+        ctx = {"logline": logline, "premise": premise, "target_words": target_words}
+        project = None
 
         try:
-            # Step 0 — 立项会议（题材定位 / 受众画像 / 爽点节奏）
-            # 必须放在所有设定生成之前：让"目标读者→爽点类型→打脸频率→情感线占比→节奏类型"
-            # 作为后续 11 步的全局约束，避免每步独立猜定位导致题材漂移。
             yield _sse("step_start", step="positioning", label="召开立项会议（题材定位）...")
             positioning = await self._gen_positioning(ctx)
             ctx["positioning"] = positioning
@@ -277,18 +148,16 @@ class GenerationService:
                 preview=positioning.get("selling_point", "")[:30] if positioning else "",
             )
 
-            # Step 1 — 项目基础
             yield _sse("step_start", step="project", label="生成项目基础信息...")
             project, ctx = await self._gen_project(ctx)
             yield _sse("step_done", step="project", count=1,
                        preview=f"《{project.title}》{project.genre}")
 
-            # Step 2 — 境界体系（先生成，后续步骤都要引用境界名）
             yield _sse("step_start", step="power_systems", label="生成境界体系...")
             try:
                 power_systems = await asyncio.wait_for(
                     self._gen_power_systems(project, ctx),
-                    timeout=180.0,  # 单步最长 3 分钟，超时按跳过处理
+                    timeout=180.0,
                 )
             except asyncio.TimeoutError:
                 yield _sse("error", step="power_systems", message="境界体系生成超时（3分钟），已跳过")
@@ -299,7 +168,6 @@ class GenerationService:
             yield _sse("step_done", step="power_systems", count=len(power_systems),
                        preview=power_systems[0].name if power_systems else "（跳过）")
 
-            # Step 3 — 势力（结构化，供人物 faction_id 引用）
             yield _sse("step_start", step="factions", label="生成势力体系...")
             try:
                 factions = await asyncio.wait_for(
@@ -315,7 +183,6 @@ class GenerationService:
             yield _sse("step_done", step="factions", count=len(factions),
                        preview="、".join(f.name for f in factions[:3]) if factions else "（跳过）")
 
-            # Step 4 — 故事线（先于人物和大纲，供 storyline_ids 引用真实 UUID）
             yield _sse("step_start", step="storylines", label="生成故事线...")
             try:
                 storylines = await asyncio.wait_for(
@@ -330,7 +197,6 @@ class GenerationService:
                 storylines = []
             yield _sse("step_done", step="storylines", count=len(storylines))
 
-            # Step 5 — 人物（输出较大，给 4 分钟）
             yield _sse("step_start", step="characters", label="生成人物库...")
             try:
                 chars = await asyncio.wait_for(
@@ -343,13 +209,10 @@ class GenerationService:
             except Exception as e:
                 yield _sse("error", step="characters", message=f"人物生成失败：{e}")
                 chars = []
-            # 人物步骤失败时不会执行 _gen_characters 末尾赋值，避免后续 KeyError('protagonist')
             ctx.setdefault("protagonist", "主角")
             yield _sse("step_done", step="characters", count=len(chars),
                        preview="、".join(c.name for c in chars[:3]) if chars else "（跳过）")
 
-            # Step 6-7 — 并行生成：核心技能 + 道具（两者无相互依赖，体量轻，共享 3 分钟）
-            # settings（25张卡）单独串行，避免与 skills/items 竞争同一 timeout 预算导致超时。
             yield _sse("step_start", step="skills", label="生成核心功法技能...")
             yield _sse("step_start", step="items", label="生成关键道具法宝...")
             try:
@@ -366,33 +229,29 @@ class GenerationService:
                     yield _sse("error", step=step_name, message="并行生成超时（3分钟），已跳过")
                 si_results = [[], []]
             skills = si_results[0] if not isinstance(si_results[0], BaseException) else []
-            items  = si_results[1] if not isinstance(si_results[1], BaseException) else []
+            items = si_results[1] if not isinstance(si_results[1], BaseException) else []
             for step_name, result in zip(("skills", "items"), si_results):
                 if isinstance(result, BaseException):
                     yield _sse("error", step=step_name, message=f"生成失败：{result}")
             yield _sse("step_done", step="skills", count=len(skills))
             yield _sse("step_done", step="items", count=len(items))
 
-            # Step 8 — 世界观设定卡（内部 3 批并行，每批 9 张 × max_tokens=8192）
-            # 并行耗时 = 最慢单批 ~200s；给 270s 宽裕预算（70s 余量）
             yield _sse("step_start", step="settings", label="生成世界观设定卡...")
             try:
-                settings = await asyncio.wait_for(
+                settings_rows = await asyncio.wait_for(
                     self._gen_settings(project, ctx),
                     timeout=270.0,
                 )
             except asyncio.TimeoutError:
                 yield _sse("error", step="settings", message="世界观设定生成超时（4.5分钟），已跳过")
-                settings = []
+                settings_rows = []
             except Exception as e:
                 yield _sse("error", step="settings", message=f"世界观设定生成失败：{e}")
-                settings = []
-            # 若 settings 失败，settings_summary 可能未写入 ctx，补一个兜底值
+                settings_rows = []
             if not ctx.get("settings_summary"):
                 ctx["settings_summary"] = "（世界观设定生成失败）"
-            yield _sse("step_done", step="settings", count=len(settings))
+            yield _sse("step_done", step="settings", count=len(settings_rows))
 
-            # Step 9 — 卷级骨架（结构复杂，给 4 分钟）
             yield _sse("step_start", step="volumes", label="规划卷级结构...")
             try:
                 nodes = await asyncio.wait_for(
@@ -408,7 +267,6 @@ class GenerationService:
             yield _sse("step_done", step="volumes", count=len(nodes),
                        preview=f"共{len(nodes)}卷" if nodes else "（跳过）")
 
-            # Step 10 — 记忆库种子
             yield _sse("step_start", step="memory", label="生成记忆库种子...")
             try:
                 mems = await asyncio.wait_for(
@@ -423,7 +281,6 @@ class GenerationService:
                 mems = []
             yield _sse("step_done", step="memory", count=len(mems))
 
-            # Step 11 — 人物关系
             yield _sse("step_start", step="relations", label="建立人物关系...")
             try:
                 rels = await asyncio.wait_for(
@@ -438,8 +295,6 @@ class GenerationService:
                 rels = []
             yield _sse("step_done", step="relations", count=len(rels))
 
-            # Step 12 — 开局前十章追读承诺清单
-            # ⚠️ 必须在 vol1_chapters（Step 12.5）之前运行：chapter_plan 生成需要读取承诺节点
             yield _sse("step_start", step="opening_contract", label="规划开局追读承诺...")
             try:
                 opening_contract = await asyncio.wait_for(
@@ -459,9 +314,6 @@ class GenerationService:
                 preview=opening_contract.get("chapter1_hook", "")[:30] if opening_contract else "（跳过）",
             )
 
-            # Step 12.5 — 第一卷章级大纲（chapter_plan OutlineNode）
-            # 位于关系生成（relation_triggers）和承诺清单（opening_contract）之后，
-            # 两者都已写入 ctx，chapter_plan 可以按章号精确锚定冲突节点和钩子要求
             yield _sse("step_start", step="vol1_chapters", label="生成第一卷章级大纲...")
             try:
                 vol1_plans = await asyncio.wait_for(
@@ -481,8 +333,6 @@ class GenerationService:
                 preview=f"第一卷共{len(vol1_plans)}章蓝图" if vol1_plans else "（跳过）",
             )
 
-            # Step 13 — 第1章场景蓝图（Scene records）
-            # 依赖 vol1_plans[0]（第1章 OutlineNode）；chapter_id=null，写章时再绑定
             yield _sse("step_start", step="ch1_scenes", label="生成第1章场景蓝图...")
             try:
                 ch1_scenes = await asyncio.wait_for(
@@ -502,7 +352,6 @@ class GenerationService:
                 preview=f"第1章共{len(ch1_scenes)}场" if ch1_scenes else "（跳过）",
             )
 
-            # Step 14 — 全局一致性扫描（交叉核验所有生成物的关键字段）
             yield _sse("step_start", step="consistency", label="全局一致性扫描...")
             try:
                 consistency_issues = await asyncio.wait_for(
@@ -525,17 +374,11 @@ class GenerationService:
             yield _sse("complete", project_id=str(project.id))
 
         except Exception as e:
-            # project 已创建时：带 project_id 返回，用户仍可进入工作台查看已有内容
-            # project 未创建时（Step 0/1 失败）：纯错误，无法继续
             if project is not None:
                 yield _sse("error", message=f"生成中断（{e}），已完成部分内容已保存", partial=True)
                 yield _sse("complete", project_id=str(project.id), partial=True)
             else:
                 yield _sse("error", message=str(e))
-
-    # ══════════════════════════════════════════════════════════
-    #  方案 B：单次全量（适合 Gemini）
-    # ══════════════════════════════════════════════════════════
 
     async def _single_shot(self, logline: str, premise: str = "", target_words: int = 1_200_000) -> AsyncGenerator[str, None]:
         yield _sse("step_start", step="all", label="AI 全量生成中（单次调用）...")
@@ -553,2315 +396,86 @@ class GenerationService:
                 task="bootstrap.single_shot",
             )
             data = _parse_json(raw)
-            data = await self._complete_single_shot_data(data, logline, premise)
+            from app.services.bootstrap import completion
+            data = await completion.complete_single_shot_data(self.ai, data, logline, premise)
             yield _sse("step_done", step="all", count=1)
 
             yield _sse("step_start", step="saving", label="写入数据库...")
-            project = await self._save_all(data, logline, premise, target_words=target_words)
+            from app.services.bootstrap import save_all
+            project = await save_all.save_all(self, data, logline, premise, target_words=target_words)
             yield _sse("step_done", step="saving", count=1)
             yield _sse("complete", project_id=str(project.id))
 
         except Exception as e:
             yield _sse("error", step="all", message=str(e))
 
-    # ══════════════════════════════════════════════════════════
-    #  Step 0 — 立项会议（题材定位）
-    # ══════════════════════════════════════════════════════════
-
-    async def _gen_positioning(self, ctx: dict) -> dict:
-        """召开立项会议：从 logline 推出读者画像 / 爽点类型 / 打脸频率 / 情感线占比 / 节奏。
-
-        本步骤的产物 (``ctx['positioning']``) 必须在后续所有 Bootstrap 步骤的 prompt 中
-        作为全局约束注入，并在写章节 prompt 中作为「作品基本面」每章贯彻——这是网文
-        系统区别于"AI 自由发挥"的关键。
-
-        Returns:
-            dict 包含字段：
-              target_audience, tropes, reference_works, selling_point,
-              face_slap_pattern, emotional_arc, pace_type, taboo_lines,
-              market_risk, differentiation_durability, hook_test（v3.1 新增，市场可行性评估）。
-            字段缺失或解析失败时回退为空 dict（写章节路径会优雅降级）。
-        """
-        system = (
-            "你是有30年经验的网络小说总编辑。从一句话创意推导出可执行的题材定位，"
-            "只返回 JSON，不要任何解释文字。"
-        )
-        prompt = f"""创意：{ctx['logline']}
-作者补充：{(ctx.get('premise') or '')[:600] or '（未填写，请独立推导）'}
-
-请基于以上创意，做一次「立项会议」决策，返回 JSON：
-{{
-  "target_audience": "目标读者画像（性别/年龄段/平台调性，例：男频 18-30 岁起点向）",
-  "tropes": ["核心爽点类型 3-5 个，从：重生/系统/苟道/扮猪吃虎/无敌流/种田流/红尘炼心/打脸装x/团宠/收徒养崽/复仇/逆袭 等中筛选最契合的"],
-  "reference_works": ["3 部参照作品（同流派代表作，仅作基调参考，禁止抄袭）"],
-  "selling_point": "一句话卖点钩子（30 字内，必须能贴在书籍封面）",
-  "face_slap_pattern": "打脸节奏（例：每 3 章一小、每 10 章一中、每卷一大）",
-  "emotional_arc": "情感线占比（none/low/medium/high，对应 0%/10%/25%/40%）",
-  "pace_type": "节奏类型（fast=番茄式爽快 / medium=起点中速 / slow=猫腻式文笔）",
-  "taboo_lines": ["禁忌边界 2-4 条（禁止涉及的题材/主题）"],
-  "market_risk": "市场风险评估（同质化程度/受众规模/题材饱和度，各一句，合计50字内）",
-  "differentiation_durability": "差异化持续性：你的核心差异化能撑几卷？第几卷之后最可能暴露同质化？建议提前布局什么钩子来对冲？（60字内）",
-  "hook_test": "封面50字钩子：用50字以内写出这本书的书架推荐语，然后自评'一个从未看过此类书的28岁男/女读者，看到这50字的点击意愿（1-10分）'，格式：推荐语｜自评分:X｜理由（30字）"
-}}
-
-要求：
-1. tropes 必须互相协调，禁止"种田流+无敌流"这类自相矛盾组合
-2. reference_works 必须是同流派作品（不要跨流派类比）
-3. 若 logline 暗示女频题材，target_audience 不要硬扭成男频
-4. market_risk 必须诚实评估，不要只说好话——若同质化风险高，直接指出
-5. hook_test 的自评分要实事求是，6分以下要给出"如何提升钩子吸引力"的建议
-6. 严禁返回任何解释，仅返回 JSON。"""
-
-        raw = await self._call_with_retry(
-            system,
-            prompt,
-            max_tokens=2560,
-            task="bootstrap.positioning",
-        )
-        try:
-            data = _parse_json(raw)
-        except Exception:  # noqa: BLE001
-            return {}
-        if not isinstance(data, dict):
-            return {}
-        # 字段兜底：缺失字段不丢，仅做最小清洗
-        for k in (
-            "target_audience", "selling_point", "face_slap_pattern",
-            "emotional_arc", "pace_type",
-            "market_risk", "differentiation_durability", "hook_test",
-        ):
-            v = data.get(k)
-            if not isinstance(v, str):
-                data[k] = ""
-        for k in ("tropes", "reference_works", "taboo_lines"):
-            v = data.get(k)
-            if not isinstance(v, list):
-                data[k] = []
-            else:
-                data[k] = [str(x).strip() for x in v if x and isinstance(x, (str, int, float))]
-        return data
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 1 — 项目基础信息
-    # ══════════════════════════════════════════════════════════
+    async def _gen_positioning(self, ctx: dict):
+        from app.services.bootstrap.steps.positioning import gen_positioning
+        return await gen_positioning(self, ctx)
 
     async def _gen_project(self, ctx: dict):
-        system = "你是网络小说策划专家。根据创意生成项目基础信息，只返回JSON。"
-        tw = int(ctx.get("target_words") or 1_200_000)
-        length_block = _book_length_constraints_for_prompt(tw)
-        # Step 0 立项定位作为全局约束注入：让 title/genre/premise 都贴合定位
-        positioning_block = ""
-        positioning = ctx.get("positioning") or {}
-        if isinstance(positioning, dict) and positioning:
-            positioning_block = (
-                "\n【立项定位（必须严格遵守）】\n"
-                + json.dumps(positioning, ensure_ascii=False, indent=2)
-                + "\n"
-            )
-        prompt = f"""创意：{ctx['logline']}
-立意与类型：{ctx.get('premise')[:1500] if ctx.get('premise') else '（未填写，请自动提炼作品定位、主题命题、核心矛盾与禁忌边界）'}
-{positioning_block}
-{length_block}
-
-返回JSON：
-{{
-  "title": "小说名（2~6个汉字，有冲击力）",
-  "genre": "玄幻",
-  "premise": "使用 markdown 二级标题输出完整《立意与类型（PREMISE）》，必须包含：作品定位、核心一句话、类型与篇幅、主题与命题、核心矛盾、主角概况、结局倾向、最坏会怎样（收束边界）、希望读者记住的一个画面、叙事视角与禁忌；其中「类型与篇幅」必须严格服从上方【全书字数目标（硬性约束）】",
-  "world_overview": "世界观简述，300~500字，包含力量体系、势力格局、社会规则",
-  "story_core": {{
-    "drive": "故事驱动力（成长/复仇/守护等）",
-    "conflict": "核心矛盾",
-    "theme": "主题",
-    "differentiation": "与同类小说的差异化"
-  }}
-}}
-要求：
-1) premise 不要空话，必须可直接作为作者创作基线
-2) premise 中必须给出清晰的目标读者、禁忌边界；「类型与篇幅」仅允许使用与【全书字数目标（硬性约束）】一致的规模表述
-3) theme / conflict 要与 premise 一致
-4) 只返回 JSON，不要解释文字。"""
-
-        raw = await self._call_with_retry(
-            system,
-            prompt,
-            max_tokens=settings.GEMINI_SETTING_COMPLETION_MAX_TOKENS,
-            task="bootstrap.project",
-        )
-        data = _parse_json(raw)
-
-        # Step 0 立项定位写进 story_core.positioning，并把作品基本面 mirror 到
-        # Project.extra.positioning（如该列已迁移），写章节路径优先读后者。
-        story_core = data.get("story_core", {}) or {}
-        positioning = ctx.get("positioning") or {}
-        if isinstance(story_core, dict) and positioning:
-            story_core["positioning"] = positioning
-
-        project_kwargs = dict(
-            title=data["title"],
-            genre=data.get("genre", "玄幻"),
-            logline=ctx["logline"],
-            premise=data.get("premise") or ctx.get("premise") or "",
-            world_overview=data.get("world_overview", ""),
-            story_core=story_core,
-            target_words=int(ctx.get("target_words") or 1_200_000),
-        )
-        # Project.extra 列在 main.py 的兼容迁移里新增；旧库未迁移时跳过赋值
-        if hasattr(Project, "extra") and positioning:
-            project_kwargs["extra"] = {"positioning": positioning}
-        # 多用户隔离：新建项目必须绑定到发起 bootstrap 的用户
-        if self.user_id is not None:
-            project_kwargs["user_id"] = self.user_id
-        project = Project(**project_kwargs)
-        self.db.add(project)
-        self.db.commit()
-        self.db.refresh(project)
-
-        ctx["project_title"] = project.title
-        ctx["genre"] = project.genre
-        ctx["world_overview"] = project.world_overview
-        ctx["story_core"] = story_core
-        ctx["premise"] = project.premise or ctx.get("premise") or ""
-        # 流派分流：加载 genre_kit 作为全局约束，后续所有步骤都读它
-        ctx["genre_kit"] = get_genre_kit(project.genre)
-        ctx["genre_kit_prompt"] = render_kit_for_prompt(ctx["genre_kit"])
-
-        return project, ctx
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 3 — 势力体系（结构化 Faction 记录）
-    # ══════════════════════════════════════════════════════════
-
-    async def _gen_factions(self, project: Project, ctx: dict):
-        system = "你是网络小说世界构建专家。只返回JSON数组。"
-        kit_block = _get_genre_kit_block(ctx)
-        prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
-创意：{ctx['logline']}
-世界观：{ctx['world_overview'][:300]}
-境界体系：{ctx.get('power_summary', '（未设定）')}
-
-【流派编辑手册约束】
-- 势力定位与冲突必须符合 genre_kit 的 satisfaction_tropes（玄幻多宗门/打脸、悬疑多嫌疑人互咬、言情多家族/情敌）
-
-生成本小说的主要势力/组织（4~6个），返回JSON数组：
-[
-  {{
-    "name": "势力名称",
-    "faction_type": "sect",
-    "alignment": "antagonist",
-    "active_period": "early",
-    "description": "势力特色与定位（60字内）",
-    "territory": "领地/活动范围",
-    "strength_level": "实力级别（如：顶级宗门，坐镇一名斗宗）",
-    "member_count": "成员规模",
-    "top_power": "最强战力描述",
-    "goals": "势力目标与图谋",
-    "resources": "势力核心资源/特产",
-    "history": "势力历史背景（30字）",
-    "secrets": "势力不为人知的秘密/隐藏阴谋（供作者参考）",
-    "rivals": ["竞争势力名"],
-    "allies": ["盟友势力名"],
-    "attitude_to_protagonist": "hostile",
-    "internal_factions": "势力内部的派系博弈（至少2派，各有代表人物与目标差异，50字内；protagonist阵营与neutral阵营也必须填写，写'改革派vs保守派'等内部张力）",
-    "villain_timeline": "【仅 antagonist 阵营填写，其余填空字符串】若主角什么都不做，这股势力会在第几卷完成什么阴谋？被主角打断后的应对策略是什么？（70字内，具体到卷号）"
-  }}
-]
-faction_type 只能是: sect / kingdom / family / guild / evil / race / other
-alignment 只能是: protagonist / neutral / antagonist / unknown
-active_period 只能是: early / mid / late / full
-attitude_to_protagonist 只能是: friendly / hostile / neutral / subordinate / superior
-必须涵盖主角阵营势力、核心反派势力、中立势力各至少1个。
-villain_timeline 对 antagonist 类势力为必填，要求具体到"第X卷前完成xxx，主角若干预则转为yyy策略"。
-只返回JSON数组，不要说明文字。"""
-
-        raw = await self._call_with_retry(
-            system,
-            prompt,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.factions",
-        )
-        data = _parse_json(raw)
-        if not isinstance(data, list):
-            data = data.get("factions", [])
-
-        results = []
-        for i, item in enumerate(data):
-            f = Faction(
-                project_id=project.id,
-                name=item.get("name", f"势力{i+1}"),
-                faction_type=item.get("faction_type", "sect"),
-                alignment=item.get("alignment", "neutral"),
-                description=item.get("description"),
-                territory=item.get("territory"),
-                strength_level=item.get("strength_level"),
-                member_count=item.get("member_count"),
-                top_power=item.get("top_power"),
-                goals=item.get("goals"),
-                resources=item.get("resources"),
-                history=item.get("history"),
-                secrets=item.get("secrets"),
-                rivals=item.get("rivals", []),
-                allies=item.get("allies", []),
-                attitude_to_protagonist=item.get("attitude_to_protagonist", "neutral"),
-                sort_order=i,
-                extra={
-                    "active_period": item.get("active_period", ""),
-                    "internal_factions": item.get("internal_factions", ""),
-                    "villain_timeline": item.get("villain_timeline", ""),
-                },
-            )
-            self.db.add(f)
-            results.append(f)
-
-        self.db.commit()
-
-        # 压入 ctx：供人物 faction 字段、设定卡去重引用
-        ctx["faction_summary"] = "、".join(
-            f"{f.name}（{f.alignment}，{f.extra.get('active_period','')}期）"
-            for f in results
-        )
-        ctx["faction_names"] = [f.name for f in results]
-        # 名字→UUID 映射，供 _gen_characters 填充 faction_id 外键
-        ctx["faction_name_to_id"] = {f.name: str(f.id) for f in results}
-        # 压入 villain_timeline 汇总，供 expand_outline 注入反派行动线约束
-        villain_timelines = [
-            f"{f.name}：{f.extra.get('villain_timeline', '')}"
-            for f in results
-            if f.alignment == "antagonist" and f.extra.get("villain_timeline", "").strip()
-        ]
-        ctx["villain_timelines"] = villain_timelines
-        return results
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 6 — 核心功法技能（结构化 Skill 记录）
-    # ══════════════════════════════════════════════════════════
-
-    async def _gen_key_skills(self, project: Project, ctx: dict):
-        system = "你是网络小说世界构建专家。只返回JSON数组。"
-        kit_block = _get_genre_kit_block(ctx)
-        # 提供 ID 列表供 AI 直接输出 UUID，强化外键关联（避免名称拼写错误）
-        char_id_hint = ", ".join(
-            f"{c['name']}（id={c['id']}）" for c in ctx.get("char_id_list", [])[:8]
-        ) or "（人物列表待生成）"
-        prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
-主角：{ctx.get('protagonist', '主角')}
-境界体系：{ctx.get('power_summary', '（未设定）')}
-主要人物（姓名+UUID）：{char_id_hint}
-
-【流派编辑手册约束】
-- 技能效果与获取方式必须符合 genre_kit 的 satisfaction_tropes（玄幻强调金手指新用法，仙侠强调心魔/渡劫相关）
-
-生成本小说最关键的5~8个功法/技能，返回JSON数组：
-[
-  {{
-    "name": "功法/技能名称",
-    "skill_type": "combat",
-    "grade": "earth",
-    "source": "来源（如：上古秘典、宗门传承）",
-    "level_required": "修炼要求（境界，如：斗者三星以上）",
-    "description": "功法/技能描述（40字内）",
-    "effects": "使用效果",
-    "limitations": "使用限制或副作用",
-    "mastered_by_character_ids": ["直接填写上面人物的UUID字符串列表，优先使用id字段"],
-    "mastered_by_names": ["对应的人物姓名（可选，用于人工核对）"],
-    "plot_hook": "这个技能/功法在故事中的剧情钩子：何时会被损毁/被夺走/被超越/失效/揭露禁忌代价？用一句话指明触发章节范围（如：「第2卷高潮时主角核心功法被反派破解，被迫觉醒隐藏传承」）"
-  }}
-]
-skill_type 只能是: combat / defense / movement / support / bloodline / special
-grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
-选择对故事最重要的技能，包含主角核心战技和1~2个反派标志性技能。
-每个技能必须填写 plot_hook，不得留空。
-只返回JSON数组，不要说明文字。"""
-
-        raw = await self._call_with_retry(
-            system,
-            prompt,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.skills",
-        )
-        data = _parse_json(raw)
-        if not isinstance(data, list):
-            data = data.get("skills", [])
-
-        # ★ 强化外键：优先使用 AI 直接输出的 UUID 列表，其次回退到名字映射
-        char_name_to_id: dict = ctx.get("char_name_to_id", {})
-        results = []
-        for i, item in enumerate(data):
-            # 优先取 mastered_by_character_ids（UUID 字符串列表），其次回退到名字映射
-            raw_ids = item.get("mastered_by_character_ids") or item.get("mastered_by", [])
-            mastered_ids = []
-            for val in raw_ids:
-                if isinstance(val, str):
-                    try:
-                        _uuid_module.UUID(val)  # 严格校验 UUID 格式
-                        mastered_ids.append(val)
-                    except ValueError:
-                        # AI 输出了名字而非 UUID：尝试名字映射回退
-                        mapped = char_name_to_id.get(val)
-                        if mapped:
-                            logger.warning(
-                                "Skill '%s' mastered_by: AI 输出名字 '%s' 而非 UUID，已回退映射到 %s",
-                                item.get("name", "?"), val, mapped,
-                            )
-                            mastered_ids.append(mapped)
-                        else:
-                            logger.warning(
-                                "Skill '%s' mastered_by: AI 输出 '%s' 既非 UUID 也不在人物列表，已丢弃",
-                                item.get("name", "?"), val,
-                            )
-            skill_extra = {}
-            if item.get("plot_hook"):
-                skill_extra["plot_hook"] = str(item["plot_hook"])[:300]
-            sk = Skill(
-                project_id=project.id,
-                name=item.get("name", f"功法{i+1}"),
-                skill_type=item.get("skill_type", "combat"),
-                grade=item.get("grade", "earth"),
-                source=item.get("source"),
-                level_required=item.get("level_required"),
-                description=item.get("description"),
-                effects=item.get("effects"),
-                limitations=item.get("limitations"),
-                mastered_by_character_ids=mastered_ids,
-                sort_order=i,
-                extra=skill_extra,
-            )
-            self.db.add(sk)
-            results.append(sk)
-
-        self.db.commit()
-        ctx["skill_names"] = [sk.name for sk in results]
-        return results
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 7 — 关键道具法宝（结构化 Item 记录）
-    # ══════════════════════════════════════════════════════════
-
-    async def _gen_key_items(self, project: Project, ctx: dict):
-        system = "你是网络小说世界构建专家。只返回JSON数组。"
-        kit_block = _get_genre_kit_block(ctx)
-        # 提供 ID 列表供 AI 直接输出 current_owner_id，强化外键关联
-        char_id_hint = ", ".join(
-            f"{c['name']}（id={c['id']}）" for c in ctx.get("char_id_list", [])[:8]
-        ) or "（人物列表待生成）"
-        prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
-主角：{ctx.get('protagonist', '主角')}
-境界体系：{ctx.get('power_summary', '（未设定）')}
-主要人物（姓名+UUID）：{char_id_hint}
-主要势力：{', '.join(ctx.get('faction_names', [])[:4])}
-
-【流派编辑手册约束】
-- 道具效果与获取必须符合 genre_kit 的 satisfaction_tropes（玄幻强调升级/打脸相关法宝）
-
-生成本小说最重要的5~8件道具/法宝，返回JSON数组：
-[
-  {{
-    "name": "道具/法宝名称",
-    "item_type": "artifact",
-    "rarity": "legendary",
-    "description": "外观与特征描述（30字内）",
-    "origin": "来历（上古遗留、宗门镇宝等）",
-    "effects": "核心能力效果",
-    "limitations": "使用限制（境界要求、次数、副作用）",
-    "story_significance": "在故事中的重要性/象征意义",
-    "current_owner_id": "当前持有人UUID（优先从上面人物id列表直接填写，或留空）",
-    "current_owner_name": "当前持有人姓名（可选，用于人工核对）",
-    "status": "intact",
-    "plot_hook": "这件道具在故事中的剧情钩子：何时会被损毁/被夺走/持有者死亡/揭露隐藏能力/成为争夺焦点？用一句话指明触发章节范围（如：「第1卷末法宝被反派势力强夺，主角踏上复夺之路」）"
-  }}
-]
-item_type 只能是: weapon / armor / pill / artifact / material / scroll / beast / other
-rarity 只能是: common / uncommon / rare / epic / legendary / mythic / unique
-status 只能是: intact / damaged / destroyed / lost / unknown
-选择对主线剧情影响最大的道具，包含主角核心战力道具和1~2个关键麦高芬道具。
-每件道具必须填写 plot_hook，不得留空。
-只返回JSON数组，不要说明文字。"""
-
-        raw = await self._call_with_retry(
-            system,
-            prompt,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.items",
-        )
-        data = _parse_json(raw)
-        if not isinstance(data, list):
-            data = data.get("items", [])
-
-        char_name_to_id: dict = ctx.get("char_name_to_id", {})
-        results = []
-        for i, item in enumerate(data):
-            # 强化外键：优先使用 AI 直接输出的 current_owner_id（严格 UUID 校验），其次回退到名字映射
-            owner_uuid_str = None
-            owner_id = item.get("current_owner_id")
-            if owner_id and isinstance(owner_id, str):
-                try:
-                    _uuid_module.UUID(owner_id)  # 严格校验 UUID 格式
-                    owner_uuid_str = owner_id
-                except ValueError:
-                    logger.warning(
-                        "Item '%s' current_owner_id: AI 输出 '%s' 不是有效 UUID，尝试名字映射",
-                        item.get("name", "?"), owner_id,
-                    )
-            if owner_uuid_str is None:
-                owner_name = item.get("current_owner_name") or item.get("current_owner", "") or ""
-                if owner_name:
-                    mapped = char_name_to_id.get(owner_name)
-                    if mapped:
-                        logger.warning(
-                            "Item '%s' current_owner: 已通过名字 '%s' 回退映射到 %s",
-                            item.get("name", "?"), owner_name, mapped,
-                        )
-                        owner_uuid_str = mapped
-                    else:
-                        logger.warning(
-                            "Item '%s' current_owner: '%s' 不在人物列表，owner_id 置空",
-                            item.get("name", "?"), owner_name,
-                        )
-            item_extra = {}
-            if item.get("plot_hook"):
-                item_extra["plot_hook"] = str(item["plot_hook"])[:300]
-            it = Item(
-                project_id=project.id,
-                name=item.get("name", f"道具{i+1}"),
-                item_type=item.get("item_type", "artifact"),
-                rarity=item.get("rarity", "rare"),
-                description=item.get("description"),
-                origin=item.get("origin"),
-                effects=item.get("effects"),
-                limitations=item.get("limitations"),
-                story_significance=item.get("story_significance"),
-                status=item.get("status", "intact"),
-                current_owner_id=UUID(owner_uuid_str) if owner_uuid_str else None,
-                sort_order=i,
-                extra=item_extra,
-            )
-            self.db.add(it)
-            results.append(it)
-
-        self.db.commit()
-        ctx["item_names"] = [it.name for it in results]
-        return results
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 8 — 世界观设定卡（纯叙事，无专属表的内容）
-    # ══════════════════════════════════════════════════════════
-
-    async def _gen_settings(
-        self,
-        project: Project,
-        ctx: dict,
-        *,
-        blueprints: Optional[list] = None,
-        prompt_addon: str = "",
-    ):
-        """
-        只生成无专属结构化表的纯叙事设定卡。
-        ❌ 不再生成：修炼体系（→ PowerSystem）、主要势力（→ Faction）、
-                    功法技能（→ Skill）、道具法宝（→ Item）
-        ✅ 生成：作品立意、世界规则、历史谜团、地图/地理、文化风俗
-
-        实现策略：将蓝图按 ``_SETTINGS_BATCH_SIZE`` 拆成 3 批，**并行**调用 AI。
-        - 并行时间 = 最慢单批时间（~200s），而非串行的 3× 时间（~600s）
-        - 一致性保障：所有批次共享同一份基础锚点（logline / world / power / faction），
-          大方向不会跑偏；细节矛盾由 Step 14 一致性扫描捕获并标注
-        - 每批 max_tokens=8192（9张卡 × ~850 tokens ≈ 7650，留余量防截断）
-
-        Args:
-            blueprints: 覆盖默认 ``GEMINI_SETTING_BLUEPRINTS``（例如仅补缺失标题的子集）。
-            prompt_addon: 附加在 prompt 末尾的约束（测试/作者说明）。
-        """
-        import logging as _logging
-        _logger = _logging.getLogger(__name__)
-
-        _SETTINGS_BATCH_SIZE = 6    # 每批最多 6 张；24 张 → 4 批（6+6+6+6）
-        # 6张卡中最重的是 section=core 的「作品立意」(~1200 tokens) + 5张 focus (~800 tokens each)
-        # 实际峰值约 5200 tokens，8192 有足够余量，彻底避免 JSON 截断
-        _BATCH_MAX_TOKENS    = 8192
-
-        bps = blueprints if blueprints is not None else GEMINI_SETTING_BLUEPRINTS
-        batches = [bps[i:i + _SETTINGS_BATCH_SIZE] for i in range(0, len(bps), _SETTINGS_BATCH_SIZE)]
-
-        # 公共上下文字段（各批 prompt 共用，在外层计算一次）
-        faction_brief      = ctx.get("faction_summary", "（已独立生成势力档案）")
-        power_brief        = ctx.get("power_summary",   "（已独立生成境界体系）")
-        char_names_hint    = "、".join(ctx.get("char_names", []))
-        faction_names_hint = "、".join(ctx.get("faction_names", []))
-        kit_block          = _get_genre_kit_block(ctx)
-        extra_block        = f"\n{prompt_addon.strip()}\n" if (prompt_addon or "").strip() else ""
-
-        async def _call_batch(batch: list, batch_idx: int) -> list:
-            """生成单批蓝图设定卡，返回原始 dict list；失败时 raise，由 gather 捕获。"""
-            batch_json = json.dumps(batch, ensure_ascii=False, indent=2)
-            prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
-创意：{ctx['logline']}
-立意与类型：{ctx.get('premise', '')[:1000] or '（未填写，请自动提炼）'}
-世界观：{ctx['world_overview'][:300]}
-
-【流派编辑手册约束】
-- 世界观必须体现流派特有的力量体系、势力格局、社会规则和读者期待（例：玄幻要强调金手指代价与升级仪式，悬疑要强调信息差与嫌疑人布局）
-- 禁忌边界必须参考 genre_kit 的 forbidden_examples
-
-已独立生成的结构化数据（设定卡不要重复这些内容）：
-- 境界体系：{power_brief}
-- 势力档案：{faction_brief}
-- 已确定人物（写 who_knows_now 时必须从此列表选名字）：{char_names_hint or '（尚未生成）'}
-- 已确定势力（写 who_knows_now 时可引用）：{faction_names_hint or '（尚未生成）'}
-
-请严格按【世界设定蓝图（第{batch_idx + 1}批）】生成全部 {len(batch)} 张设定卡，不要少卡、不要合并卡。
-世界设定蓝图（本批）：
-{batch_json}
-
-{_SETTING_CARD_SCHEMA_BRIEF}
-
-要求：
-1) 必须生成本批蓝图中的全部 {len(batch)} 张设定卡，顺序与蓝图一致
-2) 每张卡 title/category/tags/importance/stage 必须与蓝图一致，写入 extra
-3) section=core 的卡必须填写 extra.core 的全部字段
-4) section=focus 的卡必须填写 extra.focus 的全部字段
-5) 每张卡 content 至少180字，有可落地的名词、规则、代价、例外和冲突
-6) 不要重复已有的境界体系或势力信息
-7) 每张卡 extra 含 reveal_timing、who_knows_now（规则见上 schema 说明）
-{extra_block}
-只返回JSON数组，不要解释。"""
-
-            raw = await self._call_with_retry(
-                "你是网络小说世界观设计专家。只返回JSON数组。",
-                prompt,
-                max_tokens=_BATCH_MAX_TOKENS,
-                task="bootstrap.settings",
-            )
-            data = _parse_json(raw)
-            if not isinstance(data, list):
-                data = data.get("settings", [])
-            return data
-
-        # 3 批并行；return_exceptions=True 保证单批失败不中断其他批次
-        # 并行耗时 = 最慢单批（~200s），远优于串行（~600s）
-        # 细节跨批一致性由 Step 14 一致性扫描兜底
-        batch_results = await asyncio.gather(
-            *[_call_batch(b, i) for i, b in enumerate(batches)],
-            return_exceptions=True,
-        )
-
-        results = []
-        for i, batch_data in enumerate(batch_results):
-            if isinstance(batch_data, BaseException):
-                _logger.warning("settings 第%d批生成失败，已跳过：%s", i + 1, batch_data)
-                continue
-            for item in batch_data:
-                extra = _setting_extra_with_defaults(item)
-                s = WorldSetting(
-                    project_id=project.id,
-                    title=item.get("title", "设定"),
-                    content=item.get("content", ""),
-                    tags=item.get("tags", []),
-                    extra=extra,
-                )
-                self.db.add(s)
-                results.append(s)
-
-        self.db.commit()
-        ctx["settings_summary"] = " | ".join(
-            f"{s.title}：{(s.content or '')[:80]}" for s in results
-        )
-        return results
-
-    async def _gen_settings_append(self, project: Project, ctx: dict, *, user_hint: str, count: int):
-        """在已有设定基础上追加若干张自拟标题的纯叙事设定卡（非蓝图子集）。"""
-        system = "你是网络小说世界观设计专家。只返回JSON数组。"
-        existing = (
-            self.db.query(WorldSetting)
-            .filter(WorldSetting.project_id == project.id)
-            .order_by(WorldSetting.created_at)
-            .all()
-        )
-        existing_titles = [(s.title or "").strip() for s in existing if (s.title or "").strip()]
-        brief = " | ".join(f"{s.title}：{(s.content or '')[:80]}" for s in existing[:20])
-
-        char_names_hint = "、".join(ctx.get("char_names", []))
-        faction_names_hint = "、".join(ctx.get("faction_names", []))
-        kit_block = _get_genre_kit_block(ctx)
-
-        prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
-创意：{ctx['logline']}
-立意与类型：{ctx.get('premise', '')[:1000] or '（未填写，请自动提炼）'}
-世界观：{ctx['world_overview'][:400]}
-
-已独立生成的结构化数据（不要整段复制成档案，仅作叙事参照）：
-- 境界体系：{ctx.get('power_summary', '')}
-- 势力档案：{ctx.get('faction_summary', '')}
-
-【已有设定卡标题】（禁止重复或仅改一字的近似重名；内容可与旧卡互补但不要逐句复述）
-{json.dumps(existing_titles, ensure_ascii=False)}
-
-已有设定摘要（防撞车）：
-{brief[:2400]}
-
-【追加需求】
-{user_hint}
-
-请再生成恰好 {count} 张新的「纯叙事型」世界观设定卡。标题自拟，须与已有标题明显不同。
-分类的 extra.category 必须是以下之一：世界背景、地理场景、历史传说、文化风俗、规则法则、其他。
-尽量覆盖至少 3 种不同分类。
-每张卡须含：title, content（≥160字）, tags（数组）, extra。
-extra 须含 category、importance（core/major/flavor）、stage（early/mid/late/full）、
-reveal_timing、who_knows_now（须优先使用真实人物名与势力名：人物 {char_names_hint or '无'}；势力 {faction_names_hint or '无'}；若确实无人则写「佚名路人/地方商会」等具体群体，禁用「主角」「反派」泛称）。
-每张为 focus 型：extra.focus 必填 summary, story_function, conflict_seed, cost_or_risk, affected_people, exception_or_loophole, visual_anchor（各一句，可落地）。
-只返回JSON数组，不要解释。"""
-
-        raw = await self._call_with_retry(
-            system,
-            prompt,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.settings",
-        )
-        data = _parse_json(raw)
-        if not isinstance(data, list):
-            data = data.get("settings", [])
-        results = []
-        for item in data:
-            extra = _setting_extra_with_defaults(item)
-            s = WorldSetting(
-                project_id=project.id,
-                title=item.get("title", "追加设定"),
-                content=item.get("content", ""),
-                tags=item.get("tags", []) if isinstance(item.get("tags"), list) else [],
-                extra=extra,
-            )
-            self.db.add(s)
-            results.append(s)
-        self.db.commit()
-        prev = ctx.get("settings_summary") or ""
-        new_bits = " | ".join(f"{s.title}：{(s.content or '')[:80]}" for s in results)
-        ctx["settings_summary"] = (prev + " | " + new_bits).strip(" |")
-        return results
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 3 — 境界体系
-    # ══════════════════════════════════════════════════════════
+        from app.services.bootstrap.steps.project import gen_project
+        return await gen_project(self, ctx)
 
     async def _gen_power_systems(self, project: Project, ctx: dict):
-        system = "你是网络小说世界构建专家。只返回JSON数组。"
-        kit_block = _get_genre_kit_block(ctx)
-        prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
-创意：{ctx['logline']}
-世界观：{ctx['world_overview'][:300]}
+        from app.services.bootstrap.steps.power_systems import gen_power_systems
+        return await gen_power_systems(self, project, ctx)
 
-【流派编辑手册约束】
-- 境界体系必须符合 genre_kit 的 pacing_guide（玄幻要强调升级仪式与金手指代价，仙侠要强调心魔与渡劫）
-
-生成本小说的力量/境界体系，返回JSON数组（通常1~2套）：
-[
-  {{
-    "name": "体系名称，如「修炼境界」",
-    "system_type": "cultivation",
-    "description": "体系在世界观中的地位与简介（50字内）",
-    "cultivation_method": "修炼方式（如：吸纳天地灵气，淬炼丹田）",
-    "breakthrough_condition": "突破通用条件（如：灵气积累满溢+感悟）",
-    "special_rules": "特殊规则（如：天才/废柴判定，天花板原因）",
-    "protagonist_start_rank": 1,
-    "protagonist_end_rank": 9,
-    "levels": [
-      {{
-        "rank": 1,
-        "name": "境界名",
-        "description": "简述",
-        "abilities": ["能力1"],
-        "chapter_budget": 20,
-        "gatekeeper": "守在这一境界卡点的核心障碍（强敌名/事件类型/资源缺口，10字内）"
-      }},
-      {{
-        "rank": 2,
-        "name": "境界名",
-        "description": "简述",
-        "abilities": ["能力1"],
-        "chapter_budget": 30,
-        "gatekeeper": "守在这一境界卡点的核心障碍"
-      }}
-    ]
-  }}
-]
-system_type 只能是: cultivation / magic / ability / tech / hybrid
-levels 至少包含 6 个境界，按强弱从低到高排列。
-protagonist_start_rank、protagonist_end_rank 必须是整数，且等于 levels 中某一层的 rank，禁止填境界中文名。
-chapter_budget 为主角在该境界停留的预计章数（整数）；所有境界 chapter_budget 之和建议在目标总章数 70% 左右（其余 30% 用于横向扩展剧情）。
-gatekeeper 必须具体（如"宗门首席×××"或"突破所需天材地宝被反派势力垄断"），不要空泛写"强敌"。
-只返回JSON数组，不要说明文字。"""
-
-        raw = await self._call_with_retry(
-            system,
-            prompt,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.power_systems",
-        )
-        data = _parse_json(raw)
-        if not isinstance(data, list):
-            data = data.get("power_systems", [])
-
-        results = []
-        for i, item in enumerate(data):
-            levels = item.get("levels", [])
-            start_raw = item.get("protagonist_start_rank")
-            if start_raw is None:
-                start_raw = item.get("protagonist_current_rank")
-            end_raw = item.get("protagonist_end_rank")
-            ps = PowerSystem(
-                project_id=project.id,
-                name=item.get("name", "修炼体系"),
-                system_type=item.get("system_type", "cultivation"),
-                description=item.get("description"),
-                cultivation_method=item.get("cultivation_method"),
-                breakthrough_condition=item.get("breakthrough_condition"),
-                special_rules=item.get("special_rules"),
-                levels=levels,
-                protagonist_current_rank=_coerce_power_system_rank(start_raw, levels, 1),
-                protagonist_end_rank=_coerce_power_system_rank(end_raw, levels, None),
-                sort_order=i,
-            )
-            self.db.add(ps)
-            results.append(ps)
-
-        self.db.commit()
-
-        # 把境界名列表压入 ctx，供人物 current_realm 和大纲 power_milestone 引用
-        if results:
-            main_ps = results[0]
-            level_names = [lv.get("name", "") for lv in (main_ps.levels or []) if lv.get("name")]
-            ctx["power_level_names"] = level_names
-            ctx["power_system_name"] = main_ps.name
-            ctx["power_summary"] = (
-                f"{main_ps.name}：" + " → ".join(level_names[:8])
-            )
-        else:
-            ctx["power_level_names"] = []
-            ctx["power_system_name"] = ""
-            ctx["power_summary"] = ""
-
-        return results
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 4 — 故事线
-    # ══════════════════════════════════════════════════════════
+    async def _gen_factions(self, project: Project, ctx: dict):
+        from app.services.bootstrap.steps.factions import gen_factions
+        return await gen_factions(self, project, ctx)
 
     async def _gen_storylines(self, project: Project, ctx: dict):
-        system = "你是网络小说叙事结构专家。只返回JSON数组。"
-        kit_block = _get_genre_kit_block(ctx)
-        prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
-创意：{ctx['logline']}
-故事核：{ctx['story_core'].get('conflict', '')} | 主题：{ctx['story_core'].get('theme', '')}
-境界体系：{ctx.get('power_summary', '（未设定）')}
-
-【流派编辑手册约束】
-- 每条故事线的 core_conflict 和 resolution_direction 必须符合 genre_kit 的 satisfaction_tropes 和 pacing_guide
-- 主线冲突类型必须贴合流派（玄幻打脸/升级、悬疑信息差/嫌疑人、言情误会/追妻等）
-
-生成3~5条主要故事线，返回JSON数组：
-[
-  {{
-    "name": "主线：（简短有力的线名）",
-    "line_type": "main",
-    "description": "故事线简述（40字内）",
-    "core_conflict": "这条线的核心矛盾是什么",
-    "resolution_direction": "预计如何收束",
-    "status": "active",
-    "start_chapter": 1
-  }}
-]
-line_type 只能是: main / sub / romance / growth / mystery / faction / antagonist
-status 只能是: planned / active
-必须有且只有1条 main，其余为其他类型。
-只返回JSON数组，不要说明文字。"""
-
-        raw = await self._call_with_retry(
-            system,
-            prompt,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.storylines",
-        )
-        data = _parse_json(raw)
-        if not isinstance(data, list):
-            data = data.get("storylines", [])
-
-        results = []
-        for i, item in enumerate(data):
-            sl = StoryLine(
-                project_id=project.id,
-                name=item.get("name", f"故事线{i+1}"),
-                line_type=item.get("line_type", "sub"),
-                description=item.get("description"),
-                core_conflict=item.get("core_conflict"),
-                resolution_direction=item.get("resolution_direction"),
-                status=item.get("status", "planned"),
-                start_chapter=item.get("start_chapter"),
-                sort_order=i,
-            )
-            self.db.add(sl)
-            results.append(sl)
-
-        self.db.commit()
-
-        # 压入 ctx，供大纲生成时引用
-        ctx["storyline_summary"] = " | ".join(
-            f"{sl.name}（{sl.line_type}）" for sl in results
-        )
-        ctx["storyline_ids"] = {sl.name: str(sl.id) for sl in results}
-
-        return results
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 5 — 人物库
-    # ══════════════════════════════════════════════════════════
+        from app.services.bootstrap.steps.storylines import gen_storylines
+        return await gen_storylines(self, project, ctx)
 
     async def _gen_characters(self, project: Project, ctx: dict):
-        system = "你是网络小说人物设计专家。只返回JSON数组。"
-        power_hint = (
-            f"\n境界体系（current_realm 必须从此列表选择）：{ctx.get('power_summary', '')}"
-            if ctx.get('power_level_names') else ""
-        )
-        kit_block = _get_genre_kit_block(ctx)
-        prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
-创意：{ctx['logline']}
-立意与类型：{ctx.get('premise', '')[:800] or '（未填写）'}
-故事核：冲突={ctx['story_core'].get('conflict','')}，主题={ctx['story_core'].get('theme','')}{power_hint}
+        from app.services.bootstrap.steps.characters import gen_characters
+        return await gen_characters(self, project, ctx)
 
-【流派编辑手册约束（必须严格遵守）】
-- 角色配额必须符合 genre_kit 的 side_character_quota
-- 说话风格必须符合 dialogue_tone 和 forbidden_examples（严禁出现本流派禁忌的开局/对白方式）
-- speech_kit 中的 signature_words / sample_dialogues 必须体现流派特有的咬字习惯和禁忌词
+    async def _gen_key_skills(self, project: Project, ctx: dict):
+        from app.services.bootstrap.steps.skills import gen_key_skills
+        return await gen_key_skills(self, project, ctx)
 
-⚠️ 你正在生成"主线核心卡司（Core Cast）"——这8人是全书贯穿的主线角色，不是全书所有人物。
-后续章节写作时会按剧情需要动态补充配角，这里只需确定主线固定角色。
+    async def _gen_key_items(self, project: Project, ctx: dict):
+        from app.services.bootstrap.steps.items import gen_key_items
+        return await gen_key_items(self, project, ctx)
 
-生成8个人物（至少：1主角+3核心配角+2反派+2师长/势力角色），返回JSON数组：
-[
-  {{
-    "name": "姓名", "role": "protagonist",
-    "character_tier": "core",
-    "gender": "男", "age": "17", "faction": "所属势力",
-    "personality": "性格（2句话）",
-    "background": "背景经历（3句话）",
-    "motivation": "核心动机",
-    "arc": "人物弧线（从X到Y的成长）",
-    "current_realm": "当前境界（或能力层级）",
-    "speech_style": "说话风格（自由文本，一句话）",
-    "speech_kit": {{
-      "signature_words": ["最常说的1-3个标志性词语/口头禅"],
-      "sentence_length_pref": "短句/中句/长句偏好",
-      "taboo_words": ["绝对不会说的词或句式"],
-      "sample_dialogues": ["5-8句典型台词，体现说话习惯"],
-      "inner_monologue_style": "内心独白风格（克制/细腻/直白/诗化等）"
-    }},
-    "values": "价值观",
-    "fear": "最恐惧的东西——必须具体，且这个恐惧在故事中会被迫直面",
-    "secrets": "不愿公开的秘密——必须具体，且这个秘密暴露后会引发实质性后果",
-    "strengths": ["特质1", "特质2"],
-    "weaknesses": ["弱点1"],
-    "special_traits": ["特殊能力或标志性特征"],
-    "debt_to": "对哪个角色（用名字）有未还的恩情/仇怨/承诺？欠了什么？（15字内；若无则填空）",
-    "detonation_vol": "上述欠债预计在第几卷被引爆或清偿？（填卷号整数，如2；若无欠债填0）"
-  }}
-]
-role 只能是: protagonist / supporting / antagonist
-character_tier 代表该人物在全书中的叙事层级，只能是以下4个值之一：
-- core       = 核心长线：贯穿全书始终，长期驱动主线或重要支线（主角、主要反派、全书固定伙伴）
-- arc        = 弧线支柱：在某卷或某段剧情中主导走向，随该弧线完结后淡出或阵亡
-- plot       = 剧情推手：短期出现以推进特定情节节点，之后退场
-- background = 背景填充：丰富世界厚度与氛围，无强情节绑定
-请根据每个人物在故事中的实际定位严格判断，不要全部填 core。
-debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对主角或某配角有欠债（仇怨或嫉妒型）；这些欠债要分散在不同卷引爆，制造持续的人物动力。
+    async def _gen_settings(self, project: Project, ctx: dict, **kwargs):
+        from app.services.bootstrap.steps.settings import gen_settings
+        return await gen_settings(self, project, ctx, **kwargs)
 
----
-【第二部分】再追加生成5个「开局配角」（仅第一卷活跃，character_tier 固定为 "plot"）：
-这些人物丰富开局前30章的世界厚度，无需长线设计，但每人在卷一必须有具体的情节功能。
-典型角色类型（按需选用）：反派爪牙/小Boss、同辈竞争者/欺凌者、商人/情报贩子、门派长老/考官、普通市民/路人甲（提供信息或见证主角爆发）。
-
-每个配角只需填写精简字段：
-{{
-  "name": "姓名",
-  "role": "supporting 或 antagonist",
-  "character_tier": "plot",
-  "gender": "性别",
-  "age": "年龄",
-  "faction": "所属势力（已有势力名或留空）",
-  "personality": "性格一句话",
-  "motivation": "在卷一的行为动机（一句话）",
-  "current_realm": "当前境界（与已有境界体系一致）",
-  "vol1_function": "在第一卷30章内的具体剧情功能（必须具体：如'第5章欺凌主角引发第一次反击'、'第12章提供关键情报后消失'）",
-  "debt_to": "",
-  "detonation_vol": 0,
-  "speech_kit": {{"signature_words": [], "sentence_length_pref": "短句", "taboo_words": [], "sample_dialogues": [], "inner_monologue_style": "直白"}},
-  "values": "", "fear": "", "secrets": "", "strengths": [], "weaknesses": [], "special_traits": []
-}}
-请将这5个配角追加到同一JSON数组末尾，不要分开返回。
-
-【JSON 可解析性（硬性）】根为 JSON 数组；所有字符串值内禁止出现未转义的英文双引号 " ，对白请用中文直角引号「」或不用引号。
-每人 sample_dialogues 合计不超过 4 条、每条不超过 40 字，避免输出过长被网关截断导致 JSON 断裂。"""
-
-        raw = await self._call_with_retry(
-            system,
-            prompt,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.characters",
-        )
-        data = _parse_json(raw)
-        if not isinstance(data, list):
-            data = data.get("characters", [])
-
-        _VALID_TIERS = {"core", "arc", "plot", "background"}
-        results = []
-        for item in data:
-            tier = item.get("character_tier", "core")
-            if tier not in _VALID_TIERS:
-                tier = "core"
-            # 欠债字段：存入 extra，供大纲质检和 expand_outline 引用
-            char_extra: dict = {}
-            debt_to = (item.get("debt_to") or "").strip()
-            if debt_to:
-                char_extra["debt_to"] = debt_to
-            det_vol_raw = item.get("detonation_vol")
-            det_vol = _safe_int(det_vol_raw, default=0)
-            if det_vol and det_vol > 0:
-                char_extra["detonation_vol"] = det_vol
-            # plot 档配角：保存卷一功能说明
-            vol1_func = (item.get("vol1_function") or "").strip()
-            if vol1_func:
-                char_extra["vol1_function"] = vol1_func
-            faction_name = item.get("faction") or ""
-            faction_id_val = ctx.get("faction_name_to_id", {}).get(faction_name) or None
-            c = Character(
-                project_id=project.id,
-                name=item.get("name", "未命名"),
-                role=item.get("role", "supporting"),
-                character_tier=tier,
-                gender=item.get("gender"),
-                age=item.get("age"),
-                faction=faction_name or None,        # 保留可读名称字段
-                faction_id=faction_id_val,            # 同时填外键 UUID，建立真实关联
-                personality=item.get("personality"),
-                background=item.get("background"),
-                motivation=item.get("motivation"),
-                arc=item.get("arc"),
-                current_realm=item.get("current_realm"),
-                speech_style=item.get("speech_style"),
-                speech_kit=item.get("speech_kit") or {},
-                values=item.get("values"),
-                fear=item.get("fear"),
-                secrets=item.get("secrets"),
-                strengths=item.get("strengths", []),
-                weaknesses=item.get("weaknesses", []),
-                special_traits=item.get("special_traits", []),
-                extra=char_extra if char_extra else None,
-            )
-            self.db.add(c)
-            results.append(c)
-
-        self.db.commit()
-        ctx["char_names"] = [c.name for c in results]
-        ctx["protagonist"] = next((c.name for c in results if c.role == "protagonist"), "主角")
-        # 供 memory 生成用：角色名→当前境界快照
-        ctx["char_realms"] = {
-            c.name: (c.current_realm or "未知") for c in results
-        }
-        # ★ 修复：名字→UUID 映射，供 Skill/Item 存真实 character_id
-        ctx["char_name_to_id"] = {c.name: str(c.id) for c in results}
-        # 供 Prompt 直接引用：人物 ID 列表（AI 可输出 UUID 避免名称拼写错误）
-        ctx["char_id_list"] = [{"id": str(c.id), "name": c.name} for c in results]
-        # 仅 core/arc 层级参与关系图（plot 档配角不做全连接，避免组合爆炸）
-        ctx["core_char_names"] = [
-            c.name for c in results if c.character_tier in ("core", "arc")
-        ]
-        # plot 档配角摘要：供 vol1_chapter_plans 等步骤引用
-        ctx["plot_npc_summary"] = "; ".join(
-            f"{c.name}（{c.extra.get('vol1_function', '') if c.extra else ''}）"
-            for c in results
-            if c.character_tier == "plot" and c.extra and c.extra.get("vol1_function")
-        )
-        return results
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 4 — 大纲树
-    # ══════════════════════════════════════════════════════════
+    async def _gen_settings_append(self, project: Project, ctx: dict, **kwargs):
+        from app.services.bootstrap.steps.settings import gen_settings_append
+        return await gen_settings_append(self, project, ctx, **kwargs)
 
     async def _gen_volumes(self, project: Project, ctx: dict):
-        """
-        Bootstrap 阶段只生成卷级骨架（volume skeleton），不生成 chapter_plan。
-
-        章节级大纲由作者确认设定后按卷触发 expand_outline 生成，
-        那时 power_milestone / involved_characters 才有准确上下文。
-        """
-        system = "你是网络小说结构策划专家。只返回JSON数组。"
-        storyline_hint = (
-            f"\n故事线（每卷 summary 应说明推进了哪条线）：{ctx.get('storyline_summary', '')}"
-            if ctx.get('storyline_summary') else ""
-        )
-        # 从 target_words 推算卷数区间（单一数据源）
-        from app.services.outline_planning import words_to_plan
-        tw = int(project.target_words or 1_200_000)
-        plan = words_to_plan(tw)
-        n_volumes = plan["total_volumes"]
-        total_chapters_hint = plan["total_chapters"]
-
-        # Step 0 立项定位塞进卷规划：让卖点钩子 / 节奏类型 / 打脸频率落到卷级
-        positioning = ctx.get("positioning") or {}
-        positioning_block = ""
-        if isinstance(positioning, dict) and positioning:
-            positioning_block = (
-                "\n【立项定位（每卷必须贯彻）】\n"
-                + json.dumps(positioning, ensure_ascii=False)
-                + "\n"
-            )
-        kit_block = _get_genre_kit_block(ctx)
-
-        # 反派时间线摘要 → 卷规划约束：dark_hour / climax 的触发依据
-        villain_timelines = ctx.get("villain_timelines", [])
-        villain_block = ""
-        if villain_timelines:
-            villain_block = (
-                "\n【反派行动时间线（卷级 phase 必须与之对齐）】\n"
-                + "\n".join(f"- {vt}" for vt in villain_timelines)
-                + "\n⚠️ 对齐规则：反派明显占优/主角处于劣势的卷 → phase=dark_hour；\n"
-                "反派计划被终结/代价完全兑现的卷 → phase=climax。\n"
-            )
-
-        prompt = f"""小说：《{ctx['project_title']}》主角：{ctx.get('protagonist', '主角')}
-创意：{ctx['logline']}
-立意与类型：{ctx.get('premise', '')[:700] or '（未填写）'}
-设定摘要：{ctx['settings_summary']}{storyline_hint}{villain_block}{positioning_block}{kit_block}
-
-主线核心角色（固定卡司，非全书全部人物）：{', '.join(ctx.get('char_names', []))}
-⚠️ 以上只是主线人物。每卷 summary/conflict 允许并鼓励提及未命名配角（如"某城守将""地下情报商""宗门长老"等职能角色），章节细化时会按需正式创建他们。
-
-根据故事规模规划卷级结构，返回JSON数组。
-【字数目标】全书目标：{tw:,}字，折合约{total_chapters_hint}章；**必须恰好 {n_volumes} 卷**（由目标字数推算，数组长度必须等于{n_volumes}；不得为多塞 phase 而加卷，卷少时合并阶段）。
-每卷 planned_chapters 只能填 30 或 60（过渡/尾卷可填30），不要其他数字。
-所有卷的 planned_chapters 之和须尽量接近{total_chapters_hint}章。
-
-【phase 阶段标记（必填，单值）】每卷必须从下列阶段中选一个，全书必须按以下顺序大致单调推进：
-  - opening    第一卷固定为开局期（新手村、立金手指、密集爽点）
-  - rising     起飞期（势力扩张、感情线接入），通常 1-2 卷
-  - turning    转折期（矛盾升级、代价兑现），通常 1 卷
-  - dark_hour  至暗期（虐主、节奏放缓），通常 1 卷或与 turning 合并
-  - climax     高潮期（伏笔回收、终战），通常 1 卷
-  - ending     收束期（最终卷，留下一卷悬念种子）
-若总卷数较少，可省略 dark_hour 或合并 turning + dark_hour，但 opening 与 climax 必须存在。
-
-[
-  {{
-    "title": "第一卷：卷标题（有画面感，带悬念）",
-    "sort_order": 0,
-    "summary": "本卷核心剧情概述，60字内",
-    "hook": "本卷核心悬念：读者最想知道的问题",
-    "conflict": "本卷主要矛盾冲突",
-    "planned_chapters": 60,
-    "phase": "opening"
-  }}
-]
-只返回JSON数组，不要任何说明文字。"""
-
-        raw = await self._call_with_retry(
-            system,
-            prompt,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.volumes",
-        )
-        data = _parse_json(raw)
-        if not isinstance(data, list):
-            data = data.get("outline", data.get("volumes", []))
-
-        valid_phases = {"opening", "rising", "turning", "dark_hour", "climax", "ending"}
-        results = []
-        for i, vol in enumerate(data):
-            planned = vol.get("planned_chapters", 60)
-            if planned not in (30, 60):
-                planned = 60
-            phase_val = (vol.get("phase") or "").strip().lower() or None
-            if phase_val and phase_val not in valid_phases:
-                # 兜底：模型偶尔返回中文或其他写法，统一映射到默认轨迹
-                phase_val = None
-            # 若模型未返回 phase，按位置兜底：第一卷 opening、最后一卷 ending、其余 rising
-            if phase_val is None:
-                total_hint = max(1, len(data))
-                if i == 0:
-                    phase_val = "opening"
-                elif i == total_hint - 1:
-                    phase_val = "ending"
-                else:
-                    phase_val = "rising"
-            node = OutlineNode(
-                project_id=project.id,
-                parent_id=None,
-                node_type="volume",
-                title=vol.get("title", f"第{i+1}卷"),
-                summary=vol.get("summary"),
-                hook=vol.get("hook"),
-                conflict=vol.get("conflict"),
-                sort_order=vol.get("sort_order", i),
-                phase=phase_val,
-                extra={"planned_chapters": planned, "phase": phase_val},
-            )
-            self.db.add(node)
-            results.append(node)
-
-        self.db.commit()
-        # 供 memory 生成用：卷级摘要
-        ctx["volumes_summary"] = " | ".join(
-            f"{n.title}：{(n.summary or '')[:40]}" for n in results
-        )
-        return results
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 7 — 记忆库种子
-    # ══════════════════════════════════════════════════════════
+        from app.services.bootstrap.steps.volumes import gen_volumes
+        return await gen_volumes(self, project, ctx)
 
     async def _gen_memory(self, project: Project, ctx: dict):
-        system = "你是小说设定记忆管理专家。只返回JSON数组。"
-        # 汇总所有已生成的结构化上下文，让记忆种子真正锚定设定细节
-        char_snapshot = "、".join(
-            f"{n}（{ctx.get('char_realms', {}).get(n, '未知境界')}）"
-            for n in ctx.get("char_names", [])[:6]
-        )
-        prompt = f"""小说：《{ctx['project_title']}》主角：{ctx.get('protagonist', '主角')}
-境界体系：{ctx.get('power_summary', '（未设定）')}
-故事线：{ctx.get('storyline_summary', '（未设定）')}
-主要人物：{char_snapshot or ctx.get('char_names', [])}
-卷级结构：{ctx.get('volumes_summary', '（未设定）')}
-设定摘要：{ctx['settings_summary'][:400]}
-
-生成10条初始记忆库种子，覆盖「境界锚点、人物初始状态、故事线起点、关键设定规则、核心伏笔」五类，
-作为后续写作的防矛盾基线，返回JSON数组：
-[
-  {{
-    "memory_type": "setting",
-    "title": "简短标题（10字内，精准可查）",
-    "content": "具体内容，可直接作为写作参考（不少于30字）",
-    "tags": ["分类标签"]
-  }}
-]
-memory_type 只能是: event / character_state / foreshadow / setting / conflict"""
-
-        raw = await self._call_with_retry(
-            system,
-            prompt,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.memory",
-        )
-        data = _parse_json(raw)
-        if not isinstance(data, list):
-            data = data.get("memory", [])
-
-        results = []
-        for item in data:
-            m = MemoryChunk(
-                project_id=project.id,
-                memory_type=item.get("memory_type", "setting"),
-                title=item.get("title"),
-                content=item.get("content", ""),
-                tags=item.get("tags", []),
-                chapter_number=0,  # 初始种子标记为第0章
-            )
-            self.db.add(m)
-            results.append(m)
-
-        self.db.commit()
-
-        # 触发 Bootstrap 记忆种子的向量化；冷启动后不再全为 NULL embedding。
-        # 失败时静默降级（pgvector 未装 / embedding 服务未就绪均不影响生成流程）。
-        try:
-            from app.services.embedding_service import embed_texts as _embed_texts
-            from app.models.memory import HAS_PGVECTOR
-            if HAS_PGVECTOR and results:
-                _texts = [(m, (m.title or "") + " " + (m.content or "")) for m in results]
-                _vectors = await _embed_texts([t for _, t in _texts])
-                for (m, _), vec in zip(_texts, _vectors):
-                    m.embedding = vec
-                self.db.commit()
-        except Exception as _exc:
-            logger.warning("Bootstrap memory embedding failed (non-fatal): %s", _exc)
-
-        return results
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 6 — 人物关系
-    # ══════════════════════════════════════════════════════════
+        from app.services.bootstrap.steps.memory import gen_memory
+        return await gen_memory(self, project, ctx)
 
     async def _gen_relations(self, project: Project, chars: list, ctx: dict):
-        if len(chars) < 2:
-            return []
-
-        # 只对 core / arc 层角色做全连接关系图；plot 档配角不参与，避免组合爆炸
-        core_names = set(ctx.get("core_char_names", [c.name for c in chars]))
-        relation_chars = [c for c in chars if c.name in core_names]
-        if len(relation_chars) < 2:
-            relation_chars = chars  # 兜底：若过滤后不足2人，仍用全部
-
-        name_map = {c.name: c for c in chars}  # 全量 map 供解析用
-        # 把欠债信息汇总给关系生成，让 AI 设计互相呼应的张力
-        debt_summary = "; ".join(
-            f"{c.name}→欠债:{c.extra.get('debt_to','')}(第{c.extra.get('detonation_vol',0)}卷引爆)"
-            for c in relation_chars
-            if c.extra and c.extra.get("debt_to", "").strip()
-        )
-        system = "你是人物关系设计专家。只返回JSON数组。"
-        prompt = f"""人物列表：{', '.join(c.name for c in relation_chars)}
-创意：{ctx['logline']}
-已知欠债关系（请让关系设计与欠债相互呼应）：{debt_summary or '（无）'}
-
-生成人物关系（覆盖所有核心人物，每对关系1条），返回JSON数组：
-[
-  {{
-    "from_name": "人物A", "to_name": "人物B",
-    "relation_type": "师徒",
-    "description": "关系现状描述（15字内）",
-    "intensity": 8,
-    "unresolved_tension": "这段关系中悬而未决的张力/恩怨/信息差（20字内；若纯粹积极关系，写潜在的分歧或考验）",
-    "trigger_event": "什么事件会让这段关系发生质变？（15字内，要具体）"
-  }}
-]
-intensity 为 1~10 的整数，只能使用上面列出的人物名。
-unresolved_tension 和 trigger_event 为必填，不能为空或敷衍。"""
-
-        try:
-            raw = await self._call_with_retry(
-                system,
-                prompt,
-                max_tokens=max_tokens_bootstrap_completion(),
-                task="bootstrap.relations",
-            )
-            data = _parse_json(raw)
-            if not isinstance(data, list):
-                data = data.get("relations", [])
-        except Exception:
-            return []
-
-        results = []
-        for item in data:
-            from_char = name_map.get(item.get("from_name", ""))
-            to_char = name_map.get(item.get("to_name", ""))
-            if not from_char or not to_char:
-                continue
-            # 将 unresolved_tension / trigger_event 拼入 evolution_note 持久化
-            tension = (item.get("unresolved_tension") or "").strip()
-            trigger = (item.get("trigger_event") or "").strip()
-            evolution_note_parts = []
-            if tension:
-                evolution_note_parts.append(f"[张力]{tension}")
-            if trigger:
-                evolution_note_parts.append(f"[引爆事件]{trigger}")
-            evolution_note = "；".join(evolution_note_parts) or None
-            rel = CharacterRelationship(
-                project_id=project.id,
-                from_character_id=from_char.id,
-                to_character_id=to_char.id,
-                relation_type=item.get("relation_type", "认识"),
-                description=item.get("description"),
-                intensity=int(item.get("intensity", 5)),
-                evolution_note=evolution_note,
-            )
-            self.db.add(rel)
-            results.append(rel)
-
-        self.db.commit()
-
-        # 关系张力摘要 → 供 Step 11.5 生成第一卷章级大纲时引用
-        ctx["relation_triggers"] = "; ".join(
-            f"{item.get('from_name','?')}↔{item.get('to_name','?')}[{item.get('trigger_event','')}]"
-            for item in data
-            if item.get("trigger_event", "").strip()
-        )
-
-        return results
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 11.5 — 第一卷章级大纲（OutlineNode chapter_plan）
-    # ══════════════════════════════════════════════════════════
-
-    async def _gen_vol1_chapter_plans(self, project: Project, volumes: list, ctx: dict) -> list:
-        """利用 Bootstrap 全量上下文为第一卷生成 chapter_plan 级 OutlineNode。
-
-        此步骤在 Step 11（人物关系）之后触发，可以使用全部已积累的：
-        人物档案、欠债引爆节点、关系触发事件、反派时间线、故事线、开局承诺、境界体系。
-
-        Args:
-            project: 当前项目。
-            volumes: Step 9 生成的卷级 OutlineNode 列表（取 sort_order=0 的第一卷）。
-            ctx: Bootstrap 上下文字典。
-
-        Returns:
-            生成的 OutlineNode（chapter_plan）列表；失败时返回空列表。
-        """
-        if not volumes:
-            return []
-
-        vol1 = next((v for v in volumes if v.sort_order == 0), volumes[0])
-        planned = (vol1.extra or {}).get("planned_chapters", 30)
-        if planned not in (30, 60):
-            planned = 30
-
-        system = "你是网络小说结构策划专家，擅长将宏观设定转化为可执行的章节级写作蓝图。只返回JSON数组。"
-
-        # ── 压缩上下文 ──────────────────────────────────────────
-        # 人物摘要：名字 + 层级 + 欠债引爆卷
-        char_lines = []
-        for name in ctx.get("char_names", []):
-            tier = "plot" if name not in ctx.get("core_char_names", []) else "core"
-            realm = ctx.get("char_realms", {}).get(name, "")
-            char_lines.append(f"{name}({tier},{realm})")
-        char_snapshot = "、".join(char_lines)
-
-        # 欠债引爆信息（核心驱动力）
-        debt_lines = []
-        for name in ctx.get("core_char_names", []):
-            pass  # debt is already in char_extra, summarised below via relation_triggers
-
-        # 故事线
-        storyline_summary = ctx.get("storyline_summary", "（未设定）")
-        # 关系触发事件
-        relation_triggers = ctx.get("relation_triggers", "（无）")
-        # 反派时间线
-        villain_timelines = ctx.get("villain_timelines", [])
-        villain_hint = "；".join(villain_timelines) if villain_timelines else "（无）"
-        # 开局承诺：优先从 ctx 读（Step 12 已将其写入 ctx['opening_contract']），
-        # 兜底再查 project.extra（单步重跑场景下可能没有 ctx）
-        opening_contract = ctx.get("opening_contract") or (project.extra or {}).get("opening_contract", {})
-        contract_hint = ""
-        if opening_contract:
-            contract_hint = (
-                f"\n【已有开局承诺（章级大纲必须兑现）】\n"
-                f"  第1章末钩子：{opening_contract.get('chapter1_hook','')}\n"
-                f"  第3章爽点：{opening_contract.get('chapter3_payoff','')}\n"
-                f"  第5章伏笔：{opening_contract.get('chapter5_foreshadow','')}\n"
-                f"  第10章订阅钩：{opening_contract.get('chapter10_subscribe_reason','')}\n"
-                f"  节奏规划：{opening_contract.get('chapter_rhythm','')}\n"
-            )
-
-        # plot NPC 简介
-        plot_npc_hint = ctx.get("plot_npc_summary", "")
-
-        # 定位爽点
-        positioning = ctx.get("positioning") or {}
-        tropes = "、".join(positioning.get("tropes", []))
-        pace_type = positioning.get("pace_type", "medium")
-
-        # 境界突破预算：第一卷内主角应完成几个境界
-        power_level_names = ctx.get("power_level_names", [])
-        power_hint = ""
-        if power_level_names:
-            power_hint = f"\n境界体系层级：{' → '.join(power_level_names[:6])}（如有更多则省略）"
-
-        # opening 期字数标准
-        words_per_chapter = 2200  # opening phase 标准字数
-
-        # ── 分批生成（60章拆两批）──────────────────────────────
-        all_results: list[OutlineNode] = []
-
-        batch_ranges = [(1, min(30, planned))]
-        if planned > 30:
-            batch_ranges.append((31, planned))
-
-        for batch_start, batch_end in batch_ranges:
-            batch_count = batch_end - batch_start + 1
-            prev_summary = ""
-            if all_results:
-                # 前一批末尾3章摘要作为续写上下文
-                prev_summary = "\n【前批末尾3章摘要（续写衔接用）】\n" + "\n".join(
-                    f"  第{n.sort_order + 1}章：{n.summary or ''}"
-                    for n in all_results[-3:]
-                )
-
-            prompt = f"""小说：《{ctx.get('project_title', '')}》  主角：{ctx.get('protagonist', '主角')}
-创意：{ctx.get('logline', '')}
-{vol1.title}（phase={vol1.phase}，共{planned}章）
-卷摘要：{vol1.summary or ''}  核心冲突：{vol1.conflict or ''}
-
-【人物阵容】{char_snapshot}
-【开局配角功能】{plot_npc_hint or '（无）'}
-【故事线】{storyline_summary}
-【关系触发事件（可在对应章节引爆）】{relation_triggers}
-【反派时间线】{villain_hint}
-【核心爽点类型】{tropes or '（未设定）'}  节奏类型：{pace_type}{power_hint}{contract_hint}{prev_summary}
-
-请为本卷第{batch_start}～{batch_end}章生成{batch_count}个章节计划，返回JSON数组：
-[
-  {{
-    "chapter_number": {batch_start},
-    "title": "第X章：章节标题（有画面感，≤12字）",
-    "opening_hook": "开篇钩子：前500字核心手段，如何让读者第一句就无法放下（≤30字）",
-    "core_event": "核心事件：本章存在的理由，具体到人物+行动+结果（≤60字）",
-    "character_change": "人物变化：谁的认知/处境/关系发生了不可逆变化（≤30字）",
-    "foreshadow": "伏笔管理：本章新埋的伏笔或回收的旧伏笔（格式：埋[xxx] 收[xxx]，无则填空字符串）",
-    "end_hook": "章末钩子：读完最后一句停不下来的原因，具体到手法（≤30字，不能只写「留下悬念」）",
-    "involved_characters": ["人物名1", "人物名2"],
-    "storyline_refs": ["故事线名称（从已有故事线中选）"],
-    "pacing": "fast/normal/slow/climax（章节节奏）",
-    "emotional_tone": "exciting/tense/sad/romantic/mysterious/funny/epic/calm",
-    "power_milestone": "若本章有境界突破/技能习得则描述，否则填空字符串",
-    "has_face_slap": false,
-    "has_emotional_beat": false,
-    "expected_words": {words_per_chapter}
-  }}
-]
-⚠️ 强制要求：
-1. involved_characters 只能使用上方已知人物名，不要发明新名字
-2. 每章 end_hook 必须具体（"主角沉思"/"悬念丛生"之类废话不合格）
-3. 第1章和第3章的 opening_hook / end_hook 必须对应 chapter1_hook / chapter3_payoff 的要求（若有）
-4. 若 planned=60，前30章节奏偏快（以爽点和信息密度驱动），后30章可有1-2章慢节奏铺垫
-5. opening phase 每3章内至少有1次有感知的主角胜利或资源获取
-6. storyline_refs 要交叉出现，不要只推进主线
-7. foreshadow 字段：本卷内至少有2条贯穿始终的伏笔线，首次埋入章写"埋[xxx]"，回收章写"收[xxx]"
-只返回JSON数组，不要解释。"""
-
-            try:
-                raw = await self._call_with_retry(
-                    system, prompt, task="bootstrap.vol1_chapters", max_tokens=4096
-                )
-                batch_data = _parse_json(raw)
-                if not isinstance(batch_data, list):
-                    batch_data = batch_data.get("chapters", [])
-            except Exception:
-                continue  # 本批失败不阻断整体
-
-            char_name_to_id = ctx.get("char_name_to_id", {})
-            storyline_ids_map = ctx.get("storyline_ids", {})
-
-            for item in batch_data:
-                ch_num = item.get("chapter_number", batch_start)
-                # involved_characters → UUID 列表
-                involved_ids = [
-                    char_name_to_id[n]
-                    for n in item.get("involved_characters", [])
-                    if n in char_name_to_id
-                ]
-                # storyline_refs → UUID 列表
-                sl_ids = [
-                    storyline_ids_map[n]
-                    for n in item.get("storyline_refs", [])
-                    if n in storyline_ids_map
-                ]
-                end_hook_val = (item.get("end_hook") or "").strip() or None
-                node = OutlineNode(
-                    project_id=project.id,
-                    parent_id=vol1.id,
-                    node_type="chapter_plan",
-                    title=normalize_chapter_plan_title(ch_num, item.get("title")),
-                    # 五要素字段对齐质检契约（_outline_node_plan_fields）：
-                    #   node.summary    ↔ core_event       核心事件
-                    #   node.conflict   ↔ character_change  人物变化
-                    #   node.hook       ↔ opening_hook      开篇钩子
-                    #   extra.foreshadow ↔ foreshadow       伏笔管理
-                    #   node.highlight / extra.end_hook ↔ end_hook  章末钩子
-                    summary=item.get("core_event") or item.get("summary"),
-                    conflict=item.get("character_change") or item.get("conflict"),
-                    hook=(item.get("opening_hook") or "").strip() or None,
-                    highlight=end_hook_val,
-                    phase=vol1.phase,
-                    pacing=item.get("pacing", "normal"),
-                    emotional_tone=item.get("emotional_tone"),
-                    power_milestone=item.get("power_milestone") or None,
-                    involved_character_ids=involved_ids,
-                    storyline_ids=sl_ids,
-                    expected_words=item.get("expected_words", words_per_chapter),
-                    sort_order=ch_num - 1,
-                    extra={
-                        "foreshadow": (item.get("foreshadow") or "").strip(),
-                        "end_hook": end_hook_val or "",
-                        "has_face_slap": item.get("has_face_slap", False),
-                        "has_emotional_beat": item.get("has_emotional_beat", False),
-                        "bootstrap_generated": True,
-                    },
-                )
-                self.db.add(node)
-                all_results.append(node)
-
-        if all_results:
-            self.db.commit()
-
-        ctx["vol1_chapter_count"] = len(all_results)
-        return all_results
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 13 — 第1章场景蓝图（Scene records）
-    # ══════════════════════════════════════════════════════════
-
-    async def _gen_ch1_scenes(
-        self, project: Project, vol1_plans: list, ctx: dict
-    ) -> list:
-        """为第1章生成 3-5 个 Scene（分场）蓝图，写入数据库。
-
-        依赖 vol1_plans[0]（第1章 chapter_plan OutlineNode）；
-        chapter_id=null，写章时再绑定；status="planned"，content=null。
-
-        Args:
-            project: 当前项目。
-            vol1_plans: Step 12.5 生成的第一卷 chapter_plan 节点列表。
-            ctx: Bootstrap 上下文字典。
-
-        Returns:
-            生成的 Scene 列表；失败时返回空列表。
-        """
-        if not vol1_plans:
-            return []
-
-        ch1_node = vol1_plans[0]  # 第1章 OutlineNode（sort_order=0）
-
-        system = "你是网络小说分场设计专家。只返回JSON数组。"
-
-        # 读取第1章节点信息
-        ch1_summary = ch1_node.summary or ""
-        ch1_conflict = ch1_node.conflict or ""
-        ch1_hook = ch1_node.hook or ""
-
-        # 开局承诺对第1章的要求
-        opening_contract = ctx.get("opening_contract") or {}
-        first_200 = opening_contract.get("first_200_words_test", "")
-        ch1_hook_req = opening_contract.get("chapter1_hook", "")
-
-        # 主角与世界设定锚点（供场景选择地点和感官焦点）
-        protagonist = ctx.get("protagonist", "主角")
-        world_hint = ctx.get("world_overview", "")[:200]
-        power_hint = ctx.get("power_summary", "")[:100]
-        positioning = ctx.get("positioning") or {}
-        pace_type = positioning.get("pace_type", "medium")
-
-        # opening phase 字数：第1章约 2200 字，3-4 场每场约 500-700 字
-        words_per_scene = 550
-
-        prompt = f"""小说：《{ctx.get('project_title', '')}》  主角：{protagonist}
-创意：{ctx.get('logline', '')}
-世界背景（供选择地点）：{world_hint}
-境界提示：{power_hint}
-
-【第1章节点信息】
-摘要：{ch1_summary}
-核心冲突：{ch1_conflict}
-章末钩子：{ch1_hook}
-
-【开局承诺对第1章的要求】
-前200字必须完成：{first_200 or '（未设定）'}
-章末必须埋下的钩子：{ch1_hook_req or '（未设定）'}
-节奏类型：{pace_type}
-
-请为第1章设计 3-5 个分场（Scene），返回JSON数组：
-[
-  {{
-    "order": 1,
-    "title": "场标题（可选，≤10字）",
-    "time": "故事内时间（如"第1日·晨"）",
-    "location_name": "具体地点（结合世界背景，≤15字）",
-    "pov_character": "视点人物名（通常是主角）",
-    "characters_on_stage": ["在场人物名1", "在场人物名2"],
-    "goal": "本场角色想达成的目标（≤20字）",
-    "conflict": "阻碍目标实现的障碍或对立（≤20字）",
-    "turn": "本场发生的关键转变（≤20字）",
-    "hook": "场末留下的疑问或紧张（≤15字，最后一场写章末大钩）",
-    "hook_strength": 4,
-    "word_budget": {words_per_scene},
-    "pacing": "fast/mid/slow",
-    "sensory_focus": "sight/sound/smell/taste/touch/mixed"
-  }}
-]
-⚠️ 要求：
-1. 第1场必须在前100字内建立主角处境的压力或不公（不要废话开场）
-2. 至少有1场包含主角的主动行动（不能全是被动被安排）
-3. 最后一场的 hook 必须对应上方「章末必须埋下的钩子」要求
-4. pov_character 和 characters_on_stage 中只能用上方已知的人物名
-5. 各场字数预算之和约为 2000-2400 字（opening 期标准）
-只返回JSON数组，不要解释。"""
-
-        try:
-            raw = await self._call_with_retry(
-                system,
-                prompt,
-                max_tokens=max_tokens_bootstrap_completion(),
-                task="bootstrap.ch1_scenes",
-            )
-            data = _parse_json(raw)
-            if not isinstance(data, list):
-                data = data.get("scenes", [])
-        except Exception:
-            return []
-
-        char_name_to_id = ctx.get("char_name_to_id", {})
-        results: list = []
-
-        for item in data:
-            pov_name = item.get("pov_character", protagonist)
-            pov_id = char_name_to_id.get(pov_name)
-
-            on_stage_ids = [
-                char_name_to_id[n]
-                for n in item.get("characters_on_stage", [])
-                if n in char_name_to_id
-            ]
-
-            scene = Scene(
-                project_id=project.id,
-                chapter_id=None,          # 章节未写，待写章时绑定
-                outline_node_id=ch1_node.id,
-                order=item.get("order", len(results) + 1),
-                title=item.get("title") or None,
-                time=item.get("time") or None,
-                location_name=item.get("location_name") or None,
-                pov_character_id=pov_id,
-                characters_on_stage=on_stage_ids,
-                goal=item.get("goal"),
-                conflict=item.get("conflict"),
-                turn=item.get("turn"),
-                hook=item.get("hook"),
-                hook_strength=int(item.get("hook_strength", 3)),
-                word_budget=int(item.get("word_budget", words_per_scene)),
-                pacing=item.get("pacing", "mid"),
-                sensory_focus=item.get("sensory_focus", "mixed"),
-                status="planned",
-                content=None,
-                extra={"bootstrap_generated": True},
-            )
-            self.db.add(scene)
-            results.append(scene)
-
-        if results:
-            self.db.commit()
-
-        return results
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 14 — 全局一致性扫描
-    # ══════════════════════════════════════════════════════════
-
-    async def _gen_consistency_scan(self, project, ctx: dict) -> list:
-        """Bootstrap 全部步骤完成后，对所有生成物做一次交叉核验。
-
-        检查常见矛盾：境界数字一致性、人物 faction 与势力档案对齐、
-        主角掌握技能是否满足境界要求、故事线与卷骨架是否呼应等。
-        结果写入 Project.extra.consistency_issues，供前端展示"X处需确认项"。
-
-        Returns:
-            list[dict]：每条 issue 含 severity / type / description / suggestion。
-        """
-        system = (
-            "你是有30年经验的网络小说总编辑，专门做稿件前置审核。"
-            "只返回 JSON 数组，不要任何解释文字。"
-        )
-
-        # 汇总关键字段摘要（压缩到能交叉对比的程度）
-        power_summary = ctx.get("power_summary", "（未设定）")
-        faction_summary = ctx.get("faction_summary", "（未设定）")
-        char_realms = ctx.get("char_realms", {})
-        char_names = ctx.get("char_names", [])
-        skill_names = ctx.get("skill_names", [])
-        item_names = ctx.get("item_names", [])
-        storyline_summary = ctx.get("storyline_summary", "（未设定）")
-        volumes_summary = ctx.get("volumes_summary", "（未设定）")
-        protagonist = ctx.get("protagonist", "主角")
-
-        char_realm_lines = "\n".join(
-            f"- {name}：境界={realm}" for name, realm in char_realms.items()
-        )
-
-        prompt = f"""小说：《{ctx.get('project_title', '未命名')}》（{ctx.get('genre', '')}）
-
-【境界体系】
-{power_summary}
-
-【势力档案摘要】
-{faction_summary}
-
-【人物+当前境界】
-{char_realm_lines or '（未设定）'}
-
-【人物列表】{', '.join(char_names)}
-主角：{protagonist}
-主角起点境界（power_systems 中 protagonist_start_rank 对应名称）：{ctx.get('power_level_names', ['（未知）'])[0] if ctx.get('power_level_names') else '（未知）'}
-
-【已生成技能】{', '.join(skill_names) or '（无）'}
-【已生成道具】{', '.join(item_names) or '（无）'}
-
-【故事线】
-{storyline_summary}
-
-【卷级骨架】
-{volumes_summary}
-
-请对以上信息做「交叉核验」，找出所有显著矛盾或风险项，返回JSON数组：
-[
-  {{
-    "severity": "high/medium/low",
-    "type": "realm_mismatch/faction_mismatch/skill_requirement/storyline_gap/timeline_conflict/other",
-    "description": "具体矛盾描述，举例说明哪里和哪里不一致（30字内）",
-    "suggestion": "最简单的修复建议（20字内）"
-  }}
-]
-
-检查重点：
-1. 人物卡中 current_realm 是否在境界体系 levels 的合法名称里？
-2. 主角和重要人物的 faction 是否与势力档案中的势力名吻合（允许模糊匹配）？
-3. 故事线类型（main/sub/romance等）与卷骨架描述的冲突走向是否吻合？
-4. 若有多条故事线，是否都能在卷骨架中找到对应的推进节点？
-5. 境界体系 protagonist_start_rank 与主角人物卡 current_realm 是否对应同一境界？
-如果没有发现矛盾，返回空数组 []。只返回JSON数组，不要任何解释。"""
-
-        try:
-            raw = await self._call_with_retry(
-                system, prompt, max_tokens=2048, task="bootstrap.consistency_scan"
-            )
-            issues = _parse_json(raw)
-            if not isinstance(issues, list):
-                issues = []
-        except Exception:
-            issues = []
-
-        # 写入 Project.extra
-        try:
-            extra = project.extra or {}
-            extra["consistency_issues"] = issues
-            project.extra = extra
-            self.db.commit()
-        except Exception:
-            pass
-
-        return issues
-
-    # ══════════════════════════════════════════════════════════
-    #  Step 12 — 开局前十章追读承诺清单
-    # ══════════════════════════════════════════════════════════
-
-    async def _gen_opening_contract(self, project, ctx: dict) -> dict:
-        """生成开局前十章的「追读承诺清单」。
-
-        网文能否存活，开局前十章决定 70%。本步骤从全部已生成设定中
-        提炼「每章必须兑现的追读钩子」，写入 Project.extra.opening_contract。
-
-        Returns:
-            dict：包含 chapter1_hook / chapter3_payoff / chapter5_foreshadow /
-                  chapter10_subscribe_reason / first_200_words_test 等字段。
-        """
-        system = (
-            "你是有30年经验的网络小说总编辑，专门做开局追读策划。"
-            "只返回 JSON，不要任何解释文字。"
-        )
-
-        positioning = ctx.get("positioning") or {}
-        tropes = positioning.get("tropes", [])
-        pace_type = positioning.get("pace_type", "medium")
-        target_audience = positioning.get("target_audience", "")
-
-        prompt = f"""小说：《{ctx.get('project_title', '未命名')}》（{ctx.get('genre', '')}）
-主角：{ctx.get('protagonist', '主角')}  起点境界：{ctx.get('power_level_names', ['（未知）'])[0] if ctx.get('power_level_names') else '（未知）'}
-创意：{ctx.get('logline', '')}
-核心爽点：{', '.join(tropes) or '（未设定）'}
-节奏类型：{pace_type}
-目标读者：{target_audience or '（未设定）'}
-世界观：{ctx.get('world_overview', '')[:200]}
-卷一概述：{(ctx.get('volumes_summary') or '').split('|')[0][:100]}
-
-请为本书开局前10章制定「追读承诺清单」，这是编辑决定是否签约的核心审核项。
-返回JSON：
-{{
-  "first_200_words_test": "第一章前200字必须完成的3件事：1) xxx 2) xxx 3) xxx（具体到场景/信息/情绪，不要废话）",
-  "chapter1_hook": "第1章末尾钩子：读者读完第1章后必须知道答案才肯继续的那个问题（一句话）",
-  "chapter3_payoff": "第3章小爽点：主角在前3章内必须获得的第一次具体反转/胜利/资源（要具体，不要'小小展示实力'这种废话）",
-  "chapter5_foreshadow": "第5章必须埋下的长线伏笔：能支撑读者追到第30章的那个谜（一句话，具体到人物或秘密）",
-  "chapter10_subscribe_reason": "第10章末尾：读者为什么要付费订阅第11章？给出一个让人无法放下的悬念设计（具体手法：强敌登场/秘密揭示/关系逆转/etc）",
-  "opening_traps_to_avoid": ["开局必须避免的3个常见坑（针对本书题材和爽点类型的具体风险）"],
-  "chapter_rhythm": "前10章节奏设计：哪章快哪章慢，何时第一次打脸，何时第一次建立情感连接（50字内）"
-}}
-要求：每个字段必须结合本书具体设定给出，禁止使用通用模板语言。"""
-
-        try:
-            raw = await self._call_with_retry(
-                system, prompt, max_tokens=2048, task="bootstrap.opening_contract"
-            )
-            contract = _parse_json(raw)
-            if not isinstance(contract, dict):
-                contract = {}
-        except Exception:
-            contract = {}
-
-        # 写入 Project.extra（兼容保留，原有读取路径不受影响）
-        try:
-            extra = project.extra or {}
-            extra["opening_contract"] = contract
-            project.extra = extra
-            self.db.commit()
-        except Exception:
-            pass
-
-        # 同时写入 ctx，供 Step 12.5（_gen_vol1_chapter_plans）直接读取，
-        # 无需再从 project.extra 回查——避免首次运行时时序错位导致联动为空
-        ctx["opening_contract"] = contract
-
-        # ── 里程碑字段映射 → ReaderPromise 表 ──────────────────────
-        # 将结构化里程碑字段逐条写入 ReaderPromise，供写章 prompt 按章号查询注入，
-        # 避免每次都解析 JSON 字段；保留 extra.opening_contract 作为只读原始存档。
-        #
-        # 映射规则：
-        #   chapter1_hook          → source_ch=1,  window=2,  type=chapter_ending   (引导到第3章)
-        #   chapter3_payoff        → source_ch=0,  window=3,  type=protagonist_claim (前3章内兑现)
-        #   chapter5_foreshadow    → source_ch=5,  window=25, type=chapter_ending   (追到第30章)
-        #   chapter10_subscribe    → source_ch=10, window=1,  type=chapter_ending   (钩到第11章)
-        #   first_200_words_test   → source_ch=1,  window=0,  type=name_implication (写作指引)
-        if contract:
-            milestone_map = [
-                {
-                    "key": "chapter1_hook",
-                    "promise_type": "chapter_ending",
-                    "source_chapter_number": 1,
-                    "expected_chapter_window": 2,
-                    "priority": 5,
-                    "audience_aware": 4,
-                },
-                {
-                    "key": "chapter3_payoff",
-                    "promise_type": "protagonist_claim",
-                    "source_chapter_number": 0,
-                    "expected_chapter_window": 3,
-                    "priority": 4,
-                    "audience_aware": 3,
-                },
-                {
-                    "key": "chapter5_foreshadow",
-                    "promise_type": "chapter_ending",
-                    "source_chapter_number": 5,
-                    "expected_chapter_window": 25,
-                    "priority": 3,
-                    "audience_aware": 2,
-                },
-                {
-                    "key": "chapter10_subscribe_reason",
-                    "promise_type": "chapter_ending",
-                    "source_chapter_number": 10,
-                    "expected_chapter_window": 1,
-                    "priority": 5,
-                    "audience_aware": 5,
-                },
-                {
-                    "key": "first_200_words_test",
-                    "promise_type": "name_implication",
-                    "source_chapter_number": 1,
-                    "expected_chapter_window": 0,
-                    "priority": 2,
-                    "audience_aware": 1,
-                },
-            ]
-            try:
-                for m in milestone_map:
-                    text = contract.get(m["key"])
-                    if not text:
-                        continue
-                    # opening_traps_to_avoid 是数组，跳过（不适合单条 promise）
-                    if isinstance(text, list):
-                        text = "；".join(str(t) for t in text if t)
-                    if not text.strip():
-                        continue
-                    rp = ReaderPromise(
-                        project_id=project.id,
-                        promise_text=str(text).strip(),
-                        promise_type=m["promise_type"],
-                        source_chapter_number=m["source_chapter_number"],
-                        expected_chapter_window=m["expected_chapter_window"],
-                        priority=m["priority"],
-                        audience_aware=m["audience_aware"],
-                        status="open",
-                        extra={"origin": "bootstrap_opening_contract", "contract_key": m["key"]},
-                    )
-                    self.db.add(rp)
-                self.db.commit()
-            except Exception:
-                pass  # ReaderPromise 写入失败不阻断主流程
-
-        return contract
-
-    # ══════════════════════════════════════════════════════════
-    #  单次全量保存（方案B）
-    # ══════════════════════════════════════════════════════════
-
-    async def _save_all(self, data: dict, logline: str, premise: str = "", target_words: int = 1_200_000) -> Project:
-        """把方案B生成的完整 JSON 一次性存库"""
-        p = data["project"]
-        project_kwargs = dict(
-            title=p["title"],
-            genre=p.get("genre", "玄幻"),
-            logline=logline,
-            premise=p.get("premise") or premise or "",
-            world_overview=p.get("world_overview", ""),
-            story_core=p.get("story_core", {}),
-            target_words=target_words,
-        )
-        # 多用户隔离：与 _gen_project 路径保持一致，单次全量也绑定用户
-        if self.user_id is not None:
-            project_kwargs["user_id"] = self.user_id
-        project = Project(**project_kwargs)
-        self.db.add(project)
-        self.db.flush()
-
-        # 境界体系
-        for i, ps in enumerate(data.get("power_systems", [])):
-            levels = ps.get("levels", [])
-            start_raw = ps.get("protagonist_start_rank")
-            if start_raw is None:
-                start_raw = ps.get("protagonist_current_rank")
-            end_raw = ps.get("protagonist_end_rank")
-            self.db.add(PowerSystem(
-                project_id=project.id,
-                name=ps.get("name", "修炼体系"),
-                system_type=ps.get("system_type", "cultivation"),
-                description=ps.get("description"),
-                cultivation_method=ps.get("cultivation_method"),
-                breakthrough_condition=ps.get("breakthrough_condition"),
-                special_rules=ps.get("special_rules"),
-                levels=levels,
-                protagonist_current_rank=_coerce_power_system_rank(start_raw, levels, 1),
-                protagonist_end_rank=_coerce_power_system_rank(end_raw, levels, None),
-                sort_order=i,
-            ))
-
-        # ── 预分配人物 UUID（供后续技能/道具外键关联使用）──────────────────────
-        # single_shot 中人物在技能/道具之后入库，需要提前分配 ID 以建立外键。
-        # Character 创建时复用此处的预分配 ID，保持一致性。
-        _ss_name_to_uuid: dict[str, str] = {}
-        for c in data.get("characters", []):
-            cname = c.get("name", "")
-            if cname:
-                _ss_name_to_uuid[cname] = str(_uuid_module.uuid4())
-
-        # 势力
-        for i, f in enumerate(data.get("factions", [])):
-            self.db.add(Faction(
-                project_id=project.id,
-                name=f.get("name", f"势力{i+1}"),
-                faction_type=f.get("faction_type", "sect"),
-                alignment=f.get("alignment", "neutral"),
-                description=f.get("description"),
-                territory=f.get("territory"),
-                strength_level=f.get("strength_level"),
-                member_count=f.get("member_count"),
-                top_power=f.get("top_power"),
-                goals=f.get("goals"),
-                resources=f.get("resources"),
-                history=f.get("history"),
-                secrets=f.get("secrets"),
-                rivals=f.get("rivals", []),
-                allies=f.get("allies", []),
-                attitude_to_protagonist=f.get("attitude_to_protagonist", "neutral"),
-                sort_order=i,
-                extra={"active_period": f.get("active_period", "")},
-            ))
-
-        # 故事线
-        for i, sl in enumerate(data.get("storylines", [])):
-            self.db.add(StoryLine(
-                project_id=project.id,
-                name=sl.get("name", f"故事线{i+1}"),
-                line_type=sl.get("line_type", "sub"),
-                description=sl.get("description"),
-                core_conflict=sl.get("core_conflict"),
-                resolution_direction=sl.get("resolution_direction"),
-                status=sl.get("status", "planned"),
-                start_chapter=_safe_int(sl.get("start_chapter"), None),
-                sort_order=i,
-            ))
-
-        # 技能（single_shot）：使用预分配 UUID 映射校验 mastered_by
-        for i, sk in enumerate(data.get("skills", [])):
-            raw_ids = sk.get("mastered_by_character_ids") or sk.get("mastered_by", [])
-            mastered_ids: list[str] = []
-            for val in raw_ids:
-                if not isinstance(val, str):
-                    continue
-                try:
-                    _uuid_module.UUID(val)
-                    mastered_ids.append(val)
-                except ValueError:
-                    mapped = _ss_name_to_uuid.get(val)
-                    if mapped:
-                        logger.warning(
-                            "[single_shot] Skill '%s' mastered_by: AI 输出名字 '%s'，已映射到预分配 UUID %s",
-                            sk.get("name", "?"), val, mapped,
-                        )
-                        mastered_ids.append(mapped)
-                    else:
-                        logger.warning(
-                            "[single_shot] Skill '%s' mastered_by: '%s' 不在人物列表，已丢弃",
-                            sk.get("name", "?"), val,
-                        )
-            self.db.add(Skill(
-                project_id=project.id,
-                name=sk.get("name", f"功法{i+1}"),
-                skill_type=sk.get("skill_type", "combat"),
-                grade=sk.get("grade", "earth"),
-                source=sk.get("source"),
-                level_required=sk.get("level_required"),
-                description=sk.get("description"),
-                effects=sk.get("effects"),
-                limitations=sk.get("limitations"),
-                mastered_by_character_ids=mastered_ids,
-                sort_order=i,
-            ))
-
-        # 道具（single_shot）：使用预分配 UUID 映射校验 current_owner
-        for i, it in enumerate(data.get("items", [])):
-            owner_uuid_str: str | None = None
-            owner_id = it.get("current_owner_id")
-            if owner_id and isinstance(owner_id, str):
-                try:
-                    _uuid_module.UUID(owner_id)
-                    owner_uuid_str = owner_id
-                except ValueError:
-                    logger.warning(
-                        "[single_shot] Item '%s' current_owner_id: '%s' 不是有效 UUID，尝试名字映射",
-                        it.get("name", "?"), owner_id,
-                    )
-            if owner_uuid_str is None:
-                owner_name = it.get("current_owner_name") or it.get("current_owner", "") or ""
-                if owner_name:
-                    mapped = _ss_name_to_uuid.get(owner_name)
-                    if mapped:
-                        logger.warning(
-                            "[single_shot] Item '%s' current_owner: 已通过名字 '%s' 映射到预分配 UUID %s",
-                            it.get("name", "?"), owner_name, mapped,
-                        )
-                        owner_uuid_str = mapped
-                    else:
-                        logger.warning(
-                            "[single_shot] Item '%s' current_owner: '%s' 不在人物列表，owner_id 置空",
-                            it.get("name", "?"), owner_name,
-                        )
-            self.db.add(Item(
-                project_id=project.id,
-                name=it.get("name", f"道具{i+1}"),
-                item_type=it.get("item_type", "artifact"),
-                rarity=it.get("rarity", "rare"),
-                description=it.get("description"),
-                origin=it.get("origin"),
-                effects=it.get("effects"),
-                limitations=it.get("limitations"),
-                story_significance=it.get("story_significance"),
-                status=it.get("status", "intact"),
-                current_owner_id=UUID(owner_uuid_str) if owner_uuid_str else None,
-                sort_order=i,
-            ))
-
-        # 世界观设定卡（纯叙事类）
-        for s in data.get("settings", []):
-            self.db.add(WorldSetting(
-                project_id=project.id,
-                title=s.get("title", "设定"),
-                content=s.get("content", ""),
-                tags=s.get("tags", []),
-                extra=_setting_extra_with_defaults(s),
-            ))
-
-        _VALID_TIERS = {"core", "arc", "plot", "background"}
-        char_map = {}
-        for c in data.get("characters", []):
-            _tier = c.get("character_tier", "core")
-            if _tier not in _VALID_TIERS:
-                _tier = "core"
-            # 复用预分配 UUID，确保与技能/道具外键一致
-            _preassigned_id = _ss_name_to_uuid.get(c.get("name", ""))
-            char = Character(
-                id=UUID(_preassigned_id) if _preassigned_id else _uuid_module.uuid4(),
-                project_id=project.id,
-                name=c.get("name", "未命名"),
-                role=c.get("role", "supporting"),
-                character_tier=_tier,
-                gender=c.get("gender"),
-                age=c.get("age"),
-                faction=c.get("faction"),
-                personality=c.get("personality"),
-                background=c.get("background"),
-                motivation=c.get("motivation"),
-                arc=c.get("arc"),
-                current_realm=c.get("current_realm"),
-                speech_style=c.get("speech_style"),
-                values=c.get("values"),
-                fear=c.get("fear"),
-                secrets=c.get("secrets"),
-                strengths=c.get("strengths", []),
-                weaknesses=c.get("weaknesses", []),
-                special_traits=c.get("special_traits", []),
-            )
-            self.db.add(char)
-            self.db.flush()
-            char_map[char.name] = char
-
-        def save_node(item, idx=0):
-            # bootstrap 阶段只保存卷级节点，忽略 children
-            planned = _safe_int(item.get("planned_chapters"), 60)
-            if planned not in (30, 60):
-                planned = 60
-            node = OutlineNode(
-                project_id=project.id,
-                parent_id=None,
-                node_type="volume",
-                title=item.get("title", f"第{idx+1}卷"),
-                summary=item.get("summary"),
-                hook=item.get("hook"),
-                conflict=item.get("conflict"),
-                sort_order=_safe_int(item.get("sort_order"), idx),
-                extra={"planned_chapters": planned},
-            )
-            self.db.add(node)
-            self.db.flush()
-
-        outline_data = data.get("outline", data.get("volumes", []))
-        for idx, vol in enumerate(outline_data):
-            save_node(vol, idx=idx)
-
-        _ss_mem_chunks: list = []  # 收集用于后续向量化
-        for m in data.get("memory", []):
-            chunk = MemoryChunk(
-                project_id=project.id,
-                memory_type=m.get("memory_type", "setting"),
-                title=m.get("title"),
-                content=m.get("content", ""),
-                tags=m.get("tags", []),
-                chapter_number=0,
-            )
-            self.db.add(chunk)
-            _ss_mem_chunks.append(chunk)
-
-        for r in data.get("relations", []):
-            fc = char_map.get(r.get("from_name", ""))
-            tc = char_map.get(r.get("to_name", ""))
-            if fc and tc:
-                self.db.add(CharacterRelationship(
-                    project_id=project.id,
-                    from_character_id=fc.id,
-                    to_character_id=tc.id,
-                    relation_type=r.get("relation_type", "认识"),
-                    description=r.get("description"),
-                    intensity=_safe_int(r.get("intensity"), 5, min_v=1, max_v=10) or 5,
-                ))
-
-        self.db.commit()
-        self.db.refresh(project)
-
-        # 触发 single_shot 路径的记忆种子向量化（与 sequential _gen_memory 对称）
-        try:
-            from app.services.embedding_service import embed_texts as _embed_texts
-            from app.models.memory import HAS_PGVECTOR
-            if HAS_PGVECTOR and _ss_mem_chunks:
-                _ss_texts = [(m, (m.title or "") + " " + (m.content or "")) for m in _ss_mem_chunks]
-                _ss_vectors = await _embed_texts([t for _, t in _ss_texts])
-                for (m, _), vec in zip(_ss_texts, _ss_vectors):
-                    m.embedding = vec
-                self.db.commit()
-        except Exception as _exc:
-            logger.warning("Single-shot memory embedding failed (non-fatal): %s", _exc)
-        return project
-
-    async def _complete_single_shot_data(self, data: dict, logline: str, premise: str = "") -> dict:
-        """Gemini 单次生成如果少给关键数组，保存前按同一规格补齐。"""
-        if not isinstance(data, dict):
-            return data
-
-        data.setdefault("settings", [])
-        data.setdefault("characters", [])
-        data["settings"] = await self._complete_missing_settings(data, logline, premise)
-        data["characters"] = await self._complete_missing_characters(data, logline, premise)
-        return data
-
-    async def _complete_missing_settings(self, data: dict, logline: str, premise: str = "") -> list:
-        existing = data.get("settings") or []
-        existing_titles = {
-            item.get("title")
-            for item in existing
-            if isinstance(item, dict) and item.get("title")
-        }
-        missing_blueprints = [
-            bp for bp in GEMINI_SETTING_BLUEPRINTS
-            if bp["title"] not in existing_titles
-        ]
-        if not missing_blueprints:
-            return existing
-
-        system = "你是网络小说世界观设计专家。只返回JSON数组。"
-        prompt = f"""补齐缺失的世界设定卡。
-
-创意：{logline}
-立意与类型：{premise[:2000] or data.get('project', {}).get('premise', '')[:2000]}
-项目基础：{json.dumps(data.get('project', {}), ensure_ascii=False)[:4000]}
-已有设定标题：{json.dumps(sorted(existing_titles), ensure_ascii=False)}
-
-只生成以下缺失蓝图对应的设定卡：
-{json.dumps(missing_blueprints, ensure_ascii=False, indent=2)}
-
-返回JSON数组。每张卡字段：
-title, content, tags, extra。
-要求：
-1) title/category/tags/importance/stage 必须与蓝图一致，写入 extra。
-2) "作品立意" 必须填写 extra.core 全字段。
-3) 其他卡必须填写 extra.focus 全字段：summary, story_function, conflict_seed, cost_or_risk, affected_people, exception_or_loophole, visual_anchor。
-4) content 至少180字，要有名词、地点、制度、代价、例外或冲突。
-只返回JSON数组，不要解释。"""
-        raw = await self.ai._call_ai(
-            system,
-            prompt,
-            max_tokens=settings.GEMINI_SETTING_COMPLETION_MAX_TOKENS,
-            context={"operation": "bootstrap_complete_settings"},
-        )
-        parsed = _parse_json(raw)
-        if not isinstance(parsed, list):
-            parsed = parsed.get("settings", [])
-        completed = [
-            item for item in parsed
-            if isinstance(item, dict) and item.get("title") not in existing_titles
-        ]
-        return [*existing, *completed]
-
-    async def _complete_missing_characters(self, data: dict, logline: str, premise: str = "") -> list:
-        existing = data.get("characters") or []
-        existing_names = {
-            item.get("name")
-            for item in existing
-            if isinstance(item, dict) and item.get("name")
-        }
-        missing_count = max(0, CHARACTER_TARGET - len(existing))
-        if missing_count <= 0:
-            return existing
-
-        system = "你是网络小说人物设计专家。只返回JSON数组。"
-        prompt = f"""补齐缺失的人物档案。
-
-创意：{logline}
-立意与类型：{premise[:1600] or data.get('project', {}).get('premise', '')[:1600]}
-项目基础：{json.dumps(data.get('project', {}), ensure_ascii=False)[:3000]}
-已有人物：{json.dumps(existing, ensure_ascii=False)[:6000]}
-已有人物名禁止重复：{json.dumps(sorted(existing_names), ensure_ascii=False)}
-
-还需要生成 {missing_count} 个人物，使总人物数达到 {CHARACTER_TARGET} 个。
-总阵容目标：1 主角、3 核心配角、2 反派、2 师长/势力角色。
-
-返回JSON数组。每个人物字段：
-name, role, gender, age, faction, personality, background, motivation, arc, current_realm,
-speech_style, values, fear, secrets, strengths, weaknesses, special_traits。
-role 只能是 protagonist / supporting / antagonist。
-只返回JSON数组，不要解释。"""
-        raw = await self.ai._call_ai(
-            system,
-            prompt,
-            max_tokens=settings.BOOTSTRAP_COMPLETION_MAX_TOKENS,
-            context={"operation": "bootstrap_complete_characters"},
-        )
-        parsed = _parse_json(raw)
-        if not isinstance(parsed, list):
-            parsed = parsed.get("characters", [])
-        completed = []
-        for item in parsed:
-            if not isinstance(item, dict):
-                continue
-            name = item.get("name")
-            if not name or name in existing_names:
-                continue
-            completed.append(item)
-            existing_names.add(name)
-            if len(existing) + len(completed) >= CHARACTER_TARGET:
-                break
-        return [*existing, *completed]
-
-    # ══════════════════════════════════════════════════════════
-    #  带重试的 AI 调用
-    # ══════════════════════════════════════════════════════════
+        from app.services.bootstrap.steps.relations import gen_relations
+        return await gen_relations(self, project, chars, ctx)
+
+    async def _gen_opening_contract(self, project: Project, ctx: dict):
+        from app.services.bootstrap.steps.opening_contract import gen_opening_contract
+        return await gen_opening_contract(self, project, ctx)
+
+    async def _gen_vol1_chapter_plans(self, project: Project, volumes: list, ctx: dict):
+        from app.services.bootstrap.steps.vol1_chapter_plans import gen_vol1_chapter_plans
+        return await gen_vol1_chapter_plans(self, project, volumes, ctx)
+
+    async def _gen_ch1_scenes(self, project: Project, vol1_plans: list, ctx: dict):
+        from app.services.bootstrap.steps.ch1_scenes import gen_ch1_scenes
+        return await gen_ch1_scenes(self, project, vol1_plans, ctx)
+
+    async def _gen_consistency_scan(self, project: Project, ctx: dict):
+        from app.services.bootstrap.steps.consistency_scan import gen_consistency_scan
+        return await gen_consistency_scan(self, project, ctx)
 
     async def _call_with_retry(
         self,
@@ -2872,30 +486,9 @@ role 只能是 protagonist / supporting / antagonist。
         *,
         task: Optional[str] = None,
     ) -> str:
-        """调用 AI，失败时最多重试 max_retries 次。
-
-        Args:
-            task: 任务名，传给 ``ai._call_ai`` 让其按任务级采样配置发起调用；
-                未传入时使用网关默认采样（与历史行为一致）。
-        """
-        last_err = None
-        # 外层重试只做 1 次补偿（内层 _call_ai 已有自己的 3 次重试+退避）。
-        # 避免两层重试叠加（最坏 2×3×read_timeout = 90min）；两次之间加退避避免立刻打爆网关。
-        outer_delays = (3.0,)  # 1 次重试，间隔 3 秒
-        for attempt in range(len(outer_delays) + 1):
-            try:
-                return await self.ai._call_ai(
-                    system,
-                    prompt,
-                    max_tokens=max_tokens,
-                    task=task,
-                )
-            except Exception as e:
-                last_err = e
-                if attempt < len(outer_delays):
-                    await asyncio.sleep(outer_delays[attempt])
-                continue
-        raise last_err
+        """调用 AI，外层失败时做一次补偿重试（详见 ``bootstrap.retry``）。"""
+        from app.services.bootstrap.retry import call_with_retry
+        return await call_with_retry(self.ai, system, prompt, max_tokens=max_tokens, task=task)
 
 
 def __getattr__(name: str):

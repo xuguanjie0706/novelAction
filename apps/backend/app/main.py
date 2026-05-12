@@ -63,6 +63,7 @@ from app.routers import cover as cover_router
 from app.routers import auth as auth_router
 from app.routers import admin_auth as admin_auth_router
 from app.routers import dashboard as dashboard_router
+from app.routers import bootstrap_graph as bootstrap_graph_router
 from app.services.llm_config import seed_llm_from_env_if_empty
 from app.services.cover_storage import ensure_cover_storage_dir, resolved_cover_storage_dir
 
@@ -436,6 +437,27 @@ def _ensure_cover_image_call_logs_columns() -> None:
         )
 
 
+def _ensure_bootstrap_runs_table() -> None:
+    """为旧库补齐 bootstrap_runs 表（Base.metadata.create_all 对已存在表无害，此处是安全兜底）。"""
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS bootstrap_runs (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
+                project_id  UUID REFERENCES projects(id) ON DELETE SET NULL,
+                status      VARCHAR(30) NOT NULL DEFAULT 'pending',
+                error_message TEXT,
+                logline     TEXT NOT NULL,
+                mode        VARCHAR(20) NOT NULL DEFAULT 'sequential',
+                model_profile VARCHAR(20) NOT NULL DEFAULT 'gemini',
+                gate_data   JSON,
+                events      JSON NOT NULL DEFAULT '[]',
+                created_at  TIMESTAMPTZ DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ DEFAULT NOW()
+            )
+        """))
+
+
 # 自动建表（开发用，生产建议改用 Alembic）
 Base.metadata.create_all(bind=engine)
 _ensure_project_columns()
@@ -450,6 +472,7 @@ _ensure_chapter_embedding_column()
 _ensure_llm_provider_columns()
 _ensure_chapter_coherence_report_columns()
 _ensure_cover_image_call_logs_columns()
+_ensure_bootstrap_runs_table()
 _claim_orphan_projects()
 seed_llm_from_env_if_empty()
 
@@ -490,8 +513,10 @@ app.include_router(admin_auth_router.router, prefix="/api/v1")
 # projects：列表/创建只需 current_user；详情/PATCH/DELETE/子配置由路由内部 _owned_or_404 校验。
 app.include_router(projects.router, prefix="/api/v1")
 
-# bootstrap：仅需登录态，user_id 由路由从 current_user 注入到新建 Project。
+# bootstrap（旧）：SSE 直连，向后兼容。
 app.include_router(generate.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+# bootstrap（新）：LangGraph 可排队 + human-in-the-loop 闸门；鉴权由路由内部 get_current_user 处理。
+app.include_router(bootstrap_graph_router.router, prefix="/api/v1")
 
 # 全局只读/管理：需登录但不绑项目。
 app.include_router(admin_llm.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])

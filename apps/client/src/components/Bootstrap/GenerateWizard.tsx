@@ -1,12 +1,26 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+/**
+ * @file GenerateWizard — 一键生成小说的主向导面板
+ *
+ * 职责：
+ * - 渲染「输入 → 生成中 → 闸门确认 → 完成」四阶段 UI
+ * - SSE 业务状态委托给 useBootstrapStream hook
+ * - 本文件 < 450 行
+ *
+ * 阶段流转（由 hook 驱动）：
+ *   input → generating → gate（立项定位确认）→ generating → done
+ *
+ * 注意：单次全量（single_shot）模式不经过 gate；gate 仅用于串行模式。
+ */
+import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Sparkles, X, CheckCircle, Loader, AlertCircle, ChevronRight, ShieldAlert, BookOpen } from 'lucide-react'
 import clsx from 'clsx'
 import { llmApi, projectsApi } from '../../api/client'
-import { authFetch } from '../../api/authFetch'
 import type { LlmOverview } from '../../types'
-import { llmProviderIdFromRoute, modelProfileFromRoute, routeLlmProviderPayload, useAppStore } from '../../store'
+import { llmProviderIdFromRoute, modelProfileFromRoute, useAppStore } from '../../store'
 import { TargetWordsInput } from '../TargetWordsInput'
+import { useBootstrapStream } from './hooks/useBootstrapStream'
+import PositioningGatePanel from './PositioningGatePanel'
 
 // ── 字数目标选项 ──────────────────────────────────────────────
 const WORD_OPTIONS = [
@@ -17,105 +31,50 @@ const WORD_OPTIONS = [
 ] as const
 
 interface Props {
+  /** 关闭弹窗（取消或完成后跳转前调用） */
   onClose: () => void
 }
 
-type StepKey =
-  | 'project' | 'settings' | 'characters' | 'outline' | 'memory' | 'relations'
-  | 'opening_contract' | 'vol1_chapters' | 'ch1_scenes' | 'consistency'
-  | 'all' | 'saving'
-type StepStatus = 'pending' | 'running' | 'done' | 'error'
-
-interface StepState {
-  key: StepKey
-  label: string
-  status: StepStatus
-  detail?: string   // count / preview
-  /** 当前仍在飞行中的子步骤数量（多个后端 step 合并到同一卡片时使用） */
-  inflight: number
-}
-
-const STEP_DEFS: { key: StepKey; label: string }[] = [
-  { key: 'project',          label: '项目基础信息' },
-  { key: 'settings',         label: '世界观设定卡' },
-  { key: 'characters',       label: '人物库' },
-  { key: 'outline',          label: '卷级结构规划' },
-  { key: 'memory',           label: '记忆库种子' },
-  { key: 'relations',        label: '人物关系' },
-  { key: 'opening_contract', label: '开局追读承诺' },
-  { key: 'vol1_chapters',    label: '第一卷章级大纲' },
-  { key: 'ch1_scenes',       label: '第1章场景蓝图' },
-  { key: 'consistency',      label: '全局一致性扫描' },
-]
-
 type Mode = 'sequential' | 'single_shot'
 
-const STEP_KEY_ALIAS: Record<string, StepKey> = {
-  // Step 0 立项会议：后端 step=positioning，UI 归到「项目基础信息」卡片
-  positioning: 'project',
-  // 世界观相关结构化子步骤归并到”世界观设定卡”
-  power_systems: 'settings',
-  factions: 'settings',
-  storylines: 'settings',
-  skills: 'settings',
-  items: 'settings',
-  settings: 'settings',
-  // 其它后端步骤对齐前端卡片
-  volumes: 'outline',
-  // Step 12-14：后端 step 名与前端 key 一致，toDisplayStepKey 会直接命中 STEP_DEFS，alias 仅作备份
-  opening_contract: 'opening_contract',
-  vol1_chapters:    'vol1_chapters',
-  ch1_scenes:       'ch1_scenes',
-  consistency:      'consistency',
-}
-
-function toDisplayStepKey(step: unknown): StepKey | null {
-  if (typeof step !== 'string') return null
-  if (STEP_DEFS.some(s => s.key === step)) return step as StepKey
-  return STEP_KEY_ALIAS[step] ?? null
-}
-
 export default function GenerateWizard({ onClose }: Props) {
-  const navigate = useNavigate()
+  const navigate       = useNavigate()
   const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
   const setAiBackendRoute = useAppStore(s => s.setAiBackendRoute)
-  const [phase, setPhase] = useState<'input' | 'generating' | 'done'>('input')
-  const [logline, setLogline] = useState('')
-  const [mode, setMode] = useState<Mode>('sequential')
-  const [targetWords, setTargetWords] = useState(1200000)
-  const [customWordMode, setCustomWordMode] = useState(false)
-  const [steps, setSteps] = useState<StepState[]>(
-    STEP_DEFS.map(s => ({ ...s, status: 'pending', inflight: 0 }))
-  )
-  const [errorMsg, setErrorMsg] = useState('')
-  const [projectId, setProjectId] = useState<string | null>(null)
-  const [insights, setInsights] = useState<{ consistency_issues: any[]; opening_contract: Record<string,any> } | null>(null)
-  const [llmOverview, setLlmOverview] = useState<LlmOverview | null>(null)
-  const [llmLoading, setLlmLoading] = useState(false)
-  const abortRef = useRef<AbortController | null>(null)
-  const isSubmittingRef = useRef(false)   // 防止重复提交
-  const streamCompleteRef = useRef(false) // 是否收到 complete（用于检测半道断流）
-  const [waitSec, setWaitSec] = useState(0)
 
+  // ── Bootstrap SSE 状态（委托给 hook）──────────────────────────
+  const {
+    phase, steps, errorMsg, projectId, positioningData,
+    startGenerate: hookStart, handleResume, cancel: hookCancel,
+  } = useBootstrapStream()
+
+  // ── 本地 UI 状态 ──────────────────────────────────────────────
+  const [logline, setLogline]               = useState('')
+  const [mode, setMode]                     = useState<Mode>('sequential')
+  const [targetWords, setTargetWords]       = useState(1200000)
+  const [customWordMode, setCustomWordMode] = useState(false)
+  const [insights, setInsights]             = useState<{
+    consistency_issues: any[]
+    opening_contract: Record<string, any>
+  } | null>(null)
+  const [llmOverview, setLlmOverview]   = useState<LlmOverview | null>(null)
+  const [llmLoading, setLlmLoading]     = useState(false)
+  const [waitSec, setWaitSec]           = useState(0)
+  /** resume 请求进行中（gate 面板按钮禁用态） */
+  const [resumeLoading, setResumeLoading] = useState(false)
+
+  // ── 初始化：拉取 LLM 概况 ────────────────────────────────────
   useEffect(() => {
     let alive = true
     setLlmLoading(true)
     llmApi.overview()
-      .then(res => {
-        if (!alive) return
-        setLlmOverview(res.data)
-      })
-      .catch(() => {
-        if (!alive) return
-        setLlmOverview(null)
-      })
-      .finally(() => {
-        if (!alive) return
-        setLlmLoading(false)
-      })
+      .then(res => { if (alive) setLlmOverview(res.data) })
+      .catch(() => { if (alive) setLlmOverview(null) })
+      .finally(() => { if (alive) setLlmLoading(false) })
     return () => { alive = false }
   }, [])
 
+  // ── 等待计时器（仅 generating 阶段计时，gate/done 时停止）────
   useEffect(() => {
     if (phase !== 'generating') return
     setWaitSec(0)
@@ -123,25 +82,30 @@ export default function GenerateWizard({ onClose }: Props) {
     return () => window.clearInterval(id)
   }, [phase])
 
+  // ── 自动选中默认远程 provider ─────────────────────────────────
   useEffect(() => {
     if (!llmOverview?.remote_providers?.length) return
     const pick = () =>
       llmOverview.remote_providers.find(p => p.is_default) ?? llmOverview.remote_providers[0]
-
     if (aiBackendRoute === 'remote') {
-      const def = pick()
-      setAiBackendRoute(`remote:${def.id}`)
+      setAiBackendRoute(`remote:${pick().id}`)
       return
     }
     if (aiBackendRoute.startsWith('remote:')) {
       const id = aiBackendRoute.slice('remote:'.length)
-      const ok = llmOverview.remote_providers.some(p => p.id === id)
-      if (!ok) {
-        const def = pick()
-        setAiBackendRoute(`remote:${def.id}`)
+      if (!llmOverview.remote_providers.some(p => p.id === id)) {
+        setAiBackendRoute(`remote:${pick().id}`)
       }
     }
   }, [llmOverview, aiBackendRoute, setAiBackendRoute])
+
+  // ── 生成完成后拉取 Bootstrap 写入的编辑洞察数据 ──────────────
+  useEffect(() => {
+    if (!projectId) return
+    projectsApi.getInsights(projectId)
+      .then(res => setInsights(res.data))
+      .catch(() => {/* 非关键，忽略 */})
+  }, [projectId])
 
   const modelHint = useMemo(() => {
     const selectedProviderId = llmProviderIdFromRoute(aiBackendRoute)
@@ -154,157 +118,40 @@ export default function GenerateWizard({ onClose }: Props) {
     return '当前：远程（未配置）'
   }, [aiBackendRoute, llmOverview])
 
-  // ── 开始生成 ──────────────────────────────────────────────
-  const startGenerate = async () => {
-    if (!logline.trim() || isSubmittingRef.current) return
-    isSubmittingRef.current = true
-    streamCompleteRef.current = false
-    setPhase('generating')
-    setErrorMsg('')
-    setWaitSec(0)
+  // ── 开始生成 ─────────────────────────────────────────────────
+  function handleStart() {
+    if (!logline.trim()) return
+    hookStart({
+      logline: logline.trim(),
+      mode,
+      targetWords,
+      modelProfile: modelProfileFromRoute(aiBackendRoute),
+      llmProviderId: llmProviderIdFromRoute(aiBackendRoute),
+    })
+  }
 
-    // single_shot 模式用两个虚拟步骤
-    // 首步立刻标为 running：SSE 常被代理/缓冲，首个 step_start 可能在整段 AI 结束后才到，否则长时间只有空心圆、无转圈
-    if (mode === 'single_shot') {
-      setSteps([
-        { key: 'all',    label: 'AI 全量生成（单次调用）', status: 'running',  inflight: 1 },
-        { key: 'saving', label: '写入数据库',               status: 'pending',  inflight: 0 },
-      ])
-    } else {
-      setSteps(STEP_DEFS.map((s, i) => ({ ...s, status: i === 0 ? 'running' : 'pending', inflight: i === 0 ? 1 : 0 })))
-    }
-
-    const abort = new AbortController()
-    abortRef.current = abort
-
+  /**
+   * 闸门确认：提交用户审阅/编辑后的立项定位，继续执行图的后半段。
+   * @param positioning - 用户确认或修改后的立项定位 JSON
+   */
+  async function handleGateConfirm(positioning: Record<string, any>) {
+    setResumeLoading(true)
     try {
-      const res = await authFetch('/api/v1/bootstrap/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          logline: logline.trim(),
-          mode,
-          target_words: targetWords,
-          model_profile: modelProfileFromRoute(aiBackendRoute),
-          ...routeLlmProviderPayload(aiBackendRoute),
-        }),
-        signal: abort.signal,
+      await handleResume(positioning, {
+        modelProfile: modelProfileFromRoute(aiBackendRoute),
+        llmProviderId: llmProviderIdFromRoute(aiBackendRoute),
       })
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => '')
-        throw new Error(text || `请求失败 (${res.status})`)
-      }
-      if (!res.body) {
-        throw new Error('响应无流式正文')
-      }
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buf = ''
-
-      while (true) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buf += decoder.decode(value, { stream: true })
-        const lines = buf.split('\n')
-        buf = lines.pop() ?? ''
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const raw = line.slice(6).trim()
-          if (!raw || raw === '[DONE]') continue
-
-          let evt: Record<string, any>
-          try { evt = JSON.parse(raw) } catch { continue }
-
-          handleEvent(evt)
-        }
-      }
-      if (!streamCompleteRef.current && !abort.signal.aborted) {
-        setErrorMsg(prev => prev || '连接已结束但未完成生成（可能后端中断或代理超时），请查看后端日志后重试。')
-      }
-    } catch (err: any) {
-      if (err.name !== 'AbortError') {
-        setErrorMsg(err.message || '网络错误')
-      }
     } finally {
-      isSubmittingRef.current = false
+      setResumeLoading(false)
     }
   }
 
-  const handleEvent = (evt: Record<string, any>) => {
-    const { event, step, label, count, preview, message, project_id } = evt
-    const displayStep = toDisplayStepKey(step)
-
-    if (event === 'step_start') {
-      if (!displayStep) return
-      // inflight +1：多个后端子步骤可能合并到同一张显示卡片（如 power_systems/factions/settings 全部→'settings'）
-      // 只要还有子步骤在飞行就保持 running，避免中途短暂显示 done 后又翻回 running
-      setSteps(prev => prev.map(s =>
-        s.key === displayStep
-          ? { ...s, status: 'running', inflight: s.inflight + 1, label: label ?? s.label }
-          : s
-      ))
-    } else if (event === 'step_done') {
-      if (!displayStep) return
-      const detail = [
-        count != null ? `${count} 条` : '',
-        preview ?? '',
-      ].filter(Boolean).join(' · ')
-      // inflight -1：只有归零时才真正标为 done，避免其他子步骤还在进行时提前完成
-      setSteps(prev => prev.map(s => {
-        if (s.key !== displayStep) return s
-        const nextInflight = Math.max(0, s.inflight - 1)
-        return {
-          ...s,
-          inflight: nextInflight,
-          status: nextInflight === 0 ? 'done' : 'running',
-          detail: detail || s.detail,
-        }
-      }))
-    } else if (event === 'error') {
-      const msg = typeof message === 'string' && message.trim() ? message : '生成失败'
-      if (displayStep) {
-        setSteps(prev => prev.map(s =>
-          s.key === displayStep
-            ? { ...s, status: 'error', inflight: Math.max(0, s.inflight - 1), detail: msg }
-            : s
-        ))
-        setErrorMsg(`[${displayStep}] ${msg}`)
-      } else {
-        setSteps(prev => {
-          const running = prev.findIndex(s => s.status === 'running')
-          if (running === -1) return prev
-          return prev.map((s, i) =>
-            i === running ? { ...s, status: 'error' as const, detail: msg } : s
-          )
-        })
-        setErrorMsg(msg)
-      }
-    } else if (event === 'complete') {
-      streamCompleteRef.current = true
-      setProjectId(project_id)
-      setPhase('done')
-      // partial=true：流程中断但 project 已创建，提示内容不完整
-      if (evt.partial) {
-        setErrorMsg(prev => prev || '部分步骤未完成，已保存的内容可在工作台中查看和补全。')
-      }
-      // 拉取 Bootstrap 后写入的编辑洞察数据
-      if (project_id) {
-        projectsApi.getInsights(project_id)
-          .then(res => setInsights(res.data))
-          .catch(() => {/* 非关键，忽略 */})
-      }
-    }
-  }
-
-  const cancel = () => {
-    abortRef.current?.abort()
+  function cancel() {
+    hookCancel()
     onClose()
   }
 
-  // ── 渲染 ──────────────────────────────────────────────────
+  // ── 渲染 ─────────────────────────────────────────────────────
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh] overflow-hidden">
@@ -341,7 +188,7 @@ export default function GenerateWizard({ onClose }: Props) {
               立意、主题和设定将由 AI 根据一句话创意自动生成，你无需额外填写设定项。
             </p>
 
-            {/* 模式选择 */}
+            {/* 模型线路 */}
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-2">模型线路</label>
               <select
@@ -366,6 +213,7 @@ export default function GenerateWizard({ onClose }: Props) {
               <p className="text-xs text-gray-400 mt-1">{modelHint}</p>
             </div>
 
+            {/* 生成方案 */}
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-2">生成方案</label>
               <div className="grid grid-cols-2 gap-3">
@@ -373,9 +221,7 @@ export default function GenerateWizard({ onClose }: Props) {
                   onClick={() => setMode('sequential')}
                   className={clsx(
                     'p-3 rounded-xl border-2 text-left transition-all',
-                    mode === 'sequential'
-                      ? 'border-amber-400 bg-amber-50'
-                      : 'border-gray-100 hover:border-gray-200'
+                    mode === 'sequential' ? 'border-amber-400 bg-amber-50' : 'border-gray-100 hover:border-gray-200'
                   )}
                 >
                   <div className="text-sm font-semibold text-gray-800 mb-1">
@@ -393,14 +239,10 @@ export default function GenerateWizard({ onClose }: Props) {
                   onClick={() => setMode('single_shot')}
                   className={clsx(
                     'p-3 rounded-xl border-2 text-left transition-all',
-                    mode === 'single_shot'
-                      ? 'border-blue-400 bg-blue-50'
-                      : 'border-gray-100 hover:border-gray-200'
+                    mode === 'single_shot' ? 'border-blue-400 bg-blue-50' : 'border-gray-100 hover:border-gray-200'
                   )}
                 >
-                  <div className="text-sm font-semibold text-gray-800 mb-1">
-                    方案 B · 单次全量
-                  </div>
+                  <div className="text-sm font-semibold text-gray-800 mb-1">方案 B · 单次全量</div>
                   <div className="text-xs text-gray-500 leading-relaxed">
                     1 次生成世界蓝图，速度快<br />
                     适合大上下文远程模型，章级大纲需手动展开
@@ -421,16 +263,12 @@ export default function GenerateWizard({ onClose }: Props) {
                   {customWordMode ? '快捷选择' : '自定义'}
                 </button>
               </div>
-
               {customWordMode ? (
                 <TargetWordsInput
                   value={targetWords}
                   onChange={setTargetWords}
                   hint={
-                    <>
-                      · 约 {Math.round(targetWords / 2300)} 章 /{' '}
-                      {Math.ceil(Math.round(targetWords / 2300) / 60)} 卷
-                    </>
+                    <>· 约 {Math.round(targetWords / 2300)} 章 / {Math.ceil(Math.round(targetWords / 2300) / 60)} 卷</>
                   }
                 />
               ) : (
@@ -447,10 +285,7 @@ export default function GenerateWizard({ onClose }: Props) {
                           : 'border-gray-100 hover:border-gray-200 bg-white'
                       )}
                     >
-                      <div className={clsx(
-                        'text-sm font-semibold',
-                        targetWords === opt.value ? 'text-amber-700' : 'text-gray-700'
-                      )}>
+                      <div className={clsx('text-sm font-semibold', targetWords === opt.value ? 'text-amber-700' : 'text-gray-700')}>
                         {opt.label}
                       </div>
                       <div className="text-[10px] text-gray-400 mt-0.5 leading-tight">{opt.desc}</div>
@@ -461,7 +296,7 @@ export default function GenerateWizard({ onClose }: Props) {
             </div>
 
             <button
-              onClick={startGenerate}
+              onClick={handleStart}
               disabled={!logline.trim()}
               className="w-full py-3 bg-amber-500 hover:bg-amber-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
             >
@@ -471,7 +306,16 @@ export default function GenerateWizard({ onClose }: Props) {
           </div>
         )}
 
-        {/* ── 生成中 ── */}
+        {/* ── 闸门阶段：立项定位确认 ── */}
+        {phase === 'gate' && positioningData && (
+          <PositioningGatePanel
+            positioning={positioningData}
+            onConfirm={handleGateConfirm}
+            loading={resumeLoading}
+          />
+        )}
+
+        {/* ── 生成中 / 完成 ── */}
         {(phase === 'generating' || phase === 'done') && (
           <div className="flex flex-col flex-1 overflow-hidden">
             {/* 固定顶部：Logline 摘要 */}
@@ -495,18 +339,10 @@ export default function GenerateWizard({ onClose }: Props) {
                   )}
                 >
                   <div className="shrink-0 mt-0.5">
-                    {step.status === 'pending' && (
-                      <div className="w-5 h-5 rounded-full border-2 border-gray-200" />
-                    )}
-                    {step.status === 'running' && (
-                      <Loader size={18} className="text-amber-500 animate-spin" />
-                    )}
-                    {step.status === 'done' && (
-                      <CheckCircle size={18} className="text-green-500" />
-                    )}
-                    {step.status === 'error' && (
-                      <AlertCircle size={18} className="text-red-500" />
-                    )}
+                    {step.status === 'pending' && <div className="w-5 h-5 rounded-full border-2 border-gray-200" />}
+                    {step.status === 'running' && <Loader size={18} className="text-amber-500 animate-spin" />}
+                    {step.status === 'done'    && <CheckCircle size={18} className="text-green-500" />}
+                    {step.status === 'error'   && <AlertCircle size={18} className="text-red-500" />}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-gray-800">{step.label}</div>
@@ -528,9 +364,7 @@ export default function GenerateWizard({ onClose }: Props) {
               )}
 
               {errorMsg && (
-                <div className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
-                  {errorMsg}
-                </div>
+                <div className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{errorMsg}</div>
               )}
 
               {/* 完成后：编辑洞察摘要卡 */}
@@ -566,10 +400,7 @@ export default function GenerateWizard({ onClose }: Props) {
 
               {phase === 'done' && projectId && (
                 <button
-                  onClick={() => {
-                    onClose()
-                    navigate(`/project/${projectId}/outline`)
-                  }}
+                  onClick={() => { onClose(); navigate(`/project/${projectId}/outline`) }}
                   className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white font-semibold rounded-xl flex items-center justify-center gap-2 transition-colors"
                 >
                   进入工作台
@@ -578,10 +409,7 @@ export default function GenerateWizard({ onClose }: Props) {
               )}
 
               {phase === 'generating' && (
-                <button
-                  onClick={cancel}
-                  className="w-full py-2 text-sm text-gray-400 hover:text-gray-600"
-                >
+                <button onClick={cancel} className="w-full py-2 text-sm text-gray-400 hover:text-gray-600">
                   取消
                 </button>
               )}

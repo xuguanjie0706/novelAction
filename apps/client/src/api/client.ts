@@ -318,6 +318,22 @@ export const bootstrapApi = {
   streamUrl: '/api/v1/bootstrap/stream',
 }
 
+export interface BootstrapRunHistoryItem {
+  run_id: string
+  status: string
+  project_id: string | null
+  gate_data?: Record<string, any> | null
+  events: Array<Record<string, any>>
+  error_message?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export const bootstrapRunsApi = {
+  listByProject: (projectId: string) =>
+    api.get<BootstrapRunHistoryItem[]>(`/bootstrap/projects/${projectId}/runs`),
+}
+
 // ── AI ────────────────────────────────────────────────
 // ── LLM / 智能体（只读）────────────────────────────────────
 export const llmApi = {

@@ -28,6 +28,7 @@ from app.models.reader_promise import ReaderPromise
 from app.models.chapter_analysis_record import ChapterAnalysisRecord
 from app.models.pre_write_warning_record import PreWriteWarningRecord
 from app.models.user import User
+from app.models.bootstrap_run import BootstrapRun
 
 __all__ = [
     "Project",
@@ -59,4 +60,5 @@ __all__ = [
     "ChapterAnalysisRecord",
     "PreWriteWarningRecord",
     "User",
+    "BootstrapRun",
 ]

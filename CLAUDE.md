@@ -462,17 +462,23 @@ routers/outline/
 
 ---
 
-## 上帝文件登记册（治理基线，2026-05-12）
+## 上帝文件登记册（治理基线，2026-05-12 更新）
 
 | 文件 | 当前行数 | 状态 |
 |---|---:|---|
-| `apps/backend/app/routers/outline.py` | 3825 | 🚫 冻结新增 endpoint，等待按子资源拆包 |
-| `apps/backend/app/services/generation_service.py` | 3149 | 🚫 冻结新增 `_gen_*` 方法，新 Step 直接进 `services/bootstrap/steps/` |
-| `apps/backend/app/services/ai_service.py` | 2895 | 🚫 冻结新增 `AIService` 公共方法，新能力进 `services/ai/<capability>.py` |
+| `apps/backend/app/routers/outline/helpers_core.py` | 2166 | 🚫 冻结新增 endpoint；新路由进 `routers/outline/routes_*.py`，helpers_core 仅作为待继续瘦身的过渡集合 |
 | `apps/client/src/components/Writing/ChapterEditor.tsx` | 2960 | 🚫 冻结新增 props/`useState`，新功能走 hooks + 子组件 |
 | `apps/client/src/pages/OutlinePage.tsx` | 2099 | 🚫 冻结新增功能 |
 | `apps/client/src/components/Layout/GenerationQueuePanel.tsx` | 1789 | ⚠️ 警告区，下一次重大改动同步拆分 |
 | `apps/frontend/src/pages/ReadingReviewPage.tsx` | 1538 | ⚠️ 警告区 |
+
+### 已退役（2026-05-12 拆分完成）
+
+| 旧上帝文件 | 拆分去向 | 当前残留 |
+|---|---|---:|
+| `apps/backend/app/routers/outline.py` | `apps/backend/app/routers/outline/`（`routes_tree` / `routes_ai_expand` / `routes_quality` / `routes_full_generate` / `routes_workflow_ws` / `helpers_core` / `qa_internal` / `schemas`） | 已删除 |
+| `apps/backend/app/services/generation_service.py` | `apps/backend/app/services/bootstrap/`（`steps/*` + `context` / `retry` / `save_all` / `completion`） | 500 行（瘦身后的编排壳，允许继续存在） |
+| `apps/backend/app/services/ai_service.py` | `apps/backend/app/services/ai/`（`chat` / `quality` / `debrief` / `draft_stream` / `outline_ai` / `memory_ai` / `coherence` / `guardrails` / `sampling` / `writing_tools` / `client` / `service`） | 10 行（仅作兼容 re-export） |
 
 > 任何一次让上表文件**增加 ≥ 50 行**的 PR 都必须同时包含等量或更多的「治旧」删除量；否则视为破坏红线。
 

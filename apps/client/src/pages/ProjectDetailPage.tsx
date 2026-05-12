@@ -22,6 +22,9 @@ import {
   Layers,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import GenerateWizard from '../components/Bootstrap/GenerateWizard'
+import ActiveBootstrapResumeBar from '../components/Bootstrap/ActiveBootstrapResumeBar'
+import { useBootstrapResumeBanner } from '../hooks/useBootstrapResumeBanner'
 import {
   bootstrapRunsApi,
   coverApi,
@@ -31,6 +34,7 @@ import {
 } from '../api/client'
 import { authFetch } from '../api/authFetch'
 import { useAppStore } from '../store'
+import { clearActiveBootstrapRun } from '../utils/bootstrapActiveRun'
 import type { ImageProviderBrief, Project } from '../types'
 
 // ── SVG 封面（无图片提供者时的占位/预览） ─────────────────────────────────
@@ -895,6 +899,29 @@ export default function ProjectDetailPage() {
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
   const [showCoverModal, setShowCoverModal] = useState(false)
+  const [showWizard, setShowWizard] = useState(false)
+  const [wizardRecoverRunId, setWizardRecoverRunId] = useState<string | null>(null)
+  const [resumeBarHidden, setResumeBarHidden] = useState(false)
+  const [resumeCancelLoading, setResumeCancelLoading] = useState(false)
+  const { snapshot: bootstrapResumeSnapshot, refresh: refreshBootstrapResume } = useBootstrapResumeBanner(
+    projectId ?? null,
+  )
+
+  const handleCancelBootstrapRun = async () => {
+    const rid = bootstrapResumeSnapshot?.runId?.trim()
+    if (!rid) return
+    setResumeCancelLoading(true)
+    try {
+      await bootstrapRunsApi.cancel(rid)
+      clearActiveBootstrapRun()
+      toast.success('已终止生成')
+      await refreshBootstrapResume()
+    } catch {
+      toast.error('终止失败，请重试')
+    } finally {
+      setResumeCancelLoading(false)
+    }
+  }
 
   useEffect(() => {
     if (!projectId) return
@@ -942,6 +969,17 @@ export default function ProjectDetailPage() {
           onClose={() => setShowCoverModal(false)}
         />
       )}
+      {showWizard && (
+        <GenerateWizard
+          onClose={() => {
+            setShowWizard(false)
+            setWizardRecoverRunId(null)
+            void refreshBootstrapResume()
+          }}
+          recoverRunId={wizardRecoverRunId}
+          onRecoverConsumed={() => setWizardRecoverRunId(null)}
+        />
+      )}
 
       {/* 顶部导航 */}
       <header className="sticky top-0 z-30 border-b border-gray-100 bg-white/80 backdrop-blur">
@@ -966,6 +1004,20 @@ export default function ProjectDetailPage() {
       </header>
 
       <main className="mx-auto max-w-5xl px-5 py-10 sm:px-8">
+        <ActiveBootstrapResumeBar
+          snapshot={bootstrapResumeSnapshot}
+          hidden={resumeBarHidden}
+          onContinue={() => {
+            if (!bootstrapResumeSnapshot?.runId) return
+            setWizardRecoverRunId(bootstrapResumeSnapshot.runId)
+            setShowWizard(true)
+            setResumeBarHidden(false)
+          }}
+          onHide={() => setResumeBarHidden(true)}
+          onCancelRun={handleCancelBootstrapRun}
+          cancelLoading={resumeCancelLoading}
+        />
+
         {/* Hero：封面 + 基础信息 */}
         <div className="flex flex-col gap-10 sm:flex-row sm:items-start">
 

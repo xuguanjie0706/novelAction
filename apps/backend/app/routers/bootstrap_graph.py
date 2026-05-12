@@ -100,6 +100,7 @@ class RunStatus(BaseModel):
     gate_data: Optional[dict]
     events: list[dict]
     error_message: Optional[str]
+    logline: Optional[str] = None
 
 
 class RunHistoryItem(BaseModel):
@@ -110,6 +111,7 @@ class RunHistoryItem(BaseModel):
     gate_data: Optional[dict]
     events: list[dict]
     error_message: Optional[str]
+    logline: Optional[str] = None
     created_at: Optional[str]
     updated_at: Optional[str]
 
@@ -183,6 +185,7 @@ async def get_run(
         gate_data=run.gate_data,
         events=list(run.events or []),
         error_message=run.error_message,
+        logline=run.logline,
     )
 
 
@@ -217,6 +220,7 @@ async def list_project_runs(
             gate_data=r.gate_data,
             events=list(r.events or []),
             error_message=r.error_message,
+            logline=r.logline,
             created_at=r.created_at.isoformat() if r.created_at else None,
             updated_at=r.updated_at.isoformat() if r.updated_at else None,
         )

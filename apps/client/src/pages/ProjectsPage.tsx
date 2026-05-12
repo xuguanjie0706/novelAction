@@ -14,11 +14,14 @@ import {
   type RecentEdit,
 } from '../components/Home/HomeDashboardSections'
 import GenerateWizard from '../components/Bootstrap/GenerateWizard'
-import { dashboardApi, projectsApi } from '../api/client'
+import ActiveBootstrapResumeBar from '../components/Bootstrap/ActiveBootstrapResumeBar'
+import { useBootstrapResumeBanner } from '../hooks/useBootstrapResumeBanner'
+import { bootstrapRunsApi, dashboardApi, projectsApi } from '../api/client'
 import { useAppStore } from '../store'
 import type { DashboardHome, DashboardRecentChapter, Project } from '../types'
 import { HOME_RECENT_FALLBACK } from '../data/homeMock'
 import { timeAgo } from '../utils/timeAgo'
+import { clearActiveBootstrapRun } from '../utils/bootstrapActiveRun'
 
 // TODO(homepage-data): 后续接 AI 取名服务；当前为静态占位列表
 const mockNames = ['浮灯照长夜', '山海失序录', '裂星行者', '旧神便利店']
@@ -58,6 +61,10 @@ export default function ProjectsPage() {
   const [creating, setCreating] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [showWizard, setShowWizard] = useState(false)
+  const [wizardRecoverRunId, setWizardRecoverRunId] = useState<string | null>(null)
+  const [resumeBarHidden, setResumeBarHidden] = useState(false)
+  const [resumeCancelLoading, setResumeCancelLoading] = useState(false)
+  const { snapshot: bootstrapResumeSnapshot, refresh: refreshBootstrapResume } = useBootstrapResumeBanner()
   const [form, setForm] = useState({ title: '', genre: '', logline: '', premise: '', target_words: 1200000 })
 
   // 项目列表（仅用于「继续写作」按钮 / 快捷跳转）
@@ -101,10 +108,42 @@ export default function ProjectsPage() {
 
   const todayWords = dashboard?.today_words ?? 0
 
+  /** 有未结束的串行生成时禁止再开新向导；恢复请点横幅「继续」 */
+  const guardOpenNewBootstrapWizard = () => {
+    const rid = bootstrapResumeSnapshot?.runId?.trim()
+    if (rid) {
+      setResumeBarHidden(false)
+      toast(
+        '已有进行中的生成。请先点击上方「继续」回到进度；关闭向导或刷新后也可在此重新进入。',
+        { duration: 5200 },
+      )
+      return false
+    }
+    return true
+  }
+
   const onWizardClose = () => {
     setShowWizard(false)
+    setWizardRecoverRunId(null)
+    void refreshBootstrapResume()
     projectsApi.list().then(res => setProjects(res.data)).catch(() => {})
     refreshDashboard()
+  }
+
+  const handleCancelBootstrapRun = async () => {
+    const rid = bootstrapResumeSnapshot?.runId?.trim()
+    if (!rid) return
+    setResumeCancelLoading(true)
+    try {
+      await bootstrapRunsApi.cancel(rid)
+      clearActiveBootstrapRun()
+      toast.success('已终止生成')
+      await refreshBootstrapResume()
+    } catch {
+      toast.error('终止失败，请重试')
+    } finally {
+      setResumeCancelLoading(false)
+    }
   }
 
   const create = async () => {
@@ -176,7 +215,13 @@ export default function ProjectsPage() {
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-gray-950 lg:flex">
-      {showWizard && <GenerateWizard onClose={onWizardClose} />}
+      {showWizard && (
+        <GenerateWizard
+          onClose={onWizardClose}
+          recoverRunId={wizardRecoverRunId}
+          onRecoverConsumed={() => setWizardRecoverRunId(null)}
+        />
+      )}
       {showForm && (
         <CreateProjectDialog
           form={form}
@@ -186,6 +231,8 @@ export default function ProjectsPage() {
           onClose={() => setShowForm(false)}
           onUseAi={() => {
             setShowForm(false)
+            if (!guardOpenNewBootstrapWizard()) return
+            setWizardRecoverRunId(null)
             setShowWizard(true)
           }}
         />
@@ -206,6 +253,20 @@ export default function ProjectsPage() {
                   </h1>
                   <p className="mt-2 text-[15px] text-gray-500">今天也要元气满满地创作哦！</p>
                 </div>
+
+                <ActiveBootstrapResumeBar
+                  snapshot={bootstrapResumeSnapshot}
+                  hidden={resumeBarHidden}
+                  onContinue={() => {
+                    if (!bootstrapResumeSnapshot?.runId) return
+                    setWizardRecoverRunId(bootstrapResumeSnapshot.runId)
+                    setShowWizard(true)
+                    setResumeBarHidden(false)
+                  }}
+                  onHide={() => setResumeBarHidden(true)}
+                  onCancelRun={handleCancelBootstrapRun}
+                  cancelLoading={resumeCancelLoading}
+                />
 
                 <HeroPanel
                   onCreate={() => setShowForm(true)}

@@ -2,18 +2,18 @@
  * @file useBootstrapStream — Bootstrap SSE 业务逻辑 Hook
  *
  * 职责：
- * - 管理生成流程状态（phase / steps / errors / projectId / positioningData）
- * - 封装新版两阶段 SSE 流（POST /runs → GET /runs/{id}/events）
- * - 封装旧版单次 SSE 流（POST /stream，single_shot 模式专用）
- * - 暴露 startGenerate / handleResume / cancel 给 GenerateWizard 调用
- *
- * 设计约束：
- * - phase / steps 等状态完全由本 hook 管理，GenerateWizard 只做渲染
- * - gate_pending 事件触发 phase → 'gate'，前端展示确认面板
- * - gate 期间 SSE 连接保持活跃（后端不推 __stream_end__）
+ * - 管理生成流程状态（phase / steps / gate / projectId）
+ * - 新版串行：POST /runs → GET /events；支持刷新后 ``reconnectToRun`` 回放事件并重连 SSE
+ * - single_shot：POST /stream
+ * - 会话内 ``sessionStorage`` 记录 run_id（见 ``utils/bootstrapActiveRun``），便于书架/首页提示「继续生成」
+ * - ``abortSse``：仅断开当前 fetch/SSE；``cancelRun``：调用 ``POST .../cancel`` 终止后端任务并清理本地状态
  */
-import { useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { authFetch } from '../../../api/authFetch'
+import {
+  clearActiveBootstrapRun,
+  saveActiveBootstrapRun,
+} from '../../../utils/bootstrapActiveRun'
 
 // ── 类型导出 ──────────────────────────────────────────────────
 
@@ -47,20 +47,14 @@ export interface StepState {
   /** @deprecated 仅保留旧代码引用兼容，新逻辑用 count + preview */
   detail?: string
   inflight: number
-  // ── 静态元数据（初始化时写入，不随事件变化）────────────────
   icon: string
   stepColor: string
   phase: StepPhase
   stepNum: string
   desc: string
-  // ── 时序数据（由 step_start / step_done 事件填充）──────────
-  /** Date.now() when step_start received; null = not started yet */
   startedAt?: number
-  /** Date.now() when step_done received */
   completedAt?: number
-  /** 条目数量，来自 SSE step_done.count */
   count?: number
-  /** 预览文本，来自 SSE step_done.preview */
   preview?: string
 }
 
@@ -72,9 +66,6 @@ export interface StartParams {
   llmProviderId?: string | null
 }
 
-// ── 步骤元数据 ────────────────────────────────────────────────
-
-/** 每个步骤的静态展示元数据，供时间轴与详情面板使用 */
 export const STEP_META: Record<StepKey, {
   icon: string; stepColor: string; phase: StepPhase; stepNum: string; desc: string
 }> = {
@@ -94,12 +85,10 @@ export const STEP_META: Record<StepKey, {
   vol1_chapters:    { icon: '📋', stepColor: '#f97316', phase: 'blueprint',  stepNum: 'STEP 12.5', desc: '将第一卷骨架拆解为可执行的章节级写作计划' },
   ch1_scenes:       { icon: '🎬', stepColor: '#f97316', phase: 'blueprint',  stepNum: 'STEP 13',   desc: '将第1章章纲拆解为可直接执行的逐场写作蓝图' },
   consistency:      { icon: '🔍', stepColor: '#ef4444', phase: 'qa',         stepNum: 'STEP 14',   desc: '交叉核验所有生成物，标出矛盾与需要确认的问题' },
-  // single_shot 专用
   all:              { icon: '✨', stepColor: '#f59e0b', phase: 'foundation', stepNum: 'SINGLE',    desc: 'AI 单次全量生成世界蓝图（大上下文模式）' },
   saving:           { icon: '💾', stepColor: '#06b6d4', phase: 'foundation', stepNum: 'SAVE',      desc: '将生成结果批量写入数据库' },
 }
 
-/** sequential 模式下按 SSE 推进顺序排列的步骤 key 列表 */
 const SEQ_STEP_KEYS: StepKey[] = [
   'positioning', 'project',
   'power_systems', 'factions', 'storylines', 'characters',
@@ -108,9 +97,8 @@ const SEQ_STEP_KEYS: StepKey[] = [
   'opening_contract', 'vol1_chapters', 'ch1_scenes', 'consistency',
 ]
 
-/** 后端 SSE step 字段 → 前端 StepKey 映射（仅需覆盖不一致的别名） */
 const STEP_ALIAS: Partial<Record<string, StepKey>> = {
-  outline: 'volumes',  // 旧后端版本兼容
+  outline: 'volumes',
 }
 
 function makeStep(key: StepKey, overrideLabel?: string): StepState {
@@ -128,8 +116,6 @@ function toKey(step: unknown): StepKey | null {
   return STEP_ALIAS[step] ?? null
 }
 
-// ── Hook ──────────────────────────────────────────────────────
-
 /** @returns Bootstrap 生成流程的全部状态与操作 */
 export function useBootstrapStream() {
   const [phase, setPhase]                 = useState<Phase>('input')
@@ -143,16 +129,53 @@ export function useBootstrapStream() {
   const [gateStep, setGateStep]           = useState<GatePendingStep | null>(null)
   const [gateMessage, setGateMessage]     = useState('')
   const [gatePreview, setGatePreview]     = useState<Record<string, unknown> | null>(null)
-  /** 生成开始的时间戳（ms），用于计算各步骤的时间偏移 */
   const [generationStartMs, setGenStartMs] = useState<number | null>(null)
+  const [activeLogline, setActiveLogline]   = useState('')
 
   const abortRef          = useRef<AbortController | null>(null)
   const isSubmittingRef   = useRef(false)
   const streamCompleteRef = useRef(false)
+  /** 供 ``cancel()`` 读取最新 run_id，避免闭包陈旧 */
+  const runIdRef          = useRef<string | null>(null)
 
-  // ── 事件处理 ──────────────────────────────────────────────
+  useEffect(() => {
+    runIdRef.current = runId
+  }, [runId])
 
-  function handleEvent(evt: Record<string, any>) {
+  const patchGateFromSnapshot = useCallback((gateData: Record<string, any> | null | undefined) => {
+    if (!gateData || typeof gateData !== 'object') return
+    const kind = (gateData as { kind?: string }).kind || 'positioning'
+    if (kind === 'positioning' && (gateData as { positioning?: unknown }).positioning) {
+      setGateStep('positioning')
+      setPositioning((gateData as { positioning: Record<string, any> }).positioning)
+      setGateMessage('请确认或修改立项定位后继续生成')
+      setGatePreview(null)
+      setPhase('gate')
+      return
+    }
+    if (kind === 'power_systems') {
+      setGateStep('power_systems')
+      setGateMessage('请确认境界体系后继续')
+      setGatePreview({ power_systems_count: (gateData as { count?: number }).count ?? 0 })
+      setPhase('gate')
+      return
+    }
+    if (kind === 'characters') {
+      setGateStep('characters')
+      setGateMessage('请确认人物库后继续')
+      setGatePreview({ characters_count: (gateData as { count?: number }).count ?? 0 })
+      setPhase('gate')
+      return
+    }
+    if (kind === 'volumes') {
+      setGateStep('volumes')
+      setGateMessage('请确认卷级骨架后继续')
+      setGatePreview({ volumes_count: (gateData as { count?: number }).count ?? 0 })
+      setPhase('gate')
+    }
+  }, [])
+
+  const handleEvent = useCallback((evt: Record<string, any>) => {
     const { event, step, label, count, preview, message, project_id, positioning, gate_preview } = evt
     const key = toKey(step)
     const now = Date.now()
@@ -202,14 +225,26 @@ export function useBootstrapStream() {
       setPhase('gate')
     } else if (event === 'gate_passed') {
       setPhase('generating')
+    } else if (event === 'cancelled') {
+      streamCompleteRef.current = true
+      clearActiveBootstrapRun()
+      setRunId(null)
+      setGateStep(null)
+      setGateMessage('')
+      setGatePreview(null)
+      setPhase('input')
+      setProjectId(null)
+      setPositioning(null)
+      setGenStartMs(null)
+      setSteps(SEQ_STEP_KEYS.map(k => makeStep(k)))
+      setErrorMsg('')
     } else if (event === 'complete') {
       streamCompleteRef.current = true
       setProjectId(project_id)
       setPhase('done')
+      clearActiveBootstrapRun()
     }
-  }
-
-  // ── SSE 读取循环 ───────────────────────────────────────────
+  }, [])
 
   async function readSse(res: Response) {
     if (!res.body) throw new Error('响应无流式正文')
@@ -231,12 +266,6 @@ export function useBootstrapStream() {
     }
   }
 
-  // ── 主入口 ────────────────────────────────────────────────
-
-  /**
-   * 启动 Bootstrap 生成。
-   * sequential 模式走新的两阶段流；single_shot 走旧 /stream 端点。
-   */
   async function startGenerate(params: StartParams) {
     if (isSubmittingRef.current) return
     isSubmittingRef.current = true
@@ -244,6 +273,7 @@ export function useBootstrapStream() {
     const startMs = Date.now()
     setErrorMsg('')
     setGenStartMs(startMs)
+    setActiveLogline(params.logline)
     setPhase('generating')
 
     if (params.mode === 'single_shot') {
@@ -280,6 +310,11 @@ export function useBootstrapStream() {
         if (!runRes.ok) throw new Error(await runRes.text().catch(() => `创建失败 (${runRes.status})`))
         const { run_id } = await runRes.json()
         setRunId(run_id)
+        saveActiveBootstrapRun({
+          runId: run_id,
+          logline: params.logline,
+          projectId: null,
+        })
         const evtRes = await authFetch(`/api/v1/bootstrap/runs/${run_id}/events`, { signal: abort.signal })
         if (!evtRes.ok) throw new Error(`SSE 连接失败 (${evtRes.status})`)
         await readSse(evtRes)
@@ -295,11 +330,87 @@ export function useBootstrapStream() {
   }
 
   /**
-   * 用户在闸门面板提交后继续执行图。
-   *
-   * @param payload.action — ``approve`` 进入下游；``regenerate`` 仅对 Step0 / 2 / 5 / 9 有意义。
-   * @param payload.positioning — 仅 Step0 确认时必传（或后端从 gate_data 回退）。
+   * 刷新或从书架入口恢复：拉取 run 快照、回放已持久化事件、再订阅 SSE。
    */
+  async function reconnectToRun(
+    rid: string,
+    params: Pick<StartParams, 'modelProfile' | 'llmProviderId'>,
+    opts?: { loglineHint?: string },
+  ) {
+    if (isSubmittingRef.current) return
+    isSubmittingRef.current = true
+    streamCompleteRef.current = false
+    setErrorMsg('')
+    setRunId(rid)
+    setGenStartMs(Date.now())
+    setSteps(SEQ_STEP_KEYS.map(k => makeStep(k)))
+    setGateStep(null)
+    setGateMessage('')
+    setGatePreview(null)
+    setPhase('generating')
+
+    const abort = new AbortController()
+    abortRef.current = abort
+
+    try {
+      const snapRes = await authFetch(`/api/v1/bootstrap/runs/${rid}`, {
+        method: 'GET',
+        signal: abort.signal,
+      })
+      if (!snapRes.ok) throw new Error(await snapRes.text().catch(() => `无法恢复 run (${snapRes.status})`))
+      const run = await snapRes.json() as {
+        status: string
+        events?: Array<Record<string, any>>
+        gate_data?: Record<string, any> | null
+        project_id?: string | null
+        error_message?: string | null
+        logline?: string | null
+      }
+      setActiveLogline((run.logline || opts?.loglineHint || '').trim())
+
+      if (run.project_id) {
+        saveActiveBootstrapRun({
+          runId: rid,
+          logline: (run.logline || opts?.loglineHint || '').trim() || undefined,
+          projectId: run.project_id,
+        })
+      }
+
+      const evs = run.events || []
+      for (const ev of evs) handleEvent(ev)
+
+      const hasGatePending = evs.some(e => e.event === 'gate_pending')
+      if (run.status === 'awaiting_gate' && !hasGatePending) {
+        patchGateFromSnapshot(run.gate_data ?? undefined)
+      }
+
+      if (run.status === 'done') {
+        streamCompleteRef.current = true
+        if (run.project_id) setProjectId(run.project_id)
+        setPhase('done')
+        clearActiveBootstrapRun()
+        return
+      }
+      if (run.status === 'failed' || run.status === 'cancelled') {
+        setErrorMsg(run.error_message || `生成已${run.status === 'failed' ? '失败' : '取消'}`)
+        setPhase('input')
+        clearActiveBootstrapRun()
+        return
+      }
+
+      const evtRes = await authFetch(`/api/v1/bootstrap/runs/${rid}/events`, { signal: abort.signal })
+      if (!evtRes.ok) throw new Error(`SSE 重连失败 (${evtRes.status})`)
+      await readSse(evtRes)
+      if (!streamCompleteRef.current && !abort.signal.aborted) {
+        setErrorMsg(prev => prev || '连接已结束但未完成生成，请重试或从书架继续。')
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') setErrorMsg(err.message || '恢复失败')
+    } finally {
+      isSubmittingRef.current = false
+    }
+  }
+
   async function handleResume(
     payload: { action: 'approve' | 'regenerate', positioning?: Record<string, unknown> | null },
     params: Pick<StartParams, 'modelProfile' | 'llmProviderId'>,
@@ -323,11 +434,64 @@ export function useBootstrapStream() {
     }
   }
 
-  function cancel() { abortRef.current?.abort() }
+  function abortSse() {
+    abortRef.current?.abort()
+  }
+
+  /**
+   * 请求后端取消 LangGraph run，并复位前端状态（与顶条「终止」一致）。
+   * @returns 是否已成功收到成功响应（无 run_id 时视为已清理本地状态）
+   */
+  async function cancelRun(): Promise<boolean> {
+    abortSse()
+    streamCompleteRef.current = true
+    const rid = runIdRef.current
+    isSubmittingRef.current = false
+
+    if (rid) {
+      try {
+        const res = await authFetch(`/api/v1/bootstrap/runs/${rid}/cancel`, { method: 'POST' })
+        if (!res.ok) {
+          const t = await res.text().catch(() => '')
+          setErrorMsg(t.trim() || `终止失败（${res.status}）`)
+          streamCompleteRef.current = false
+          return false
+        }
+        clearActiveBootstrapRun()
+        setRunId(null)
+        setGateStep(null)
+        setGateMessage('')
+        setGatePreview(null)
+        setPhase('input')
+        setProjectId(null)
+        setPositioning(null)
+        setGenStartMs(null)
+        setSteps(SEQ_STEP_KEYS.map(k => makeStep(k)))
+        setErrorMsg('')
+        return true
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : '终止请求失败'
+        setErrorMsg(msg)
+        streamCompleteRef.current = false
+        return false
+      }
+    }
+
+    clearActiveBootstrapRun()
+    setPhase('input')
+    setGateStep(null)
+    setGateMessage('')
+    setGatePreview(null)
+    setProjectId(null)
+    setPositioning(null)
+    setGenStartMs(null)
+    setSteps(SEQ_STEP_KEYS.map(k => makeStep(k)))
+    return true
+  }
 
   return {
     phase, steps, errorMsg, projectId, positioningData, runId, generationStartMs,
-    gateStep, gateMessage, gatePreview,
-    startGenerate, handleResume, cancel,
+    gateStep, gateMessage, gatePreview, activeLogline,
+    startGenerate, reconnectToRun, handleResume, abortSse, cancelRun,
   }
 }

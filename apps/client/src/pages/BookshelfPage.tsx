@@ -1,16 +1,19 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BookOpen, ChevronRight, Feather, Plus, Search, Sparkles } from 'lucide-react'
-import { projectsApi } from '../api/client'
+import { BookOpen, ChevronRight, Loader2, Plus, Search, Sparkles, Trash2 } from 'lucide-react'
+import { bootstrapRunsApi, projectsApi } from '../api/client'
 import { useAppStore } from '../store'
 import type { Project } from '../types'
 import HomeSidebar from '../components/Home/HomeSidebar'
 import HomeTopBar from '../components/Home/HomeTopBar'
 import GenerateWizard from '../components/Bootstrap/GenerateWizard'
+import ActiveBootstrapResumeBar from '../components/Bootstrap/ActiveBootstrapResumeBar'
+import { useBootstrapResumeBanner } from '../hooks/useBootstrapResumeBanner'
 import {
   CreateProjectDialog,
 } from '../components/Home/HomeDashboardSections'
 import toast from 'react-hot-toast'
+import { clearActiveBootstrapRun, readActiveBootstrapRun } from '../utils/bootstrapActiveRun'
 
 // ── 封面渐变方案（按类型） ──────────────────────────────
 const GENRE_GRADIENTS: Record<string, { from: string; to: string; accent: string }> = {
@@ -63,14 +66,31 @@ function timeAgo(dateStr: string) {
 }
 
 // ── 单本书卡片 ─────────────────────────────────────────
-function BookCard({ project, onClick }: { project: Project; onClick: () => void }) {
+function BookCard({
+  project,
+  onOpen,
+  onDelete,
+  deleting,
+}: {
+  project: Project
+  onOpen: () => void
+  onDelete: (project: Project) => void
+  deleting: boolean
+}) {
   const g = getGradient(project.genre)
   const updatedAt = project.updated_at ?? project.created_at
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
       className="group relative flex cursor-pointer flex-col overflow-hidden rounded-xl border border-gray-100 bg-white text-left shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
     >
       {/* 封面 */}
@@ -138,7 +158,7 @@ function BookCard({ project, onClick }: { project: Project; onClick: () => void 
             {project.logline}
           </p>
         )}
-        <div className="mt-auto flex items-center justify-between pt-2">
+        <div className="mt-auto flex items-center justify-between gap-2 pt-2">
           {project.target_words ? (
             <span className="text-[11px] text-gray-400">
               目标 {(project.target_words / 10000).toFixed(0)} 万字
@@ -146,10 +166,26 @@ function BookCard({ project, onClick }: { project: Project; onClick: () => void 
           ) : (
             <span />
           )}
-          <span className="text-[11px] text-gray-400">{timeAgo(updatedAt)}</span>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <span className="text-[11px] text-gray-400">{timeAgo(updatedAt)}</span>
+            <button
+              type="button"
+              title="从书架删除"
+              aria-label={`删除《${project.title}》`}
+              disabled={deleting}
+              onClick={(e) => {
+                e.stopPropagation()
+                e.preventDefault()
+                onDelete(project)
+              }}
+              className="rounded p-1 text-gray-400 opacity-100 transition hover:bg-red-50 hover:text-red-600 sm:opacity-0 sm:group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            </button>
+          </div>
         </div>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -179,11 +215,16 @@ function EmptyShelf({ onCreate }: { onCreate: () => void }) {
 // ── 主页面 ─────────────────────────────────────────────
 export default function BookshelfPage() {
   const navigate = useNavigate()
-  const { setCurrentProject } = useAppStore()
+  const { setCurrentProject, removeGenTask } = useAppStore()
   const [projects, setProjects] = useState<Project[]>([])
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [showWizard, setShowWizard] = useState(false)
+  const [wizardRecoverRunId, setWizardRecoverRunId] = useState<string | null>(null)
+  const [resumeBarHidden, setResumeBarHidden] = useState(false)
+  const [resumeCancelLoading, setResumeCancelLoading] = useState(false)
+  const { snapshot: bootstrapResumeSnapshot, refresh: refreshBootstrapResume } = useBootstrapResumeBanner()
   const [showForm, setShowForm] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState({ title: '', genre: '', logline: '', premise: '', target_words: 1200000 })
@@ -200,7 +241,51 @@ export default function BookshelfPage() {
 
   const onWizardClose = () => {
     setShowWizard(false)
+    setWizardRecoverRunId(null)
+    void refreshBootstrapResume()
     projectsApi.list().then(res => setProjects(res.data)).catch(() => {})
+  }
+
+  const handleCancelBootstrapRun = async () => {
+    const rid = bootstrapResumeSnapshot?.runId?.trim()
+    if (!rid) return
+    setResumeCancelLoading(true)
+    try {
+      await bootstrapRunsApi.cancel(rid)
+      clearActiveBootstrapRun()
+      toast.success('已终止生成')
+      await refreshBootstrapResume()
+    } catch {
+      toast.error('终止失败，请重试')
+    } finally {
+      setResumeCancelLoading(false)
+    }
+  }
+
+  const deleteProject = async (project: Project) => {
+    if (
+      !window.confirm(
+        `确定从书架删除「${project.title}」？\n将永久删除该小说及章节、设定等全部数据，且不可恢复。`,
+      )
+    ) {
+      return
+    }
+    setDeletingId(project.id)
+    try {
+      await projectsApi.delete(project.id)
+      const { genQueue, currentProject } = useAppStore.getState()
+      genQueue.filter((t) => t.projectId === project.id).forEach((t) => removeGenTask(t.id))
+      if (currentProject?.id === project.id) setCurrentProject(null)
+      const active = readActiveBootstrapRun()
+      if (active?.projectId === project.id) clearActiveBootstrapRun()
+      setProjects((prev) => prev.filter((p) => p.id !== project.id))
+      toast.success('已删除')
+      void refreshBootstrapResume()
+    } catch {
+      /* axios 拦截器已 toast */
+    } finally {
+      setDeletingId(null)
+    }
   }
 
   const create = async () => {
@@ -252,9 +337,38 @@ export default function BookshelfPage() {
 
   const todayWords = 2560
 
+  /**
+   * 有未结束的串行生成时禁止再开「新」向导，避免双 run。
+   * 恢复进度只通过顶部条「继续」；若用户曾点「本页不再提示」，再次点「AI 生成」会重新显示该条。
+   */
+  const guardOpenNewBootstrapWizard = () => {
+    const rid = bootstrapResumeSnapshot?.runId?.trim()
+    if (rid) {
+      setResumeBarHidden(false)
+      toast(
+        '已有进行中的生成。请先点击上方「继续」回到进度；关闭向导或刷新后也可在此重新进入。',
+        { duration: 5200 },
+      )
+      return false
+    }
+    return true
+  }
+
+  const openNewBootstrapWizard = () => {
+    if (!guardOpenNewBootstrapWizard()) return
+    setWizardRecoverRunId(null)
+    setShowWizard(true)
+  }
+
   return (
     <div className="min-h-screen bg-[#f8fafc] text-gray-950 lg:flex">
-      {showWizard && <GenerateWizard onClose={onWizardClose} />}
+      {showWizard && (
+        <GenerateWizard
+          onClose={onWizardClose}
+          recoverRunId={wizardRecoverRunId}
+          onRecoverConsumed={() => setWizardRecoverRunId(null)}
+        />
+      )}
       {showForm && (
         <CreateProjectDialog
           form={form}
@@ -262,7 +376,12 @@ export default function BookshelfPage() {
           onChange={setForm}
           onCreate={create}
           onClose={() => setShowForm(false)}
-          onUseAi={() => { setShowForm(false); setShowWizard(true) }}
+          onUseAi={() => {
+            setShowForm(false)
+            if (!guardOpenNewBootstrapWizard()) return
+            setWizardRecoverRunId(null)
+            setShowWizard(true)
+          }}
         />
       )}
 
@@ -308,7 +427,7 @@ export default function BookshelfPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowWizard(true)}
+                  onClick={openNewBootstrapWizard}
                   className="flex h-10 items-center gap-2 rounded-lg bg-amber-500 px-4 text-sm font-semibold text-white shadow-md transition-colors hover:bg-amber-600"
                 >
                   <Sparkles size={16} />
@@ -316,6 +435,20 @@ export default function BookshelfPage() {
                 </button>
               </div>
             </div>
+
+            <ActiveBootstrapResumeBar
+              snapshot={bootstrapResumeSnapshot}
+              hidden={resumeBarHidden}
+              onContinue={() => {
+                if (!bootstrapResumeSnapshot?.runId) return
+                setWizardRecoverRunId(bootstrapResumeSnapshot.runId)
+                setShowWizard(true)
+                setResumeBarHidden(false)
+              }}
+              onHide={() => setResumeBarHidden(true)}
+              onCancelRun={handleCancelBootstrapRun}
+              cancelLoading={resumeCancelLoading}
+            />
 
             {/* 书架木板分隔 */}
             <div className="mt-6 h-px bg-gradient-to-r from-transparent via-amber-200/60 to-transparent" />
@@ -333,21 +466,23 @@ export default function BookshelfPage() {
                 <p>没有找到「{search}」相关的小说</p>
               </div>
             ) : projects.length === 0 ? (
-              <EmptyShelf onCreate={() => setShowWizard(true)} />
+              <EmptyShelf onCreate={openNewBootstrapWizard} />
             ) : (
               <div className="grid gap-6 pt-8 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                 {filtered.map(project => (
                   <BookCard
                     key={project.id}
                     project={project}
-                    onClick={() => navigate(`/bookshelf/${project.id}`)}
+                    onOpen={() => navigate(`/bookshelf/${project.id}`)}
+                    onDelete={deleteProject}
+                    deleting={deletingId === project.id}
                   />
                 ))}
 
                 {/* 添加占位卡 */}
                 <button
                   type="button"
-                  onClick={() => setShowWizard(true)}
+                  onClick={openNewBootstrapWizard}
                   className="flex h-48 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-gray-200 bg-white/60 text-gray-400 transition-colors hover:border-amber-300 hover:text-amber-500"
                 >
                   <Plus size={28} />

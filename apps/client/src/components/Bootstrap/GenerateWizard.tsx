@@ -1,28 +1,31 @@
 /**
  * @file GenerateWizard — 一键生成小说的主向导面板
  *
- * 职责：
- * - 渲染「输入 → 生成中 → 闸门确认 → 完成」四阶段 UI
- * - SSE 业务状态委托给 useBootstrapStream hook
- * - generating / done 阶段渲染时间轴纪要（BootstrapTimeline + BootstrapTimelineDetail）
+ * 入口约定（与书架/小说详情顶条互补）：
+ * - **新建**：从首页「用 AI 写」、书架「AI 生成」等进入，``recoverRunId`` 为空；若已有未结束 run，各页会先拦截并提示点「继续」。
+ * - **恢复**：仅在用户点 ``ActiveBootstrapResumeBar`` 的「继续」时传入 ``recoverRunId``（关闭向导、刷新后默认留在当前页，不自动打开本组件）。
  *
  * 阶段流转（由 hook 驱动）：
- *   input → generating → gate（立项定位确认）→ generating → done
+ *   input → generating → gate（根闸门审阅）→ generating → done
  *
- * 注意：单次全量（single_shot）模式不经过 gate；gate 仅用于串行模式。
+ * 支持 ``recoverRunId``：回放事件并重连 SSE。
+ *
+ * **外壳形态**（互相独立、可顶栏切换）：
+ * - ``modal``：正常提交流程——输入 / 闸门 / 生成中 / 纪要均在**居中弹层**内完成（与截图一致）。
+ * - ``workspace``：多用于刷新后从顶条「继续」恢复（``recoverRunId``）——默认**全屏工作台**时间轴，便于断线重连后对照步骤；亦可手动与弹层互切。
  */
 import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, X } from 'lucide-react'
+import { Loader2, Maximize2, Minimize2, Sparkles, X } from 'lucide-react'
 import clsx from 'clsx'
+import toast from 'react-hot-toast'
 import { llmApi, projectsApi } from '../../api/client'
 import type { LlmOverview } from '../../types'
 import { llmProviderIdFromRoute, modelProfileFromRoute, useAppStore } from '../../store'
 import { TargetWordsInput } from '../TargetWordsInput'
 import { useBootstrapStream } from './hooks/useBootstrapStream'
 import type { StepKey } from './hooks/useBootstrapStream'
-import PositioningGatePanel from './PositioningGatePanel'
-import BootstrapStepGatePanel from './BootstrapStepGatePanel'
+import BootstrapGateTimelineDetail from './BootstrapGateTimelineDetail'
 import BootstrapTimeline from './BootstrapTimeline'
 import BootstrapTimelineDetail from './BootstrapTimelineDetail'
 
@@ -37,20 +40,27 @@ const WORD_OPTIONS = [
 interface Props {
   /** 关闭弹窗（取消或完成后跳转前调用） */
   onClose: () => void
+  /** 恢复某次未结束的 run（与首页/书架顶部条联动） */
+  recoverRunId?: string | null
+  /** 恢复流程已开始消费 recoverRunId 后回调，避免父级 effect 重复触发 */
+  onRecoverConsumed?: () => void
 }
 
 type Mode = 'sequential' | 'single_shot'
 
-export default function GenerateWizard({ onClose }: Props) {
+/** 弹层（默认正常提交） vs 全屏工作台（默认恢复 run） */
+type BootstrapShell = 'modal' | 'workspace'
+
+export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsumed }: Props) {
   const navigate       = useNavigate()
   const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
   const setAiBackendRoute = useAppStore(s => s.setAiBackendRoute)
 
   // ── Bootstrap SSE 状态（委托给 hook）──────────────────────────
   const {
-    phase, steps, errorMsg, projectId, positioningData, generationStartMs,
-    gateStep, gateMessage, gatePreview,
-    startGenerate: hookStart, handleResume, cancel: hookCancel,
+    phase, steps, errorMsg, projectId, positioningData, generationStartMs, runId,
+    gateStep, gateMessage, gatePreview, activeLogline,
+    startGenerate: hookStart, reconnectToRun, handleResume, abortSse, cancelRun,
   } = useBootstrapStream()
 
   /** 时间轴当前选中的步骤 key */
@@ -71,6 +81,14 @@ export default function GenerateWizard({ onClose }: Props) {
   /** resume 请求进行中（gate 面板按钮禁用态） */
   const [resumeLoading, setResumeLoading] = useState(false)
 
+  /**
+   * 有 ``recoverRunId`` 时默认全屏工作台（刷新/断线后继续）；否则默认弹层。
+   * 输入阶段强制弹层，避免空状态占满屏。
+   */
+  const [shell, setShell] = useState<BootstrapShell>(() =>
+    recoverRunId?.trim() ? 'workspace' : 'modal',
+  )
+
   // ── 初始化：拉取 LLM 概况 ────────────────────────────────────
   useEffect(() => {
     let alive = true
@@ -89,6 +107,47 @@ export default function GenerateWizard({ onClose }: Props) {
     const id = window.setInterval(() => setWaitSec(s => s + 1), 1000)
     return () => window.clearInterval(id)
   }, [phase])
+
+  /** 与 resume / 重连请求体一致，避免每次 render 新对象导致恢复 effect 反复触发 */
+  const resumeParams = useMemo(
+    () => ({
+      modelProfile: modelProfileFromRoute(aiBackendRoute),
+      llmProviderId: llmProviderIdFromRoute(aiBackendRoute),
+    }),
+    [aiBackendRoute],
+  )
+
+  /** 从 URL 或 session 恢复 run 后，把时间轴上的「一句话」与后端 logline 对齐 */
+  useEffect(() => {
+    const t = activeLogline?.trim()
+    if (!t) return
+    if (phase !== 'input') setLogline(t)
+  }, [activeLogline, phase])
+
+  useEffect(() => {
+    if (phase === 'input') setShell('modal')
+  }, [phase])
+
+  /** 父级传入 recoverRunId（首页/书架条「继续」）时：回放事件 + 重连 SSE */
+  useEffect(() => {
+    const rid = recoverRunId?.trim()
+    if (!rid) return
+    let cancelled = false
+    void reconnectToRun(rid, resumeParams, { loglineHint: logline.trim() || undefined })
+      .then(() => {
+        if (!cancelled) onRecoverConsumed?.()
+      })
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : '恢复失败'
+        toast.error(msg)
+        if (!cancelled) onRecoverConsumed?.()
+      })
+    return () => {
+      cancelled = true
+    }
+    // 刻意仅依赖 recoverRunId：恢复只应在用户点击「继续」时跑一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reconnectToRun / resumeParams 稳定由调用方控制
+  }, [recoverRunId])
 
   // ── 自动选中默认远程 provider ─────────────────────────────────
   useEffect(() => {
@@ -138,11 +197,6 @@ export default function GenerateWizard({ onClose }: Props) {
     })
   }
 
-  const resumeParams = {
-    modelProfile: modelProfileFromRoute(aiBackendRoute),
-    llmProviderId: llmProviderIdFromRoute(aiBackendRoute),
-  }
-
   /**
    * Step0 闸门：提交用户审阅/编辑后的立项定位后继续。
    */
@@ -185,8 +239,36 @@ export default function GenerateWizard({ onClose }: Props) {
     }
   }
 
-  function cancel() {
-    hookCancel()
+  const [terminating, setTerminating] = useState(false)
+
+  async function cancel() {
+    if (terminating) return
+    setTerminating(true)
+    try {
+      const ok = await cancelRun()
+      if (ok) onClose()
+    } finally {
+      setTerminating(false)
+    }
+  }
+
+  /** 闸门阶段：仅断 SSE 并关弹窗；不调用 ``cancelRun``，便于顶条继续 */
+  function handleGateDismiss() {
+    abortSse()
+    onClose()
+  }
+
+  /** 时间轴/纪要：关层不关后端；生成任务仍可由顶条「继续」或「终止」处理 */
+  function handleHeaderClose() {
+    if (phase === 'gate') {
+      handleGateDismiss()
+      return
+    }
+    if (phase === 'generating' || phase === 'done') {
+      abortSse()
+      onClose()
+      return
+    }
     onClose()
   }
 
@@ -206,59 +288,88 @@ export default function GenerateWizard({ onClose }: Props) {
     if (running) setSelectedStepKey(running.key)
   }, [steps]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** 闸门阶段：左侧时间轴锁定在当前闸门步骤，与生成中同一套工作台 */
+  useEffect(() => {
+    if (phase !== 'gate' || !gateStep) return
+    setSelectedStepKey(gateStep)
+  }, [phase, gateStep])
+
   // ── 渲染 ─────────────────────────────────────────────────────
   const selectedStep = steps.find(s => s.key === selectedStepKey) ?? null
+  const isGatePhase = phase === 'gate'
+  /** 时间轴 + 右栏：生成中 / 完成 / 根闸门（不再单独全屏审阅页） */
+  const showWorkbenchSplit = isTimelinePhase || (isGatePhase && !!gateStep)
+
+  const useWorkspaceChrome =
+    shell === 'workspace' && phase !== 'input' && showWorkbenchSplit
+
+  const innerShellClass = useWorkspaceChrome
+    ? 'flex h-full w-full flex-col overflow-hidden bg-[#f8fafc]'
+    : showWorkbenchSplit
+      ? 'flex h-[min(92vh,920px)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-gray-200/90 bg-[#f8fafc] shadow-2xl'
+      : 'flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl'
 
   return (
-    <div className={clsx(
-      'fixed inset-0 z-50 flex',
-      isTimelinePhase ? 'items-stretch' : 'items-center justify-center bg-black/40 backdrop-blur-sm p-4',
-    )}>
-      {/* 时间轴模式：全屏深色沉浸式；其他模式：居中白卡 */}
-      <div className={clsx(
-        'flex flex-col overflow-hidden',
-        isTimelinePhase
-          ? 'w-full h-full'
-          : 'bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh]',
-        phase === 'gate' && 'max-w-2xl',
+    <div
+      className={clsx(
+        'fixed inset-0 z-50 flex',
+        useWorkspaceChrome
+          ? 'items-stretch'
+          : 'items-center justify-center bg-gray-950/20 p-3 backdrop-blur-[2px] sm:p-4',
       )}
-        style={isTimelinePhase ? { background: '#0d0d12' } : undefined}
-      >
+    >
+      <div className={innerShellClass}>
 
-        {/* 标题栏 */}
+        {/* 标题栏：闸门阶段与首页顶栏一致（白底细边框） */}
         <div
-          className={clsx('flex items-center justify-between px-6 py-4 flex-shrink-0')}
-          style={isTimelinePhase
-            ? { background: '#13131a', borderBottom: '1px solid #2a2a3a' }
-            : { borderBottom: '1px solid #f3f4f6' }
-          }
+          className={clsx(
+            'flex flex-shrink-0 items-center justify-between px-5 py-3.5 sm:px-6',
+            showWorkbenchSplit && 'border-b border-gray-100 bg-white',
+          )}
+          style={!showWorkbenchSplit ? { borderBottom: '1px solid #f3f4f6' } : undefined}
         >
           <div className="flex items-center gap-2">
-            <Sparkles size={18} className={isTimelinePhase ? 'text-purple-400' : 'text-amber-500'} />
-            <span
-              className="font-semibold"
-              style={isTimelinePhase ? { color: '#e2e2ec' } : { color: '#111827' }}
-            >
+            <Sparkles size={18} className="text-amber-500" />
+            <span className="font-semibold text-gray-950">
               {phase === 'done' ? '生成纪要' : 'AI 一键生成小说'}
             </span>
             {isTimelinePhase && phase === 'done' && (
-              <span style={{ fontSize: 11, padding: '1px 8px', borderRadius: 20, border: '1px solid #22c55e50', color: '#22c55e', background: '#22c55e10', marginLeft: 4 }}>
+              <span className="ml-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
                 ✓ 全部完成
               </span>
             )}
+            {isGatePhase && (
+              <span className="ml-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                待审阅
+              </span>
+            )}
             {isTimelinePhase && phase === 'generating' && (
-              <span style={{ fontSize: 11, padding: '1px 8px', borderRadius: 20, border: '1px solid #7c6af750', color: '#a78bfa', background: '#7c6af710', marginLeft: 4 }}>
+              <span className="ml-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
                 生成中…
               </span>
             )}
           </div>
-          <button
-            onClick={cancel}
-            style={isTimelinePhase ? { color: '#5a5a78' } : { color: '#9ca3af' }}
-            className="hover:opacity-80 transition-opacity"
-          >
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            {(showWorkbenchSplit || isGatePhase) && (
+              <button
+                type="button"
+                onClick={() => setShell(s => (s === 'modal' ? 'workspace' : 'modal'))}
+                className="mr-1 inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs font-medium text-gray-700 shadow-sm transition-colors hover:border-amber-200 hover:bg-amber-50/50"
+                title={shell === 'modal' ? '全屏工作台：适合刷新后继续对照步骤' : '弹窗视图：与正常提交时一致'}
+              >
+                {shell === 'modal' ? <Maximize2 size={14} className="shrink-0 text-gray-500" /> : <Minimize2 size={14} className="shrink-0 text-gray-500" />}
+                <span className="hidden md:inline">{shell === 'modal' ? '全屏工作台' : '弹窗视图'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleHeaderClose}
+              className="rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+              aria-label={isGatePhase ? '关闭，稍后继续' : '关闭'}
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {/* ── 输入阶段 ── */}
@@ -400,49 +511,53 @@ export default function GenerateWizard({ onClose }: Props) {
           </div>
         )}
 
-        {/* ── 闸门：Step0 立项 / Step2·5·9 根设定 ── */}
-        {phase === 'gate' && gateStep === 'positioning' && positioningData && (
-          <PositioningGatePanel
-            positioning={positioningData}
-            onConfirm={handleGateConfirm}
-            onRegenerate={handlePositioningRegenerate}
-            loading={resumeLoading}
-          />
-        )}
-        {phase === 'gate' && (gateStep === 'power_systems' || gateStep === 'characters' || gateStep === 'volumes') && (
-          <BootstrapStepGatePanel
-            step={gateStep}
-            message={gateMessage || '请确认后继续生成'}
-            preview={gatePreview}
-            loading={resumeLoading}
-            onApprove={handleRootGateApprove}
-            onRegenerate={handleRootGateRegenerate}
-          />
-        )}
-
-        {/* ── 生成中 / 完成：时间轴纪要 ── */}
-        {isTimelinePhase && (
-          <div className="flex flex-1 overflow-hidden">
+        {showWorkbenchSplit && (
+          <div className="flex min-h-0 flex-1 overflow-hidden">
             <BootstrapTimeline
               steps={steps}
-              selectedKey={selectedStepKey}
-              onSelect={key => setSelectedStepKey(key)}
+              selectedKey={phase === 'gate' && gateStep ? gateStep : selectedStepKey}
+              onSelect={phase === 'gate' ? () => {} : key => setSelectedStepKey(key)}
               phase={phase}
               logline={logline}
               elapsedSec={waitSec}
               generationStartMs={generationStartMs}
             />
-            <BootstrapTimelineDetail
-              step={selectedStep}
-              positioningData={positioningData}
-              insights={insights}
-              generationStartMs={generationStartMs}
-              phase={phase}
-              projectId={projectId}
-              onNavigate={() => { onClose(); navigate(`/project/${projectId}/outline`) }}
-              onCancel={cancel}
-              errorMsg={errorMsg}
-            />
+            {isGatePhase && gateStep ? (
+              gateStep === 'positioning' && !positioningData ? (
+                <div className="flex min-h-0 flex-1 flex-col items-center justify-center bg-[#f8fafc] px-6">
+                  <Loader2 size={28} className="animate-spin text-amber-500" />
+                  <span className="mt-3 text-sm text-gray-500">正在加载立项数据…</span>
+                </div>
+              ) : (
+                <BootstrapGateTimelineDetail
+                  gateStep={gateStep}
+                  gateMessage={gateMessage}
+                  gatePreview={gatePreview}
+                  positioningData={positioningData}
+                  loading={resumeLoading}
+                  terminating={terminating}
+                  onDismiss={handleGateDismiss}
+                  onApprovePositioning={handleGateConfirm}
+                  onRegeneratePositioning={handlePositioningRegenerate}
+                  onApproveOther={handleRootGateApprove}
+                  onRegenerateOther={handleRootGateRegenerate}
+                  onTerminate={cancel}
+                />
+              )
+            ) : (
+              <BootstrapTimelineDetail
+                step={selectedStep}
+                positioningData={positioningData}
+                insights={insights}
+                generationStartMs={generationStartMs}
+                phase={phase}
+                projectId={projectId}
+                onNavigate={() => { onClose(); navigate(`/project/${projectId}/outline`) }}
+                onCancel={cancel}
+                terminating={terminating}
+                errorMsg={errorMsg}
+              />
+            )}
           </div>
         )}
       </div>

@@ -330,6 +330,154 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 ---
 
+## 代码结构红线（架构级硬约束，2026-05 新增）
+
+> 设计动机：本仓库已经出现「上帝文件」（`generation_service.py` 3149 行 / `ai_service.py` 2895 行 / `routers/outline.py` 3825 行 / `ChapterEditor.tsx` 2960 行）。它们不是被一次写出来的，而是**没有显式上限**导致的路径依赖膨胀。本节给出硬性红线 —— 触线时**必须先拆分再加新功能**，禁止「再加一段就好」式增量恶化。
+
+### 规模上限（硬指标）
+
+| 对象 | 软警戒线 | 硬上限（PR 不予合入） |
+|------|---------:|----------------------:|
+| 单文件 LOC（含注释；`.py` / `.ts` / `.tsx`） | 400 | **600** |
+| 单函数 / 单 React 组件 LOC | 80 | **150** |
+| 单类公共方法数 | 10 | **15** |
+| 单文件 `useState` / `useEffect` 总数（前端） | 20 | **40** |
+| 单 Prompt 字符串字面量行数 | 30 | **60**（超出抽到 `prompts/*.py`） |
+
+**触线处置**：超软警戒线必须在 PR 描述里说明计划；**超硬上限**的文件，PR 必须**同步包含拆分提交**（即「治旧」与「加新」同一 PR），否则评审一律退回。例外只允许两类：自动生成代码（schema、migration）、第三方供应文件。
+
+### 反 God-Object 原则
+
+- **Service 类按业务能力切包**，不按横切关注点切包。`AIService` 那种「只要共用 `_call_ai` 就什么都塞」的写法**禁止再新增方法**，新方法走 `services/ai/<capability>.py` 的 mixin / 自由函数路径（见下「拆分蓝图」）。
+- **路由文件按资源动词切包**，不按「同一前缀」无限堆。`routers/outline.py` 已达 3825 行，禁止新增 endpoint；新功能放 `routers/outline/<sub_resource>.py` 子模块。
+- **React 组件 ≤ 400 行**；超过 1500 行的 `*Page.tsx` 必须先拆 `hooks/` + 子组件再迭代。
+
+### 编排薄壳模式（Orchestration Shell）
+
+对**多步骤流程类**（Bootstrap、章节起草、复盘、读者模拟），强制采用「**编排薄壳 + 步骤独立模块 + Prompt/Parse/Save 分层**」：
+
+- **薄壳层**：`service.py` 只负责 SSE 事件循环、步骤分发、整体 try/except。不写业务 prompt、不写 DB 落库。
+- **步骤层**：每个步骤一个文件（如 `steps/positioning.py`），导出 `async def gen_xxx(ai, db, project, ctx) -> ...`。文件内拆 `_build_prompt` / `_persist` 两个私有函数。
+- **Prompt 层**：长 prompt（≥ 30 行字面量）抽到 `prompts/*.py`；带 ctx 插值的用 f-string 函数封装。
+- **Parse 层**：JSON 解析统一走 `parse.py`（如 `_parse_json` / `_coerce_*` / `_safe_int`），禁止在 step 文件内现写 try/except。
+
+新增步骤 = 新增一个 step 文件 + 薄壳里加一段 yield，**结构上不可能让薄壳回到 3000 行**。
+
+---
+
+## Service / Router 拆分蓝图（落地清单）
+
+> 以下是目前已规划但**尚未落地**的拆分。新写代码前先看这里：若新功能属于以下任一模块，请直接放到拆分后的目标位置，**不要往旧的上帝文件里塞**。
+
+### `services/generation_service.py` → `services/bootstrap/` 包
+
+```
+services/bootstrap/
+├── __init__.py          # re-export GenerationService（保持外部 import 兼容）
+├── service.py           # class GenerationService：仅 __init__ / bootstrap / _sequential / _single_shot
+├── context.py           # hydrate_ctx_from_project / _get_genre_kit_block
+├── sse.py               # _sse / step_start / step_done helpers
+├── parse.py             # _parse_json / _safe_int / _coerce_power_system_rank
+├── retry.py             # _call_with_retry
+├── prompts/
+│   ├── single_shot.py   # _single_shot_prompt
+│   ├── blueprints.py    # _setting_blueprints_for_prompt + _setting_extra_with_defaults
+│   └── word_budget.py   # _book_length_constraints_for_prompt
+├── steps/               # 每个 Bootstrap step 一个文件（≤ 300 行）
+│   ├── positioning.py            # Step 0
+│   ├── project.py                # Step 1
+│   ├── power_systems.py          # Step 2
+│   ├── factions.py               # Step 3
+│   ├── storylines.py             # Step 4
+│   ├── characters.py             # Step 5
+│   ├── skills.py                 # Step 6
+│   ├── items.py                  # Step 7
+│   ├── settings.py               # Step 8（含 _gen_settings_append）
+│   ├── volumes.py                # Step 9
+│   ├── memory.py                 # Step 10
+│   ├── relations.py              # Step 11
+│   ├── opening_contract.py       # Step 12
+│   ├── vol1_chapter_plans.py     # Step 12.5
+│   ├── ch1_scenes.py             # Step 13
+│   └── consistency_scan.py       # Step 14
+├── save_all.py          # _save_all（single_shot 大写库）
+└── completion.py        # _complete_single_shot_data / _complete_missing_*
+```
+
+**约束**：拆分完成前，**禁止**在 `generation_service.py` 新增 `_gen_*` 方法或新 Step；新需求直接落到目标 `steps/*.py`，并以 thin re-export 的方式被旧文件引用。
+
+### `services/ai_service.py` → `services/ai/` 包
+
+按业务能力切，`class AIService` 用 mixin 拼装：
+
+```
+services/ai/
+├── __init__.py          # re-export AIService
+├── client.py            # _get_client / _clip_context / _large_context_enabled / _plain_text
+├── sampling.py          # _is_retryable_llm_error / _build_sampling_kwargs / _call_ai / _stream_ai
+├── quality.py           # quality_check / quality_debt_micro_patch
+├── coherence.py         # chapter_coherence_check / apply_coherence_revisions
+├── drafting.py          # draft_assist_stream / pre_write_warning / scene_plan
+├── chat.py              # suggest_stream / chat_stream
+├── outline.py           # expand_outline / outline_quality_check / outline_repair_plan / plan_full_structure
+├── debrief.py           # auto_extract_debrief
+├── reader_sim.py        # reader_psychology_sim
+├── memory.py            # extract_memory
+└── service.py           # class AIService(ClientMixin, SamplingMixin, QualityMixin, ...)
+```
+
+**约束**：拆分完成前，**禁止**在 `AIService` 新增公共方法；新 AI 能力走 `services/ai/<capability>.py` 的自由函数 + 同名 mixin。
+
+### `routers/outline.py` → `routers/outline/` 包
+
+按子资源切，主 `__init__.py` 聚合 `router`：
+
+```
+routers/outline/
+├── __init__.py          # APIRouter 聚合 + include_router 各子模块
+├── tree.py              # GET/POST/PATCH/DELETE 大纲树基本 CRUD
+├── quality.py           # outline_quality_check / outline_repair_plan
+├── embedding_dup.py     # compute_outline_chapter_vectors / analyze_outline_embedding_duplicates
+├── power_curve.py       # _detect_outline_power_curve_issues + 路由
+├── death_continuity.py  # _detect_outline_character_death_continuity + 路由
+├── theme_align.py       # _detect_outline_theme_alignment_issues + 路由
+├── foreshadow.py        # _detect_outline_foreshadow_issues + 路由
+├── revision.py          # _create_outline_revision / _create_quality_revision
+├── ai_expand.py         # POST /ai-expand 及 commit
+└── ws.py                # outline_workflow_websocket
+```
+
+**约束**：拆分完成前，禁止在 `routers/outline.py` 新增 endpoint。
+
+### 前端组件拆分蓝图
+
+| 当前文件 | 行数 | 目标结构 |
+|---|---:|---|
+| `apps/client/src/components/Writing/ChapterEditor.tsx` | 2960 | `Writing/ChapterEditor/` 包：`index.tsx` 主壳 + `TopToolBar.tsx` + `DebriefPanel.tsx` + `PlanCard.tsx` + `CharacterMiniCard.tsx` + `hooks/{useChapterAutosave,usePreWriteWarning,useDebriefRun}.ts` + `utils.ts` |
+| `apps/client/src/pages/OutlinePage.tsx` | 2099 | `pages/Outline/` 包：树视图 / AI 扩展面板 / 质检面板 / Diff 视图分文件 |
+| `apps/client/src/components/Layout/GenerationQueuePanel.tsx` | 1789 | 拆 `QueueList` / `QueueItemDetail` / `useGenerationQueue` |
+| `apps/frontend/src/pages/ReadingReviewPage.tsx` | 1538 | 拆 `ReviewList` / `SnapshotDiff` / `useReviewSubmit` |
+
+**约束**：上述四个文件**冻结新增功能**；新需求必须先开拆分 PR。
+
+---
+
+## 上帝文件登记册（治理基线，2026-05-12）
+
+| 文件 | 当前行数 | 状态 |
+|---|---:|---|
+| `apps/backend/app/routers/outline.py` | 3825 | 🚫 冻结新增 endpoint，等待按子资源拆包 |
+| `apps/backend/app/services/generation_service.py` | 3149 | 🚫 冻结新增 `_gen_*` 方法，新 Step 直接进 `services/bootstrap/steps/` |
+| `apps/backend/app/services/ai_service.py` | 2895 | 🚫 冻结新增 `AIService` 公共方法，新能力进 `services/ai/<capability>.py` |
+| `apps/client/src/components/Writing/ChapterEditor.tsx` | 2960 | 🚫 冻结新增 props/`useState`，新功能走 hooks + 子组件 |
+| `apps/client/src/pages/OutlinePage.tsx` | 2099 | 🚫 冻结新增功能 |
+| `apps/client/src/components/Layout/GenerationQueuePanel.tsx` | 1789 | ⚠️ 警告区，下一次重大改动同步拆分 |
+| `apps/frontend/src/pages/ReadingReviewPage.tsx` | 1538 | ⚠️ 警告区 |
+
+> 任何一次让上表文件**增加 ≥ 50 行**的 PR 都必须同时包含等量或更多的「治旧」删除量；否则视为破坏红线。
+
+---
+
 ## 代码文档与注释契约（架构级）
 
 本节约束 **人机协作与长期演进**：注释不是为了「行数好看」，而是为了让 **公共 API、业务不变量、失败形态与边界** 在一屏内可被读懂；后续在本仓库改 **TypeScript/JavaScript** 时，以 **严格 JSDoc** 为默认交付标准。
@@ -370,13 +518,15 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 ## 开发建议（给未来的 Claude）
 
-1. **改 AI 调用**：只需动 `apps/backend/app/services/ai_service.py`，不要在 router 层直接调 openai
+0. **动手前先读「代码结构红线」与「上帝文件登记册」**：若改动文件已在登记册，**禁止**直接在原文件里加新功能；先按「拆分蓝图」的目标结构落新代码，再考虑老文件的迁移节奏。
+1. **改 AI 调用**：动 `apps/backend/app/services/ai_service.py` 时**只允许修改/重构现有方法**，新增能力一律按蓝图放 `services/ai/<capability>.py`；router 层永远不直连 openai
 2. **加新数据表**：在 `apps/backend/app/models/` 新建文件 → `models/__init__.py` 导出 → `schemas/` 对应 → `routers/` 路由 → `main.py` 注册
-3. **Prompt 优化**：prompt 字符串统一放在 service 层；需要 JSON 时在提示词末尾强调「只返回 JSON」
+3. **Prompt 优化**：prompt 字符串统一放在 service 层；超 30 行抽到 `*/prompts/*.py`；需要 JSON 时在提示词末尾强调「只返回 JSON」
 4. **JSON 解析**：所有 `_call_ai` 的 JSON 解析用 `_parse_json()` 统一处理，不要 try/except 分散在各处
 5. **pgvector**：embedding 字段已在 `MemoryChunk` 预留，启用时需 `CREATE EXTENSION vector;` 并取消 `memory.py` 中的条件导入
 6. **改创作端 UI**：主要改 `apps/client/`；**管理后台**改 `apps/frontend/`（与 client 独立依赖与构建）
 7. **TS/JS 注释**：新增或修改公共 `export` 时，遵循上文「代码文档与注释契约」，使用 **严格 JSDoc**；后端对应模块用 Google 风格 docstring。
+8. **PR 自检**：提交前对触线文件执行 `wc -l <file>`，超硬上限必须**先拆再合**；新建 step / capability / sub-router 必须落到拆分蓝图指定路径。
 
 ---
 

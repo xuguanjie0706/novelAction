@@ -32,31 +32,50 @@ from app.models import (
     Faction, Skill, Item, ReaderPromise, Scene
 )
 
-
 # ─────────────────────────────────────────────────────────────
-#  工具函数
+#  Bootstrap 包模块级工具 / 常量 / prompt 构造（thin re-export）
+#
+#  本文件正在被拆分为 `services/bootstrap/` 子包（参见 CLAUDE.md「Service 拆分蓝图」）。
+#  Step A 已迁移：parse 工具、SSE、prompt 构造与蓝图常量。
+#  下列 `_前缀` 别名保留是为了**完全不破坏**外部 import 路径，例如：
+#      from app.services.generation_service import _parse_json
+#      generation_module.GEMINI_SETTING_BLUEPRINTS
+#      generation_module._single_shot_prompt(...)
+#  实现位置：
+#      apps/backend/app/services/bootstrap/parse.py
+#      apps/backend/app/services/bootstrap/sse.py
+#      apps/backend/app/services/bootstrap/prompts/{blueprints,word_budget,single_shot}.py
 # ─────────────────────────────────────────────────────────────
 
-def _parse_json(text: str):
-    """容错 JSON 解析：去 markdown fence、去 think 标签、strip 空白"""
-    # 去掉 <think>...</think>（部分兼容端点会输出 think 块）
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    text = text.strip()
-    # 去掉 ```json ... ``` 或 ``` ... ```
-    fence = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
-    if fence:
-        text = fence.group(1).strip()
-    # 找第一个 { 或 [ 开始截取
-    start = min(
-        (text.find("{") if text.find("{") != -1 else len(text)),
-        (text.find("[") if text.find("[") != -1 else len(text)),
-    )
-    text = text[start:]
-    return json.loads(text)
+from app.services.bootstrap.parse import (
+    parse_json as _parse_json,
+    coerce_power_system_rank as _coerce_power_system_rank,
+    safe_int as _safe_int,
+)
+from app.services.bootstrap.sse import sse as _sse
+from app.services.bootstrap.prompts import (
+    GEMINI_SETTING_BLUEPRINTS,
+    SETTING_CARD_SCHEMA_BRIEF as _SETTING_CARD_SCHEMA_BRIEF,
+    CHARACTER_TARGET,
+    FACTION_MIN_TARGET,
+    FACTION_MAX_TARGET,
+    SKILL_MIN_TARGET,
+    SKILL_MAX_TARGET,
+    ITEM_MIN_TARGET,
+    ITEM_MAX_TARGET,
+    setting_blueprints_for_prompt as _setting_blueprints_for_prompt,
+    setting_extra_with_defaults as _setting_extra_with_defaults,
+    book_length_constraints_for_prompt as _book_length_constraints_for_prompt,
+    single_shot_prompt as _single_shot_prompt,
+)
 
 
 def _get_genre_kit_block(ctx: dict) -> str:
-    """返回 genre_kit 的 prompt 注入块，若 ctx 中已有则直接使用"""
+    """返回 genre_kit 的 prompt 注入块，若 ctx 中已有则直接使用。
+
+    暂留在此文件中（未迁入 bootstrap 包）：依赖 ctx 与 genre_kit 服务，与 step 实现强耦合，
+    将与 14 个 `_gen_*` 一起在 Step B 迁移到 `bootstrap/context.py`。
+    """
     kit_prompt = ctx.get("genre_kit_prompt")
     if kit_prompt:
         return f"\n{kit_prompt}\n"
@@ -66,267 +85,6 @@ def _get_genre_kit_block(ctx: dict) -> str:
         from app.services.genre_kit import get_genre_guardrail
         return "\n" + get_genre_guardrail(genre) + "\n"
     return ""
-
-
-def _coerce_power_system_rank(value, levels: list, default: int | None) -> int | None:
-    """
-    DB 列 protagonist_*_rank 为 Integer，须对应 levels[].rank。
-    LLM 常误填境界中文名；此处尽量解析为整数，失败则回退 default。
-    """
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return default
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float) and value == int(value):
-        return int(value)
-    if isinstance(value, str):
-        s = value.strip()
-        if not s:
-            return default
-        try:
-            return int(s)
-        except ValueError:
-            pass
-        norm_levels = [lv for lv in (levels or []) if isinstance(lv, dict)]
-        for lv in norm_levels:
-            name = (lv.get("name") or "").strip()
-            if not name:
-                continue
-            if s == name or name in s or s in name:
-                r = lv.get("rank")
-                if isinstance(r, int):
-                    return r
-                try:
-                    return int(r)
-                except (TypeError, ValueError):
-                    continue
-    return default
-
-
-def _safe_int(
-    value,
-    default: int | None = None,
-    *,
-    min_v: int | None = None,
-    max_v: int | None = None,
-) -> int | None:
-    """
-    单次生成 JSON 里 Integer 字段常被写成字符串或非数字文案；
-    尽量解析为 int，失败则 default；可选 min/max 裁剪。
-    """
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return default
-    if isinstance(value, int):
-        out = value
-    elif isinstance(value, float) and value == int(value):
-        out = int(value)
-    elif isinstance(value, str):
-        s = value.strip()
-        if not s:
-            return default
-        try:
-            out = int(s)
-        except ValueError:
-            m = re.search(r"-?\d+", s)
-            if not m:
-                return default
-            out = int(m.group(0))
-    else:
-        return default
-    if min_v is not None:
-        out = max(min_v, out)
-    if max_v is not None:
-        out = min(max_v, out)
-    return out
-
-
-def _sse(event: str, **kwargs) -> str:
-    payload = {"event": event, **kwargs}
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-
-GEMINI_SETTING_BLUEPRINTS = [
-    {"title": "作品立意", "category": "世界背景", "tags": ["立意", "主题"], "importance": "core", "stage": "full", "section": "core", "purpose": "锁定作品承诺、核心矛盾、读者钩子和禁忌边界。"},
-    {"title": "世界底层规则", "category": "规则法则", "tags": ["规则", "法则"], "importance": "core", "stage": "full", "section": "focus", "purpose": "定义所有角色必须遵守的硬规则、代价和例外。"},
-    {"title": "时代格局与阶层结构", "category": "世界背景", "tags": ["时代", "阶层"], "importance": "core", "stage": "full", "section": "focus", "purpose": "说明世界为什么不公平，主角从哪里被压迫。"},
-    {"title": "主角起点生存环境", "category": "世界背景", "tags": ["起点", "生存"], "importance": "core", "stage": "early", "section": "focus", "purpose": "提供开篇十章可直接使用的生活压力、羞辱和资源限制。"},
-    {"title": "大陆地图与地缘格局", "category": "地理场景", "tags": ["地图", "地理"], "importance": "core", "stage": "full", "section": "focus", "purpose": "给出大地图、路线方向、资源分布和势力边界。"},
-    {"title": "开篇城镇与日常空间", "category": "地理场景", "tags": ["城镇", "开篇"], "importance": "major", "stage": "early", "section": "focus", "purpose": "沉淀主角开局活动区、街巷、家族/宗门/市集场景。"},
-    {"title": "核心宗门或学院地貌", "category": "地理场景", "tags": ["宗门", "学院"], "importance": "major", "stage": "early", "section": "focus", "purpose": "给修炼、考核、冲突和师承关系提供稳定舞台。"},
-    {"title": "禁地与高危秘境", "category": "地理场景", "tags": ["禁地", "秘境"], "importance": "major", "stage": "mid", "section": "focus", "purpose": "准备升级副本、伏笔揭示和关键资源争夺。"},
-    {"title": "交通路径与边境关卡", "category": "地理场景", "tags": ["交通", "边境"], "importance": "major", "stage": "full", "section": "focus", "purpose": "约束角色移动速度、追杀路线和跨区域代价。"},
-    {"title": "远古战争与失落真相", "category": "历史传说", "tags": ["远古", "战争"], "importance": "core", "stage": "full", "section": "focus", "purpose": "埋下全书级谜团、反派根源和世界现状成因。"},
-    {"title": "被篡改的官方历史", "category": "历史传说", "tags": ["历史", "谎言"], "importance": "major", "stage": "mid", "section": "focus", "purpose": "制造信息差，让读者持续追问真相。"},
-    {"title": "民间传说与危险谣言", "category": "历史传说", "tags": ["传说", "谣言"], "importance": "flavor", "stage": "early", "section": "focus", "purpose": "给路人谈资、地方恐惧和小伏笔提供素材。"},
-    {"title": "禁忌人物或失踪先贤", "category": "历史传说", "tags": ["先贤", "禁忌"], "importance": "major", "stage": "full", "section": "focus", "purpose": "连接主角传承、反派阴影和后期真相。"},
-    {"title": "宗门礼法与等级称谓", "category": "文化风俗", "tags": ["礼法", "称谓"], "importance": "major", "stage": "early", "section": "focus", "purpose": "让对话、羞辱、拜师和处罚有具体制度感。"},
-    {"title": "民俗节庆与公共仪式", "category": "文化风俗", "tags": ["节庆", "仪式"], "importance": "flavor", "stage": "full", "section": "focus", "purpose": "提供大型场景、社交冲突和视觉记忆点。"},
-    {"title": "交易习惯与黑市规矩", "category": "文化风俗", "tags": ["交易", "黑市"], "importance": "major", "stage": "full", "section": "focus", "purpose": "支撑拍卖、情报、赃物、资源兑换和风险。"},
-    {"title": "婚盟血誓与家族规训", "category": "文化风俗", "tags": ["家族", "誓约"], "importance": "major", "stage": "mid", "section": "focus", "purpose": "制造人物选择、亲情束缚和势力联姻矛盾。"},
-    {"title": "资源经济与稀缺机制", "category": "规则法则", "tags": ["资源", "经济"], "importance": "core", "stage": "full", "section": "focus", "purpose": "解释修炼资源如何流通、垄断和剥削。"},
-    {"title": "誓约契约与违约反噬", "category": "规则法则", "tags": ["誓约", "契约"], "importance": "major", "stage": "full", "section": "focus", "purpose": "给承诺、背叛、交易和审判提供硬约束。"},
-    {"title": "突破副作用与失败代价", "category": "规则法则", "tags": ["突破", "代价"], "importance": "core", "stage": "full", "section": "focus", "purpose": "防止升级廉价化，让每次变强有代价。"},
-    {"title": "信息禁区与知识垄断", "category": "规则法则", "tags": ["禁区", "知识"], "importance": "major", "stage": "mid", "section": "focus", "purpose": "解释秘密为何难以公开，制造调查阻力。"},
-    {"title": "妖兽生态与危险等级", "category": "其他", "tags": ["妖兽", "生态"], "importance": "major", "stage": "full", "section": "focus", "purpose": "提供野外战斗、材料来源和环境压迫。"},
-    {"title": "职业体系与底层营生", "category": "其他", "tags": ["职业", "民生"], "importance": "flavor", "stage": "full", "section": "focus", "purpose": "让世界不只围着修炼者转，补足普通人的生活。"},
-    {"title": "终局神话与世界边界", "category": "其他", "tags": ["终局", "边界"], "importance": "core", "stage": "late", "section": "focus", "purpose": "预埋后期地图扩展、终极敌人和结局余味。"},
-]
-
-_SETTING_CARD_SCHEMA_BRIEF = """单卡 JSON 须含：title, content（每张≥180字、可落地名词/规则/代价/冲突）, tags, extra。
-extra 须含 category、importance、stage（与蓝图字段一致）。
-蓝图 section 为 core：extra.core 必填 core_concept, genre_position, protagonist_drive, core_conflict, reader_hook, emotional_tone, boundaries, ending_direction（各一句短句）。
-蓝图 section 为 focus：extra.focus 必填 summary, story_function, conflict_seed, cost_or_risk, affected_people, exception_or_loophole, visual_anchor（各一句）。
-每张 extra 还须 reveal_timing（何时以何情节揭示）、who_knows_now（须从上方已列人物名与势力名择真实名书写，禁用「主角」「反派」等泛称）。
-【JSON 可解析性】字符串内禁止未转义的英文双引号 " ，对白用「」或省略引号。"""
-
-CHARACTER_TARGET = 8
-FACTION_MIN_TARGET = 4
-FACTION_MAX_TARGET = 6
-SKILL_MIN_TARGET = 5
-SKILL_MAX_TARGET = 8
-ITEM_MIN_TARGET = 5
-ITEM_MAX_TARGET = 8
-def _setting_blueprints_for_prompt() -> str:
-    return json.dumps(GEMINI_SETTING_BLUEPRINTS, ensure_ascii=False, indent=2)
-
-
-def _book_length_constraints_for_prompt(target_words: int) -> str:
-    """写入 LLM：premise「类型与篇幅」必须与项目 target_words 一致，避免默认套用网文超长篇区间。"""
-    from app.services.outline_planning import words_to_plan
-
-    tw = max(1, int(target_words or 1_200_000))
-    plan = words_to_plan(tw)
-    approx_wan = round(tw / 10_000)
-    return (
-        f"【全书字数目标（硬性约束）】全书计划总字数为 {tw:,} 字（约 {approx_wan} 万字），"
-        f"按当前规划约 {plan['total_chapters']} 章、{plan['total_volumes']} 卷。\n"
-        "premise 中的「类型与篇幅」必须与上述总字数一致：用该字数规模（或与之等价的单一区间，且上下限均不得偏离该目标一个数量级）描述篇幅，"
-        "禁止写「三百万—五百万字」「数百万字」「千万字级」等与上述目标明显矛盾的常见超长篇口径；"
-        "若题材常见于超长篇，仍须按本项目既定总字数收敛叙事尺度（地图换代、支线数量与之匹配），不得暗示必须写到更高字数才能讲完。"
-    )
-
-
-def _setting_extra_with_defaults(item: dict) -> dict:
-    extra = item.get("extra", {})
-    if not isinstance(extra, dict):
-        extra = {}
-    matching = next(
-        (bp for bp in GEMINI_SETTING_BLUEPRINTS if bp["title"] == item.get("title")),
-        None,
-    )
-    if matching:
-        extra = {
-            "schema_version": 2,
-            **extra,
-            "category": matching["category"],
-            "importance": matching["importance"],
-            "stage": matching["stage"],
-        }
-    else:
-        extra = {"schema_version": 2, **extra}
-    # 揭示节奏字段（v3，若 AI 生成时填写则保留，否则给空字符串占位）
-    extra.setdefault("reveal_timing", "")      # 本设定何时/以何种情节方式向读者/主角揭示
-    extra.setdefault("who_knows_now", "")      # 故事开篇时哪些角色/势力知道这一设定
-    return extra
-
-
-def _single_shot_prompt(logline: str, premise: str = "", target_words: int = 1_200_000) -> str:
-    from app.services.outline_planning import words_to_plan
-    plan = words_to_plan(target_words)
-    n_volumes = plan["total_volumes"]
-    total_chapters_hint = plan["total_chapters"]
-    setting_blueprints = _setting_blueprints_for_prompt()
-    return f"""根据以下创意，生成完整的小说初始化数据：
-
-创意：{logline}
-立意与类型（作品基本面）：{premise[:2000] or '（未填写，请根据创意自动提炼作品定位、主题命题、核心矛盾与禁忌边界）'}
-【全书字数目标】{target_words:,}字，折合约{total_chapters_hint}章
-{_book_length_constraints_for_prompt(target_words)}
-
-返回一个 JSON 对象，顶层字段固定为：
-project, power_systems, factions, storylines, skills, items, characters, settings, outline, memory, relations。
-
-下面是字段结构说明，不代表数组数量；数组数量必须遵守后面的硬性数量规则。
-
-project 字段结构：
-{{
-  "title": "小说名称",
-  "genre": "玄幻",
-  "logline": "{logline}",
-  "premise": "立意与类型（含作品定位、主题命题、核心矛盾、禁忌边界，可落地，至少200字）；其中「类型与篇幅」必须严格服从上方【全书字数目标（硬性约束）】",
-  "world_overview": "世界观简述（300~500字）",
-  "story_core": {{"drive": "故事驱动力", "conflict": "核心矛盾", "theme": "主题", "differentiation": "差异化"}}
-}}
-
-power_systems 每个元素字段：
-name, system_type, description, cultivation_method, breakthrough_condition, special_rules,
-protagonist_start_rank, protagonist_end_rank, levels。
-protagonist_start_rank 与 protagonist_end_rank 必须是整数（与 levels 中某一层的 rank 一致），禁止写境界中文名。
-levels 至少 6 个层级，每层包含 rank, name, description, requirements, abilities, sub_level_count。
-
-factions 每个元素字段：
-name, faction_type, alignment, active_period, description, territory, strength_level,
-member_count, top_power, goals, resources, history, secrets, rivals, allies, attitude_to_protagonist。
-
-storylines 每个元素字段：
-name, line_type, description, core_conflict, resolution_direction, status, start_chapter。
-
-skills 每个元素字段：
-name, skill_type, grade, source, level_required, prerequisites, description, effects, limitations, mastered_by。
-
-items 每个元素字段：
-name, item_type, rarity, description, origin, effects, limitations, story_significance, current_owner, status。
-
-characters 每个元素字段：
-name, role, character_tier, gender, age, faction, personality, background, motivation, arc, current_realm,
-speech_style, values, fear, secrets, strengths, weaknesses, special_traits。
-role 只能是: protagonist / supporting / antagonist
-character_tier 代表该人物在全书中的叙事层级，只能是以下4个值之一：
-core=核心长线（贯穿全书，驱动主线，如主角/主反派/固定伙伴）；
-arc=弧线支柱（某卷/某段主导剧情，随弧线结束淡出）；
-plot=剧情推手（短期推进特定情节后退场）；
-background=背景填充（丰富世界氛围，无强情节绑定）。
-请根据每个人物实际定位严格判断，不要全部填 core。
-
-settings 每个元素字段：
-title, content, tags, extra。
-"作品立意" 必须填写 extra.core 全字段；其他设定卡必须填写 extra.focus 全字段。
-所有 settings 都必须写入 extra.schema_version=2、extra.category、extra.importance、extra.stage。
-
-outline 每个元素字段：
-title, sort_order, summary, hook, conflict, planned_chapters。planned_chapters 只能是 30 或 60。
-
-memory 每个元素字段：
-memory_type, title, content, tags。
-
-relations 每个元素字段：
-from_name, to_name, relation_type, description, intensity。
-
-硬性数量规则：
-- factions 必须生成 {FACTION_MIN_TARGET}~{FACTION_MAX_TARGET} 个，涵盖主角阵营、反派阵营、中立阵营；active_period 只能是 early/mid/late/full。
-- storylines 必须生成 3~5 条，必须有且只有 1 条 main。
-- skills 必须生成 {SKILL_MIN_TARGET}~{SKILL_MAX_TARGET} 个关键技能。
-- items 必须生成 {ITEM_MIN_TARGET}~{ITEM_MAX_TARGET} 个关键道具。
-- characters 必须生成 {CHARACTER_TARGET} 个：1 主角、3 核心配角、2 反派、2 师长/势力角色。
-- settings 必须生成 {len(GEMINI_SETTING_BLUEPRINTS)} 张，严格按以下【世界设定蓝图】顺序生成，不要少卡，不要合并卡。
-- outline 必须恰好生成 {n_volumes} 卷（由目标字数推算，不得增减），所有卷 planned_chapters 之和须尽量接近{total_chapters_hint}章。
-- memory 必须生成 10 条初始记忆库种子。
-
-世界设定蓝图：
-{setting_blueprints}
-
-settings 规则：
-1) 每张卡 title/category/tags/importance/stage 必须与蓝图一致，写入 extra。
-2) 每张卡 content 至少180字，要有可写进正文的名词、地点、制度、代价、例外或冲突。
-3) WorldSetting 只写没有专属表承载的叙事世界圣经；不要把势力档案、功法、道具整段重复进 settings。
-
-只返回 JSON，不要解释，不要 markdown fence。"""
-
-
 
 
 # ─────────────────────────────────────────────────────────────

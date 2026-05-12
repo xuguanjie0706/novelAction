@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.schemas.bootstrap_positioning import try_validate_positioning
 from app.services.bootstrap.parse import parse_json
 
 
@@ -13,7 +14,7 @@ async def gen_positioning(svc: Any, ctx: dict) -> dict:
         "你是有30年经验的网络小说总编辑。从一句话创意推导出可执行的题材定位，"
         "只返回 JSON，不要任何解释文字。"
     )
-    prompt = f"""创意：{ctx['logline']}
+    base_user = f"""创意：{ctx['logline']}
 作者补充：{(ctx.get('premise') or '')[:600] or '（未填写，请独立推导）'}
 
 请基于以上创意，做一次「立项会议」决策，返回 JSON：
@@ -37,32 +38,35 @@ async def gen_positioning(svc: Any, ctx: dict) -> dict:
 3. 若 logline 暗示女频题材，target_audience 不要硬扭成男频
 4. market_risk 必须诚实评估，不要只说好话——若同质化风险高，直接指出
 5. hook_test 的自评分要实事求是，6分以下要给出"如何提升钩子吸引力"的建议
-6. 严禁返回任何解释，仅返回 JSON。"""
-
-    raw = await svc._call_with_retry(
-        system,
-        prompt,
-        max_tokens=2560,
-        task="bootstrap.positioning",
-    )
-    try:
-        data = parse_json(raw)
-    except Exception:  # noqa: BLE001
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    for k in (
-        "target_audience", "selling_point", "face_slap_pattern",
-        "emotional_arc", "pace_type",
-        "market_risk", "differentiation_durability", "hook_test",
-    ):
-        v = data.get(k)
-        if not isinstance(v, str):
-            data[k] = ""
-    for k in ("tropes", "reference_works", "taboo_lines"):
-        v = data.get(k)
-        if not isinstance(v, list):
-            data[k] = []
-        else:
-            data[k] = [str(x).strip() for x in v if x and isinstance(x, (str, int, float))]
-    return data
+6. 严禁返回任何解释，仅返回 JSON。
+7. 上述 JSON 的每一个键都必须出现且类型正确；字符串不得为空（market_risk / differentiation_durability / hook_test 除外可为短句但不可省略键）。"""
+    last_schema_err = ""
+    for attempt in range(3):
+        fix_block = ""
+        if last_schema_err:
+            fix_block = (
+                "\n\n【重要：上次输出未通过 schema 校验，请修正后仅返回 JSON】\n"
+                f"校验错误摘要：{last_schema_err}\n"
+                "必须补全所有缺失键；tropes / reference_works / taboo_lines 至少各 1 条非空字符串；"
+                "selling_point / face_slap_pattern / target_audience 等核心字符串不得为空。"
+            )
+        prompt = base_user + fix_block
+        raw = await svc._call_with_retry(
+            system,
+            prompt,
+            max_tokens=2560,
+            task="bootstrap.positioning",
+        )
+        try:
+            data = parse_json(raw)
+        except Exception:  # noqa: BLE001
+            last_schema_err = "JSON 解析失败"
+            continue
+        if not isinstance(data, dict):
+            last_schema_err = "根类型必须为 JSON 对象"
+            continue
+        normalized, err = try_validate_positioning(data)
+        if normalized is not None:
+            return normalized
+        last_schema_err = err or "schema 校验失败"
+    return {}

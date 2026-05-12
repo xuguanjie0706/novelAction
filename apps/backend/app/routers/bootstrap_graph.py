@@ -15,8 +15,8 @@ bootstrap_graph.py — LangGraph Bootstrap 路由
 SSE 协议（JSON lines，prefix: data:）：
   step_start    — {"step": "positioning", "label": "..."}
   step_done     — {"step": "...", "count": N, "preview": "..."}
-  gate_pending  — {"step": "positioning", "positioning": {...}, "message": "..."}
-  gate_passed   — {"positioning": {...}}
+  gate_pending  — {"step": "positioning|power_systems|characters|volumes", "message": "...", "positioning": {...}?, "gate_preview": {...}?}
+  gate_passed   — {"step": "...", "positioning": {...}?}
   error         — {"step": "...", "message": "..."}
   complete      — {"project_id": "uuid"}
   __stream_end__— 内部哨兵，触发 SSE 连接关闭（不转发到客户端）
@@ -42,11 +42,12 @@ from app.models.bootstrap_run import BootstrapRun
 from app.models.user import User
 from app.services.bootstrap.graph import (
     emit,
-    run_bootstrap,
     resume_bootstrap,
+    run_bootstrap,
     subscribe,
     unsubscribe,
 )
+from app.schemas.bootstrap_positioning import try_validate_positioning
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/bootstrap", tags=["bootstrap-graph"])
@@ -81,10 +82,12 @@ class ResumeRequest(BaseModel):
     """
     POST /bootstrap/runs/{run_id}/resume 请求体。
 
-    positioning 为用户在前端确认或编辑后的立项定位 JSON；
-    若用户未修改直接点确认，传回原 gate_data.positioning 即可。
+    - 立项闸门（step positioning）：须带 ``positioning``（或依赖 gate_data 中的备份）；
+      ``action=regenerate`` 时忽略 positioning，由后端重新调用 Step 0。
+    - 其他闸门（境界 / 人物 / 卷骨架）：仅需 ``action``；``regenerate`` 会删除本步产物并重跑。
     """
-    positioning: dict
+    action: Literal["approve", "regenerate"] = "approve"
+    positioning: Optional[dict] = None
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
 
@@ -299,7 +302,7 @@ async def resume_run(
     task = asyncio.create_task(
         resume_bootstrap(
             run_id,
-            req.positioning,
+            _build_resume_payload(run, req),
             model_profile=req.model_profile,
             llm_provider_id=req.llm_provider_id,
             user_id=current_user.id,
@@ -337,6 +340,29 @@ async def cancel_run(
 # ──────────────────────────────────────────────────────
 # 内部辅助
 # ──────────────────────────────────────────────────────
+
+
+def _build_resume_payload(run: BootstrapRun, req: ResumeRequest) -> dict:
+    """
+    将 HTTP 请求体转为 LangGraph ``Command(resume=...)`` 用的扁平 dict。
+
+    立项闸门：校验 / 归一化 positioning；approve 时可从 gate_data 回退未改动的备份。
+    其他闸门：仅转发 action。
+    """
+    gd = run.gate_data if isinstance(run.gate_data, dict) else {}
+    kind = gd.get("kind") or "positioning"
+    if kind == "positioning":
+        if req.action == "regenerate":
+            return {"action": "regenerate"}
+        raw = req.positioning if req.positioning is not None else gd.get("positioning")
+        if not isinstance(raw, dict) or not raw:
+            raise HTTPException(status_code=422, detail="缺少有效的 positioning，无法通过立项闸门")
+        normalized, err = try_validate_positioning(raw)
+        if err or normalized is None:
+            raise HTTPException(status_code=422, detail=err or "positioning 校验失败")
+        return {"action": "approve", "positioning": normalized}
+    return {"action": req.action}
+
 
 def _get_owned_run(db: Session, run_id: str, user_id) -> BootstrapRun:
     """

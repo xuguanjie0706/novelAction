@@ -16,6 +16,8 @@ interface Props {
   positioning: Record<string, any>
   /** 用户点击「确认继续」时调用，传入最终（可能已编辑过的）positioning */
   onConfirm: (positioning: Record<string, any>) => void
+  /** 重新召开立项会议（Step 0 整步重跑） */
+  onRegenerate?: () => void
   /** 是否正在提交 resume（按钮禁用态） */
   loading?: boolean
 }
@@ -30,7 +32,7 @@ function emotionLabel(v: string) {
   return { none: '无情感线', low: '低（10%）', medium: '中（25%）', high: '高（40%）' }[v] ?? v
 }
 
-export default function PositioningGatePanel({ positioning, onConfirm, loading }: Props) {
+export default function PositioningGatePanel({ positioning, onConfirm, onRegenerate, loading }: Props) {
   const [editing, setEditing]       = useState(false)
   const [jsonText, setJsonText]     = useState(() => JSON.stringify(positioning, null, 2))
   const [jsonError, setJsonError]   = useState('')
@@ -150,6 +152,16 @@ export default function PositioningGatePanel({ positioning, onConfirm, loading }
           {editing ? '收起' : '展开修改立项定位'}
           {editing ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
         </button>
+        {onRegenerate && (
+          <button
+            type="button"
+            onClick={onRegenerate}
+            disabled={loading}
+            className="w-full py-2.5 text-sm text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 disabled:opacity-50"
+          >
+            重新召开立项会议（整步重跑）
+          </button>
+        )}
       </div>
     </div>
   )

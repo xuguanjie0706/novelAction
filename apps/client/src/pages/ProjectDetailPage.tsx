@@ -506,7 +506,16 @@ function eventText(ev: Record<string, any>) {
     return `完成：${ev.step || '步骤'}${detail ? `（${detail}）` : ''}`
   }
   if (ev.event === 'error') return `异常：${ev.message || ev.step || '未知错误'}`
-  if (ev.event === 'gate_pending') return '等待你确认立项定位'
+  if (ev.event === 'gate_pending') {
+    const st = ev.step ? String(ev.step) : ''
+    const labels: Record<string, string> = {
+      positioning: '等待你确认立项定位',
+      power_systems: '等待你确认境界体系',
+      characters: '等待你确认人物库',
+      volumes: '等待你确认卷级骨架',
+    }
+    return labels[st] || '等待你确认后继续生成'
+  }
   if (ev.event === 'gate_passed') return '已确认定位，继续生成'
   if (ev.event === 'cancelled') return ev.message || '生成已取消'
   if (ev.event === 'complete') return '整套流程已完成'

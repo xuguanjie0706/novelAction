@@ -290,6 +290,17 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
             self._clip_context(prev_chapter_tail, 300, 4000, from_end=True)
             if prev_chapter_tail else "（这是第一章，无前情）"
         )
+        prev_continuity_hard = ""
+        if (prev_chapter_tail or "").strip():
+            tail200 = self._clip_context(
+                prev_chapter_tail.strip(), 200, 4000, from_end=True
+            )
+            prev_continuity_hard = (
+                "\n\n▍【上文衔接·硬约束】\n"
+                f"以下为上章正文末尾（最多 200 字，权威续接锚点）：\n「{tail200}」\n\n"
+                "硬规则：本章正文开头约 200 字必须直接承接上述末尾的情境、人物视点、悬念与语势，"
+                "禁止凭空倒叙复盘、禁止无交代的时间或空间跳切、禁止另起炉灶改换场次。"
+            )
         continuity_part = (
             f"\n【连续性账本 / 不得违背】\n{self._clip_context(continuity_context, 2000, 24000)}\n"
             if continuity_context
@@ -400,7 +411,7 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
 {writing_brief_part}
 
 【上章结尾】
-{prev_part}
+{prev_part}{prev_continuity_hard}
 {continuity_part}
 {chapter_index_part}
 {plot_dossier_part}

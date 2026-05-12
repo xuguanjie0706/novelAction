@@ -22,6 +22,7 @@ import { TargetWordsInput } from '../TargetWordsInput'
 import { useBootstrapStream } from './hooks/useBootstrapStream'
 import type { StepKey } from './hooks/useBootstrapStream'
 import PositioningGatePanel from './PositioningGatePanel'
+import BootstrapStepGatePanel from './BootstrapStepGatePanel'
 import BootstrapTimeline from './BootstrapTimeline'
 import BootstrapTimelineDetail from './BootstrapTimelineDetail'
 
@@ -48,6 +49,7 @@ export default function GenerateWizard({ onClose }: Props) {
   // ── Bootstrap SSE 状态（委托给 hook）──────────────────────────
   const {
     phase, steps, errorMsg, projectId, positioningData, generationStartMs,
+    gateStep, gateMessage, gatePreview,
     startGenerate: hookStart, handleResume, cancel: hookCancel,
   } = useBootstrapStream()
 
@@ -136,17 +138,48 @@ export default function GenerateWizard({ onClose }: Props) {
     })
   }
 
+  const resumeParams = {
+    modelProfile: modelProfileFromRoute(aiBackendRoute),
+    llmProviderId: llmProviderIdFromRoute(aiBackendRoute),
+  }
+
   /**
-   * 闸门确认：提交用户审阅/编辑后的立项定位，继续执行图的后半段。
-   * @param positioning - 用户确认或修改后的立项定位 JSON
+   * Step0 闸门：提交用户审阅/编辑后的立项定位后继续。
    */
   async function handleGateConfirm(positioning: Record<string, any>) {
     setResumeLoading(true)
     try {
-      await handleResume(positioning, {
-        modelProfile: modelProfileFromRoute(aiBackendRoute),
-        llmProviderId: llmProviderIdFromRoute(aiBackendRoute),
-      })
+      await handleResume({ action: 'approve', positioning }, resumeParams)
+    } finally {
+      setResumeLoading(false)
+    }
+  }
+
+  /** Step0：整步重新召开立项会议 */
+  async function handlePositioningRegenerate() {
+    setResumeLoading(true)
+    try {
+      await handleResume({ action: 'regenerate' }, resumeParams)
+    } finally {
+      setResumeLoading(false)
+    }
+  }
+
+  /** Step 2 / 5 / 9 闸门：确认继续 */
+  async function handleRootGateApprove() {
+    setResumeLoading(true)
+    try {
+      await handleResume({ action: 'approve' }, resumeParams)
+    } finally {
+      setResumeLoading(false)
+    }
+  }
+
+  /** Step 2 / 5 / 9 闸门：重跑本步 */
+  async function handleRootGateRegenerate() {
+    setResumeLoading(true)
+    try {
+      await handleResume({ action: 'regenerate' }, resumeParams)
     } finally {
       setResumeLoading(false)
     }
@@ -367,12 +400,23 @@ export default function GenerateWizard({ onClose }: Props) {
           </div>
         )}
 
-        {/* ── 闸门阶段：立项定位确认 ── */}
-        {phase === 'gate' && positioningData && (
+        {/* ── 闸门：Step0 立项 / Step2·5·9 根设定 ── */}
+        {phase === 'gate' && gateStep === 'positioning' && positioningData && (
           <PositioningGatePanel
             positioning={positioningData}
             onConfirm={handleGateConfirm}
+            onRegenerate={handlePositioningRegenerate}
             loading={resumeLoading}
+          />
+        )}
+        {phase === 'gate' && (gateStep === 'power_systems' || gateStep === 'characters' || gateStep === 'volumes') && (
+          <BootstrapStepGatePanel
+            step={gateStep}
+            message={gateMessage || '请确认后继续生成'}
+            preview={gatePreview}
+            loading={resumeLoading}
+            onApprove={handleRootGateApprove}
+            onRegenerate={handleRootGateRegenerate}
           />
         )}
 

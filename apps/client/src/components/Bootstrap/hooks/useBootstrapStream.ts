@@ -18,6 +18,16 @@ import { authFetch } from '../../../api/authFetch'
 // ── 类型导出 ──────────────────────────────────────────────────
 
 export type Phase = 'input' | 'generating' | 'gate' | 'done'
+/** 与后端 ``gate_pending.step`` 对齐的根闸门步骤 */
+export type GatePendingStep = 'positioning' | 'power_systems' | 'characters' | 'volumes'
+
+const GATE_PENDING_STEPS: readonly GatePendingStep[] = [
+  'positioning', 'power_systems', 'characters', 'volumes',
+]
+
+function isGatePendingStep(s: unknown): s is GatePendingStep {
+  return typeof s === 'string' && (GATE_PENDING_STEPS as readonly string[]).includes(s)
+}
 export type StepStatus = 'pending' | 'running' | 'done' | 'error'
 /** 时间轴分组阶段标识 */
 export type StepPhase = 'foundation' | 'world' | 'characters' | 'narrative' | 'blueprint' | 'qa'
@@ -130,6 +140,9 @@ export function useBootstrapStream() {
   const [projectId, setProjectId]         = useState<string | null>(null)
   const [positioningData, setPositioning] = useState<Record<string, any> | null>(null)
   const [runId, setRunId]                 = useState<string | null>(null)
+  const [gateStep, setGateStep]           = useState<GatePendingStep | null>(null)
+  const [gateMessage, setGateMessage]     = useState('')
+  const [gatePreview, setGatePreview]     = useState<Record<string, unknown> | null>(null)
   /** 生成开始的时间戳（ms），用于计算各步骤的时间偏移 */
   const [generationStartMs, setGenStartMs] = useState<number | null>(null)
 
@@ -140,7 +153,7 @@ export function useBootstrapStream() {
   // ── 事件处理 ──────────────────────────────────────────────
 
   function handleEvent(evt: Record<string, any>) {
-    const { event, step, label, count, preview, message, project_id, positioning } = evt
+    const { event, step, label, count, preview, message, project_id, positioning, gate_preview } = evt
     const key = toKey(step)
     const now = Date.now()
 
@@ -177,7 +190,15 @@ export function useBootstrapStream() {
       }
       setErrorMsg(`${key ? `[${key}] ` : ''}${msg}`)
     } else if (event === 'gate_pending') {
-      setPositioning(positioning || {})
+      const gst = isGatePendingStep(step) ? step : 'positioning'
+      setGateStep(gst)
+      setGateMessage(typeof message === 'string' ? message : '')
+      setGatePreview(
+        gate_preview && typeof gate_preview === 'object'
+          ? (gate_preview as Record<string, unknown>)
+          : null,
+      )
+      if (positioning && typeof positioning === 'object') setPositioning(positioning)
       setPhase('gate')
     } else if (event === 'gate_passed') {
       setPhase('generating')
@@ -229,6 +250,9 @@ export function useBootstrapStream() {
       setSteps([makeStep('all', 'AI 全量生成（单次调用）'), makeStep('saving', '写入数据库')])
     } else {
       setSteps(SEQ_STEP_KEYS.map(k => makeStep(k)))
+      setGateStep(null)
+      setGateMessage('')
+      setGatePreview(null)
     }
 
     const abort = new AbortController()
@@ -271,22 +295,26 @@ export function useBootstrapStream() {
   }
 
   /**
-   * 用户在 gate 面板确认立项定位后调用，向后端提交 resume。
-   * SSE 连接仍活跃，事件将继续流入 readSse 循环。
+   * 用户在闸门面板提交后继续执行图。
+   *
+   * @param payload.action — ``approve`` 进入下游；``regenerate`` 仅对 Step0 / 2 / 5 / 9 有意义。
+   * @param payload.positioning — 仅 Step0 确认时必传（或后端从 gate_data 回退）。
    */
   async function handleResume(
-    positioning: Record<string, any>,
+    payload: { action: 'approve' | 'regenerate', positioning?: Record<string, unknown> | null },
     params: Pick<StartParams, 'modelProfile' | 'llmProviderId'>,
   ) {
     if (!runId) return
     try {
+      const body: Record<string, unknown> = {
+        action: payload.action,
+        model_profile: params.modelProfile,
+        llm_provider_id: params.llmProviderId ?? null,
+      }
+      if (payload.positioning != null) body.positioning = payload.positioning
       const res = await authFetch(`/api/v1/bootstrap/runs/${runId}/resume`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          positioning,
-          model_profile: params.modelProfile,
-          llm_provider_id: params.llmProviderId ?? null,
-        }),
+        body: JSON.stringify(body),
       })
       if (!res.ok) throw new Error(await res.text().catch(() => `resume 失败 (${res.status})`))
     } catch (err: any) {
@@ -299,6 +327,7 @@ export function useBootstrapStream() {
 
   return {
     phase, steps, errorMsg, projectId, positioningData, runId, generationStartMs,
+    gateStep, gateMessage, gatePreview,
     startGenerate, handleResume, cancel,
   }
 }

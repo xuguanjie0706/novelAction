@@ -1,12 +1,13 @@
 """
 Bootstrap LangGraph StateGraph — 支持 human-in-the-loop 闸门。
 
-拓扑：START → positioning → gate(interrupt) → project → power_systems → factions
-      → storylines → characters → skills_items → settings → volumes → memory
-      → relations → opening_contract → vol1_chapters → ch1_scenes → consistency → END
+拓扑：START → positioning → gate(interrupt) → project → power_systems → gate_power(interrupt)
+      → factions → storylines → characters → gate_chars(interrupt) → skills_items → settings
+      → volumes → gate_vol(interrupt) → memory → relations → opening_contract → vol1_chapters
+      → ch1_scenes → consistency → END
 
-gate 节点在 positioning 完成后暂停（interrupt_before），用户确认/修改 positioning
-后由 resume_bootstrap() 以 Command(resume=...) 继续。
+多个 ``interrupt_before`` 与节点内 ``interrupt()`` 配合：每道闸门先落库/推送 ``gate_pending``，
+用户 ``POST /resume`` 后继续；Step0 支持 ``action=regenerate`` 重跑立项；Step2/5/9 支持删表重跑。
 
 Checkpointing：进程内 MemorySaver（thread_id=run_id）；多 worker 需换 PostgresSaver。
 复杂节点实现见 graph_nodes.py。代码红线：本文件 < 400 行。
@@ -69,7 +70,8 @@ def _persist(db, run_id: str, payload: dict, *, status: str | None = None, **ext
         run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
         if not run:
             return
-        run.events = list(run.events or []) + [payload]
+        if payload:
+            run.events = list(run.events or []) + [payload]
         if status:
             run.status = status
         for k, v in extra.items():
@@ -178,29 +180,68 @@ async def node_positioning(state: BootstrapState, config: dict | None = None) ->
     ctx.update({"logline": state["logline"], "premise": state["premise"],
                 "target_words": state["target_words"]})
     positioning = await svc._gen_positioning(ctx)
+    if not positioning:
+        emit(run_id, "error", db, step="positioning",
+             message="立项定位生成未通过 schema 校验（已重试），请更换模型或精简创意后重试")
+        raise ValueError("positioning_invalid")
     ctx["positioning"] = positioning
     emit(run_id, "step_done", db, step="positioning", count=1,
          preview=(positioning.get("selling_point") or "")[:30])
     emit(run_id, "gate_pending", db, persist_status="awaiting_gate",
          step="positioning", positioning=positioning,
          message="请确认或修改立项定位后点击「继续生成」")
-    _persist(db, run_id, {}, gate_data={"positioning": positioning})
+    _persist(db, run_id, {}, gate_data={"kind": "positioning", "positioning": positioning})
     return {"positioning": positioning, "ctx": ctx, "completed_steps": ["positioning"]}
 
 
 async def node_gate(state: BootstrapState, config: dict | None = None) -> dict:
-    """Human-in-the-loop 闸门。首次：interrupt() 暂停图；Resume：返回用户修改的 positioning。"""
+    """Step 0 后闸门：确认 / 编辑 / 重新召开立项会议（regenerate）。"""
+    from langgraph.types import interrupt
+
     config = _resolve_config(config)
-    user_input: Any = interrupt({"type": "positioning_gate", "positioning": state["positioning"]})
-    updated = (
-        user_input.get("positioning", state["positioning"])
-        if isinstance(user_input, dict) else state["positioning"]
-    )
     db = config["configurable"]["db"]
+    run_id = state["run_id"]
+    svc = _make_svc(config)
+    positioning = dict(state.get("positioning") or {})
     ctx = dict(state.get("ctx") or {})
-    ctx["positioning"] = updated
-    emit(state["run_id"], "gate_passed", db, persist_status="running", positioning=updated)
-    return {"positioning": updated, "ctx": ctx}
+
+    while True:
+        user_input: Any = interrupt({
+            "type": "positioning_gate",
+            "step": "positioning",
+            "positioning": positioning,
+        })
+        if not isinstance(user_input, dict):
+            user_input = {}
+        action = (user_input.get("action") or "approve").strip().lower()
+        if action == "regenerate":
+            ctx = dict(state.get("ctx") or {})
+            ctx.update({
+                "logline": state["logline"],
+                "premise": state["premise"],
+                "target_words": state["target_words"],
+            })
+            positioning = await svc._gen_positioning(ctx)
+            if not positioning:
+                emit(run_id, "error", db, step="positioning",
+                     message="重新生成立项定位失败，请稍后重试")
+                raise ValueError("positioning_regen_failed")
+            ctx["positioning"] = positioning
+            emit(run_id, "step_start", db, step="positioning", label="重新召开立项会议…")
+            emit(run_id, "step_done", db, step="positioning", count=1,
+                 preview=(positioning.get("selling_point") or "")[:30])
+            emit(run_id, "gate_pending", db, persist_status="awaiting_gate",
+                 step="positioning", positioning=positioning,
+                 message="请再次确认或修改立项定位后继续生成")
+            _persist(db, run_id, {}, gate_data={"kind": "positioning", "positioning": positioning})
+            continue
+        updated = user_input.get("positioning", positioning)
+        if not isinstance(updated, dict):
+            updated = positioning
+        ctx["positioning"] = updated
+        emit(run_id, "gate_passed", db, persist_status="running",
+             step="positioning", positioning=updated)
+        return {"positioning": updated, "ctx": ctx}
 
 
 async def node_project(state: BootstrapState, config: dict | None = None) -> dict:
@@ -239,41 +280,53 @@ def _build_graph() -> StateGraph:
         node_characters, node_skills_items, node_volumes,
         node_relations, node_vol1_chapters, node_ch1_scenes, node_consistency,
     )
+    from app.services.bootstrap.graph_gates import (
+        node_gate_characters,
+        node_gate_power_systems,
+        node_gate_volumes,
+    )
     g = StateGraph(BootstrapState)
     for name, fn in [
-        ("positioning",      node_positioning),
-        ("gate",             node_gate),
-        ("project",          node_project),
-        ("power_systems",    node_power_systems),
-        ("factions",         node_factions),
-        ("storylines",       node_storylines),
-        ("characters",       node_characters),
-        ("skills_items",     node_skills_items),
-        ("settings",         node_settings),
-        ("volumes",          node_volumes),
-        ("memory",           node_memory),
-        ("relations",        node_relations),
-        ("opening_contract", node_opening_contract),
-        ("vol1_chapters",    node_vol1_chapters),
-        ("ch1_scenes",       node_ch1_scenes),
-        ("consistency",      node_consistency),
+        ("positioning",          node_positioning),
+        ("gate",                 node_gate),
+        ("project",              node_project),
+        ("power_systems",        node_power_systems),
+        ("gate_power_systems",   node_gate_power_systems),
+        ("factions",             node_factions),
+        ("storylines",           node_storylines),
+        ("characters",           node_characters),
+        ("gate_characters",      node_gate_characters),
+        ("skills_items",         node_skills_items),
+        ("settings",             node_settings),
+        ("volumes",              node_volumes),
+        ("gate_volumes",         node_gate_volumes),
+        ("memory",               node_memory),
+        ("relations",            node_relations),
+        ("opening_contract",     node_opening_contract),
+        ("vol1_chapters",        node_vol1_chapters),
+        ("ch1_scenes",           node_ch1_scenes),
+        ("consistency",          node_consistency),
     ]:
         g.add_node(name, fn)
 
     chain = [
         START, "positioning", "gate", "project",
-        "power_systems", "factions", "storylines",
-        "characters", "skills_items", "settings",
-        "volumes", "memory", "relations",
+        "power_systems", "gate_power_systems", "factions", "storylines",
+        "characters", "gate_characters", "skills_items", "settings",
+        "volumes", "gate_volumes", "memory", "relations",
         "opening_contract", "vol1_chapters",
         "ch1_scenes", "consistency", END,
     ]
     for a, b in zip(chain, chain[1:]):
         g.add_edge(a, b)
 
-    # interrupt_before=["gate"]：图在 gate 节点执行前暂停；
-    # positioning 节点负责更新 DB status=awaiting_gate + 推送 gate_pending 事件
-    return g.compile(checkpointer=_checkpointer, interrupt_before=["gate"])
+    return g.compile(
+        checkpointer=_checkpointer,
+        # 仅 Step0 前暂停：positioning 节点已推送 gate_pending。
+        # Step2/5/9 闸门完全依赖各 gate 节点内的 interrupt()，否则 interrupt_before
+        # 会在 emit(gate_pending) 之前截断，前端永远收不到闸门事件。
+        interrupt_before=["gate"],
+    )
 
 
 bootstrap_graph = _build_graph()
@@ -324,10 +377,14 @@ async def run_bootstrap(
 
 
 async def resume_bootstrap(
-    run_id: str, updated_positioning: dict,
-    *, model_profile: str, llm_provider_id, user_id,
+    run_id: str,
+    resume_payload: dict,
+    *,
+    model_profile: str,
+    llm_provider_id,
+    user_id,
 ) -> None:
-    """从 MemorySaver checkpoint 继续，以 Command(resume=...) 传入用户确认的 positioning。"""
+    """从 MemorySaver checkpoint 继续，以 Command(resume=...) 传入用户决策（含多闸门）。"""
     db = SessionLocal()
     try:
         run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
@@ -341,7 +398,7 @@ async def resume_bootstrap(
             "user_id": user_id,
         }}
         await bootstrap_graph.ainvoke(
-            Command(resume={"positioning": updated_positioning}),
+            Command(resume=dict(resume_payload)),
             config=config,
         )
     except asyncio.CancelledError:
@@ -351,7 +408,14 @@ async def resume_bootstrap(
         logger.exception("Bootstrap resume %s failed", run_id)
         _handle_run_error(db, run_id, exc)
     finally:
-        _push(run_id, {"event": "__stream_end__"})
+        # 多闸门：若本轮 ainvoke 停在 interrupt()（status=awaiting_gate），必须保持 SSE 连接，
+        # 等待用户下一次 /resume；仅在终态时关闭流。
+        try:
+            run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
+            if run and run.status in ("done", "failed", "cancelled"):
+                _push(run_id, {"event": "__stream_end__"})
+        except Exception:
+            pass
         db.close()
 
 

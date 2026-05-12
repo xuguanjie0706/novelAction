@@ -1,0 +1,1711 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>生成纪要 · 设计稿</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:         #0d0d12;
+    --bg2:        #13131a;
+    --bg3:        #1a1a24;
+    --bg4:        #22222f;
+    --border:     #2a2a3a;
+    --border2:    #353548;
+    --text:       #e2e2ec;
+    --text2:      #9999b8;
+    --text3:      #5a5a78;
+    --accent:     #7c6af7;
+    --accent2:    #9b8ff8;
+    --accent-glow:#7c6af740;
+
+    --c-foundation:#f59e0b;
+    --c-world:     #06b6d4;
+    --c-char:      #22c55e;
+    --c-story:     #a78bfa;
+    --c-blueprint: #f97316;
+    --c-qa:        #ef4444;
+    --c-gate:      #ec4899;
+  }
+
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-size: 13px;
+  }
+
+  /* ── HEADER ──────────────────────────────────────────── */
+  .app-header {
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+  }
+  .header-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .header-title h1 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .header-title .novel-name {
+    font-size: 12px;
+    color: var(--text2);
+    background: var(--bg4);
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    padding: 2px 8px;
+  }
+  .header-stats {
+    display: flex;
+    gap: 20px;
+    margin-left: auto;
+    align-items: center;
+  }
+  .stat-item {
+    text-align: center;
+  }
+  .stat-item .val {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1;
+  }
+  .stat-item .lbl {
+    font-size: 10px;
+    color: var(--text3);
+    margin-top: 2px;
+  }
+  .stat-sep {
+    width: 1px;
+    height: 28px;
+    background: var(--border);
+  }
+  .header-done-badge {
+    background: #16532440;
+    border: 1px solid #22c55e50;
+    color: #22c55e;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  /* ── MAIN LAYOUT ─────────────────────────────────────── */
+  .main-layout {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* ── TIMELINE PANEL ──────────────────────────────────── */
+  .timeline-panel {
+    width: 340px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    padding: 20px 0 40px;
+    border-right: 1px solid var(--border);
+    background: var(--bg);
+    position: relative;
+  }
+  .timeline-panel::-webkit-scrollbar { width: 4px; }
+  .timeline-panel::-webkit-scrollbar-track { background: transparent; }
+  .timeline-panel::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+
+  /* vertical axis line */
+  .timeline-axis {
+    position: absolute;
+    left: 36px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: linear-gradient(to bottom, transparent, var(--border2) 5%, var(--border2) 95%, transparent);
+    pointer-events: none;
+  }
+
+  /* ── PHASE GROUP ──────────────────────────────────────── */
+  .phase-group { margin-bottom: 4px; }
+  .phase-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px 6px 56px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text3);
+    position: relative;
+  }
+  .phase-header::before {
+    content: '';
+    position: absolute;
+    left: 30px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--bg2);
+    border: 2px solid var(--phase-color, var(--border2));
+    box-shadow: 0 0 8px var(--phase-color, transparent);
+  }
+  .phase-header .phase-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--phase-color, var(--text3));
+    margin-right: 2px;
+  }
+
+  /* ── STEP NODE ─────────────────────────────────────────── */
+  .step-node {
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+    padding: 6px 16px 6px 56px;
+    cursor: pointer;
+    position: relative;
+    transition: background 0.15s;
+    border-left: 3px solid transparent;
+  }
+  .step-node:hover {
+    background: var(--bg3);
+  }
+  .step-node.active {
+    background: var(--bg3);
+    border-left-color: var(--step-color, var(--accent));
+  }
+  /* node dot on axis */
+  .step-node::before {
+    content: '';
+    position: absolute;
+    left: 28px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--bg);
+    border: 2px solid var(--step-color, var(--border2));
+    transition: border-color 0.2s, box-shadow 0.2s;
+    z-index: 1;
+  }
+  .step-node.active::before,
+  .step-node:hover::before {
+    box-shadow: 0 0 10px var(--step-color, transparent);
+    background: var(--bg2);
+  }
+  .step-node.status-running::before {
+    border-color: var(--accent2);
+    animation: pulse-dot 1.2s infinite;
+  }
+  .step-node.status-done::before {
+    background: var(--step-color, var(--border2));
+    border-color: var(--step-color, var(--border2));
+  }
+  .step-node.status-error::before {
+    background: var(--c-qa);
+    border-color: var(--c-qa);
+  }
+  .step-node.status-gate::before {
+    border-color: var(--c-gate);
+    box-shadow: 0 0 10px var(--c-gate);
+    animation: pulse-gate 1.5s infinite;
+  }
+  @keyframes pulse-dot {
+    0%, 100% { box-shadow: 0 0 0px var(--accent2); }
+    50% { box-shadow: 0 0 12px var(--accent2); }
+  }
+  @keyframes pulse-gate {
+    0%, 100% { box-shadow: 0 0 4px var(--c-gate); }
+    50% { box-shadow: 0 0 16px var(--c-gate); }
+  }
+
+  .step-inner {
+    flex: 1;
+    min-width: 0;
+  }
+  .step-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    line-height: 1.3;
+  }
+  .step-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  .step-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .step-status-icon {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .step-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 3px;
+    font-size: 11px;
+    color: var(--text3);
+  }
+  .step-meta .t-start {
+    font-variant-numeric: tabular-nums;
+  }
+  .step-meta .sep { color: var(--border2); }
+  .step-meta .t-dur {
+    color: var(--text3);
+    font-variant-numeric: tabular-nums;
+  }
+  .step-meta .count-badge {
+    margin-left: auto;
+    background: var(--bg4);
+    border: 1px solid var(--border2);
+    border-radius: 10px;
+    padding: 0px 6px;
+    font-size: 10px;
+    color: var(--text2);
+    white-space: nowrap;
+  }
+
+  /* spinner */
+  .spin {
+    width: 12px; height: 12px;
+    border: 2px solid var(--border2);
+    border-top-color: var(--accent2);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* gate badge */
+  .gate-badge {
+    font-size: 10px;
+    background: #ec4899;
+    color: white;
+    border-radius: 4px;
+    padding: 1px 5px;
+    animation: pulse-opacity 1.2s infinite;
+  }
+  @keyframes pulse-opacity { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+  /* ── DETAIL PANEL ────────────────────────────────────── */
+  .detail-panel {
+    flex: 1;
+    overflow-y: auto;
+    background: var(--bg2);
+    position: relative;
+  }
+  .detail-panel::-webkit-scrollbar { width: 4px; }
+  .detail-panel::-webkit-scrollbar-track { background: transparent; }
+  .detail-panel::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+
+  .detail-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text3);
+    gap: 8px;
+    font-size: 13px;
+  }
+  .detail-empty svg { opacity: 0.3; }
+
+  .detail-content {
+    padding: 24px;
+    max-width: 800px;
+  }
+
+  /* detail header */
+  .detail-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .detail-header-icon {
+    font-size: 28px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .detail-header-text {}
+  .detail-header-text h2 {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+  .detail-header-text .desc {
+    font-size: 12px;
+    color: var(--text2);
+  }
+  .detail-timing {
+    margin-left: auto;
+    text-align: right;
+    flex-shrink: 0;
+  }
+  .detail-timing .duration-val {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .detail-timing .duration-lbl {
+    font-size: 10px;
+    color: var(--text3);
+  }
+  .detail-timing .start-time {
+    font-size: 11px;
+    color: var(--text3);
+    margin-top: 2px;
+  }
+
+  /* ── generic card ──── */
+  .card {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+  }
+  .card-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-bottom: 10px;
+  }
+  .card-row {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    margin-bottom: 6px;
+  }
+  .card-row:last-child { margin-bottom: 0; }
+  .card-row .lbl {
+    font-size: 11px;
+    color: var(--text3);
+    width: 80px;
+    flex-shrink: 0;
+  }
+  .card-row .val {
+    font-size: 13px;
+    color: var(--text);
+    flex: 1;
+  }
+
+  /* badges */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    border: 1px solid;
+    margin: 2px;
+  }
+  .badge-wrap { display: flex; flex-wrap: wrap; gap: 0; }
+
+  /* tag */
+  .tag {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin: 2px;
+  }
+
+  /* grid */
+  .card-grid { display: grid; gap: 8px; }
+  .card-grid-2 { grid-template-columns: 1fr 1fr; }
+  .card-grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+
+  /* level ladder */
+  .level-ladder { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+  .level-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    background: var(--bg4);
+    border-radius: 6px;
+    border-left: 3px solid var(--level-color, var(--border2));
+  }
+  .level-num { font-size: 10px; color: var(--text3); width: 20px; text-align: center; flex-shrink: 0; }
+  .level-name { font-size: 13px; font-weight: 500; color: var(--text); flex: 1; }
+  .level-power { font-size: 10px; color: var(--text3); }
+  .level-note { font-size: 11px; color: var(--text2); flex: 2; }
+
+  /* character cards */
+  .char-card {
+    background: var(--bg4);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .char-card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .char-avatar {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--acc1, #7c6af7), var(--acc2, #22c55e));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; color: white; font-weight: 700;
+    flex-shrink: 0;
+  }
+  .char-name { font-size: 13px; font-weight: 600; color: var(--text); }
+  .char-role { font-size: 10px; color: var(--text3); }
+  .char-realm {
+    margin-left: auto;
+    font-size: 10px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text2);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  .char-trait { font-size: 11px; color: var(--text2); line-height: 1.4; }
+
+  /* faction cards */
+  .faction-card {
+    background: var(--bg4);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 10px 12px;
+    border-left: 3px solid var(--f-color, var(--border2));
+  }
+  .faction-name { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+  .faction-type {
+    display: inline-block;
+    font-size: 10px; padding: 1px 6px; border-radius: 4px; margin-bottom: 4px;
+    background: var(--bg3); color: var(--text3);
+  }
+  .faction-desc { font-size: 11px; color: var(--text2); line-height: 1.4; }
+
+  /* volume cards */
+  .vol-card {
+    background: var(--bg4);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .vol-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .vol-num { font-size: 10px; color: var(--text3); width: 28px; flex-shrink: 0; }
+  .vol-name { font-size: 13px; font-weight: 600; color: var(--text); flex: 1; }
+  .vol-phase {
+    font-size: 10px; padding: 1px 7px; border-radius: 10px; border: 1px solid;
+    flex-shrink: 0;
+  }
+  .vol-desc { font-size: 11px; color: var(--text2); line-height: 1.4; }
+
+  /* scene cards */
+  .scene-card {
+    background: var(--bg4);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    gap: 10px;
+  }
+  .scene-num {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--accent); color: white;
+    font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .scene-body { flex: 1; min-width: 0; }
+  .scene-goal { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
+  .scene-meta { font-size: 11px; color: var(--text3); margin-bottom: 3px; }
+  .scene-hook { font-size: 11px; color: var(--text2); line-height: 1.4; }
+
+  /* consistency issues */
+  .issue-card {
+    background: var(--bg4);
+    border-radius: 8px;
+    padding: 10px 12px;
+    border-left: 3px solid;
+    margin-bottom: 6px;
+  }
+  .issue-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
+  .issue-desc { font-size: 11px; color: var(--text2); line-height: 1.4; }
+
+  /* promise cards */
+  .promise-card {
+    background: var(--bg4);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 8px 12px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .promise-prio {
+    width: 20px; height: 20px; border-radius: 4px;
+    background: var(--p-color, var(--bg3));
+    color: white; font-size: 10px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .promise-text { font-size: 12px; color: var(--text); flex: 1; line-height: 1.4; }
+  .promise-type { font-size: 10px; color: var(--text3); margin-top: 2px; }
+
+  /* storyline */
+  .sl-card {
+    background: var(--bg4);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 10px 12px;
+    border-left: 3px solid var(--sl-color, var(--border2));
+  }
+  .sl-top { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .sl-type { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--bg3); color: var(--text3); }
+  .sl-name { font-size: 13px; font-weight: 600; color: var(--text); }
+  .sl-desc { font-size: 11px; color: var(--text2); line-height: 1.4; }
+
+  /* hook test */
+  .hook-box {
+    background: var(--bg4);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .hook-text { font-size: 14px; color: var(--text); line-height: 1.6; margin-bottom: 8px; font-style: italic; }
+  .hook-score { display: flex; align-items: center; gap: 10px; }
+  .hook-stars { display: flex; gap: 3px; }
+  .hook-star { width: 14px; height: 14px; border-radius: 2px; }
+  .hook-score-num { font-size: 20px; font-weight: 700; color: var(--text); }
+  .hook-score-note { font-size: 11px; color: var(--text2); }
+
+  /* positioning summary */
+  .pos-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .pos-item {
+    background: var(--bg4);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .pos-item-full { grid-column: span 2; }
+  .pos-lbl { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+  .pos-val { font-size: 13px; color: var(--text); line-height: 1.5; }
+
+  /* section label */
+  .section-label {
+    font-size: 11px; font-weight: 700; color: var(--text3); text-transform: uppercase;
+    letter-spacing: 0.07em; margin-bottom: 8px; margin-top: 16px;
+  }
+  .section-label:first-child { margin-top: 0; }
+
+  /* step number badge in detail */
+  .step-num-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    font-size: 11px;
+    font-weight: 700;
+    color: white;
+    flex-shrink: 0;
+    margin-right: 2px;
+  }
+
+  /* progress bar in header */
+  .progress-track {
+    flex: 1;
+    height: 4px;
+    background: var(--bg4);
+    border-radius: 4px;
+    overflow: hidden;
+    max-width: 180px;
+  }
+  .progress-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width 0.4s;
+  }
+</style>
+</head>
+<body>
+
+<!-- ── APP HEADER ──────────────────────────────────────────── -->
+<div class="app-header">
+  <div class="header-title">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c6af7" stroke-width="2">
+      <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+    </svg>
+    <h1>生成纪要</h1>
+    <span class="novel-name">📖 灵根破碎录</span>
+  </div>
+
+  <!-- progress bar (during generation, shows partial fill) -->
+  <div class="progress-track" title="全部步骤完成">
+    <div class="progress-fill" style="width:100%"></div>
+  </div>
+
+  <div class="header-stats">
+    <div class="stat-item">
+      <div class="val">4<span style="font-size:13px;font-weight:400;color:var(--text2)">m</span> 32<span style="font-size:13px;font-weight:400;color:var(--text2)">s</span></div>
+      <div class="lbl">总耗时</div>
+    </div>
+    <div class="stat-sep"></div>
+    <div class="stat-item">
+      <div class="val">87</div>
+      <div class="lbl">生成条目</div>
+    </div>
+    <div class="stat-sep"></div>
+    <div class="stat-item">
+      <div class="val">15</div>
+      <div class="lbl">步骤</div>
+    </div>
+    <div class="stat-sep"></div>
+    <div class="stat-item" style="text-align:left">
+      <div class="val" style="font-size:13px;color:var(--text2);font-weight:500">2026-05-12</div>
+      <div class="lbl">14:23 生成</div>
+    </div>
+    <div class="header-done-badge">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+      全部完成
+    </div>
+  </div>
+</div>
+
+<!-- ── MAIN LAYOUT ────────────────────────────────────────── -->
+<div class="main-layout">
+
+  <!-- ── TIMELINE PANEL ─────────────────────────────────── -->
+  <div class="timeline-panel" id="timelinePanel">
+    <div class="timeline-axis"></div>
+
+    <!-- 阶段 1: 立项基础 -->
+    <div class="phase-group">
+      <div class="phase-header" style="--phase-color:var(--c-foundation)">
+        <span class="phase-dot"></span>立项基础
+      </div>
+      <div class="step-node status-done" style="--step-color:var(--c-gate)" data-key="gate" onclick="select('gate')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">🔑</span>
+            <span class="step-name">立项闸门</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ec4899" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+0s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">8.3s</span>
+            <span class="count-badge" style="color:var(--c-gate);border-color:#ec489930">人工确认 · 已通过</span>
+          </div>
+        </div>
+      </div>
+      <div class="step-node status-done active" style="--step-color:var(--c-foundation)" data-key="positioning" onclick="select('positioning')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">🎯</span>
+            <span class="step-name">立项会议</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+8s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">12.1s</span>
+            <span class="count-badge">10 项定位决策</span>
+          </div>
+        </div>
+      </div>
+      <div class="step-node status-done" style="--step-color:var(--c-foundation)" data-key="project" onclick="select('project')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">📚</span>
+            <span class="step-name">项目基础</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+21s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">6.4s</span>
+            <span class="count-badge">项目已创建</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 阶段 2: 世界构建 -->
+    <div class="phase-group">
+      <div class="phase-header" style="--phase-color:var(--c-world)">
+        <span class="phase-dot"></span>世界构建
+      </div>
+      <div class="step-node status-done" style="--step-color:var(--c-world)" data-key="power_systems" onclick="select('power_systems')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">⚡</span>
+            <span class="step-name">境界体系</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+28s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">9.8s</span>
+            <span class="count-badge">9 阶境界</span>
+          </div>
+        </div>
+      </div>
+      <div class="step-node status-done" style="--step-color:var(--c-world)" data-key="factions" onclick="select('factions')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">🏰</span>
+            <span class="step-name">势力组织</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+38s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">11.2s</span>
+            <span class="count-badge">5 个势力</span>
+          </div>
+        </div>
+      </div>
+      <div class="step-node status-done" style="--step-color:var(--c-world)" data-key="settings" onclick="select('settings')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">🌍</span>
+            <span class="step-name">世界观设定</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+50s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">14.6s</span>
+            <span class="count-badge">12 张设定卡</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 阶段 3: 角色与故事 -->
+    <div class="phase-group">
+      <div class="phase-header" style="--phase-color:var(--c-char)">
+        <span class="phase-dot"></span>角色与故事
+      </div>
+      <div class="step-node status-done" style="--step-color:#8b5cf6" data-key="storylines" onclick="select('storylines')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">🔮</span>
+            <span class="step-name">故事线</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+1m 05s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">8.0s</span>
+            <span class="count-badge">4 条故事线</span>
+          </div>
+        </div>
+      </div>
+      <div class="step-node status-done" style="--step-color:var(--c-char)" data-key="characters" onclick="select('characters')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">👤</span>
+            <span class="step-name">人物库</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+1m 13s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">22.4s</span>
+            <span class="count-badge">10 个角色</span>
+          </div>
+        </div>
+      </div>
+      <div class="step-node status-done" style="--step-color:#ef4444" data-key="skills" onclick="select('skills')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">⚔️</span>
+            <span class="step-name">技能功法</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+1m 36s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">9.1s</span>
+            <span class="count-badge">8 个技能</span>
+          </div>
+        </div>
+      </div>
+      <div class="step-node status-done" style="--step-color:#eab308" data-key="items" onclick="select('items')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">💎</span>
+            <span class="step-name">道具法宝</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+1m 46s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">7.6s</span>
+            <span class="count-badge">6 件法宝</span>
+          </div>
+        </div>
+      </div>
+      <div class="step-node status-done" style="--step-color:var(--c-char)" data-key="relations" onclick="select('relations')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">🕸️</span>
+            <span class="step-name">人物关系</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+1m 54s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">10.3s</span>
+            <span class="count-badge">14 条关系</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 阶段 4: 叙事规划 -->
+    <div class="phase-group">
+      <div class="phase-header" style="--phase-color:var(--c-story)">
+        <span class="phase-dot"></span>叙事规划
+      </div>
+      <div class="step-node status-done" style="--step-color:var(--c-story)" data-key="volumes" onclick="select('volumes')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">📖</span>
+            <span class="step-name">卷级结构</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+2m 05s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">18.7s</span>
+            <span class="count-badge">9 卷骨架</span>
+          </div>
+        </div>
+      </div>
+      <div class="step-node status-done" style="--step-color:#ec4899" data-key="memory" onclick="select('memory')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">🧠</span>
+            <span class="step-name">记忆库种子</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ec4899" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+2m 24s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">6.9s</span>
+            <span class="count-badge">5 条记忆</span>
+          </div>
+        </div>
+      </div>
+      <div class="step-node status-done" style="--step-color:var(--c-char)" data-key="opening_contract" onclick="select('opening_contract')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">🤝</span>
+            <span class="step-name">开局追读承诺</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+2m 31s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">11.5s</span>
+            <span class="count-badge">8 条承诺</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 阶段 5: 执行蓝图 -->
+    <div class="phase-group">
+      <div class="phase-header" style="--phase-color:var(--c-blueprint)">
+        <span class="phase-dot"></span>执行蓝图
+      </div>
+      <div class="step-node status-done" style="--step-color:var(--c-blueprint)" data-key="vol1_chapters" onclick="select('vol1_chapters')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">📋</span>
+            <span class="step-name">第一卷章级大纲</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+2m 43s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">19.2s</span>
+            <span class="count-badge">15 章节规划</span>
+          </div>
+        </div>
+      </div>
+      <div class="step-node status-done" style="--step-color:var(--c-blueprint)" data-key="ch1_scenes" onclick="select('ch1_scenes')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">🎬</span>
+            <span class="step-name">第1章场景蓝图</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+3m 02s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">13.4s</span>
+            <span class="count-badge">5 个分场</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 阶段 6: 质量保证 -->
+    <div class="phase-group">
+      <div class="phase-header" style="--phase-color:var(--c-qa)">
+        <span class="phase-dot"></span>质量保证
+      </div>
+      <div class="step-node status-done" style="--step-color:var(--c-qa)" data-key="consistency" onclick="select('consistency')">
+        <div class="step-inner">
+          <div class="step-top">
+            <span class="step-icon">🔍</span>
+            <span class="step-name">全局一致性扫描</span>
+            <span class="step-status-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            </span>
+          </div>
+          <div class="step-meta">
+            <span class="t-start">+3m 16s</span>
+            <span class="sep">·</span>
+            <span class="t-dur">16.1s</span>
+            <span class="count-badge" style="color:#f97316;border-color:#f9731640">⚠ 3 处待确认</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /timeline-panel -->
+
+  <!-- ── DETAIL PANEL ──────────────────────────────────── -->
+  <div class="detail-panel" id="detailPanel">
+    <!-- injected by JS -->
+    <div class="detail-empty" id="emptyState">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+      <span>点击左侧任意步骤，查看详细内容</span>
+    </div>
+    <div id="detailContent" style="display:none"></div>
+  </div>
+
+</div><!-- /main-layout -->
+
+<script>
+// ── DETAIL DATA ───────────────────────────────────────────────────────────────
+
+const DETAILS = {
+
+gate: {
+  icon: '🔑',
+  name: '立项闸门 · 定位确认',
+  desc: 'AI 生成初步立项定位后，作者人工审阅并确认通过',
+  step: 'GATE',
+  stepColor: '#ec4899',
+  duration: '8.3s',
+  startAt: '+0s',
+  render: () => `
+    <div class="card" style="border-color:#ec489940;background:#1a111f">
+      <div class="card-title" style="color:#ec4899">闸门状态</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+        <span style="font-size:15px;font-weight:600;color:#22c55e">人工确认通过</span>
+      </div>
+      <div style="font-size:12px;color:var(--text2)">
+        AI 完成 Step 0（立项会议）后暂停，将初步定位呈现给作者审阅。作者可直接确认、或修改后继续。
+        本次生成由作者在 8.3s 内确认通过，后续步骤已全部完成。
+      </div>
+    </div>
+    <div class="section-label">闸门机制说明</div>
+    <div class="card">
+      <div class="card-row"><span class="lbl">闸门位置</span><span class="val">Step 0 完成 → Step 1 开始之间</span></div>
+      <div class="card-row"><span class="lbl">闸门类型</span><span class="val">人工审阅 · 立项定位</span></div>
+      <div class="card-row"><span class="lbl">可编辑内容</span><span class="val">目标读者 / 爽点类型 / 节奏类型 / 禁忌红线</span></div>
+      <div class="card-row"><span class="lbl">放弃选项</span><span class="val">取消本次生成 / 回退重写一句话创意</span></div>
+    </div>
+  `
+},
+
+positioning: {
+  icon: '🎯',
+  name: '立项会议',
+  desc: '从一句话创意推出全局定位约束，作为后续所有 AI 步骤的基准锚点',
+  step: 'STEP 0',
+  stepColor: '#f59e0b',
+  duration: '12.1s',
+  startAt: '+8s',
+  render: () => `
+    <div class="section-label">核心钩子</div>
+    <div class="hook-box">
+      <div class="hook-text">「灵根被废的天才少年，在宗门绝命擂台上以废体击败天骄——修炼界从此多了一个让人既怜又惧的名字。」</div>
+      <div class="hook-score">
+        <div class="hook-score-num" style="color:#f59e0b">7.5</div>
+        <div>
+          <div style="display:flex;gap:3px;margin-bottom:3px">
+            ${[1,2,3,4,5,6,7,8,9,10].map(i=>`<div class="hook-star" style="background:${i<=7?'#f59e0b':'var(--bg4)'}"></div>`).join('')}
+          </div>
+          <div class="hook-score-note">封面推荐语自评 · 建议增加"逆袭时间线"以提升悬念感</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-label">定位决策</div>
+    <div class="pos-grid">
+      <div class="pos-item">
+        <div class="pos-lbl">目标读者</div>
+        <div class="pos-val">男频 · 18-30岁 · 起点/番茄向</div>
+      </div>
+      <div class="pos-item">
+        <div class="pos-lbl">节奏类型</div>
+        <div class="pos-val">⚡ fast · 番茄式爽快节奏</div>
+      </div>
+      <div class="pos-item">
+        <div class="pos-lbl">打脸频率</div>
+        <div class="pos-val">每3章一小 · 每10章一中 · 每卷一大</div>
+      </div>
+      <div class="pos-item">
+        <div class="pos-lbl">感情线占比</div>
+        <div class="pos-val">low · 约10%</div>
+      </div>
+      <div class="pos-item pos-item-full">
+        <div class="pos-lbl">核心爽点</div>
+        <div class="pos-val">
+          <span class="badge" style="color:#f59e0b;border-color:#f59e0b50;background:#f59e0b10">逆袭</span>
+          <span class="badge" style="color:#f59e0b;border-color:#f59e0b50;background:#f59e0b10">扮猪吃虎</span>
+          <span class="badge" style="color:#f59e0b;border-color:#f59e0b50;background:#f59e0b10">系统觉醒</span>
+          <span class="badge" style="color:#f59e0b;border-color:#f59e0b50;background:#f59e0b10">打脸装x</span>
+          <span class="badge" style="color:#f59e0b;border-color:#f59e0b50;background:#f59e0b10">无敌流</span>
+        </div>
+      </div>
+      <div class="pos-item pos-item-full">
+        <div class="pos-lbl">参照作品</div>
+        <div class="pos-val">斗破苍穹 · 完美世界 · 武动乾坤</div>
+      </div>
+      <div class="pos-item pos-item-full">
+        <div class="pos-lbl">市场风险评估</div>
+        <div class="pos-val" style="font-size:12px;color:var(--text2)">同质化程度：中高（废材逆袭赛道饱和）。受众规模：大（男频主流赛道）。题材饱和度：需在"觉醒体质"外增加差异化设定以突围。</div>
+      </div>
+      <div class="pos-item pos-item-full">
+        <div class="pos-lbl">禁忌红线</div>
+        <div class="pos-val">
+          <span class="badge" style="color:var(--c-qa);border-color:#ef444450;background:#ef444410">禁止圣母主角</span>
+          <span class="badge" style="color:var(--c-qa);border-color:#ef444450;background:#ef444410">禁止无限升级无代价</span>
+          <span class="badge" style="color:var(--c-qa);border-color:#ef444450;background:#ef444410">禁止NTR</span>
+        </div>
+      </div>
+    </div>
+  `
+},
+
+project: {
+  icon: '📚', name: '项目基础信息', step: 'STEP 1', stepColor: '#f59e0b', duration: '6.4s', startAt: '+21s',
+  desc: '创建项目记录，写入基础信息与立项定位',
+  render: () => `
+    <div class="card">
+      <div class="card-title">项目信息</div>
+      <div class="card-row"><span class="lbl">书名</span><span class="val" style="font-size:16px;font-weight:700">灵根破碎录</span></div>
+      <div class="card-row"><span class="lbl">题材</span><span class="val">玄幻修仙 · 东方奇幻</span></div>
+      <div class="card-row"><span class="lbl">一句话创意</span><span class="val" style="color:var(--text2)">一个被废掉灵根的天才少年，在死亡边缘觉醒了逆天体质，从此踏上颠覆修仙界的道路</span></div>
+      <div class="card-row"><span class="lbl">目标字数</span><span class="val">120 万字 · 约 9 卷</span></div>
+      <div class="card-row"><span class="lbl">生成模式</span><span class="val">顺序串行 · Sequential</span></div>
+    </div>
+  `
+},
+
+power_systems: {
+  icon: '⚡', name: '境界体系', step: 'STEP 2', stepColor: '#06b6d4', duration: '9.8s', startAt: '+28s',
+  desc: '构建本作核心力量进阶体系，决定主角成长曲线',
+  render: () => `
+    <div class="card">
+      <div class="card-title">灵力修炼体系</div>
+      <div class="card-row"><span class="lbl">体系名称</span><span class="val">灵力修炼道</span></div>
+      <div class="card-row"><span class="lbl">共 9 阶</span><span class="val" style="color:var(--text2)">每阶分 9 层小境界，突破需灵根共鸣——主角灵根被废后以"混沌体"另辟蹊径</span></div>
+    </div>
+    <div class="section-label">境界阶梯</div>
+    <div class="level-ladder">
+      ${[
+        ['①','炼气期','淬体聚气','夯实灵力根基，主角新手期','#06b6d4'],
+        ['②','筑基期','铸造灵台','建立灵台，正式踏入修仙','#06b6d4'],
+        ['③','金丹期','凝丹成道','聚灵成丹，质的跃升','#22c55e'],
+        ['④','元婴期','婴魂分离','元神出窍，寿命翻倍','#22c55e'],
+        ['⑤','化神期','神海成形','神识广布，可遥感百里','#a78bfa'],
+        ['⑥','合体期','天地合一','灵力与天地同频','#a78bfa'],
+        ['⑦','大乘期','问道苍穹','近乎仙人，凡人难及','#f59e0b'],
+        ['⑧','渡劫期','天劫锤炼','九九天劫，生死一线','#f97316'],
+        ['⑨','仙界','飞升成仙','脱离凡俗，终极目标','#ef4444'],
+      ].map(([num,name,title,note,color])=>`
+        <div class="level-row" style="--level-color:${color}">
+          <span class="level-num">${num}</span>
+          <span class="level-name">${name}</span>
+          <span class="level-power" style="color:${color};font-weight:600">${title}</span>
+          <span class="level-note">${note}</span>
+        </div>
+      `).join('')}
+    </div>
+    <div class="section-label">主角专属体质</div>
+    <div class="card" style="border-color:#7c6af760;background:#1a1428">
+      <div class="card-row"><span class="lbl">体质名</span><span class="val" style="color:#a78bfa;font-weight:700">混沌虚无体</span></div>
+      <div class="card-row"><span class="lbl">觉醒条件</span><span class="val">灵根被废 + 生死边缘 + 强烈求生意志</span></div>
+      <div class="card-row"><span class="lbl">核心特性</span><span class="val" style="color:var(--text2)">无需灵根，直接吸收天地混沌之力；能融合任意属性；修炼速度随绝境程度指数增长</span></div>
+    </div>
+  `
+},
+
+factions: {
+  icon: '🏰', name: '势力组织', step: 'STEP 3', stepColor: '#06b6d4', duration: '11.2s', startAt: '+38s',
+  desc: '构建世界权力版图，设计主角需要面对的势力格局',
+  render: () => `
+    <div class="card">
+      <div class="card-title">势力总览</div>
+      <div class="card-row"><span class="lbl">势力格局</span><span class="val">两宗一教一国一联盟 · 三方鼎立</span></div>
+    </div>
+    <div class="section-label">势力详情</div>
+    <div class="card-grid">
+      ${[
+        ['青云宗','正道第一宗','cyan','宗主：云天正·元婴后期。主角曾隶属，废除灵根后被驱逐，是主要矛盾源头。宗门暗藏叛徒，实力比表面更深厚。'],
+        ['血魔教','邪道霸主','red','教主：血魔尊者·合体期。表面为宗门公敌，实则把控多方暗棋。主角后期与其有复杂纠葛。'],
+        ['大炎皇朝','世俗皇权','orange','皇帝：炎弘·炼气巅峰。凡俗力量最强，与修仙界签有"天道盟约"，暗中培养皇族灵根天才。'],
+        ['古武世家·叶氏','隐世家族','purple','家主：叶苍·金丹初期。拥有修仙界罕见的功法传承，对混沌体有秘密记载，主角重要盟友。'],
+        ['散修联盟','草莽势力','green','盟主虚位，实为多方博弈场。主角底层起步的关键舞台，信息来源与人脉积累的温床。'],
+      ].map(([name,type,color,desc])=>`
+        <div class="faction-card" style="--f-color:var(--c-${color=='cyan'?'world':color=='red'?'qa':color=='orange'?'blueprint':color=='purple'?'story':'char'})">
+          <div class="faction-name">${name}</div>
+          <div class="faction-type">${type}</div>
+          <div class="faction-desc">${desc}</div>
+        </div>
+      `).join('')}
+    </div>
+  `
+},
+
+storylines: {
+  icon: '🔮', name: '故事线', step: 'STEP 4', stepColor: '#8b5cf6', duration: '8.0s', startAt: '+1m 05s',
+  desc: '规划贯穿全书的叙事主轴，决定读者追读动力来源',
+  render: () => `
+    <div class="card-grid">
+      ${[
+        ['主线','逆袭之路','#a78bfa','被废才子觉醒混沌体，从底层散修出发，一步步颠覆整个修仙秩序，最终飞升成仙。贯穿全书，是所有冲突的主轴。'],
+        ['成长线','道心熔铸','#22c55e','主角从仇恨驱动到道心升华的内在旅程。每卷至暗期后都有一次价值观重塑，让"强大"有了不同含义。'],
+        ['感情线','知己相知','#ec4899','与女主（叶轻寒）的交织：由误解到相知，低优先级但高质量节点，每卷约一个重要情感节点。'],
+        ['势力博弈线','三方棋局','#06b6d4','青云宗、血魔教、皇朝三方明争暗斗，主角在裂缝中求存并最终成为改变格局的变量。'],
+      ].map(([type,name,color,desc])=>`
+        <div class="sl-card" style="--sl-color:${color}">
+          <div class="sl-top">
+            <span class="sl-type">${type}</span>
+            <span class="sl-name">${name}</span>
+          </div>
+          <div class="sl-desc">${desc}</div>
+        </div>
+      `).join('')}
+    </div>
+  `
+},
+
+characters: {
+  icon: '👤', name: '人物库', step: 'STEP 5', stepColor: '#22c55e', duration: '22.4s', startAt: '+1m 13s',
+  desc: '创建核心人物档案，包含背景、性格、成长弧、与主角关系',
+  render: () => `
+    <div class="card">
+      <div class="card-title">人物统计</div>
+      <div style="display:flex;gap:12px">
+        <div style="text-align:center;flex:1">
+          <div style="font-size:22px;font-weight:700;color:var(--text)">1</div>
+          <div style="font-size:11px;color:var(--text3)">主角</div>
+        </div>
+        <div style="text-align:center;flex:1">
+          <div style="font-size:22px;font-weight:700;color:var(--text)">3</div>
+          <div style="font-size:11px;color:var(--text3)">女主/挚友</div>
+        </div>
+        <div style="text-align:center;flex:1">
+          <div style="font-size:22px;font-weight:700;color:var(--text)">4</div>
+          <div style="font-size:11px;color:var(--text3)">反派/对手</div>
+        </div>
+        <div style="text-align:center;flex:1">
+          <div style="font-size:22px;font-weight:700;color:var(--text)">2</div>
+          <div style="font-size:11px;color:var(--text3)">配角</div>
+        </div>
+      </div>
+    </div>
+    <div class="section-label">核心人物</div>
+    <div class="card-grid card-grid-2">
+      ${[
+        ['陆云','主角','炼气·混沌体','--acc1:#7c6af7;--acc2:#a78bfa','被废灵根少年，觉醒混沌虚无体。表面沉默内敛，实则意志如钢。人生驱动力从仇恨逐渐转向护道。'],
+        ['叶轻寒','女主·知己','金丹初期','--acc1:#22c55e;--acc2:#06b6d4','古武世家隐脉传人，对混沌体有特殊感知。冷静理智，是主角最重要的情报与盟友来源。'],
+        ['云天正','反派·宗主','元婴后期','--acc1:#ef4444;--acc2:#f97316','废除主角灵根的直接责任人。表面德高望重，实则为家族私欲不择手段。'],
+        ['铁牛','挚友·搞笑担当','炼气中期','--acc1:#eab308;--acc2:#f59e0b','出身贫民，修炼天赋一般但心性极好。主角最信任的人，关键时刻救场。'],
+      ].map(([name,role,realm,grad,trait])=>`
+        <div class="char-card">
+          <div class="char-card-top">
+            <div class="char-avatar" style="${grad}">${name[0]}</div>
+            <div>
+              <div class="char-name">${name}</div>
+              <div class="char-role">${role}</div>
+            </div>
+            <div class="char-realm">${realm}</div>
+          </div>
+          <div class="char-trait">${trait}</div>
+        </div>
+      `).join('')}
+    </div>
+    <div style="margin-top:8px;font-size:11px;color:var(--text3);text-align:center">另有 6 个配角已生成 · 点击人物库查看全部</div>
+  `
+},
+
+skills: {
+  icon: '⚔️', name: '技能功法', step: 'STEP 6', stepColor: '#ef4444', duration: '9.1s', startAt: '+1m 36s',
+  desc: '生成核心战斗技能与修炼功法',
+  render: () => `
+    <div class="section-label">核心功法 (3)</div>
+    <div class="card-grid">
+      ${[
+        ['混沌经','主角专属','主角','#a78bfa','觉醒后自生的吸收混沌之力的根本功法，无属性限制，越绝境越强。'],
+        ['青云剑诀','青云宗传承','多人习得','#06b6d4','主角废除前修炼的功法，被夺走后残留记忆成为逆袭重要伏笔。'],
+        ['天魔血法','血魔教秘典','反派专属','#ef4444','以血为引，威力巨大但噬主，暗示血魔教主的真正结局。'],
+      ].map(([name,type,owner,color,desc])=>`
+        <div class="card" style="border-left:3px solid ${color};padding:10px 12px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span style="font-size:14px;font-weight:700;color:var(--text)">${name}</span>
+            <span style="font-size:10px;background:var(--bg4);padding:1px 6px;border-radius:4px;color:var(--text3)">${type}</span>
+            <span style="margin-left:auto;font-size:10px;color:${color}">${owner}</span>
+          </div>
+          <div style="font-size:12px;color:var(--text2)">${desc}</div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="section-label">战斗技能 (5)</div>
+    <div class="card-grid card-grid-2">
+      ${[
+        ['虚空斩','剑道攻击','主角后期'],
+        ['混沌护体','防御技','主角'],
+        ['雷霆掌','远程攻击','多人'],
+        ['血影分身','幻术','反派'],
+        ['天罗地网','封锁术','大宗派'],
+      ].map(([name,type,owner])=>`
+        <div style="background:var(--bg4);border:1px solid var(--border2);border-radius:6px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:13px;font-weight:500;color:var(--text)">${name}</div>
+            <div style="font-size:10px;color:var(--text3)">${type}</div>
+          </div>
+          <div style="font-size:10px;color:var(--text3)">${owner}</div>
+        </div>
+      `).join('')}
+    </div>
+  `
+},
+
+items: {
+  icon: '💎', name: '道具法宝', step: 'STEP 7', stepColor: '#eab308', duration: '7.6s', startAt: '+1m 46s',
+  desc: '生成关键道具与法宝，埋下伏笔与稀缺资源节点',
+  render: () => `
+    <div class="card-grid">
+      ${[
+        ['混沌玉佩','传家宝','★★★★★','主角家传遗物，被认为是废品。实为混沌体觉醒的触发器，最终篇揭示真正来历。'],
+        ['天墉剑','传世法剑','★★★★','青云宗镇宗之宝，主角与宗门最终决战的核心道具，暗示血脉秘密。'],
+        ['血心丹','邪道丹药','★★★','服用可短期暴增实力但噬命，用于刻画底层修士的绝望选择。'],
+        ['虚空戒指','储物法器','★★','主角从第一个击败的对手处获得，开启物资积累线的重要起点。'],
+        ['古武残卷','功法碎片','★★★','叶氏家族提供，记载远古混沌体修士的片段，串联多条伏笔。'],
+        ['炎龙骨丹','底层资源','★','大炎皇朝特产灵药，前期资源积累的常见货币，价格锚点。'],
+      ].map(([name,type,rarity,desc])=>`
+        <div class="card" style="padding:10px 12px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span style="font-size:13px;font-weight:700;color:var(--text)">${name}</span>
+            <span style="font-size:10px;background:var(--bg4);padding:1px 6px;border-radius:4px;color:var(--text3)">${type}</span>
+            <span style="margin-left:auto;font-size:11px;color:#eab308">${rarity}</span>
+          </div>
+          <div style="font-size:12px;color:var(--text2)">${desc}</div>
+        </div>
+      `).join('')}
+    </div>
+  `
+},
+
+relations: {
+  icon: '🕸️', name: '人物关系', step: 'STEP 11', stepColor: '#22c55e', duration: '10.3s', startAt: '+1m 54s',
+  desc: '建立人物关系网，明确情感张力与社会结构',
+  render: () => `
+    <div class="card">
+      <div class="card-title">关系图谱概览</div>
+      <div style="font-size:12px;color:var(--text2);line-height:1.7">共 14 条关系，覆盖 8 个人物。关键张力：<strong style="color:var(--text)">陆云 ↔ 云天正</strong>（仇恨主轴）·<strong style="color:var(--text)">陆云 ↔ 叶轻寒</strong>（感情线）· <strong style="color:var(--text)">青云宗 ↔ 血魔教</strong>（势力博弈）</div>
+    </div>
+    <div class="section-label">核心关系 (前6条)</div>
+    <div class="card-grid">
+      ${[
+        ['陆云','云天正','深仇·废灵根之恨','#ef4444','仇恨是主线驱动力，但后期揭示云天正行为有更深背景，迫使主角重新审视仇恨的意义。'],
+        ['陆云','叶轻寒','知己·渐进感情','#ec4899','从信息交换者到生死之交，感情线低调但扎实，每卷都有推进节点。'],
+        ['陆云','铁牛','挚友·情义担当','#22c55e','唯一无条件信任的存在，是主角人性保留的锚点。'],
+        ['云天正','血魔教主','明敌暗盟','#f97316','表面死敌，实则在某条隐线上有交易，揭露时引发势力格局大震荡。'],
+        ['叶轻寒','古武叶氏','血脉羁绊','#06b6d4','家族压力是她的内在冲突来源，她需要在忠家还是护道中做选择。'],
+        ['铁牛','大炎皇朝','隐藏背景','#a78bfa','铁牛真实身份是皇室旁支，中期解锁的重要设定，改变底层叙事格局。'],
+      ].map(([a,b,type,color,desc])=>`
+        <div class="card" style="padding:10px 12px;border-left:3px solid ${color}">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+            <span style="font-weight:700;color:var(--text)">${a}</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            <span style="font-weight:700;color:var(--text)">${b}</span>
+            <span style="margin-left:auto;font-size:10px;color:${color}">${type}</span>
+          </div>
+          <div style="font-size:11px;color:var(--text2);line-height:1.4">${desc}</div>
+        </div>
+      `).join('')}
+    </div>
+  `
+},
+
+settings: {
+  icon: '🌍', name: '世界观设定', step: 'STEP 8', stepColor: '#06b6d4', duration: '14.6s', startAt: '+50s',
+  desc: '生成世界底层规则、地理格局、历史传说等叙事性设定卡',
+  render: () => `
+    <div class="card">
+      <div class="card-title">设定卡统计</div>
+      <div style="display:flex;gap:20px">
+        ${[['世界背景','3张'],['地理场景','4张'],['历史传说','2张'],['文化风俗','3张']].map(([t,c])=>`
+          <div style="text-align:center">
+            <div style="font-size:18px;font-weight:700;color:var(--text)">${c}</div>
+            <div style="font-size:10px;color:var(--text3)">${t}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+    <div class="section-label">精选设定 (4 / 12)</div>
+    <div class="card-grid">
+      ${[
+        ['天道结界','世界背景','修仙界与凡俗界的隔断屏障，七千年前一场大战留下的产物。近年出现裂缝，是整本书最大的未解谜题与终卷伏笔。'],
+        ['混沌禁地','地理场景','传说中混沌之力的发源地，凡俗修士禁入。主角觉醒混沌体后获得隐秘指引，是中期重大剧情地点。'],
+        ['灵根起源战','历史传说','远古时期一场毁天灭地的战争后，灵根体系被强行植入人族血脉——但这一过程有无数人失去了更古老的能力。'],
+        ['宗门供奉制','文化风俗','上贡制度：弱小宗门向强宗每月上缴资源换取庇护。主角早期资源匮乏的结构性原因，也是他对宗门体制仇视的根源。'],
+      ].map(([name,cat,desc])=>`
+        <div class="card" style="padding:10px 12px">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+            <span style="font-size:13px;font-weight:700;color:var(--text)">${name}</span>
+            <span style="font-size:10px;background:var(--bg4);color:var(--text3);padding:1px 6px;border-radius:4px">${cat}</span>
+          </div>
+          <div style="font-size:12px;color:var(--text2);line-height:1.5">${desc}</div>
+        </div>
+      `).join('')}
+    </div>
+  `
+},
+
+volumes: {
+  icon: '📖', name: '卷级结构', step: 'STEP 9', stepColor: '#a78bfa', duration: '18.7s', startAt: '+2m 05s',
+  desc: '规划全书九卷骨架，为每卷分配叙事阶段标记',
+  render: () => `
+    <div class="card">
+      <div class="card-title">全书卷级概览</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${[['opening','开局期','#22c55e'],['rising','起飞期','#06b6d4'],['turning','转折期','#f59e0b'],['dark_hour','至暗期','#a78bfa'],['climax','高潮期','#ef4444']].map(([k,l,c])=>`
+          <span style="font-size:11px;padding:2px 8px;border-radius:12px;border:1px solid ${c}50;color:${c};background:${c}15">${l}</span>
+        `).join('')}
+      </div>
+    </div>
+    <div class="section-label">九卷骨架</div>
+    <div class="card-grid">
+      ${[
+        ['1','新手村·废材觉醒','opening','#22c55e','被废灵根，擂台死战，混沌体觉醒。确立主角性格底色，埋下云天正恩怨、铁牛情义、混沌玉佩三条主伏笔。'],
+        ['2','散修丛林·底层求存','rising','#06b6d4','加入散修联盟，体验底层生态，实力稳步提升。感情线首个重大节点，叶氏线正式开启。'],
+        ['3','宗门博弈·大势初显','rising','#06b6d4','与青云宗正面冲突首次升级，开始介入势力博弈，知晓血魔教秘密。'],
+        ['4','天之涯·禁地之行','turning','#f59e0b','混沌禁地探秘，获得混沌经全本，揭示灵根起源战真相第一层，开始动摇旧有仇恨观。'],
+        ['5','刀锋上的盟约','turning','#f59e0b','三方势力正式撕破脸，主角被迫选边，做出第一个真正意义上的道义选择。'],
+        ['6','至暗·背叛之冬','dark_hour','#a78bfa','铁牛隐藏身份曝光，叶轻寒被家族带走，主角陷入最深的孤立。至暗期节奏放缓，主角道心重铸。'],
+        ['7','归来·新的道','climax','#ef4444','道心升华后强势归来，正式向青云宗宣战，伏笔大批量兑现，爽点拉满。'],
+        ['8','乾坤翻转','climax','#ef4444','天道结界裂缝扩大，三方势力联合应对外部威胁，主角成为新格局的枢纽人物。'],
+        ['9','天道之上','ending','#8b5cf6','最终决战与天道真相揭露，留下飞升前的一个隐秘种子伏笔，为续集或番外留口。'],
+      ].map(([vol,name,phase,color,desc])=>`
+        <div class="vol-card">
+          <div class="vol-top">
+            <span class="vol-num">第${vol}卷</span>
+            <span class="vol-name">${name}</span>
+            <span class="vol-phase" style="color:${color};border-color:${color}50;background:${color}15">${phase}</span>
+          </div>
+          <div class="vol-desc">${desc}</div>
+        </div>
+      `).join('')}
+    </div>
+  `
+},
+
+memory: {
+  icon: '🧠', name: '记忆库种子', step: 'STEP 10', stepColor: '#ec4899', duration: '6.9s', startAt: '+2m 24s',
+  desc: '注入长篇记忆管理系统的初始知识种子',
+  render: () => `
+    <div class="card">
+      <div class="card-title">记忆库说明</div>
+      <div style="font-size:12px;color:var(--text2);line-height:1.6">Bootstrap 阶段写入 5 条高优先级记忆种子，作为后续章节生成时 AI 记忆检索的核心基准。每条种子附有 embedding 向量（pgvector）供语义检索。</div>
+    </div>
+    <div class="section-label">5 条记忆种子</div>
+    <div class="card-grid">
+      ${[
+        ['混沌虚无体觉醒条件','人物·主角','炼气期死亡边缘 + 强烈求生意志 + 混沌玉佩共鸣三要素同时满足。缺一不可。后期可能有其他觉醒路径但尚未解锁。'],
+        ['天道结界裂缝现象','世界规则','近50年内每逢天劫夜（每三年一次）会出现宽度约1寸的裂缝，持续3小时后自动愈合。裂缝内传出的能量与混沌之力频率相似。'],
+        ['陆云·核心人物关系','人物·关系','父母下落不明（被逼离家），视铁牛为唯一家人。对叶轻寒有暧昧但压制。对云天正负有死仇，第1章被废灵根时目睹全程。'],
+        ['青云宗·内部结构','势力·青云宗','表面三长老制，实则长老会被一位"阁中人"操控。宗主云天正本人亦受制于此阁。这一真相在第7卷前不可对主角揭露。'],
+        ['散修联盟·生态规则','世界·社会','散修联盟无固定盟主，靠"信誉令牌"体系维持秩序。令牌可转让，是底层修士最重要的社交货币。主角第2卷会获得一块。'],
+      ].map(([title,tag,content])=>`
+        <div class="card" style="padding:10px 12px">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+            <span style="font-size:12px;font-weight:700;color:var(--text)">${title}</span>
+            <span style="font-size:10px;background:var(--bg4);color:var(--text3);padding:1px 6px;border-radius:4px;margin-left:auto">${tag}</span>
+          </div>
+          <div style="font-size:11px;color:var(--text2);line-height:1.5">${content}</div>
+        </div>
+      `).join('')}
+    </div>
+  `
+},
+
+opening_contract: {
+  icon: '🤝', name: '开局追读承诺', step: 'STEP 12', stepColor: '#22c55e', duration: '11.5s', startAt: '+2m 31s',
+  desc: '明确前10章对读者的显式与隐式承诺，防止追读流失',
+  render: () => `
+    <div class="card">
+      <div class="card-title">承诺框架说明</div>
+      <div style="font-size:12px;color:var(--text2);line-height:1.6">开局承诺清单约束前10章的内容节奏，每章写作时 AI 会注入"本章必须/可以兑现的承诺"。复盘时自动检测回收情况。</div>
+    </div>
+    <div class="section-label">8 条追读承诺</div>
+    <div class="card-grid">
+      ${[
+        ['P5','第1章必须展示主角被废灵根的绝望与不服——读者第一眼判断值不值得追','chapter_ending','#ef4444'],
+        ['P5','第1章末必须给出觉醒钩子（混沌玉佩发光/异象），让读者有理由翻第2章','chapter_ending','#ef4444'],
+        ['P4','前3章内主角必须赢得一场"废材理论上不可能赢"的小战斗','name_implication','#f97316'],
+        ['P4','第5章前铁牛必须出场并展现"真兄弟"的信号','character_intro','#f97316'],
+        ['P3','前5章内必须出现一个明确的仇恨目标（云天正或其代理人）','chapter_ending','#f59e0b'],
+        ['P3','第8章前叶轻寒必须出场并留下"她知道某个秘密"的悬念','character_intro','#f59e0b'],
+        ['P2','第10章前给出一个"修仙界不止我们知道的那样简单"的世界悬念','volume_ending','#22c55e'],
+        ['P2','整个开局期内主角不能无故滥杀，为道心升华的后期弧做铺垫','name_implication','#22c55e'],
+      ].map(([prio,text,type,color])=>`
+        <div class="promise-card">
+          <div class="promise-prio" style="--p-color:${color}">${prio}</div>
+          <div>
+            <div class="promise-text">${text}</div>
+            <div class="promise-type">${type}</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `
+},
+
+vol1_chapters: {
+  icon: '📋', name: '第一卷章级大纲', step: 'STEP 12.5', stepColor: '#f97316', duration: '19.2s', startAt: '+2m 43s',
+  desc: '将卷级骨架拆解为可执行的章节级写作计划',
+  render: () => `
+    <div class="card">
+      <div class="card-title">第一卷：新手村·废材觉醒</div>
+      <div class="card-row"><span class="lbl">章节数</span><span class="val">15 章 · 约 3.3 万字</span></div>
+      <div class="card-row"><span class="lbl">阶段</span><span class="val"><span style="color:#22c55e;font-weight:600">opening</span> · 开局期 · 爽点密度高</span></div>
+    </div>
+    <div class="section-label">章节规划（前8章预览）</div>
+    <div class="card-grid">
+      ${[
+        ['第1章','废材擂台','陆云在宗门年度擂台上出场，被废灵根前的最后闪光，以及废除瞬间的绝望。混沌玉佩异动钩子。'],
+        ['第2章','混沌觉醒','生死边缘觉醒混沌体，初步感知到与众不同的力量。暗中隐藏实力，开始逃离宗门。'],
+        ['第3章','散修第一战','逃离途中遭遇流氓散修，以废体身份击败对方，获得虚空戒指——资源积累开篇。'],
+        ['第4章','铁牛','遭遇流落在外的铁牛，二人初识，建立信任的第一个场景。'],
+        ['第5章','散修联盟入口','抵达散修联盟外围聚集地，了解底层生态，目睹供奉制压迫，强化仇恨与改变意志。'],
+        ['第6章','信誉令牌','通过一次有风险的委托任务获得第一块信誉令牌，开始建立底层人脉。'],
+        ['第7章','远处的青云宗','叶轻寒首次出场（背影/神秘感），留下"她似乎认识混沌体"的信号。'],
+        ['第8章','小打脸·旧同门','遭遇昔日青云宗同门的羞辱与挑战，以"废材"身份赢得第一次真正意义上的打脸战。'],
+      ].map(([ch,name,outline])=>`
+        <div class="card" style="padding:10px 12px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+            <span style="font-size:11px;color:var(--text3);white-space:nowrap">${ch}</span>
+            <span style="font-size:13px;font-weight:700;color:var(--text)">${name}</span>
+          </div>
+          <div style="font-size:11px;color:var(--text2);line-height:1.5">${outline}</div>
+        </div>
+      `).join('')}
+    </div>
+    <div style="margin-top:8px;font-size:11px;color:var(--text3);text-align:center">另有第9-15章规划已生成 · 在大纲页查看完整内容</div>
+  `
+},
+
+ch1_scenes: {
+  icon: '🎬', name: '第1章场景蓝图', step: 'STEP 13', stepColor: '#f97316', duration: '13.4s', startAt: '+3m 02s',
+  desc: '将第1章章纲拆解为可直接执行的逐场写作蓝图',
+  render: () => `
+    <div class="card">
+      <div class="card-title">第1章：废材擂台</div>
+      <div class="card-row"><span class="lbl">分场数量</span><span class="val">5 个分场</span></div>
+      <div class="card-row"><span class="lbl">字数预算</span><span class="val">2200 字 · opening 阶段标准</span></div>
+      <div class="card-row"><span class="lbl">情感基调</span><span class="val">热血 → 绝望 → 不甘 · 含开局钩子</span></div>
+    </div>
+    <div class="section-label">5 个分场</div>
+    <div class="card-grid">
+      ${[
+        ['擂台报名','陆云·云天正','前500字','宗门擂台报名处，陆云坚持报名，宗门执事嘲讽，奠定主角性格底色——倔强、不服、有尊严。','场景钩子：长老席上云天正的眼神意味深长，为后续废除伏笔。'],
+        ['对战·最后的闪光','陆云·对手','约400字','擂台对战，陆云以灵根优势短暂占上风，观众错愕，展示"曾经的他确实优秀"——为随后的落差做铺垫。',''],
+        ['废除灵根','陆云·云天正','约300字','云天正突然出手废除灵根。慢镜式描写：力量消散的感觉、众人的反应、陆云的眼神。本场最重要，决定读者代入感。','必须展示陆云的"不甘"而非"哭泣"，性格定基调。'],
+        ['坠落山崖','陆云独角','约500字','被驱逐出宗门，独自走向悬崖边。心理独白：仇恨、不甘、求生意志。混沌玉佩发光——觉醒的最直接触发器。','本场是第1章的真正高潮，钩子密度最高。'],
+        ['坠崖结尾·钩子','陆云独角','约200字','意识涣散前最后的决意，玉佩光芒大盛，"某种东西在他体内苏醒……"。章末悬念留给第2章。','读者翻页冲动节点。'],
+      ].map(([goal,chars,budget,hook,note])=>`
+        <div class="scene-card">
+          <div class="scene-body">
+            <div class="scene-goal">${goal}</div>
+            <div class="scene-meta">出场：${chars} · ${budget}</div>
+            <div class="scene-hook">${hook}${note?'<br><span style="color:var(--accent2)">▸ '+note+'</span>':''}</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `
+},
+
+consistency: {
+  icon: '🔍', name: '全局一致性扫描', step: 'STEP 14', stepColor: '#ef4444', duration: '16.1s', startAt: '+3m 16s',
+  desc: '交叉核验所有生成物，标出矛盾与需要确认的问题',
+  render: () => `
+    <div class="card" style="border-color:#f9731640;background:#1a110f">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span style="font-size:13px;font-weight:600;color:#f97316">3 处待确认问题</span>
+        <span style="margin-left:auto;font-size:11px;color:var(--text3)">不影响开始写作，建议在进入第3章前处理</span>
+      </div>
+      <div style="font-size:12px;color:var(--text2)">扫描范围：设定 × 人物 × 功法 × 道具 × 境界 × 大纲，共核查 214 个字段交叉点。</div>
+    </div>
+    <div class="section-label">问题清单</div>
+    <div class="issue-card" style="border-color:#ef4444">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+        <span style="font-size:10px;background:#ef444420;color:#ef4444;padding:1px 6px;border-radius:4px">严重</span>
+        <span class="issue-title">混沌体觉醒条件与玉佩描述矛盾</span>
+      </div>
+      <div class="issue-desc">境界体系文件：混沌体觉醒需三要素同时满足（死亡边缘+意志+玉佩共鸣）。但道具描述中玉佩写为"被认为是废品，无任何已知功效"——此描述导致读者在第1章无从预期玉佩的觉醒作用。<br><span style="color:#f97316">▸ 建议：在道具描述中加入"某些古籍有极模糊的记录"等暗示语句，避免完全无铺垫。</span></div>
+    </div>
+    <div class="issue-card" style="border-color:#f97316">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+        <span style="font-size:10px;background:#f9731620;color:#f97316;padding:1px 6px;border-radius:4px">中等</span>
+        <span class="issue-title">第6卷铁牛身份揭露时间轴与第2卷散修联盟弧冲突</span>
+      </div>
+      <div class="issue-desc">第2卷大纲写铁牛帮助主角建立散修人脉，但第6卷揭示铁牛实为皇室旁支。如中期身份未被暗示，读者会感到突兀。<br><span style="color:#f97316">▸ 建议：在第2-3卷埋入2-3个细节线索（如铁牛某些礼仪习惯/对皇朝态度的矛盾反应）。</span></div>
+    </div>
+    <div class="issue-card" style="border-color:#f59e0b">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+        <span style="font-size:10px;background:#f59e0b20;color:#f59e0b;padding:1px 6px;border-radius:4px">轻微</span>
+        <span class="issue-title">叶轻寒境界标注（金丹初期）与第一卷登场时间存在能力差距</span>
+      </div>
+      <div class="issue-desc">第7章叶轻寒出场时主角尚在炼气期，金丹境界差距过于悬殊，可能削弱后续感情线的对等感。<br><span style="color:#f59e0b">▸ 建议：将叶轻寒第一次出场境界调低为"筑基期"，设定她因某个原因刻意隐藏真实修为。</span></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="card-title">扫描结论</div>
+      <div style="font-size:12px;color:var(--text2);line-height:1.6">整体设定一致性良好，3处问题均有明确修复建议。可直接开始第1章写作，在进入第3章前处理以上问题即可。</div>
+    </div>
+  `
+},
+
+}
+
+// ── INTERACTION ───────────────────────────────────────────────────────────────
+
+let currentKey = 'positioning'
+
+function select(key) {
+  // update timeline active state
+  document.querySelectorAll('.step-node').forEach(n => {
+    n.classList.toggle('active', n.dataset.key === key)
+  })
+  currentKey = key
+  renderDetail(key)
+}
+
+function renderDetail(key) {
+  const d = DETAILS[key]
+  if (!d) return
+
+  document.getElementById('emptyState').style.display = 'none'
+  const el = document.getElementById('detailContent')
+  el.style.display = 'block'
+
+  const stepColorStyle = `color:${d.stepColor}`
+
+  el.innerHTML = `
+    <div class="detail-content">
+      <div class="detail-header">
+        <div class="detail-header-icon">${d.icon}</div>
+        <div class="detail-header-text">
+          <h2>${d.name}</h2>
+          <div class="desc" style="display:flex;align-items:center;gap:8px">
+            <span class="step-num-badge" style="background:${d.stepColor}20;color:${d.stepColor};border:1px solid ${d.stepColor}50;width:auto;padding:1px 8px;border-radius:4px;font-size:10px">${d.step}</span>
+            <span>${d.desc}</span>
+          </div>
+        </div>
+        <div class="detail-timing">
+          <div class="duration-val">${d.duration}</div>
+          <div class="duration-lbl">耗时</div>
+          <div class="start-time">开始于 ${d.startAt}</div>
+        </div>
+      </div>
+      ${d.render()}
+    </div>
+  `
+  // scroll to top
+  document.getElementById('detailPanel').scrollTop = 0
+}
+
+// init
+select('positioning')
+</script>
+</body>
+</html>

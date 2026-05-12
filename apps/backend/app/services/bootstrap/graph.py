@@ -311,6 +311,10 @@ async def run_bootstrap(
         run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
         if not run or run.status != "awaiting_gate":
             _push(run_id, {"event": "__stream_end__"})
+    except asyncio.CancelledError:
+        emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")
+        _push(run_id, {"event": "__stream_end__"})
+        raise
     except Exception as exc:
         logger.exception("Bootstrap run %s failed", run_id)
         _handle_run_error(db, run_id, exc)
@@ -340,6 +344,9 @@ async def resume_bootstrap(
             Command(resume={"positioning": updated_positioning}),
             config=config,
         )
+    except asyncio.CancelledError:
+        emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")
+        raise
     except Exception as exc:
         logger.exception("Bootstrap resume %s failed", run_id)
         _handle_run_error(db, run_id, exc)

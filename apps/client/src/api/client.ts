@@ -332,6 +332,7 @@ export interface BootstrapRunHistoryItem {
 export const bootstrapRunsApi = {
   listByProject: (projectId: string) =>
     api.get<BootstrapRunHistoryItem[]>(`/bootstrap/projects/${projectId}/runs`),
+  cancel: (runId: string) => api.post<{ ok: boolean; run_id: string; status: string }>(`/bootstrap/runs/${runId}/cancel`),
 }
 
 // ── AI ────────────────────────────────────────────────

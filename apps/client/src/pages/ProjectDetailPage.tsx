@@ -507,6 +507,7 @@ function eventText(ev: Record<string, any>) {
   if (ev.event === 'error') return `异常：${ev.message || ev.step || '未知错误'}`
   if (ev.event === 'gate_pending') return '等待你确认立项定位'
   if (ev.event === 'gate_passed') return '已确认定位，继续生成'
+  if (ev.event === 'cancelled') return ev.message || '生成已取消'
   if (ev.event === 'complete') return '整套流程已完成'
   return ev.event || '事件'
 }
@@ -514,6 +515,7 @@ function eventText(ev: Record<string, any>) {
 function GenerateJourneyPanel({ projectId }: { projectId: string }) {
   const [runs, setRuns] = useState<BootstrapRunHistoryItem[]>([])
   const [loadingRuns, setLoadingRuns] = useState(true)
+  const [cancellingRunId, setCancellingRunId] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -585,6 +587,29 @@ function GenerateJourneyPanel({ projectId }: { projectId: string }) {
     }
   }, [projectId])
 
+  const cancelRun = async (runId: string) => {
+    setCancellingRunId(runId)
+    try {
+      await bootstrapRunsApi.cancel(runId)
+      setRuns((prev) =>
+        prev.map((r) =>
+          r.run_id === runId
+            ? {
+                ...r,
+                status: 'cancelled',
+                events: [...(r.events || []), { event: 'cancelled', message: '用户已取消生成' }],
+              }
+            : r
+        )
+      )
+      toast.success('已请求停止生成')
+    } catch {
+      toast.error('停止生成失败')
+    } finally {
+      setCancellingRunId(null)
+    }
+  }
+
   return (
     <section className="mt-8">
       <h2 className="mb-4 flex items-center gap-2 text-lg font-bold text-gray-900">
@@ -607,9 +632,21 @@ function GenerateJourneyPanel({ projectId }: { projectId: string }) {
                     Run #{run.run_id.slice(0, 8)}
                     {run.created_at ? ` · ${new Date(run.created_at).toLocaleString('zh-CN')}` : ''}
                   </div>
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${runStatusColor(run.status)}`}>
-                    {runStatusLabel(run.status)}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {(run.status === 'running' || run.status === 'awaiting_gate') && (
+                      <button
+                        type="button"
+                        onClick={() => void cancelRun(run.run_id)}
+                        disabled={cancellingRunId === run.run_id}
+                        className="rounded-md border border-red-200 px-2 py-0.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
+                      >
+                        {cancellingRunId === run.run_id ? '停止中...' : '停止生成'}
+                      </button>
+                    )}
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${runStatusColor(run.status)}`}>
+                      {runStatusLabel(run.status)}
+                    </span>
+                  </div>
                 </div>
                 {run.error_message && (
                   <div className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">{run.error_message}</div>

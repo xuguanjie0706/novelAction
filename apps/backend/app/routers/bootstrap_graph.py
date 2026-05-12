@@ -41,6 +41,7 @@ from app.dependencies import get_current_user
 from app.models.bootstrap_run import BootstrapRun
 from app.models.user import User
 from app.services.bootstrap.graph import (
+    emit,
     run_bootstrap,
     resume_bootstrap,
     subscribe,
@@ -49,6 +50,18 @@ from app.services.bootstrap.graph import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/bootstrap", tags=["bootstrap-graph"])
+_RUN_TASKS: dict[str, asyncio.Task] = {}
+
+
+def _track_task(run_id: str, task: asyncio.Task) -> None:
+    """登记后台 run 任务，并在结束后自动清理。"""
+    _RUN_TASKS[run_id] = task
+
+    def _cleanup(_t: asyncio.Task) -> None:
+        if _RUN_TASKS.get(run_id) is _t:
+            _RUN_TASKS.pop(run_id, None)
+
+    task.add_done_callback(_cleanup)
 
 
 # ──────────────────────────────────────────────────────
@@ -130,7 +143,7 @@ async def create_run(
     run_id = str(run.id)
 
     # 启动后台任务（不阻塞 HTTP 响应）
-    asyncio.create_task(
+    task = asyncio.create_task(
         run_bootstrap(
             run_id,
             logline=req.logline,
@@ -142,6 +155,7 @@ async def create_run(
         ),
         name=f"bootstrap-{run_id[:8]}",
     )
+    _track_task(run_id, task)
     return {"run_id": run_id}
 
 
@@ -224,7 +238,7 @@ async def stream_events(
     """
     run = _get_owned_run(db, run_id, current_user.id)
     past_events = list(run.events or [])
-    already_done = run.status in ("done", "failed")
+    already_done = run.status in ("done", "failed", "cancelled")
 
     async def event_generator():
         # ① replay 已持久化事件
@@ -282,7 +296,7 @@ async def resume_run(
             detail=f"Run is in status '{run.status}', expected 'awaiting_gate'",
         )
 
-    asyncio.create_task(
+    task = asyncio.create_task(
         resume_bootstrap(
             run_id,
             req.positioning,
@@ -292,7 +306,32 @@ async def resume_run(
         ),
         name=f"bootstrap-resume-{run_id[:8]}",
     )
+    _track_task(run_id, task)
     return {"ok": True, "run_id": run_id}
+
+
+@router.post("/runs/{run_id}/cancel", summary="取消正在执行的 Bootstrap 运行")
+async def cancel_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """
+    取消 run（若后台任务仍在执行会主动 task.cancel()）。
+
+    - 状态会标记为 cancelled
+    - SSE 会收到 cancelled 事件
+    """
+    run = _get_owned_run(db, run_id, current_user.id)
+    if run.status in ("done", "failed", "cancelled"):
+        return {"ok": True, "run_id": run_id, "status": run.status}
+
+    task = _RUN_TASKS.get(run_id)
+    if task and not task.done():
+        task.cancel()
+
+    emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")
+    return {"ok": True, "run_id": run_id, "status": "cancelled"}
 
 
 # ──────────────────────────────────────────────────────

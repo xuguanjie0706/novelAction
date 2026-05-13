@@ -8,9 +8,9 @@ Location 模型 — 空间连续性机制
   （如藏经阁第一章"木质气息/烛光"，第五章变成"石板冰冷/明亮"——AI 味的典型来源）。
 
 与现有系统的连接：
-  - Character.current_location (str)   → 复盘时提取，写章时查 Location 名匹配
-  - Scene.location_name (str)          → 未来启用 location_id FK 后可精确查询
-  - Scene.location_id (UUID, 已注释预留) → 本次随 Location 模型一起启用
+  - Character.current_location (str)   → 复盘时提取，写章时按名称/别名与 Location 匹配
+  - Scene.location_id (UUID, FK)       → 精确关联本表；Bootstrap/旧数据可仅用 location_name 文本兜底
+  - Scene.location_name (str)          → 与 location_id 并存，便于展示与未建库地点时的自由文本
   - 写章 prompt：_build_location_context() 在 gated_draft_routes.py 注入硬约束块
 """
 

@@ -123,8 +123,8 @@ def delete_location(
 ):
     """删除地点。
 
-    注意：删除后与该地点关联的 Scene.location_id 将置 NULL（数据库层 ON DELETE SET NULL 未配置，
-    需调用方自行处理；或在 Scene 删除前先解除关联）。
+    注意：``scenes.location_id`` 外键在库中为 ``ON DELETE SET NULL``（见 ``main._ensure_scene_location_id_column``），
+    删除地点后关联分场的 ``location_id`` 会被置空，``location_name`` 等冗余字段仍保留供正文对读。
 
     @param project_id: 项目 UUID
     @param location_id: 地点 UUID

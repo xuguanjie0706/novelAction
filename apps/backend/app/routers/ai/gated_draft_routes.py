@@ -357,8 +357,9 @@ def _build_location_context(db: Session, project_id: str) -> str:
         "forbidden": "禁区",
     }
 
-    lines: list[str] = []
-    seen_locs: set[str] = set()  # 避免同一地点重复出现
+    # 按展示地点合并多人：「张三、李四所在：」+ 同一条地点/感官行，避免重复块浪费上下文。
+    groups: dict[str, dict] = {}
+    group_order: list[str] = []
 
     for char_name, loc_text in char_locs:
         matched = _match_location(loc_text)
@@ -370,18 +371,25 @@ def _build_location_context(db: Session, project_id: str) -> str:
             sensory = (matched.sensory_signature or "").strip()
 
         entry_key = loc_display.lower()
-        if entry_key not in seen_locs:
-            seen_locs.add(entry_key)
-            loc_line = f"  - {loc_display}" + (f"（{danger}）" if danger else "")
-            if sensory:
-                loc_line += f"\n    感官基准：{sensory}"
-            lines.append(f"{char_name}所在：\n{loc_line}")
+        if entry_key not in groups:
+            groups[entry_key] = {
+                "names": [char_name],
+                "loc_display": loc_display,
+                "danger": danger,
+                "sensory": sensory,
+            }
+            group_order.append(entry_key)
         else:
-            # 同地点多人，只追加人名
-            for i, line in enumerate(lines):
-                if f"{loc_display}" in line:
-                    lines[i] = line.replace("所在：", f"等所在：", 1) if "等所在" not in line else line
-                    break
+            groups[entry_key]["names"].append(char_name)
+
+    lines: list[str] = []
+    for entry_key in group_order:
+        g = groups[entry_key]
+        names_joined = "、".join(g["names"])
+        loc_line = f"  - {g['loc_display']}" + (f"（{g['danger']}）" if g["danger"] else "")
+        if g["sensory"]:
+            loc_line += f"\n    感官基准：{g['sensory']}"
+        lines.append(f"{names_joined}所在：\n{loc_line}")
 
     if not lines:
         return ""

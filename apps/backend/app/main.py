@@ -442,11 +442,18 @@ def _ensure_cover_image_call_logs_columns() -> None:
 
 def _ensure_locations_table() -> None:
     """
-    开发环境兼容迁移：建立 locations 表及相关索引。
-    Base.metadata.create_all 已为新表建表，此处仅补充索引与兜底操作（幂等）。
+    开发环境兼容迁移：为 locations 表补充索引（幂等）。
+    主表由 Base.metadata.create_all 建立；若模型未注册导致表尚未存在，跳过索引以免启动失败。
     """
     with engine.begin() as conn:
-        # 主表由 create_all 建立；此处只补充非 ORM 层的额外约束
+        row = conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = current_schema() AND table_name = 'locations'"
+            )
+        ).fetchone()
+        if not row:
+            return
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_locations_project_id ON locations (project_id)"
         ))

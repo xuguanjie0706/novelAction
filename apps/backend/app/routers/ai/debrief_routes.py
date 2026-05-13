@@ -55,6 +55,8 @@ def chapter_debrief(
     _new_memory_chunks: List[MemoryChunk] = []
     chapter_index_saved = False
     chapter_index_error: Optional[str] = None
+    # 境界序号单调性 guard：收集被阻止的降级操作，回传给前端提示作者检查
+    realm_rank_warnings: List[str] = []
     synced_foreshadows = {"created": 0, "updated": 0, "resolved": 0}
     asset_stats = {
         "created_items": 0,
@@ -133,7 +135,24 @@ def chapter_debrief(
         if cu.current_realm is not None:
             char.current_realm = cu.current_realm.strip()[:100]
         if cu.realm_rank is not None:
-            char.realm_rank = cu.realm_rank
+            _prev_rank = char.realm_rank
+            # ── 境界序号单调性 guard ────────────────────────────────────────
+            # 防止 AI 复盘把主角/重要角色境界序号降低（如主角从 rank 5 写成 rank 2）。
+            # 豁免：角色当前状态为 depowered / suppressed / sealed（剧情性强制降级）。
+            _blocked_statuses = {"depowered", "suppressed", "sealed"}
+            if (
+                _prev_rank is not None
+                and cu.realm_rank < _prev_rank
+                and (char.current_status or "alive") not in _blocked_statuses
+            ):
+                realm_rank_warnings.append(
+                    f"⚠️ {char.name} 境界序号 {_prev_rank}（{char.current_realm or '?'}）"
+                    f"→ {cu.realm_rank} 为降级，已自动阻止；"
+                    "若确为剧情性降级（封印/剥夺），请先将角色状态设为 'suppressed' 后重试。"
+                )
+                # 阻止写入：保留当前 realm_rank，仅更新 realm 名称
+            else:
+                char.realm_rank = cu.realm_rank
 
         if getattr(char, "role", None) == "protagonist" and (
             cu.current_realm is not None or cu.realm_rank is not None
@@ -638,6 +657,8 @@ def chapter_debrief(
         "speech_kit_updated_count": speech_kit_updated_count,
         "promises_created": promises_created,
         "promises_fulfilled": promises_fulfilled,
+        # 被境界序号单调性 guard 阻止的降级操作；非空时前端应弹出警告提示作者检查复盘
+        "realm_rank_warnings": realm_rank_warnings,
         "message": result_message,
     }
 

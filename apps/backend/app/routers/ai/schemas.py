@@ -95,6 +95,13 @@ class DraftAssistRequest(BaseModel):
     replace_existing: bool = False
     """若指定，则在 user_prompt 中注入该条待处理质量债务的定向修复指令（须与 chapter_id 对应章一致）"""
     focus_quality_debt_id: Optional[UUID] = None
+    consistency_issue_ack: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "当 ``writing_config.block_on_consistency_issues`` 为真且存在未处理的高优先级矛盾时，"
+            "传入待放行条目的 fingerprint 列表（与 409 响应 ``issues[].fingerprint`` 一致）。"
+        ),
+    )
 
 
 class GatedDraftRequest(BaseModel):
@@ -114,6 +121,10 @@ class GatedDraftRequest(BaseModel):
     replace_existing: bool = True
     """可选：临时覆盖项目级 writing_config 的部分字段"""
     override_config: Optional[dict] = None
+    consistency_issue_ack: Optional[List[str]] = Field(
+        default=None,
+        description="阻塞起笔时与 ``DraftAssistRequest.consistency_issue_ack`` 语义相同。",
+    )
 
 
 class CharacterUpdate(BaseModel):

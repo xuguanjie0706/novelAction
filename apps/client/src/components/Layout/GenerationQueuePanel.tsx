@@ -28,6 +28,10 @@ import {
 import { autoCommitGeneratedChapterDebrief } from '../../utils/generatedChapterDebrief'
 import { formatApiError } from '../../utils/apiError'
 import {
+  postDraftAssistAccumulatedWithPrewriteRetry,
+  authFetchGatedDraftStreamWithPrewriteRetry,
+} from '../../utils/draftPrewriteBlocked'
+import {
   splitStreamedDraftText,
   parseChapterIndexMarkdown,
   fallbackChapterIndexFromRawMarkdown,
@@ -775,43 +779,18 @@ async function runContinueChapters(
 
     let accumulated = ''
     try {
-      const res = await authFetch(`/api/v1/projects/${projectId}/ai/draft-assist/stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      accumulated = await postDraftAssistAccumulatedWithPrewriteRetry(
+        authFetch,
+        `/api/v1/projects/${projectId}/ai/draft-assist/stream`,
+        {
           chapter_id: chapterId,
           model_profile: modelProfile,
           ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
           user_prompt: userPrompt.trim() || null,
           replace_existing: false,
-        }),
-        signal,
-      })
-
-      if (!res.ok) throw new Error((await res.text().catch(() => '')).slice(0, 240) || `HTTP ${res.status}`)
-      if (!res.body) throw new Error('响应无流式内容')
-
-      const reader = res.body.getReader()
-      const dec = new TextDecoder()
-      let buf = ''
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += dec.decode(value, { stream: true })
-        const lines = buf.split('\n')
-        buf = lines.pop() ?? ''
-        for (const line of lines) {
-          const parsed = parseSseDataLine(line)
-          if (!parsed) continue
-          if (parsed.error) throw new Error(parsed.error)
-          if (parsed.text) accumulated += parsed.text
-        }
-      }
-      for (const line of buf.split('\n')) {
-        const parsed = parseSseDataLine(line)
-        if (parsed?.error) throw new Error(parsed.error)
-        if (parsed?.text) accumulated += parsed.text
-      }
+        },
+        { signal },
+      )
 
       if (!accumulated.trim()) throw new Error('未收到正文内容')
 
@@ -1000,43 +979,18 @@ async function runRewriteChapter(
   let accumulated = ''
   try {
     pushProgress({ step: 'draft', label: `正在重写《${chapter.title}》…`, done: false, error: false })
-    const res = await authFetch(`/api/v1/projects/${projectId}/ai/draft-assist/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    accumulated = await postDraftAssistAccumulatedWithPrewriteRetry(
+      authFetch,
+      `/api/v1/projects/${projectId}/ai/draft-assist/stream`,
+      {
         chapter_id: chapterId,
         model_profile: modelProfile,
         ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
         user_prompt: userPrompt.trim() || null,
         replace_existing: true,
-      }),
-      signal,
-    })
-
-    if (!res.ok) throw new Error((await res.text().catch(() => '')).slice(0, 240) || `HTTP ${res.status}`)
-    if (!res.body) throw new Error('响应无流式内容')
-
-    const reader = res.body.getReader()
-    const dec = new TextDecoder()
-    let buf = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buf += dec.decode(value, { stream: true })
-      const lines = buf.split('\n')
-      buf = lines.pop() ?? ''
-      for (const line of lines) {
-        const parsed = parseSseDataLine(line)
-        if (!parsed) continue
-        if (parsed.error) throw new Error(parsed.error)
-        if (parsed.text) accumulated += parsed.text
-      }
-    }
-    for (const line of buf.split('\n')) {
-      const parsed = parseSseDataLine(line)
-      if (parsed?.error) throw new Error(parsed.error)
-      if (parsed?.text) accumulated += parsed.text
-    }
+      },
+      { signal },
+    )
 
     if (!accumulated.trim()) throw new Error('未收到正文内容')
 
@@ -1218,20 +1172,19 @@ async function runGatedRewriteChapter(
   let gateOutcome: 'passed' | 'failed' | null = null
 
   try {
-    const res = await authFetch(aiApi.gatedDraftStreamUrl(projectId), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const res = await authFetchGatedDraftStreamWithPrewriteRetry(
+      authFetch,
+      aiApi.gatedDraftStreamUrl(projectId),
+      {
         chapter_id: chapterId,
         model_profile: modelProfile,
         ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
         user_prompt: userPrompt.trim() || null,
         replace_existing: true,
-      }),
-      signal,
-    })
+      },
+      { signal },
+    )
 
-    if (!res.ok) throw new Error((await res.text().catch(() => '')).slice(0, 240) || `HTTP ${res.status}`)
     if (!res.body) throw new Error('响应无流式内容')
 
     const reader = res.body.getReader()
@@ -1257,9 +1210,17 @@ async function runGatedRewriteChapter(
       // 结构化事件处理
       if (ev === 'gate_config') {
         const warnEnabled = obj.pre_write_warning_enabled === true
+        const hookOn = obj.hook_mandate_active === true
+        const fsEn = obj.enforce_face_slap_payoff_when_hook_required === true
+        const blk = obj.block_on_consistency_issues === true || obj.block_on_realm_mismatch === true
+        const extras: string[] = []
+        if (warnEnabled) extras.push('写前预警已开启')
+        if (hookOn && fsEn) extras.push('爽点结算章将卡 face_slap_payoff')
+        if (blk) extras.push('写前硬门已开启')
+        const extraStr = extras.length ? ` · ${extras.join(' · ')}` : ''
         pushProgress({
           step: 'gate_config',
-          label: `门控配置：综合分≥${obj.min_overall_score} / 订阅意愿≥${obj.min_subscribe_intent}，最多${obj.max_rewrite_attempts}次${warnEnabled ? ' · 写前预警已开启' : ''}`,
+          label: `门控配置：综合分≥${obj.min_overall_score} / 订阅意愿≥${obj.min_subscribe_intent}，最多${obj.max_rewrite_attempts}次${extraStr ? `${extraStr}` : ''}`,
           done: true,
           error: false,
         })

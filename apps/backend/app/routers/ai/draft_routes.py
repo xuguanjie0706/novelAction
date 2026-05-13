@@ -37,6 +37,12 @@ from app.routers.ai.schemas import DraftAssistRequest
 from app.schemas.scene import ScenePlanRequest, ScenePlanResponse
 from app.models import Scene
 from app.routers.ai.text_utils import plain_text, strip_tail_meta_lines, truncate
+from app.routers.ai.draft_helpers import (
+    _build_consistency_issues_block,
+    _calc_hook_requirement,
+    merge_writing_config,
+    prewrite_gate_violation,
+)
 
 router = APIRouter()
 
@@ -571,6 +577,27 @@ async def _build_draft_context(
             pov_character_name = outline_node.pov_character.name
         character_screen_time = outline_node.character_screen_time or {}
 
+    # ── Bootstrap Step 14 一致性矛盾：过滤与本章角色相关条目，追加到 continuity_context ──
+    # 避免引入新参数到 draft_assist_stream；作为连续性账本的尾部追加块传入。
+    _issues_block = _build_consistency_issues_block(
+        project_extra=project_extra if isinstance(project_extra, dict) else {},
+        manifest_names=chapter_manifest_names,
+    )
+    if _issues_block:
+        continuity_context = continuity_context + _issues_block
+
+    # ── 爽点结算章硬约束：按章节序号 + 阶段 + 打脸频率推算 MUST 规则 ──────────────
+    # 结果追加到 writing_brief_context（和激活资产同区块，写章前 brief 区域），
+    # 不新增 draft_assist_stream 参数。
+    _face_slap = (positioning_value or {}).get("face_slap_pattern") or ""
+    _hook_req = _calc_hook_requirement(
+        phase=phase_value or "",
+        sort_order=chapter.sort_order or 0,
+        face_slap_pattern=_face_slap,
+    )
+    if _hook_req:
+        writing_brief_context = writing_brief_context + _hook_req
+
     # ── ReaderPromise 写章注入 ─────────────────────────────────────────────
     # 查询当前章节窗口内 open 承诺，分必须/可以兑现两级注入写章 prompt
     reader_promise_context = _build_reader_promise_context(
@@ -649,6 +676,13 @@ async def draft_assist_stream(
     large_context = req.model_profile == "gemini"
 
     ctx = await _build_draft_context(db, project_id, chapter, project, large_context)
+
+    cfg_wm = merge_writing_config(project, None)
+    viol = prewrite_gate_violation(
+        db, project, chapter, ctx, cfg_wm, req.consistency_issue_ack,
+    )
+    if viol:
+        raise HTTPException(status_code=409, detail=viol)
 
     user_prompt_str = (req.user_prompt or "").strip()
 

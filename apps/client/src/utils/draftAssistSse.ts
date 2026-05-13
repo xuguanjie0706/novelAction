@@ -49,6 +49,15 @@ export interface GateConfigEvent {
   min_subscribe_intent: number
   max_rewrite_attempts: number
   auto_quality_gate: boolean
+  pre_write_warning_enabled?: boolean
+  /** 以下为后端扩展字段（可选） */
+  block_on_consistency_issues?: boolean
+  consistency_block_severities?: string[]
+  block_on_realm_mismatch?: boolean
+  enforce_face_slap_payoff_when_hook_required?: boolean
+  min_face_slap_payoff_score?: number
+  /** 本章是否命中爽点硬约束（结算章/高潮期） */
+  hook_mandate_active?: boolean
 }
 
 /** `attempt_start` 事件 */

@@ -17,7 +17,8 @@ import {
   fallbackChapterIndexFromRawMarkdown,
   htmlToPlainForSplit,
 } from '../utils/draftChapterIndexSplit'
-import { accumulateDraftAssistStream, plainTextDraftToHtml } from '../utils/draftAssistSse'
+import { plainTextDraftToHtml } from '../utils/draftAssistSse'
+import { postDraftAssistAccumulatedWithPrewriteRetry } from '../utils/draftPrewriteBlocked'
 
 // ── 工具 ─────────────────────────────────────────────────────────────────────
 const CHAPTER_NUM_PREFIX = /^\s*第\s*0*(\d+)\s*章/
@@ -762,19 +763,18 @@ export default function CluesPage() {
           /* 快照失败不阻断 */
         }
       }
-      const res = await authFetch(`/api/v1/projects/${projectId}/ai/draft-assist/stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const accumulated = await postDraftAssistAccumulatedWithPrewriteRetry(
+        authFetch,
+        `/api/v1/projects/${projectId}/ai/draft-assist/stream`,
+        {
           chapter_id: chapterId,
           model_profile: modelProfile,
           ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
           user_prompt: null,
           replace_existing: replaceExisting,
           focus_quality_debt_id: debt.id,
-        }),
-      })
-      const accumulated = await accumulateDraftAssistStream(res)
+        },
+      )
       if (!accumulated.trim()) throw new Error('未收到正文内容')
       const { body: draftBody, indexMarkdown } = splitStreamedDraftText(accumulated.trim())
       if (!draftBody.trim()) throw new Error('未收到叙事正文（可能只有索引块）')

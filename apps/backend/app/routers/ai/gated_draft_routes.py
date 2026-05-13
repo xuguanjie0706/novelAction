@@ -7,7 +7,7 @@ gated_draft_routes.py — 质量门控写作端点
   - 质检逻辑复用 AIService.quality_check；存库逻辑内联（避免额外 HTTP 跳转）。
 
 SSE 协议（JSON lines，prefix: ``data: ``）：
-  gate_config       — 循环开始前推送生效配置
+  gate_config       — 循环开始前推送生效配置（含 block_on_consistency_issues、hook_mandate_active 等）
   pre_warn_running  — 写前预警开始（仅当 pre_write_warning_enabled=true）
   pre_warn_done     — 写前预警完成，附 risk_count / ok / protagonist_fact_sheet / writing_brief
   attempt_start     — 本轮起笔开始（strategy: initial | patch | full_rewrite）
@@ -54,6 +54,11 @@ from app.routers.ai.context import (
     format_world_setting_context,
 )
 from app.routers.ai.draft_routes import _build_draft_context
+from app.routers.ai.draft_helpers import (
+    hook_chapter_mandate_active,
+    merge_writing_config,
+    prewrite_gate_violation,
+)
 from app.services.embedding_service import semantic_search as _semantic_search
 from app.routers.ai.quality_debt import sync_quality_debts
 from app.routers.ai.schemas import GatedDraftRequest
@@ -62,43 +67,6 @@ from app.services.ai_service import AIService
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 
 router = APIRouter()
-
-# ── 默认配置 ────────────────────────────────────────────────────
-_DEFAULT_CONFIG: dict = {
-    "auto_quality_gate": True,
-    "min_overall_score": 6.0,            # 0-10；默认偏低，不干扰日常写作
-    "min_subscribe_intent": 6.0,         # 章末追读意愿；专项门槛，独立于 overall
-    "max_rewrite_attempts": 3,           # 最大尝试次数（含首次）
-    "pre_write_warning_enabled": False,  # 写前预警：开启后每次门控写作前先跑一次预警并注入 prompt
-}
-
-
-def _get_writing_config(project: Project, override: dict | None = None) -> dict:
-    """
-    合并项目级 writing_config 与请求级 override_config，返回最终生效配置。
-
-    优先级：override_config > project.extra.writing_config > 内置默认值。
-
-    @param project: 已加载的 Project ORM 对象
-    @param override: 请求体中的临时覆盖字段（可为空）
-    @returns 包含 auto_quality_gate / min_overall_score /
-             min_subscribe_intent / max_rewrite_attempts /
-             pre_write_warning_enabled 的配置 dict
-    """
-    cfg = dict(_DEFAULT_CONFIG)
-    project_extra = getattr(project, "extra", None) or {}
-    if isinstance(project_extra, dict):
-        stored = project_extra.get("writing_config")
-        if isinstance(stored, dict):
-            cfg.update({k: v for k, v in stored.items() if k in _DEFAULT_CONFIG})
-    if override and isinstance(override, dict):
-        cfg.update({k: v for k, v in override.items() if k in _DEFAULT_CONFIG})
-    # 值域保护
-    cfg["min_overall_score"] = max(0.0, min(10.0, float(cfg["min_overall_score"])))
-    cfg["min_subscribe_intent"] = max(0.0, min(10.0, float(cfg["min_subscribe_intent"])))
-    cfg["max_rewrite_attempts"] = max(1, min(5, int(cfg["max_rewrite_attempts"])))
-    cfg["pre_write_warning_enabled"] = bool(cfg.get("pre_write_warning_enabled", False))
-    return cfg
 
 
 def _count_words_plain(text: str) -> int:
@@ -541,15 +509,25 @@ async def _run_quality_check_inline(
     return result
 
 
-def _check_passed(qc_result: dict, cfg: dict) -> tuple[bool, list[str]]:
+def _check_passed(
+    qc_result: dict,
+    cfg: dict,
+    *,
+    hook_mandate_active: bool = False,
+) -> tuple[bool, list[str]]:
     """
     判断质检是否通过门槛，返回 (passed, failing_dimension_names)。
 
     当 auto_quality_gate=False 时：质检结果仍会推送给前端供参考，
     但不触发重写循环（始终视为通过），避免只开预警却被强制重写。
 
+    当 ``enforce_face_slap_payoff_when_hook_required`` 为真且本章为爽点结算章
+    （与 ``_calc_hook_requirement`` 注入硬约束同判）时，额外要求
+    ``face_slap_payoff`` 维度分数 ≥ ``min_face_slap_payoff_score``。
+
     @param qc_result: quality_check 返回的完整结果 dict
     @param cfg: 生效的 writing_config dict（需含 auto_quality_gate 键）
+    @param hook_mandate_active: 本章是否适用爽点硬约束（结算章/高潮期）
     @returns (True, []) 若通过；(False, [...]) 列出未达标维度名
     """
     # auto_quality_gate 关闭时：仅做信息性质检，不触发重写
@@ -565,6 +543,12 @@ def _check_passed(qc_result: dict, cfg: dict) -> tuple[bool, list[str]]:
         failing.append(f"overall_score({overall:.1f}<{cfg['min_overall_score']})")
     if subscribe_intent < cfg["min_subscribe_intent"]:
         failing.append(f"subscribe_intent({subscribe_intent:.1f}<{cfg['min_subscribe_intent']})")
+
+    if hook_mandate_active and cfg.get("enforce_face_slap_payoff_when_hook_required"):
+        min_fs = float(cfg.get("min_face_slap_payoff_score") or 6.0)
+        fs = float((dims.get("face_slap_payoff") or {}).get("score") or 0)
+        if fs < min_fs:
+            failing.append(f"face_slap_payoff({fs:.1f}<{min_fs}，本章为爽点结算/高潮硬约束章)")
 
     return (len(failing) == 0), failing
 
@@ -702,12 +686,14 @@ async def gated_draft_stream(
     质量门控写作：写稿 → 自动质检 → 未达标则重写 → 循环至通过或暂停。
 
     流程：
-    1. 读取 project.extra.writing_config 合并请求 override_config
+    1. 读取 project.extra.writing_config 合并请求 override_config；构建起草上下文并执行写前硬门
+       （``block_on_consistency_issues`` / ``block_on_realm_mismatch``），不通过则 ``409``。
     2. 循环（最多 max_rewrite_attempts 次）：
        a. 起笔（第1轮=initial，第2轮=patch，第3轮=full_rewrite）
        b. 保存章节正文 + 创建 ChapterVersion 快照
        c. 内联质检（复用 AIService.quality_check）
-       d. 检查 overall_score ≥ min_overall_score 且 subscribe_intent ≥ min_subscribe_intent
+       d. 检查 overall_score、subscribe_intent；若开启 ``enforce_face_slap_payoff_when_hook_required``
+          且本章为爽点结算章，则额外检查 face_slap_payoff 维度
        e. 通过 → gate_passed，结束
        f. 未通过 → 生成重写 prompt，继续下一轮
     3. 全部尝试用完仍未通过 → chapter.status = needs_review，emit gate_failed
@@ -724,7 +710,7 @@ async def gated_draft_stream(
     if not project:
         raise HTTPException(404, "Project not found")
 
-    cfg = _get_writing_config(project, req.override_config)
+    cfg = merge_writing_config(project, req.override_config)
     large_context = req.model_profile == "gemini"
 
     svc = AIService(
@@ -732,6 +718,19 @@ async def gated_draft_stream(
         db=db,
         llm_provider_id=req.llm_provider_id,
     )
+
+    try:
+        draft_ctx = await _build_draft_context(db, project_id, chapter, project, large_context)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"上下文构建失败：{e}") from e
+
+    viol = prewrite_gate_violation(
+        db, project, chapter, draft_ctx, cfg, req.consistency_issue_ack,
+    )
+    if viol:
+        raise HTTPException(status_code=409, detail=viol)
+
+    hook_mandate = hook_chapter_mandate_active(draft_ctx, chapter)
 
     def _sse(payload: dict) -> str:
         return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -745,6 +744,14 @@ async def gated_draft_stream(
             "max_rewrite_attempts": cfg["max_rewrite_attempts"],
             "auto_quality_gate": cfg["auto_quality_gate"],
             "pre_write_warning_enabled": cfg["pre_write_warning_enabled"],
+            "block_on_consistency_issues": cfg.get("block_on_consistency_issues", False),
+            "consistency_block_severities": cfg.get("consistency_block_severities", ["high"]),
+            "block_on_realm_mismatch": cfg.get("block_on_realm_mismatch", False),
+            "enforce_face_slap_payoff_when_hook_required": cfg.get(
+                "enforce_face_slap_payoff_when_hook_required", False
+            ),
+            "min_face_slap_payoff_score": cfg.get("min_face_slap_payoff_score", 6.0),
+            "hook_mandate_active": hook_mandate,
         })
 
         user_prompt_str = (req.user_prompt or "").strip()
@@ -752,8 +759,7 @@ async def gated_draft_stream(
         passed = False
         # 跨轮复用上下文：多轮间项目静态数据/上一章状态/承诺/伏笔/质检债务全部不变；
         # 而 gated 始终 replace_existing=True，draft_assist_stream 内部不读 existing_content。
-        # 仅第 1 轮构建一次，后续轮直接复用，省 DB 查询 + 拼接开销。
-        ctx: dict | None = None
+        # 在路由层预先构建 draft_ctx，与写前硬门（一致性/境界）共用同一份上下文。
 
         # ── 写前预警（仅首次，pre_write_warning_enabled=True 时执行）──────────
         # 将预警结果格式化为「写前简报」块，通过 draft_assist_stream 的专属参数
@@ -814,21 +820,13 @@ async def gated_draft_stream(
                 "strategy": strategy,
             })
 
-            # ── 刷新章节实体（保存正文用，仍每轮做）；上下文仅第 1 轮构建 ──
+            # ── 刷新章节实体（保存正文用，仍每轮做）；上下文复用路由层预构建的 draft_ctx ──
             db.refresh(chapter)
 
-            if ctx is None:
-                try:
-                    ctx = await _build_draft_context(db, project_id, chapter, project, large_context)
-                except Exception as e:
-                    yield _sse({"error": f"上下文构建失败：{e}"})
-                    return
-
-            # ── 流式生成正文，同时累积到 accumulated ──────────────────
             accumulated = ""
             try:
                 async for chunk in svc.draft_assist_stream(
-                    **ctx,
+                    **draft_ctx,
                     user_prompt=current_user_prompt,
                     # 写前简报走独立通道（2500 字预算），不与 user_prompt 竞争截断配额；
                     # 重写轮沿用首轮生成的同一份简报，保持状态锁定在整轮写作期间一致。
@@ -915,7 +913,7 @@ async def gated_draft_stream(
             })
 
             # ── 判断是否通过 ───────────────────────────────────────────
-            ok, failing = _check_passed(qc, cfg)
+            ok, failing = _check_passed(qc, cfg, hook_mandate_active=hook_mandate)
             if ok:
                 passed = True
                 # 覆写最后一个 qc_result 中的 passed=False → 补发 gate_passed

@@ -1,72 +1,102 @@
 /**
  * ScenePanel — 章节分场蓝图面板
  *
- * 职责：为 OutlinePage 中选中的 chapter_plan 节点，展示其下所有
- * Scene（分场）记录，支持按 order 排列的只读卡片视图。
+ * 职责：
+ *   1. 展示 chapter_plan 节点下已有的所有 Scene（分场）记录
+ *   2. 提供「AI 生成分场」按钮——调用 /ai/scene-plan 生成计划，
+ *      再通过 /scenes/batch 批量入库（replace_existing=true 保证幂等）
  *
- * 数据来源：GET /api/v1/projects/{pid}/scenes/?outline_node_id=xxx
- * 约束：仅做展示，不含编辑逻辑（编写流程在写作页完成）。
+ * 数据来源：
+ *   - 读：GET /api/v1/projects/{pid}/scenes/?outline_node_id=xxx
+ *   - 生成：POST /api/v1/projects/{pid}/ai/scene-plan
+ *   - 写库：POST /api/v1/projects/{pid}/scenes/batch
+ *
+ * 约束：生成后不支持在此处编辑，编辑逻辑在写作页完成。
  *
  * @see SceneRead schema（apps/backend/app/schemas/scene.py）
+ * @see /ai/scene-plan 端点（apps/backend/app/routers/ai/draft_routes.py）
  */
-import React, { useEffect, useState } from 'react'
-import { scenesApi } from '../../api/client'
+import React, { useEffect, useState, useCallback } from 'react'
+import { aiApi, scenesApi } from '../../api/client'
+import { useAppStore } from '../../store'
 import type { Scene, ScenePacing, SceneStatus } from '../../types'
 import clsx from 'clsx'
-import { Loader2, MapPin, Clock, User, Target, Swords, Zap, Anchor, Gauge, BookOpen, AlertCircle } from 'lucide-react'
+import toast from 'react-hot-toast'
+import {
+  Loader2, MapPin, Clock, Target, Swords, Zap, Anchor,
+  Gauge, BookOpen, AlertCircle, Sparkles, RefreshCw,
+} from 'lucide-react'
+
+// ── 辅助：从 store 取模型配置 ─────────────────────────────
+
+function useModelConfig() {
+  const route = useAppStore.getState().aiBackendRoute
+  // 与 OutlinePage 保持一致的工具函数
+  const profile = route === 'gemini' ? 'gemini' : 'local'
+  const providerId: string | undefined =
+    route && route !== 'local' && route !== 'gemini' ? route : undefined
+  return { profile, providerId } as const
+}
 
 // ── 常量映射 ──────────────────────────────────────────────
 
 const PACING_META: Record<ScenePacing, { label: string; color: string }> = {
-  fast: { label: '快',  color: 'bg-red-50 text-red-600 border-red-200' },
-  mid:  { label: '中',  color: 'bg-amber-50 text-amber-600 border-amber-200' },
-  slow: { label: '慢',  color: 'bg-blue-50 text-blue-600 border-blue-200' },
+  fast: { label: '快节奏', color: 'bg-red-50 text-red-600 border-red-200' },
+  mid:  { label: '中节奏', color: 'bg-amber-50 text-amber-600 border-amber-200' },
+  slow: { label: '慢节奏', color: 'bg-blue-50 text-blue-600 border-blue-200' },
 }
 
 const STATUS_META: Record<SceneStatus, { label: string; dot: string; ring: string }> = {
-  planned:  { label: '待写',   dot: 'bg-gray-300',   ring: 'ring-gray-200' },
-  written:  { label: '已写',   dot: 'bg-green-400',  ring: 'ring-green-200' },
-  reviewed: { label: '已审',   dot: 'bg-violet-400', ring: 'ring-violet-200' },
+  planned:  { label: '待写', dot: 'bg-gray-300',   ring: 'ring-gray-200' },
+  written:  { label: '已写', dot: 'bg-green-400',  ring: 'ring-green-200' },
+  reviewed: { label: '已审', dot: 'bg-violet-400', ring: 'ring-violet-200' },
 }
 
-const HOOK_STARS = (n: number) =>
-  Array.from({ length: 5 }, (_, i) => (
-    <span key={i} className={i < n ? 'text-amber-400' : 'text-gray-200'}>★</span>
-  ))
+// ── 子组件：星级钩子强度 ──────────────────────────────────
 
-// ── 子组件：单条场景卡片 ───────────────────────────────────
-
-interface SceneCardProps {
-  scene: Scene
-  index: number
+function HookStars({ n }: { n: number }) {
+  return (
+    <span className="flex items-center gap-0.5">
+      {Array.from({ length: 5 }, (_, i) => (
+        <span key={i} className={i < n ? 'text-amber-400' : 'text-gray-200'} style={{ fontSize: 10 }}>★</span>
+      ))}
+    </span>
+  )
 }
 
-/**
- * 单场场景卡片（只读）。
- * 展示：地点/时间、POV（仅有 ID 时用缩略显示）、目标、冲突、转折、钩子、字数预算、节奏、状态。
- */
-function SceneCard({ scene, index }: SceneCardProps) {
+// ── 子组件：元信息行 ──────────────────────────────────────
+
+function MetaRow({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  return (
+    <div className="flex items-start gap-1.5 text-xs min-w-0">
+      <span className="shrink-0">{icon}</span>
+      <span className="text-gray-400 shrink-0 whitespace-nowrap">{label}</span>
+      <span className="text-gray-700 leading-relaxed min-w-0 break-words">{value}</span>
+    </div>
+  )
+}
+
+// ── 子组件：单条场景卡片 ──────────────────────────────────
+
+function SceneCard({ scene, index }: { scene: Scene; index: number }) {
   const pacing = PACING_META[scene.pacing] ?? PACING_META.mid
   const status = STATUS_META[scene.status] ?? STATUS_META.planned
 
   return (
-    <div className="rounded-xl border border-gray-100 bg-white shadow-sm hover:shadow-md transition-shadow overflow-hidden">
-      {/* 卡头：序号 + 状态 + 节奏 */}
-      <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-100">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-bold text-gray-400 w-5 text-center">#{index + 1}</span>
+    <div className="rounded-xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+      {/* 卡头 */}
+      <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b border-gray-100">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[11px] font-bold text-gray-400 shrink-0">#{index + 1}</span>
           {scene.title && (
-            <span className="text-xs font-semibold text-gray-700 truncate max-w-[200px]">{scene.title}</span>
+            <span className="text-xs font-semibold text-gray-700 truncate">{scene.title}</span>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          {/* 字数预算 */}
+        <div className="flex items-center gap-1.5 shrink-0">
           <span className="text-[10px] text-gray-400 font-mono">{scene.word_budget}字</span>
-          {/* 节奏 */}
           <span className={clsx('text-[10px] px-1.5 py-0.5 rounded border font-medium', pacing.color)}>
-            {pacing.label}节奏
+            {pacing.label}
           </span>
-          {/* 状态 */}
           <span className={clsx('flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full ring-1', status.ring)}>
             <span className={clsx('w-1.5 h-1.5 rounded-full', status.dot)} />
             {status.label}
@@ -74,9 +104,8 @@ function SceneCard({ scene, index }: SceneCardProps) {
         </div>
       </div>
 
-      {/* 卡体：结构要素 */}
-      <div className="px-4 py-3 space-y-2.5">
-        {/* 地点 & 时间 */}
+      {/* 卡体 */}
+      <div className="px-4 py-3 space-y-2">
         {(scene.location_name || scene.time) && (
           <div className="flex items-start gap-4 flex-wrap">
             {scene.location_name && (
@@ -87,50 +116,28 @@ function SceneCard({ scene, index }: SceneCardProps) {
             )}
           </div>
         )}
-
-        {/* 目标 */}
         {scene.goal && (
           <MetaRow icon={<Target size={11} className="text-emerald-500 mt-0.5" />} label="目标" value={scene.goal} />
         )}
-
-        {/* 冲突 */}
         {scene.conflict && (
           <MetaRow icon={<Swords size={11} className="text-red-400 mt-0.5" />} label="冲突" value={scene.conflict} />
         )}
-
-        {/* 转折 */}
         {scene.turn && (
           <MetaRow icon={<Zap size={11} className="text-amber-400 mt-0.5" />} label="转折" value={scene.turn} />
         )}
-
-        {/* 钩子 */}
         {scene.hook && (
           <div>
-            <MetaRow icon={<Anchor size={11} className="text-indigo-400 mt-0.5" />} label="出场钩子" value={scene.hook} />
-            <div className="flex items-center gap-0.5 mt-1 ml-3.5 pl-1">
-              {HOOK_STARS(scene.hook_strength)}
-              <span className="text-[10px] text-gray-400 ml-1">强度 {scene.hook_strength}/5</span>
+            <MetaRow icon={<Anchor size={11} className="text-indigo-400 mt-0.5" />} label="钩子" value={scene.hook} />
+            <div className="flex items-center gap-1.5 mt-1 pl-4">
+              <HookStars n={scene.hook_strength} />
+              <span className="text-[10px] text-gray-400">强度 {scene.hook_strength}/5</span>
             </div>
           </div>
         )}
-
-        {/* 感官焦点 */}
         {scene.sensory_focus && scene.sensory_focus !== 'mixed' && (
           <MetaRow icon={<Gauge size={11} className="text-purple-400 mt-0.5" />} label="感官" value={scene.sensory_focus} />
         )}
       </div>
-    </div>
-  )
-}
-
-// ── 子组件：元信息行 ──────────────────────────────────────
-
-function MetaRow({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
-  return (
-    <div className="flex items-start gap-1.5 text-xs min-w-0">
-      <span className="shrink-0 mt-0.5">{icon}</span>
-      <span className="text-gray-400 shrink-0">{label}</span>
-      <span className="text-gray-700 leading-relaxed min-w-0 break-words">{value}</span>
     </div>
   )
 }
@@ -142,20 +149,33 @@ interface ScenePanelProps {
   projectId: string
   /** chapter_plan 大纲节点 ID */
   outlineNodeId: string
+  /** 章节标题——用于 AI 生成分场的 prompt */
+  nodeTitle: string
+  /** 章节摘要——用于 AI 生成分场的 prompt */
+  nodeSummary: string
 }
 
 /**
- * ScenePanel — 展示某 chapter_plan 下的所有分场蓝图。
+ * ScenePanel — 分场蓝图展示 + AI 生成入口。
  *
- * 加载策略：outlineNodeId 变化时重新拉取；空态时展示提示。
- * 副作用：仅发起 GET 请求，无写库操作。
+ * 状态机：
+ *   idle → 展示场景列表（或空态）
+ *   generating → 调用 AI 生成 + 批量入库
+ *   error → 展示错误，允许重试
+ *
+ * 副作用：
+ *   - 读：GET /scenes/ （outlineNodeId 变化时触发）
+ *   - 写：POST /ai/scene-plan + POST /scenes/batch （点击生成时触发）
  */
-export default function ScenePanel({ projectId, outlineNodeId }: ScenePanelProps) {
-  const [scenes, setScenes]   = useState<Scene[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError]     = useState<string | null>(null)
+export default function ScenePanel({ projectId, outlineNodeId, nodeTitle, nodeSummary }: ScenePanelProps) {
+  const [scenes, setScenes]       = useState<Scene[]>([])
+  const [loading, setLoading]     = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [error, setError]         = useState<string | null>(null)
 
-  useEffect(() => {
+  // ── 读取已有分场 ───────────────────────────────────────
+
+  const fetchScenes = useCallback(() => {
     if (!projectId || !outlineNodeId) return
     setLoading(true)
     setError(null)
@@ -165,7 +185,42 @@ export default function ScenePanel({ projectId, outlineNodeId }: ScenePanelProps
       .finally(() => setLoading(false))
   }, [projectId, outlineNodeId])
 
-  // ── 加载中 ────────────────────────────────────────────
+  useEffect(() => { fetchScenes() }, [fetchScenes])
+
+  // ── AI 生成分场 ────────────────────────────────────────
+
+  const handleGenerate = useCallback(async () => {
+    if (generating) return
+    const { profile, providerId } = useModelConfig()
+    setGenerating(true)
+    try {
+      // Step 1: AI 生成分场计划
+      const planRes = await aiApi.scenePlan(
+        projectId,
+        outlineNodeId,
+        nodeTitle || '未命名章节',
+        nodeSummary || '',
+        profile as 'local' | 'gemini',
+        providerId,
+      )
+      const rawScenes = planRes.data.scenes
+      if (!rawScenes?.length) {
+        toast.error('AI 返回的分场计划为空，请重试')
+        return
+      }
+
+      // Step 2: 批量入库（replace_existing=true 会先清空旧场景）
+      const saveRes = await scenesApi.batchCreate(projectId, outlineNodeId, rawScenes)
+      setScenes(saveRes.data)
+      toast.success(`已生成 ${saveRes.data.length} 个分场`)
+    } catch {
+      toast.error('生成分场失败，请检查模型配置后重试')
+    } finally {
+      setGenerating(false)
+    }
+  }, [projectId, outlineNodeId, nodeTitle, nodeSummary, generating])
+
+  // ── 渲染：加载中 ───────────────────────────────────────
 
   if (loading) {
     return (
@@ -176,58 +231,86 @@ export default function ScenePanel({ projectId, outlineNodeId }: ScenePanelProps
     )
   }
 
-  // ── 错误 ───────────────────────────────────────────────
+  // ── 渲染：错误 ─────────────────────────────────────────
 
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
         <AlertCircle size={24} className="text-red-400 mb-3" />
-        <p className="text-sm text-red-500">{error}</p>
+        <p className="text-sm text-red-500 mb-3">{error}</p>
+        <button
+          onClick={fetchScenes}
+          className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50"
+        >
+          重试
+        </button>
       </div>
     )
   }
 
-  // ── 空态 ───────────────────────────────────────────────
+  // ── 渲染：空态 ─────────────────────────────────────────
 
   if (scenes.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center text-gray-400">
         <BookOpen size={32} className="mb-3 opacity-30" />
-        <p className="text-sm font-medium">暂无分场蓝图</p>
-        <p className="text-xs mt-1.5 text-gray-300 max-w-[220px] leading-relaxed">
-          Bootstrap 第 13 步会自动为第 1 章生成分场；<br />
-          后续章节可通过写作页「生成分场」按钮创建
+        <p className="text-sm font-medium text-gray-600">暂无分场蓝图</p>
+        <p className="text-xs mt-1.5 text-gray-400 max-w-[220px] leading-relaxed">
+          Bootstrap 第 13 步自动为第 1 章生成；<br />
+          其他章节点击下方按钮即可生成
         </p>
+        <button
+          onClick={handleGenerate}
+          disabled={generating}
+          className="mt-5 flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white text-sm rounded-lg transition-colors"
+        >
+          {generating
+            ? <><Loader2 size={14} className="animate-spin" />生成中…</>
+            : <><Sparkles size={14} />AI 生成分场</>
+          }
+        </button>
       </div>
     )
   }
 
-  // ── 摘要栏 ─────────────────────────────────────────────
+  // ── 渲染：场景列表 ─────────────────────────────────────
 
-  const totalBudget = scenes.reduce((s, sc) => s + sc.word_budget, 0)
+  const totalBudget  = scenes.reduce((s, sc) => s + sc.word_budget, 0)
   const writtenCount = scenes.filter(sc => sc.status !== 'planned').length
 
   return (
     <div className="space-y-4">
-      {/* 汇总信息栏 */}
-      <div className="flex items-center gap-4 px-1">
-        <div className="flex items-center gap-1.5 text-xs text-gray-500">
-          <User size={11} />
+      {/* 汇总 + 重新生成按钮 */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3 text-xs text-gray-500">
           <span>{scenes.length} 场</span>
-        </div>
-        <div className="flex items-center gap-1.5 text-xs text-gray-500">
-          <BookOpen size={11} />
+          <span className="text-gray-300">·</span>
           <span>合计约 {totalBudget.toLocaleString()} 字</span>
+          {writtenCount > 0 && (
+            <>
+              <span className="text-gray-300">·</span>
+              <span className="text-green-600 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                已写 {writtenCount}/{scenes.length}
+              </span>
+            </>
+          )}
         </div>
-        {writtenCount > 0 && (
-          <div className="flex items-center gap-1.5 text-xs text-green-600">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
-            <span>已写 {writtenCount}/{scenes.length}</span>
-          </div>
-        )}
+        <button
+          onClick={handleGenerate}
+          disabled={generating}
+          title="重新生成（将覆盖现有分场）"
+          className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-amber-600 hover:border-amber-200 disabled:opacity-50 transition-colors"
+        >
+          {generating
+            ? <Loader2 size={12} className="animate-spin" />
+            : <RefreshCw size={12} />
+          }
+          {generating ? '生成中…' : '重新生成'}
+        </button>
       </div>
 
-      {/* 场景卡片列表 */}
+      {/* 场景卡片 */}
       <div className="space-y-3">
         {scenes.map((scene, i) => (
           <SceneCard key={scene.id} scene={scene} index={i} />

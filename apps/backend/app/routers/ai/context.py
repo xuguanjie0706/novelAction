@@ -2,7 +2,7 @@ import json
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -195,14 +195,43 @@ def build_continuity_context(
     if outline_node and (outline_node.foreshadows_resolved or outline_node.foreshadows_laid):
         bridge_lines.append("伏笔必须有前因后果；不得凭空写角色已经知道未在前文出现的信息。")
 
-    # ── 全局伏笔管理表：优先传 open 状态伏笔 ────────────────────────────
-    global_foreshadows = db.query(Foreshadow).filter(
-        Foreshadow.project_id == project_id,
-        Foreshadow.status == "open",
-    ).order_by(Foreshadow.priority.desc(), Foreshadow.created_at).limit(12).all()
+    # ── 全局伏笔管理表：逾期优先 → priority 降序 → 时间升序 ──────────────
+    # 排序逻辑：逾期伏笔（planned_resolve_chapter <= 当前章）排在最前面，
+    # 确保编辑最关注的"快截止/已过期"伏笔无论 priority 高低都能进入注入窗口，
+    # 不依赖 pre_write_warning 是否开启。
+    _ch_num = chapter.sort_order or 0
+    global_foreshadows = (
+        db.query(Foreshadow)
+        .filter(
+            Foreshadow.project_id == project_id,
+            Foreshadow.status == "open",
+        )
+        .order_by(
+            # 0 = 逾期（planned_resolve_chapter 存在且 <= 当前章），1 = 未逾期
+            case(
+                (
+                    (Foreshadow.planned_resolve_chapter.isnot(None))
+                    & (Foreshadow.planned_resolve_chapter <= _ch_num),
+                    0,
+                ),
+                else_=1,
+            ),
+            Foreshadow.priority.desc(),
+            Foreshadow.created_at,
+        )
+        .limit(12)
+        .all()
+    )
     foreshadow_lines = []
     for f in global_foreshadows:
-        parts = [f.code or "F-?", f.title]
+        # 逾期标记：当章号 > 0 且已超过计划回收章
+        is_overdue = bool(
+            _ch_num > 0
+            and f.planned_resolve_chapter
+            and f.planned_resolve_chapter <= _ch_num
+        )
+        overdue_tag = "⚠️已逾期！" if is_overdue else ""
+        parts = [overdue_tag + (f.code or "F-?"), f.title]
         if f.laid_chapter_number:
             parts.append(f"(第{f.laid_chapter_number}章埋)")
         if f.planned_resolve_chapter:

@@ -95,6 +95,10 @@ class DraftStreamMixin:
         # 仅在门控写作且 pre_write_warning_enabled=True 时由 gated_draft_routes 填入；
         # 普通 draft-assist/stream 调用传空字符串即可（默认值）。
         pre_write_brief: str = "",
+        # 空间连续性约束（由 gated_draft_routes._build_location_context 生成）：
+        # 列出各主角当前位置 + Location.sensory_signature，注入为硬约束，防感官/位置跨章漂移。
+        # 有内容时插入 prompt 中【本章大纲计划】之前，无内容时跳过（不产生空白行）。
+        location_context: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
@@ -370,6 +374,12 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
                 + "\n==="
             )
 
+        # 空间连续性约束：由 gated_draft_routes._build_location_context 生成。
+        # 有内容时注入【本章大纲计划】之前，作为感官/位置漂移防护硬墙；无数据时跳过。
+        location_context_part = ""
+        if location_context and location_context.strip():
+            location_context_part = "\n" + location_context.strip() + "\n"
+
         # ── 分场蓝图：有数据时以「权威结构」标签注入，并提示下方 outline 平铺字段降级为风格参考 ──
         # 当前 Bootstrap 仅为第 1 章生成 Scene 记录；其余章节 blueprint 为空，回退到 outline 平铺。
         # 通过显式 authority 声明，避免 AI 在两套结构间漂移。
@@ -417,7 +427,7 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
 {plot_dossier_part}
 {quality_debt_part}
 {reader_promise_part}
-【本章大纲计划】{outline_authority_note}
+{location_context_part}【本章大纲计划】{outline_authority_note}
 标题：{chapter_title}{day_part}
 开篇钩子：{outline_hook or "（未填写）"}
 核心事件：{outline_summary or "（未填写）"}

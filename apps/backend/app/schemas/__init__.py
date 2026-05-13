@@ -14,6 +14,7 @@ from app.schemas.chapter_index import ChapterIndexCreate, ChapterIndexUpdate, Ch
 from app.schemas.memory import MemoryChunkCreate, MemoryChunkOut
 from app.schemas.foreshadow import ForeshadowCreate, ForeshadowUpdate, ForeshadowOut
 from app.schemas.quality_debt import QualityDebtOut, QualityDebtUpdate
+from app.schemas.location import LocationCreate, LocationUpdate, LocationOut
 from app.schemas.scene import SceneCreate, SceneUpdate, SceneRead, ScenePlanRequest, ScenePlanResponse
 from app.schemas.reader_promise import ReaderPromiseCreate, ReaderPromiseUpdate, ReaderPromiseOut
 
@@ -28,6 +29,7 @@ __all__ = [
     "MemoryChunkCreate", "MemoryChunkOut",
     "ForeshadowCreate", "ForeshadowUpdate", "ForeshadowOut",
     "QualityDebtOut", "QualityDebtUpdate",
+    "LocationCreate", "LocationUpdate", "LocationOut",
     "SceneCreate", "SceneUpdate", "SceneRead", "ScenePlanRequest", "ScenePlanResponse",
     "ReaderPromiseCreate", "ReaderPromiseUpdate", "ReaderPromiseOut",
 ]

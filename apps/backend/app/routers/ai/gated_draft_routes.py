@@ -40,6 +40,7 @@ from app.models import (
     ChapterVersion,
     Character,
     Foreshadow,
+    Location,
     MemoryChunk,
     OutlineNode,
     PowerSystem,
@@ -293,6 +294,108 @@ def _build_pre_warn_prompt_block(warn_result: dict) -> str:
 
     lines.append("===")
     return "\n".join(lines)
+
+
+def _build_location_context(db: Session, project_id: str) -> str:
+    """
+    构造空间连续性约束块，注入写章 prompt。
+
+    逻辑：
+    1. 查询项目内所有 Character（最多 12 个）的 current_location 字段；
+    2. 对每个非空 current_location，尝试在 locations 表中按名称/别名模糊匹配；
+    3. 若匹配到 Location，提取 danger_level + sensory_signature 作为感官基准；
+    4. 组装成「⚠️ 空间连续性约束」块，写章时 AI 必须遵守。
+
+    空返回值（空字符串）：项目无角色、所有角色位置为空，或数据库中无任何 Location 记录时返回 ""。
+
+    @param db: SQLAlchemy Session
+    @param project_id: 项目 UUID 字符串
+    @returns 格式化约束文本块；无有效数据时返回空字符串
+    """
+    characters = (
+        db.query(Character)
+        .filter(Character.project_id == project_id)
+        .order_by(Character.realm_rank.desc().nullslast())  # 主角/高境界角色优先
+        .limit(12)
+        .all()
+    )
+
+    char_locs: list[tuple[str, str]] = [
+        (c.name, (c.current_location or "").strip())
+        for c in characters
+        if (c.current_location or "").strip()
+    ]
+    if not char_locs:
+        return ""
+
+    # 预加载项目内所有 Location，用于名称匹配（数量通常 < 100，全量拉取可接受）
+    all_locations = (
+        db.query(Location)
+        .filter(Location.project_id == project_id)
+        .all()
+    )
+
+    def _match_location(loc_text: str) -> Location | None:
+        """按精确名 → 别名包含 → 名称包含的优先级依次匹配。"""
+        loc_lower = loc_text.lower()
+        for loc in all_locations:
+            if loc.name.lower() == loc_lower:
+                return loc
+        for loc in all_locations:
+            aliases = loc.aliases or []
+            if any(a.lower() == loc_lower for a in aliases):
+                return loc
+        for loc in all_locations:
+            if loc.name.lower() in loc_lower or loc_lower in loc.name.lower():
+                return loc
+        return None
+
+    danger_labels = {
+        "safe": "安全",
+        "neutral": "中性",
+        "dangerous": "危险",
+        "forbidden": "禁区",
+    }
+
+    lines: list[str] = []
+    seen_locs: set[str] = set()  # 避免同一地点重复出现
+
+    for char_name, loc_text in char_locs:
+        matched = _match_location(loc_text)
+        loc_display = matched.name if matched else loc_text
+        danger = ""
+        sensory = ""
+        if matched:
+            danger = f"危险等级：{danger_labels.get(matched.danger_level or 'neutral', matched.danger_level)}"
+            sensory = (matched.sensory_signature or "").strip()
+
+        entry_key = loc_display.lower()
+        if entry_key not in seen_locs:
+            seen_locs.add(entry_key)
+            loc_line = f"  - {loc_display}" + (f"（{danger}）" if danger else "")
+            if sensory:
+                loc_line += f"\n    感官基准：{sensory}"
+            lines.append(f"{char_name}所在：\n{loc_line}")
+        else:
+            # 同地点多人，只追加人名
+            for i, line in enumerate(lines):
+                if f"{loc_display}" in line:
+                    lines[i] = line.replace("所在：", f"等所在：", 1) if "等所在" not in line else line
+                    break
+
+    if not lines:
+        return ""
+
+    block = (
+        "【⚠️ 空间连续性约束（必须遵守）】\n"
+        "本章起始空间状态（来自上章复盘提取）：\n"
+        + "\n".join(lines)
+        + "\n⚠️ 严禁在未交代过渡（如传送/赶路场景）的情况下改变角色所在地。"
+        "如需切换场景，必须写明位移动作或明确时间跳跃标注。\n"
+        "⚠️ 有感官基准的地点：正文中该地点的气味/光线/声音/温度描写，必须与「感官基准」保持一致，"
+        "不得引入矛盾感官细节。"
+    )
+    return block
 
 
 def _plain_text_from_html(html: str) -> str:
@@ -724,6 +827,9 @@ async def gated_draft_stream(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"上下文构建失败：{e}") from e
 
+    # 空间连续性约束块：注入写章 prompt，防止 AI 跨章位置漂移
+    location_context = _build_location_context(db, str(project_id))
+
     viol = prewrite_gate_violation(
         db, project, chapter, draft_ctx, cfg, req.consistency_issue_ack,
     )
@@ -831,6 +937,8 @@ async def gated_draft_stream(
                     # 写前简报走独立通道（2500 字预算），不与 user_prompt 竞争截断配额；
                     # 重写轮沿用首轮生成的同一份简报，保持状态锁定在整轮写作期间一致。
                     pre_write_brief=pre_warn_brief_block,
+                    # 空间连续性约束：各章复用同一份（角色位置在整轮写作期间不变）
+                    location_context=location_context,
                     replace_existing=True,  # 门控写作始终整章重写
                     stream_log_context={
                         "project_id": str(project_id),

@@ -1,6 +1,6 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
-import type { AiChatMessage, Chapter, ChapterAnalysisResult, ChapterAnalysisStats, DashboardHome, HookCheckResult, LlmOverview, ReaderSimulationResult, Scene, StorylineGapsResult, WorldSetting } from '../types'
+import type { AiChatMessage, Chapter, ChapterAnalysisResult, ChapterAnalysisStats, DashboardHome, HookCheckResult, Location, LlmOverview, ReaderPromise, ReaderSimulationResult, Scene, StorylineGapsResult, WorldSetting } from '../types'
 import {
   extractUsage,
   finishLlmCall,
@@ -250,6 +250,84 @@ export const qualityDebtsApi = {
     api.patch(`/projects/${pid}/quality-debts/${id}`, data),
 }
 
+// ── ReaderPromise（读者承诺台账） ─────────────────────────
+
+/**
+ * 读者承诺 CRUD。
+ * 后端路由前缀：/api/v1/projects/{pid}/reader_promises/
+ */
+export const readerPromisesApi = {
+  /**
+   * 列出项目所有承诺，可按 status 过滤（open/fulfilled/broken）。
+   * @param pid - 项目 ID
+   * @param status - 可选状态过滤
+   */
+  list: (pid: string, status?: string) =>
+    api.get<ReaderPromise[]>(`/projects/${pid}/reader_promises/`, {
+      params: status ? { status } : undefined,
+    }),
+
+  /**
+   * 创建新承诺。
+   * @param pid - 项目 ID
+   * @param data - 承诺内容，promise_text 必填
+   */
+  create: (pid: string, data: Partial<ReaderPromise>) =>
+    api.post<ReaderPromise>(`/projects/${pid}/reader_promises/`, data),
+
+  /**
+   * 更新承诺字段（部分更新）——常用于标记 status=fulfilled/broken。
+   * @param pid - 项目 ID
+   * @param id - 承诺 ID
+   * @param data - 要更新的字段
+   */
+  update: (pid: string, id: string, data: Partial<ReaderPromise>) =>
+    api.patch<ReaderPromise>(`/projects/${pid}/reader_promises/${id}`, data),
+
+  /** 删除承诺（谨慎使用，一般用 status=broken 代替）。 */
+  delete: (pid: string, id: string) =>
+    api.delete(`/projects/${pid}/reader_promises/${id}`),
+}
+
+// ── Locations（空间连续性机制） ───────────────────────────────
+
+/**
+ * 地点（Location）CRUD。
+ * 后端路由前缀：/api/v1/projects/{pid}/locations
+ *
+ * sensory_signature 是核心字段：写章时注入 prompt 防止感知漂移。
+ * 依赖：Character.current_location（文本）在复盘后自动更新，无需本接口维护。
+ */
+export const locationsApi = {
+  /**
+   * 列出项目所有地点，按 sort_order + name 升序。
+   * @param pid - 项目 ID
+   */
+  list: (pid: string) =>
+    api.get<Location[]>(`/projects/${pid}/locations`),
+
+  /**
+   * 创建地点。
+   * @param pid - 项目 ID
+   * @param data - 地点数据，name 必填
+   */
+  create: (pid: string, data: Omit<Partial<Location>, 'id' | 'project_id' | 'created_at' | 'updated_at'>) =>
+    api.post<Location>(`/projects/${pid}/locations`, data),
+
+  /**
+   * 更新地点字段（部分更新）。
+   * @param pid - 项目 ID
+   * @param id - 地点 ID
+   * @param data - 要更新的字段
+   */
+  update: (pid: string, id: string, data: Partial<Location>) =>
+    api.patch<Location>(`/projects/${pid}/locations/${id}`, data),
+
+  /** 删除地点（解除关联后再删）。 */
+  delete: (pid: string, id: string) =>
+    api.delete(`/projects/${pid}/locations/${id}`),
+}
+
 // ── Scenes（三层调度：分场） ───────────────────────────────
 
 /**
@@ -264,6 +342,23 @@ export const scenesApi = {
    */
   list: (pid: string, params: { outline_node_id?: string; chapter_id?: string }) =>
     api.get<Scene[]>(`/projects/${pid}/scenes/`, { params }),
+
+  /**
+   * 批量创建分场——AI 生成计划后调用，replace_existing=true 会先清空旧记录。
+   * @param pid - 项目 ID
+   * @param outline_node_id - 批次归属节点 ID（同时用于清空旧场景）
+   * @param scenes - AI 返回的场景列表（字段与 SceneCreate 对齐）
+   */
+  batchCreate: (
+    pid: string,
+    outline_node_id: string,
+    scenes: Array<Record<string, unknown>>,
+  ) =>
+    api.post<Scene[]>(`/projects/${pid}/scenes/batch`, {
+      outline_node_id,
+      scenes,
+      replace_existing: true,
+    }),
 }
 
 // ── Outline ───────────────────────────────────────────
@@ -633,4 +728,33 @@ export const aiApi = {
     model_profile: modelProfile,
     ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
   }),
+
+  /**
+   * 章纲 → 分场计划（AI 生成，不自动入库）。
+   * 调用方负责将返回的 scenes 批量写入 scenesApi.batchCreate。
+   *
+   * @param pid - 项目 ID
+   * @param outlineNodeId - chapter_plan 节点 ID（用于读取 prev_directives）
+   * @param chapterTitle - 章节标题，传入 OutlineNode.title
+   * @param chapterSummary - 章节摘要，传入 OutlineNode.summary
+   * @param modelProfile - 模型线路
+   * @param llmProviderId - 远程线路 provider ID（可选）
+   */
+  scenePlan: (
+    pid: string,
+    outlineNodeId: string,
+    chapterTitle: string,
+    chapterSummary: string,
+    modelProfile: 'local' | 'gemini' = 'local',
+    llmProviderId?: string,
+  ) => api.post<{ scenes: Array<Record<string, unknown>>; total_word_budget: number; notes?: string }>(
+    `/projects/${pid}/ai/scene-plan`,
+    {
+      outline_node_id: outlineNodeId,
+      chapter_title: chapterTitle,
+      chapter_summary: chapterSummary,
+      model_profile: modelProfile,
+      ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
+    },
+  ),
 }

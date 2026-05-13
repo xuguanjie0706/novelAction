@@ -58,7 +58,7 @@ from app.dependencies import get_current_user, verify_project_access
 from app.routers import projects, world_settings, characters, outline, chapters, chapter_indexes, ai, generate, admin_llm, llm_public, admin_llm_calls, admin_cover_image_calls
 from app.routers import storylines, power_systems, skills, items, factions
 from app.routers import foreshadows, quality_debts
-from app.routers import scenes, reader_promises
+from app.routers import scenes, reader_promises, locations as locations_router
 from app.routers import cover as cover_router
 from app.routers import auth as auth_router
 from app.routers import admin_auth as admin_auth_router
@@ -440,6 +440,26 @@ def _ensure_cover_image_call_logs_columns() -> None:
         )
 
 
+def _ensure_locations_table() -> None:
+    """
+    开发环境兼容迁移：建立 locations 表及相关索引。
+    Base.metadata.create_all 已为新表建表，此处仅补充索引与兜底操作（幂等）。
+    """
+    with engine.begin() as conn:
+        # 主表由 create_all 建立；此处只补充非 ORM 层的额外约束
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_locations_project_id ON locations (project_id)"
+        ))
+
+
+def _ensure_scene_location_id_column() -> None:
+    """为 scenes 表启用 location_id FK 列（从注释预留状态正式启用）。"""
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE scenes ADD COLUMN IF NOT EXISTS location_id UUID REFERENCES locations(id) ON DELETE SET NULL"
+        ))
+
+
 def _ensure_bootstrap_runs_table() -> None:
     """为旧库补齐 bootstrap_runs 表（Base.metadata.create_all 对已存在表无害，此处是安全兜底）。"""
     with engine.begin() as conn:
@@ -476,6 +496,8 @@ _ensure_llm_provider_columns()
 _ensure_chapter_coherence_report_columns()
 _ensure_cover_image_call_logs_columns()
 _ensure_bootstrap_runs_table()
+_ensure_locations_table()
+_ensure_scene_location_id_column()
 _claim_orphan_projects()
 seed_llm_from_env_if_empty()
 
@@ -558,6 +580,7 @@ app.include_router(foreshadows.router, prefix="/api/v1", dependencies=_project_s
 app.include_router(quality_debts.router, prefix="/api/v1", dependencies=_project_scoped_dep)
 app.include_router(scenes.router, prefix="/api/v1", dependencies=_project_scoped_dep)
 app.include_router(reader_promises.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(locations_router.router, prefix="/api/v1", dependencies=_project_scoped_dep)
 app.include_router(cover_router.router, prefix="/api/v1", dependencies=_project_scoped_dep)
 
 ensure_cover_storage_dir()

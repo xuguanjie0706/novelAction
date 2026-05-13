@@ -23,6 +23,7 @@ from app.models.outline_revision import OutlineRevision
 from app.models.quality_debt import QualityDebt
 from app.models.character_change_log import CharacterChangeLog
 from app.models.cover_image_call_log import CoverImageCallLog
+from app.models.location import Location
 from app.models.scene import Scene
 from app.models.reader_promise import ReaderPromise
 from app.models.chapter_analysis_record import ChapterAnalysisRecord
@@ -57,6 +58,7 @@ __all__ = [
     "QualityDebt",
     "CharacterChangeLog",
     "CoverImageCallLog",
+    "Location",
     "Scene",
     "ReaderPromise",
     "ChapterAnalysisRecord",

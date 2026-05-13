@@ -48,6 +48,129 @@ router = APIRouter()
 
 
 # ═══════════════════════════════════════════════════════════════
+# 复盘闭环辅助：prev_directives 格式化
+# ═══════════════════════════════════════════════════════════════
+
+def _build_prev_directives(outline_node) -> str:
+    """
+    将 OutlineNode.extra.directives_from_prev 格式化为写章可用的纯文本指令块。
+
+    debrief_routes 在复盘提交时，将 AI 生成的 next_chapter_directives 写入下一章
+    OutlineNode.extra.directives_from_prev（最多保留最近5条）。本函数提取最近2条
+    有效指令，组织成可注入 draft_assist_stream prev_directives 参数的字符串。
+
+    设计原则：只提取"写正文时可操作的约束"，过滤掉对写章无直接价值的元数据
+    （如 from_chapter_id、applied_at），避免浪费 AI 注意力。
+
+    @param outline_node: 当前章节对应的 OutlineNode ORM 对象（可为 None）
+    @returns 格式化指令字符串；无有效指令时返回空字符串
+    """
+    if outline_node is None or not isinstance(outline_node.extra, dict):
+        return ""
+    dirs = outline_node.extra.get("directives_from_prev") or []
+    if not dirs:
+        return ""
+
+    patch_key_zh = {
+        "adjust_pacing":                    ("节奏调整",       lambda v: v),
+        "force_pov":                         ("强制POV视角",    lambda v: v),
+        "add_foreshadow":                    ("伏笔延续要求",   lambda v: v),
+        "reader_expectation_note":           ("读者期待管理",   lambda v: v),
+        "must_resolve_promise_in_next_N_chapters": (
+            "承诺兑现窗口",
+            lambda v: f"本章或接下来 {v} 章内必须兑现已有读者承诺",
+        ),
+        "increase_screen_time_for":          (
+            "补足戏份",
+            lambda v: "、".join(str(x) for x in (v or [])[:4]) + " 上章戏份不足，本章必须有实质场景",
+        ),
+    }
+
+    dir_parts: list[str] = []
+    for d in dirs[-2:]:  # 只取最近2条，避免指令过期堆积
+        patch = d.get("patch") or {}
+        reason = (d.get("reason") or "").strip()
+        from_title = (d.get("from_chapter_title") or "上章").strip()
+
+        parts: list[str] = []
+        for key, (label, fmt) in patch_key_zh.items():
+            val = patch.get(key)
+            if not val:
+                continue
+            try:
+                parts.append(f"{label}：{fmt(val)}")
+            except Exception:
+                parts.append(f"{label}：{val}")
+
+        if reason:
+            parts.append(f"编辑理由：{reason}")
+        if parts:
+            dir_parts.append(f"[来自《{from_title}》复盘] " + "；".join(parts))
+
+    return "\n".join(dir_parts)
+
+
+# ═══════════════════════════════════════════════════════════════
+# hook_strength 趋势预警辅助
+# ═══════════════════════════════════════════════════════════════
+
+def _append_hook_trend_warning(
+    db,
+    project_id: str,
+    current_sort_order: int,
+    writing_brief_context: str,
+    window: int = 5,
+    threshold: float = 3.0,
+) -> str:
+    """
+    查询本章之前最近 ``window`` 章的 hook_strength 均值，若低于 ``threshold``
+    则向 writing_brief_context 追加主编强制钩子指令。
+
+    设计动机：单章质检只能发现"本章章末钩子不足"；本函数提供连续趋势视角——
+    多章持续偏弱说明作者系统性地忽视了钩子设计，需要在写章前就发出干预信号
+    而非写完后再由质检打低分。
+
+    @param db: SQLAlchemy Session
+    @param project_id: 项目 UUID 字符串
+    @param current_sort_order: 当前章节 sort_order（查询范围为严格小于此值）
+    @param writing_brief_context: 原 writing_brief_context 字符串（末尾追加）
+    @param window: 向前回看的章节数，默认5
+    @param threshold: 均值低于此值时触发预警，默认3.0（满分5）
+    @returns 追加预警后的 writing_brief_context；未触发时原样返回
+    """
+    if current_sort_order <= 0:
+        return writing_brief_context
+
+    recent = (
+        db.query(ChapterIndex.hook_strength)
+        .filter(
+            ChapterIndex.project_id == project_id,
+            ChapterIndex.chapter_number < current_sort_order,
+            ChapterIndex.hook_strength.isnot(None),
+        )
+        .order_by(ChapterIndex.chapter_number.desc())
+        .limit(window)
+        .all()
+    )
+    if len(recent) < 3:  # 样本不足，不误报
+        return writing_brief_context
+
+    avg = sum(r[0] for r in recent) / len(recent)
+    if avg >= threshold:
+        return writing_brief_context
+
+    warning = (
+        f"\n\n▍【钩子趋势预警 · 主编强制指令】\n"
+        f"近 {len(recent)} 章 hook_strength 均值 {avg:.1f}/5（连续偏弱），读者续读意愿存在系统性风险。\n"
+        "本章章末钩子升级为最高优先级硬约束：\n"
+        "· 必须选用悬念揭示型（A）或格局颠覆反转型（C）钩子，禁止以心理独白、景色描写或总结句收尾\n"
+        "· 最后一段 ≤ 80 字，用一个具体的、尚未解决的行动/对话节点结束，不要解释、不要抒情\n"
+        "· 该章整体须含 ≥ 1 处可被读者截图传播的「高光瞬间」以对冲前期低钩章带来的读者疲劳"
+    )
+    return writing_brief_context + warning
+
+
+# ═══════════════════════════════════════════════════════════════
 # ReaderPromise 写章注入辅助
 # ═══════════════════════════════════════════════════════════════
 
@@ -609,6 +732,19 @@ async def _build_draft_context(
     # 无 Scene 记录时静默降级为空字符串，不影响已有写作流程。
     scene_blueprint = _build_scene_blueprint(db, project_id, chapter, outline_node)
 
+    # ── 复盘闭环：读取上一章写入本章大纲节点的 next_chapter_directives ──────────
+    # debrief_routes 在提交复盘时，将 next_chapter_directives 写入目标 OutlineNode.extra
+    # 的 directives_from_prev 字段（最多保留最近5条）。
+    # 此处提取并格式化为字符串，传给 draft_assist_stream 的 prev_directives 参数，
+    # 注入 system prompt 最高优先级区块，使复盘编辑指令真正在下一章写作中生效。
+    prev_directives_str = _build_prev_directives(outline_node)
+
+    # ── hook_strength 趋势预警：近5章均值 < 3 时追加主编强制钩子指令 ─────────────
+    # 防止章末钩子连续偏弱导致读者流失，当趋势下行时主动干预写章 prompt。
+    writing_brief_context = _append_hook_trend_warning(
+        db, project_id, chapter.sort_order or 0, writing_brief_context
+    )
+
     return dict(
         chapter_title=chapter.title or "",
         outline_hook=outline_node.hook or "" if outline_node else "",
@@ -640,6 +776,7 @@ async def _build_draft_context(
         character_screen_time=character_screen_time,
         scene_blueprint=scene_blueprint,
         reader_promise_context=reader_promise_context,
+        prev_directives=prev_directives_str,
     )
 
 

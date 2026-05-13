@@ -33,9 +33,8 @@ class Scene(Base):
     # 时间线
     time = Column(String(100))                        # “第3日·夜” 或 “同日·上午”
     story_day = Column(String(50))                    # 故事内日期表述
-    # location_id: 待 Location 模型实现后添加 (P2-W7)；当前用 location_name 文本字段
-    # location_id = Column(UUID(as_uuid=True), ForeignKey("locations.id"), nullable=True)
-    location_name = Column(String(200))               # 冗余，当前自由文本
+    location_id = Column(UUID(as_uuid=True), ForeignKey("locations.id"), nullable=True)  # FK → locations.id；由 main.py 兼容迁移补齐
+    location_name = Column(String(200))               # 冗余保留，方便旧数据与 free-text 兜底
 
     # 视点与角色
     pov_character_id = Column(UUID(as_uuid=True), ForeignKey("characters.id"), nullable=True)  # FK → characters.id，本场 POV
@@ -66,3 +65,4 @@ class Scene(Base):
     chapter = relationship("Chapter", back_populates="scenes")
     outline_node = relationship("OutlineNode", back_populates="scenes")
     pov_character = relationship("Character", foreign_keys=[pov_character_id])
+    location = relationship("Location", back_populates="scenes", foreign_keys=[location_id])

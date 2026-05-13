@@ -2054,7 +2054,12 @@ function NodeDetailPanel({
       )}
 
       {activeTab === 'scene' && node.node_type === 'chapter_plan' && (
-        <ScenePanel projectId={projectId} outlineNodeId={node.id} />
+        <ScenePanel
+          projectId={projectId}
+          outlineNodeId={node.id}
+          nodeTitle={node.title ?? ''}
+          nodeSummary={node.summary ?? ''}
+        />
       )}
 
       {activeTab === 'overview' && node.node_type === 'chapter_plan' && (

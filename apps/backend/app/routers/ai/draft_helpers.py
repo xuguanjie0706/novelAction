@@ -30,7 +30,7 @@ _WRITING_CONFIG_DEFAULTS: dict[str, Any] = {
     "min_overall_score": 6.0,
     "min_subscribe_intent": 6.0,
     "max_rewrite_attempts": 3,
-    "pre_write_warning_enabled": False,
+    "pre_write_warning_enabled": True,
     # 新增：Bootstrap Step14 矛盾 — 默认不阻塞（向后兼容）
     "block_on_consistency_issues": False,
     "consistency_block_severities": ["high"],

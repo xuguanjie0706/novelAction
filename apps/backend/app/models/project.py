@@ -42,3 +42,4 @@ class Project(Base):
     factions = relationship("Faction", back_populates="project", cascade="all, delete-orphan")
     scenes = relationship("Scene", back_populates="project", cascade="all, delete-orphan")
     reader_promises = relationship("ReaderPromise", back_populates="project", cascade="all, delete-orphan")
+    locations = relationship("Location", back_populates="project", cascade="all, delete-orphan")

@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Crown, User, Swords, Zap, BookOpen, Eye, Trash2, Heart, TrendingUp, FileText, Target, NotebookPen, Search, Users, History, Eraser, X, RotateCcw, Check, Loader2 } from 'lucide-react'
+import { Plus, Crown, User, Swords, Zap, BookOpen, Eye, Trash2, Heart, TrendingUp, FileText, Target, NotebookPen, Search, Users, History, Eraser, X, RotateCcw, Check, Loader2, Share2 } from 'lucide-react'
 import { charactersApi, outlineApi, aiApi } from '../api/client'
 import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload } from '../store'
 import type { Character, CharacterChangeLog } from '../types'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
+import RelationshipGraph from '../components/Characters/RelationshipGraph'
 
 // ── 常量 ──────────────────────────────────────────────────
 
@@ -932,6 +933,8 @@ export default function CharactersPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [tierFilter, setTierFilter]     = useState<TierFilter>('all')
   const [groupBy, setGroupBy]           = useState<GroupBy>('role')
+  /** 页面主视图：list = 人物列表+详情，graph = 关系图 */
+  const [pageView, setPageView]         = useState<'list' | 'graph'>('list')
 
   useEffect(() => {
     if (!projectId) return
@@ -1007,6 +1010,32 @@ export default function CharactersPage() {
 
   const hasFilter = searchQ.trim() !== '' || roleFilter !== 'all' || statusFilter !== 'all' || tierFilter !== 'all'
 
+  // ── 关系图视图 ──────────────────────────────────────────
+  if (pageView === 'graph') {
+    return (
+      <div className="flex flex-col h-full">
+        {/* 顶栏：标题 + 返回按钮 */}
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 bg-white shrink-0">
+          <div className="flex items-center gap-2">
+            <Share2 size={14} className="text-amber-500" />
+            <span className="text-sm font-semibold text-gray-700">人物关系图</span>
+            <span className="text-xs text-gray-400">{characters.length} 人</span>
+          </div>
+          <button
+            onClick={() => setPageView('list')}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors"
+          >
+            <Users size={12} />返回人物列表
+          </button>
+        </div>
+        {/* ReactFlow 画布（占满剩余空间） */}
+        <div className="flex-1 relative overflow-hidden">
+          <RelationshipGraph projectId={projectId!} />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex h-full">
       {/* 左栏：人物列表 */}
@@ -1019,6 +1048,14 @@ export default function CharactersPage() {
             <span className="text-xs text-gray-400">
               {hasFilter ? `${filteredChars.length}/` : ''}{characters.length} 人
             </span>
+            {/* 关系图入口 */}
+            <button
+              onClick={() => setPageView('graph')}
+              title="查看关系图"
+              className="text-gray-400 hover:text-amber-500 transition-colors"
+            >
+              <Share2 size={14} />
+            </button>
             <button onClick={handleCreate} disabled={creating} className="text-amber-500 hover:text-amber-600 disabled:opacity-50">
               <Plus size={16} />
             </button>

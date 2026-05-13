@@ -6,6 +6,7 @@ import { useAuthStore } from '../../store/authStore'
 import { projectsApi, charactersApi } from '../../api/client'
 import clsx from 'clsx'
 import LlmAgentMenu from './LlmAgentMenu'
+import CreditBadge from './CreditBadge'
 import toast from 'react-hot-toast'
 
 interface Props { projectId: string }
@@ -148,6 +149,7 @@ export default function TopBar({ projectId }: Props) {
         </div>
 
         <div className="flex items-center gap-2">
+          <CreditBadge />
           <LlmAgentMenu />
           <button
             onClick={() => setShowResetModal(true)}

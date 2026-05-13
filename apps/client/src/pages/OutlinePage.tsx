@@ -12,6 +12,7 @@ import { collectAncestorIds, findChapterPlanByNumber } from '../utils/outlineNav
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import OutlineAIPanel from '../components/Outline/OutlineAIPanel'
+import ScenePanel from '../components/Outline/ScenePanel'
 import { TargetWordsInput } from '../components/TargetWordsInput'
 import { collectExpandableNodes } from '../utils/outlineAiExpand'
 
@@ -1609,7 +1610,7 @@ function NodeDetailPanel({
   const { characters, storyLines } = useAppStore()
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState<'overview' | 'chapter' | 'quality' | 'ai'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'chapter' | 'scene' | 'quality' | 'ai'>('overview')
   const [form, setForm] = useState({
     title: node.title ?? '',
     summary: node.summary ?? '',
@@ -1684,6 +1685,7 @@ function NodeDetailPanel({
   const tabs = [
     { key: 'overview' as const, label: '基础' },
     ...(node.node_type === 'chapter_plan' ? [{ key: 'chapter' as const, label: '章节要素' }] : []),
+    ...(node.node_type === 'chapter_plan' ? [{ key: 'scene' as const, label: '分场蓝图' }] : []),
     ...(isExpandable ? [{ key: 'quality' as const, label: '单卷质检' }] : []),
     ...(isExpandable ? [{ key: 'ai' as const, label: 'AI 展开' }] : []),
   ]
@@ -2049,6 +2051,10 @@ function NodeDetailPanel({
 
       {activeTab === 'ai' && isExpandable && (
         <OutlineAIPanel node={node} projectId={projectId} onCommitDone={onAICommitDone} />
+      )}
+
+      {activeTab === 'scene' && node.node_type === 'chapter_plan' && (
+        <ScenePanel projectId={projectId} outlineNodeId={node.id} />
       )}
 
       {activeTab === 'overview' && node.node_type === 'chapter_plan' && (

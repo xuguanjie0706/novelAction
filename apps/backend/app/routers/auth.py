@@ -49,6 +49,21 @@ def register(body: UserRegisterRequest, db: Session = Depends(get_db)) -> TokenR
         hashed_password=hash_password(body.password),
     )
     db.add(user)
+    db.flush()  # 获取 user.id，供积分初始化使用
+
+    # 注册赠送积分（CREDIT_NEW_USER_BONUS > 0 时生效）
+    from app.config import settings as _settings
+    bonus = _settings.CREDIT_NEW_USER_BONUS
+    if bonus > 0:
+        from app.services import credit_service as _cs
+        _cs.topup(
+            user.id,
+            bonus,
+            ref_type="registration_bonus",
+            note=f"新用户注册赠送 {bonus} 积分",
+            db=db,
+        )
+
     db.commit()
     db.refresh(user)
 

@@ -39,6 +39,29 @@ from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 
 
 class SamplingMixin:
+    def _preflight_credit_check(self) -> None:
+        """积分预检：仅在 CREDIT_ENFORCEMENT=hard 且 user_id 已知时阻断调用。
+
+        - ``off``：完全跳过，适合开发 / 内部部署。
+        - ``soft``：跳过（允许余额为 0 时调用，扣费后余额可到 0，前端显示警告）。
+        - ``hard``：余额 < 1 积分时立即抛出 402，阻止 AI 调用。
+
+        Raises:
+            HTTPException 402: enforcement=hard 且余额不足时。
+        """
+        enforcement = settings.CREDIT_ENFORCEMENT
+        if enforcement == "off" or not getattr(self, "_user_id", None):
+            return
+        if enforcement == "hard":
+            from app.services import credit_service  # 延迟导入，避免循环依赖
+            from fastapi import HTTPException
+            balance = credit_service.get_balance(self._user_id, db=self._db)
+            if balance < 1:
+                raise HTTPException(
+                    status_code=402,
+                    detail=f"积分不足（当前 {balance} 积分），请充值后继续使用",
+                )
+
     def _is_retryable_llm_error(err: Exception) -> bool:
         status_code = getattr(err, "status_code", None)
         if isinstance(status_code, int) and status_code in (408, 429, 500, 502, 503, 504):
@@ -89,6 +112,7 @@ class SamplingMixin:
         Returns:
             模型返回的纯文本内容（不含 ``<think>``）。
         """
+        self._preflight_credit_check()
         client = self._get_client()
         start = time.perf_counter()
         sampling_kwargs = self._build_sampling_kwargs(task, sampling)
@@ -151,6 +175,8 @@ class SamplingMixin:
                     **sampling_kwargs,
                 },
                 output_payload={"text": content},
+                user_id=getattr(self, "_user_id", None),
+                task=task,
                 db=self._db,
             )
             return content
@@ -187,6 +213,7 @@ class SamplingMixin:
         sampling: Optional[dict] = None,
     ) -> AsyncGenerator[str, None]:
         """流式 LLM 调用。参数语义与 :meth:`_call_ai` 一致。"""
+        self._preflight_credit_check()
         client = self._get_client()
         start = time.perf_counter()
         output_chunks: List[str] = []
@@ -230,6 +257,8 @@ class SamplingMixin:
                     **sampling_kwargs,
                 },
                 output_payload={"text": "".join(output_chunks)},
+                user_id=getattr(self, "_user_id", None),
+                task=task,
                 db=self._db,
             )
         except Exception as e:

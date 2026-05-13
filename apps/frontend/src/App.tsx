@@ -11,6 +11,8 @@ import CoverImageCallLogsPage from './pages/CoverImageCallLogsPage'
 import DebriefListPage from './pages/DebriefListPage'
 import NovelManagementPage from './pages/NovelManagementPage'
 import ReadingReviewPage from './pages/ReadingReviewPage'
+import UserCreditsPage from './pages/UserCreditsPage'
+import RedeemCodesPage from './pages/RedeemCodesPage'
 
 export default function App() {
   return (
@@ -35,6 +37,8 @@ export default function App() {
               <Route path="cover-image-calls" element={<CoverImageCallLogsPage />} />
               <Route path="llm-calls" element={<LlmCallLogsPage />} />
               <Route path="reading-review" element={<ReadingReviewPage />} />
+              <Route path="user-credits" element={<UserCreditsPage />} />
+              <Route path="redeem-codes" element={<RedeemCodesPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

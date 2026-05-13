@@ -1,6 +1,6 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
-import type { AiChatMessage, Chapter, ChapterAnalysisResult, ChapterAnalysisStats, DashboardHome, HookCheckResult, LlmOverview, ReaderSimulationResult, StorylineGapsResult, WorldSetting } from '../types'
+import type { AiChatMessage, Chapter, ChapterAnalysisResult, ChapterAnalysisStats, DashboardHome, HookCheckResult, LlmOverview, ReaderSimulationResult, Scene, StorylineGapsResult, WorldSetting } from '../types'
 import {
   extractUsage,
   finishLlmCall,
@@ -248,6 +248,22 @@ export const qualityDebtsApi = {
     api.get(`/projects/${pid}/quality-debts/${status ? `?status=${encodeURIComponent(status)}` : ''}`),
   update: (pid: string, id: string, data: any) =>
     api.patch(`/projects/${pid}/quality-debts/${id}`, data),
+}
+
+// ── Scenes（三层调度：分场） ───────────────────────────────
+
+/**
+ * 分场 API——读取某 OutlineNode 或 Chapter 的场景蓝图。
+ * 后端路由：GET /api/v1/projects/{pid}/scenes/
+ */
+export const scenesApi = {
+  /**
+   * 列出某 outline_node_id（chapter_plan）或 chapter_id 下的所有场景，按 order 升序。
+   * @param pid - 项目 ID
+   * @param params - 过滤条件，至少传 outline_node_id 或 chapter_id 其一
+   */
+  list: (pid: string, params: { outline_node_id?: string; chapter_id?: string }) =>
+    api.get<Scene[]>(`/projects/${pid}/scenes/`, { params }),
 }
 
 // ── Outline ───────────────────────────────────────────

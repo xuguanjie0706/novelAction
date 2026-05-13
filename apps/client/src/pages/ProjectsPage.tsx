@@ -191,6 +191,7 @@ export default function ProjectsPage() {
       outline: () => navigateFirstProject('outline'),
       coherence: () => navigate('/coherence-check'),
       stats: () => toast('数据统计页正在建设中，当前先展示首页写作数据'),
+      wallet: () => navigate('/wallet'),
       trash: () => toast('回收站暂无内容'),
     }
     targetMap[target]?.()

@@ -29,6 +29,8 @@ from app.models.chapter_analysis_record import ChapterAnalysisRecord
 from app.models.pre_write_warning_record import PreWriteWarningRecord
 from app.models.user import User
 from app.models.bootstrap_run import BootstrapRun
+from app.models.user_credit import UserCredit, CreditTransaction
+from app.models.redeem_code import RedeemCode
 
 __all__ = [
     "Project",
@@ -61,4 +63,7 @@ __all__ = [
     "PreWriteWarningRecord",
     "User",
     "BootstrapRun",
+    "UserCredit",
+    "CreditTransaction",
+    "RedeemCode",
 ]

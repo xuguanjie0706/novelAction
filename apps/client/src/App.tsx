@@ -9,6 +9,7 @@ import AppLayout from './components/Layout/AppLayout'
 import ProjectCachedViews from './pages/ProjectCachedViews'
 import ChapterCoherencePage from './pages/ChapterCoherencePage'
 import LoginPage from './pages/LoginPage'
+import WalletPage from './pages/WalletPage'
 import { projectsApi } from './api/client'
 import { useAppStore } from './store'
 import { useAuthStore } from './store/authStore'
@@ -136,6 +137,14 @@ export default function App() {
           element={
             <PrivateRoute>
               <ChapterCoherencePage />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/wallet"
+          element={
+            <PrivateRoute>
+              <WalletPage />
             </PrivateRoute>
           }
         />

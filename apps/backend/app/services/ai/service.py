@@ -41,9 +41,19 @@ class AIService(
         profile: str = "default",
         db: Optional[Session] = None,
         llm_provider_id: Optional[UUID] = None,
+        user_id: Optional[UUID] = None,
     ):
+        """初始化 AIService。
+
+        Args:
+            profile: 模型线路（``"default"`` 走本地 .env，``"gemini"`` 走远程兼容网关）。
+            db: 已开启事务的 Session；为 None 时各操作自行开关连接。
+            llm_provider_id: 使用管理后台持久化的 LlmProvider 时传入。
+            user_id: 当前登录用户 UUID；传入后每次 AI 调用自动触发积分扣费与预检。
+        """
         self.profile = profile
         self._db = db
+        self._user_id = user_id  # 积分扣费凭据，None 时跳过积分逻辑
         self.model = (settings.AI_MODEL or "").strip()
         self.base_url = settings.LLM_BASE_URL
         self.api_key = settings.LLM_API_KEY

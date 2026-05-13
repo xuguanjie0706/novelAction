@@ -623,6 +623,45 @@ export interface DashboardHome {
  * avg_score / avg_hook_strength 为浮点数，展示时保留一位小数。
  * 定性字段（verdict、what_hooked 等）取最近一次分析。
  */
+// ── Scene（三层调度：章纲 → 分场 → 正文） ──────────────────
+
+/** 节奏标记 */
+export type ScenePacing = 'fast' | 'mid' | 'slow'
+
+/** 分场状态 */
+export type SceneStatus = 'planned' | 'written' | 'reviewed'
+
+/**
+ * 分场（Scene）——章节的子结构单元。
+ * 对应后端 SceneRead schema；由 Bootstrap Step 13 或手动生成。
+ * outline_node_id 指向所属 chapter_plan 大纲节点。
+ */
+export interface Scene {
+  id: string
+  project_id: string
+  outline_node_id: string | null
+  chapter_id: string | null
+  order: number
+  title: string | null
+  time: string | null
+  story_day: string | null
+  location_name: string | null
+  pov_character_id: string | null
+  /** 在场人物 ID 列表 */
+  characters_on_stage: string[]
+  goal: string | null
+  conflict: string | null
+  turn: string | null
+  hook: string | null
+  hook_strength: number
+  word_budget: number
+  pacing: ScenePacing
+  sensory_focus: string
+  status: SceneStatus
+  content: string | null
+  extra: Record<string, unknown>
+}
+
 export interface ChapterAnalysisStats {
   chapter_id: string
   run_count: number

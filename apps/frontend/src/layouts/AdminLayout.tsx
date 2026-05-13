@@ -5,10 +5,12 @@ import {
   DatabaseOutlined,
   ExperimentOutlined,
   FileImageOutlined,
+  GiftOutlined,
   LogoutOutlined,
   PictureOutlined,
   ReadOutlined,
   UserOutlined,
+  WalletOutlined,
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useMemo } from 'react'
@@ -33,6 +35,8 @@ export default function AdminLayout() {
   const selected = useMemo(() => {
     if (loc.pathname.startsWith('/novels')) return ['/novels']
     if (loc.pathname.startsWith('/debriefs')) return ['/debriefs']
+    if (loc.pathname.startsWith('/user-credits')) return ['/user-credits']
+    if (loc.pathname.startsWith('/redeem-codes')) return ['/redeem-codes']
     if (loc.pathname.startsWith('/reading-review')) return ['/reading-review']
     if (loc.pathname.startsWith('/llm-calls')) return ['/llm-calls']
     if (loc.pathname.startsWith('/cover-image-calls')) return ['/cover-image-calls']
@@ -104,6 +108,18 @@ export default function AdminLayout() {
               icon: <ReadOutlined />,
               label: '小说评测',
               onClick: () => navigate('/reading-review'),
+            },
+            {
+              key: '/user-credits',
+              icon: <WalletOutlined />,
+              label: '用户积分',
+              onClick: () => navigate('/user-credits'),
+            },
+            {
+              key: '/redeem-codes',
+              icon: <GiftOutlined />,
+              label: '兑换码',
+              onClick: () => navigate('/redeem-codes'),
             },
           ]}
         />

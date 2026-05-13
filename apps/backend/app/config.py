@@ -78,6 +78,16 @@ class Settings(BaseSettings):
     # 登录成功后签发 role=admin JWT，可跨用户访问所有 /api/v1/projects/*。
     ADMIN_USERNAME: Optional[str] = None
     ADMIN_PASSWORD: Optional[str] = None
+
+    # ── 积分系统 ─────────────────────────────────────────────
+    # CREDIT_ENFORCEMENT 控制积分不足时的行为：
+    #   "off"    关闭积分检查，任何用户都可以无限调用 AI（开发 / 内部使用）
+    #   "soft"   积分不足时仍允许调用，但在响应头写入 X-Credit-Warning（默认）
+    #   "hard"   积分不足时直接返回 402 Payment Required，阻止调用
+    CREDIT_ENFORCEMENT: str = "soft"
+    # 新用户注册时赠送的积分数（0 = 不赠送）
+    CREDIT_NEW_USER_BONUS: int = 10000
+
     CORS_ORIGINS: list[str] = [
         "http://localhost:3173",
         "http://127.0.0.1:3173",

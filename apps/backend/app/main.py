@@ -64,6 +64,9 @@ from app.routers import auth as auth_router
 from app.routers import admin_auth as admin_auth_router
 from app.routers import dashboard as dashboard_router
 from app.routers import bootstrap_graph as bootstrap_graph_router
+from app.routers import credits as credits_router
+from app.routers import admin_credits as admin_credits_router
+from app.routers import admin_redeem_codes as admin_redeem_codes_router
 from app.services.llm_config import seed_llm_from_env_if_empty
 from app.services.cover_storage import ensure_cover_storage_dir, resolved_cover_storage_dir
 
@@ -506,6 +509,15 @@ app.add_middleware(ForwardedHostASGIMiddleware)
 # 注册路由
 # auth：自身完成登录鉴权，不需要外层依赖。
 app.include_router(auth_router.router, prefix="/api/v1")
+
+# credits：用户积分余额与流水（需 Bearer token）。
+app.include_router(credits_router.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+
+# admin/credits：管理员积分调账（需 admin token，路由内部再校验 role）。
+app.include_router(admin_credits_router.router, prefix="/api/v1")
+
+# admin/redeem-codes：管理员批量生成兑换码（需 admin token，路由内部再校验 role）。
+app.include_router(admin_redeem_codes_router.router, prefix="/api/v1")
 
 # admin/auth：管理后台独立登录入口（与创作端用户体系隔离），自身处理鉴权。
 app.include_router(admin_auth_router.router, prefix="/api/v1")

@@ -3,6 +3,7 @@ import clsx from 'clsx'
 import {
   BarChart3,
   BookOpen,
+  Coins,
   Crown,
   Feather,
   FileText,
@@ -30,6 +31,7 @@ const NAV_ITEMS = [
   { id: 'outline', label: '大纲', icon: FileText },
   { id: 'coherence', label: '连贯性测试', icon: Link2 },
   { id: 'stats', label: '数据统计', icon: BarChart3 },
+  { id: 'wallet', label: '我的钱包', icon: Coins },
   { id: 'trash', label: '回收站', icon: Trash2 },
 ]
 

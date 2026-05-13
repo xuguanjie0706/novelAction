@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from operator import add
 from typing import Annotated, Any, Optional
 from typing_extensions import TypedDict
@@ -84,7 +85,8 @@ def _persist(db, run_id: str, payload: dict, *, status: str | None = None, **ext
 
 def emit(run_id: str, event: str, db=None, *, persist_status: str | None = None, **kwargs) -> None:
     """推送 SSE 事件：写实时队列 + 可选持久化到 BootstrapRun.events / 更新 status。"""
-    payload = {"event": event, **kwargs}
+    # 服务端毫秒时间戳：供前端重连 replay 时还原各步耗时（放在最后，避免 kwargs 覆盖）
+    payload = {"event": event, **kwargs, "ts": int(time.time() * 1000)}
     _push(run_id, payload)
     if db is not None:
         _persist(db, run_id, payload, status=persist_status)

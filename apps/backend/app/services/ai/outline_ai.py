@@ -61,16 +61,21 @@ class OutlineMixin:
         prior_foreshadow_ledger: str = "",          # 前文伏笔汇总 + 伏笔表未回收项
         realm_whitelist: list[str] | None = None,   # 项目合法境界名白名单
         protagonist_state: str = "",                 # 主角当前结构化状态（境界/位置/持有物）
+        protagonist_psychology: str = "",            # 主角心理档案（core_wound/current_desire/biggest_lie）
         villain_timelines: list[str] | None = None,  # 反派势力行动时间线摘要（来自 Faction.extra.villain_timeline）
         opening_contract: dict | None = None,        # 开局承诺清单（来自 Project.extra.opening_contract，仅第一卷前10章使用）
     ) -> dict:
-        """
-        为选定的大纲节点（卷或旧篇）生成详细的子章节计划。
-        返回「五要素」格式：开篇钩子/核心事件/人物变化/伏笔管理/章末钩子。
+        """为选定的大纲节点（卷或旧篇）生成详细的子章节计划。
+
+        章节设计遵循「欲望→障碍→选择→代价」因果链：每章存在的理由是
+        上一章选择的代价；每章的核心事件是本章选择的直接后果。
+
+        Returns:
+            包含 volume_analysis 和 chapters 数组的 dict；解析失败返回 {"error": ...}。
         """
         system = """你是拥有30年经验的网络小说策划，深刻理解网文追读机制。
-你的大纲必须让每一章都有存在的理由，特别是「章末钩子」——
-那是让读者无法放下手机的最后一句话的设计意图。
+你深知：章节的核心不是「发生了什么」，而是「主角主动想要什么→什么挡住了他→
+他做了什么选择（选择暴露性格）→选择的代价喂给了下一章」。
 严格返回 JSON，不要任何额外文字。"""
 
         start_num = existing_chapters + 1
@@ -103,6 +108,10 @@ class OutlineMixin:
         protagonist_state_context = (
             f"\n【主角当前状态（结构化硬约束，优先级高于任何叙事摘要）】\n{protagonist_state}\n"
             if protagonist_state else ""
+        )
+        protagonist_psychology_context = (
+            f"\n【主角心理档案（章节行为的底层驱动，高优先级约束）】\n{protagonist_psychology}\n"
+            if protagonist_psychology else ""
         )
         # 境界白名单约束块
         _TRADITIONAL_FORBIDDEN = [
@@ -162,11 +171,11 @@ class OutlineMixin:
 世界观摘要：{world_summary[:400]}
 主要人物（主线核心卡司，非全书全部人物——配角可按剧情需要随时引入）：{character_summary[:500]}
 全书立意：{theme_statement[:300] or '（未填写；请从创意和人物中提炼一条贯穿全书的价值命题）'}
-{realm_constraint_block}{protagonist_state_context}{global_context}{prior_plot_block}{prior_ledger_block}{previous_context}{continuity_context}{batch_goal_context}{villain_block}{opening_death_line_block}
+{realm_constraint_block}{protagonist_state_context}{protagonist_psychology_context}{global_context}{prior_plot_block}{prior_ledger_block}{previous_context}{continuity_context}{batch_goal_context}{villain_block}{opening_death_line_block}
 请为本{node_type == 'volume' and '卷' or '旧篇'}生成 {chapter_count} 个章节计划，章节编号从第{start_num}章开始。
 {genre_guardrail_text(genre)}
 
-每章使用「作家五要素」格式，返回 JSON：
+每章使用「欲望-障碍-选择-代价」因果链格式，返回 JSON：
 {{
   "volume_analysis": {{
     "emotional_arc": "情绪弧线，如：压迫→绝境→逆转→升华",
@@ -177,11 +186,17 @@ class OutlineMixin:
     {{
       "number": {start_num},
       "title": "章节标题（有冲击力，可带悬念）",
+      "protagonist_want": "主角这一章主动想要什么（必须是主动欲望，不是「被逼应付」）",
+      "protagonist_obstacle": "什么具体阻止了他（内部恐惧或外部冲突，不能只写「敌人」）",
+      "protagonist_choice": "他做了什么关键选择（这个选择必须暴露性格，而不只是解决问题）",
+      "choice_cost": "这个选择的代价（喂给下一章的债务，不能零代价）",
       "opening_hook": "开篇钩子：前500字的核心手段。例：用主角被宣判死刑的场面倒叙开篇",
-      "core_event": "核心事件：这章存在的理由，删掉会损失什么",
+      "core_event": "核心事件：必须是 protagonist_choice 的直接后果，格式「因[choice]→[result]」",
       "character_change": "人物变化：谁的认知/处境/关系发生了不可逆变化",
-      "foreshadow": "伏笔管理：本章新埋的伏笔 / 回收的旧伏笔（格式：埋[xxx] 收[xxx]）",
+      "foreshadow": "伏笔管理：埋[伏笔内容|主题:与立意的关联] 收[伏笔内容]（无则填空）",
+      "villain_action": "反派这一章在做什么（即便不是本章视角），以及如何逼迫主角",
       "end_hook": "章末钩子：读者读完最后一句停不下来的原因，要具体到手法",
+      "reader_emotion_target": "本章结束时读者的目标情绪（exciting/tense/sad/romantic/mysterious/warm/anxious/epic）",
       "pacing": "fast/medium/slow",
       "word_estimate": 2300
     }}
@@ -189,16 +204,17 @@ class OutlineMixin:
 }}
 
 重点要求：
-1. 每章「章末钩子」必须具体，不能只写"留下悬念"，要说清楚「悬念的具体内容」
-2. 每章字数预估控制在 2200-2400 字，默认 2300 字
-3. 每章核心事件必须同时服务于情节推进、人物变化和全书立意，不要只堆事件
-4. 前3章追读钩子要特别强
-5. 伏笔要有连续性，本卷内至少有2条贯穿始终的伏笔线
-6. 如果提供了已生成章节上下文或滚动连续性账本，必须承接上一批章末钩子、人物状态和未回收伏笔，不得重复已发生的核心事件
-7. 本批第一章要自然回应上一批最后一章留下的具体悬念；如果处于新卷开头，则先承接全书卷线蓝图再开启本卷核心问题
-8. 若提供了「前几卷已规划章纲」：不得复述或改头换面重复前序已写核心事件；新卷情节在其上推进
-9. 若提供了「前几卷伏笔台账」：本卷各章 foreshadow 字段须点名埋/收，优先处理台账中高优先级仍未回收条目，并与章纲五要素一致
-10. 「合同型伏笔」硬约束：台账中 deadline_chapter <= 本批最后一章章号 的条目视为「逾期伏笔」，必须在本批章纲中安排至少一章写明「收[F-xxx：...]」，否则视为结构缺陷"""
+1. core_event 必须是 protagonist_choice 的直接后果，不能与 choice 在逻辑上无关
+2. choice_cost 不能为空——零代价的选择不是戏剧，必须为下一章留下债务
+3. villain_action 不能只写"（无）"——反派在大格局中始终有独立行动
+4. 每章「章末钩子」必须具体，不能只写"留下悬念"，要说清楚「悬念的具体内容」
+5. 每章字数预估控制在 2200-2400 字，默认 2300 字
+6. 伏笔要有连续性，本卷内至少有2条贯穿始终的伏笔线；埋入时附「|主题:xxx」说明与立意的关联
+7. 如果提供了已生成章节上下文或滚动连续性账本，必须承接上一批章末钩子、人物状态和未回收伏笔，不得重复已发生的核心事件
+8. 本批第一章要自然回应上一批最后一章留下的具体悬念；如果处于新卷开头，则先承接全书卷线蓝图再开启本卷核心问题
+9. 若提供了「前几卷已规划章纲」：不得复述或改头换面重复前序已写核心事件；新卷情节在其上推进
+10. 若提供了「前几卷伏笔台账」：本卷各章 foreshadow 字段须点名埋/收，优先处理台账中高优先级仍未回收条目，并与章纲五要素一致
+11. 「合同型伏笔」硬约束：台账中 deadline_chapter <= 本批最后一章章号 的条目视为「逾期伏笔」，必须在本批章纲中安排至少一章写明「收[F-xxx：...]」，否则视为结构缺陷"""
 
         max_tok = max_tokens_expand_outline(self.profile)
         response = await self._call_ai(

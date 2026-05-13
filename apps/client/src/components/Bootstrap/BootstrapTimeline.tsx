@@ -48,8 +48,9 @@ interface StepNodeProps {
 }
 
 function StepNode({ step, isSelected, generationStartMs, onClick }: StepNodeProps) {
-  const offsetMs =
+  const offsetMsRaw =
     step.startedAt != null && generationStartMs != null ? step.startedAt - generationStartMs : null
+  const offsetMs = offsetMsRaw != null ? Math.max(0, offsetMsRaw) : null
   const durationMs =
     step.startedAt != null && step.completedAt != null ? step.completedAt - step.startedAt : null
 
@@ -153,7 +154,10 @@ export default function BootstrapTimeline({
 
   const totalDurationMs =
     isDone && generationStartMs != null
-      ? steps.reduce((max, s) => Math.max(max, s.completedAt ?? 0), 0) - generationStartMs
+      ? Math.max(
+          0,
+          steps.reduce((max, s) => Math.max(max, s.completedAt ?? 0), 0) - generationStartMs,
+        )
       : null
 
   const totalItems = steps.reduce((sum, s) => sum + (s.count ?? 0), 0)

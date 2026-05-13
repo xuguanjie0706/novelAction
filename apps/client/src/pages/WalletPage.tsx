@@ -135,7 +135,6 @@ function BalanceHero({ credit }: { credit: CreditBalance | null }) {
         {[
           { tier: '重型模型', desc: 'GPT-4 / Opus', cost: '5 / 15 积分 / 千 token' },
           { tier: '标准模型', desc: 'Sonnet / Flash', cost: '1 / 3 积分 / 千 token' },
-          { tier: '本地模型', desc: 'Ollama / LM Studio', cost: '免费' },
         ].map(({ tier, desc, cost }) => (
           <div
             key={tier}

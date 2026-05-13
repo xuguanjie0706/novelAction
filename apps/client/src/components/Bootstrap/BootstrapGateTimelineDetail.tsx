@@ -30,6 +30,116 @@ const GATE_LABEL: Record<GatePendingStep, string> = {
   volumes: '卷级骨架',
 }
 
+const ROLE_ZH: Record<string, string> = {
+  protagonist: '主角',
+  antagonist: '反派',
+  supporting: '配角',
+  neutral: '中立',
+}
+
+const TIER_ZH: Record<string, string> = {
+  core: '核心',
+  arc: '弧线',
+  plot: '剧情',
+  background: '背景',
+}
+
+function roleLabel(role: unknown): string {
+  if (typeof role !== 'string' || !role) return '—'
+  return ROLE_ZH[role] ?? role
+}
+
+function tierLabel(tier: unknown): string {
+  if (typeof tier !== 'string' || !tier) return '—'
+  return TIER_ZH[tier] ?? tier
+}
+
+/**
+ * 人物闸门：展示后端 ``gate_preview`` 中的角色清单与关系样本，便于确认后再继续。
+ *
+ * @param preview — ``characters_preview`` / ``relations_sample`` 等字段来自 ``graph_gates._characters_gate_preview``
+ */
+function CharactersGateReview({ preview }: { preview: Record<string, unknown> }) {
+  const rows = Array.isArray(preview.characters_preview)
+    ? (preview.characters_preview as Record<string, unknown>[])
+    : []
+  const rels = Array.isArray(preview.relations_sample)
+    ? (preview.relations_sample as Record<string, unknown>[])
+    : []
+  const relTotal = typeof preview.relations_count === 'number' ? preview.relations_count : null
+  const truncated = preview.characters_preview_truncated === true
+
+  if (rows.length === 0 && rels.length === 0 && !(relTotal != null && relTotal > 0)) return null
+
+  return (
+    <div className="mt-5 w-full space-y-5 text-left">
+      {rows.length > 0 && (
+        <div>
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">角色清单</h3>
+          <div className="max-h-[min(22rem,50vh)] overflow-auto rounded-lg border border-gray-200">
+            <table className="w-full min-w-[280px] border-collapse text-left text-[13px]">
+              <thead className="sticky top-0 z-[1] bg-gray-50 text-[11px] font-semibold text-gray-600">
+                <tr>
+                  <th className="border-b border-gray-200 px-3 py-2">姓名</th>
+                  <th className="border-b border-gray-200 px-2 py-2">身份</th>
+                  <th className="border-b border-gray-200 px-2 py-2">档位</th>
+                  <th className="hidden border-b border-gray-200 px-2 py-2 sm:table-cell">势力</th>
+                  <th className="hidden border-b border-gray-200 px-2 py-2 md:table-cell">境界</th>
+                </tr>
+              </thead>
+              <tbody className="text-gray-800">
+                {rows.map((row, i) => (
+                  <tr key={i} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/80">
+                    <td className="max-w-[120px] truncate px-3 py-2 font-medium" title={String(row.name ?? '')}>
+                      {String(row.name ?? '—')}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-2 text-gray-600">{roleLabel(row.role)}</td>
+                    <td className="whitespace-nowrap px-2 py-2 text-gray-600">{tierLabel(row.character_tier)}</td>
+                    <td className="hidden max-w-[100px] truncate px-2 py-2 text-gray-600 sm:table-cell" title={row.faction ? String(row.faction) : ''}>
+                      {row.faction ? String(row.faction) : '—'}
+                    </td>
+                    <td className="hidden max-w-[120px] truncate px-2 py-2 text-gray-600 md:table-cell" title={row.current_realm ? String(row.current_realm) : ''}>
+                      {row.current_realm ? String(row.current_realm) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {truncated && (
+            <p className="mt-1.5 text-[11px] text-amber-700">仅展示前 40 名；完整列表可在生成结束后于「人物」页查看。</p>
+          )}
+        </div>
+      )}
+
+      {(rels.length > 0 || (relTotal != null && relTotal > 0)) && (
+        <div>
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">
+            人物关系{relTotal != null ? `（共 ${relTotal} 条）` : ''}
+          </h3>
+          {rels.length > 0 ? (
+            <ul className="space-y-1.5 rounded-lg border border-gray-200 bg-gray-50/60 px-3 py-2 text-[13px] text-gray-800">
+              {rels.map((r, i) => (
+                <li key={i} className="leading-snug">
+                  <span className="font-medium text-gray-900">{String(r.from ?? '？')}</span>
+                  <span className="mx-1 text-gray-400">→</span>
+                  <span className="font-medium text-gray-900">{String(r.to ?? '？')}</span>
+                  <span className="ml-2 text-xs text-gray-500">（{String(r.relation_type ?? '关联')}）</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-gray-500">关系数据将出现在后续「建立人物关系」步骤之后。</p>
+          )}
+          {relTotal != null && relTotal > rels.length && (
+            <p className="mt-1.5 text-[11px] text-gray-500">以下仅列出前 {rels.length} 条，其余请在「人物」页查看。</p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function previewSummary(
   step: GatePendingStep,
   preview: Record<string, unknown> | null,
@@ -41,7 +151,10 @@ function previewSummary(
   }
   if (step === 'characters') {
     const n = preview.characters_count
-    return typeof n === 'number' ? `已写入 ${n} 名角色（含关系）` : null
+    if (typeof n !== 'number') return null
+    const rc = preview.relations_count
+    if (typeof rc === 'number' && rc > 0) return `已写入 ${n} 名角色 · ${rc} 条人物关系`
+    return `已写入 ${n} 名角色`
   }
   if (step === 'volumes') {
     const n = preview.volumes_count
@@ -169,14 +282,17 @@ export default function BootstrapGateTimelineDetail({
             </div>
           )}
           {!isPos && (
-            <div className="flex flex-col items-center gap-4 rounded-xl border border-gray-100 bg-white px-6 py-12 text-center shadow-sm">
+            <div className="rounded-xl border border-gray-100 bg-white px-4 py-8 text-center shadow-sm sm:px-8">
               <div className="text-5xl leading-none opacity-90">{meta?.icon}</div>
               {summary && (
-                <p className="max-w-md rounded-xl border border-gray-100 bg-gray-50 px-4 py-2.5 text-sm font-medium text-gray-800">
+                <p className="mx-auto mt-4 max-w-md rounded-xl border border-gray-100 bg-gray-50 px-4 py-2.5 text-sm font-medium text-gray-800">
                   {summary}
                 </p>
               )}
-              <p className="max-w-sm text-xs leading-relaxed text-gray-500">
+              {gateStep === 'characters' && gatePreview ? (
+                <CharactersGateReview preview={gatePreview} />
+              ) : null}
+              <p className="mx-auto mt-5 max-w-sm text-xs leading-relaxed text-gray-500">
                 若结构大体满意请点底栏「确认并继续」；「重新生成」将按后端策略回滚本步产物后重跑。
               </p>
             </div>

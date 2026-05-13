@@ -6,8 +6,10 @@ Bootstrap LangGraph — Step 2 / 5 / 9 人工闸门节点。
 from __future__ import annotations
 
 from langgraph.types import interrupt
+from sqlalchemy import case
+from sqlalchemy.orm import aliased
 
-from app.models import Character, OutlineNode, PowerSystem, Project
+from app.models import Character, CharacterRelationship, OutlineNode, PowerSystem, Project
 from app.services.bootstrap.gate_regenerate import (
     regenerate_characters,
     regenerate_power_systems,
@@ -20,6 +22,73 @@ from app.services.bootstrap.graph import (
     _resolve_config,
     emit,
 )
+
+
+def _characters_gate_preview(db, pid) -> dict:
+    """
+    人物闸门审阅用摘要：角色条目前 40 条 + 关系总数 + 关系样本（JOIN 人名），写入 gate_preview / gate_data。
+
+    Returns:
+        可直接展开进 ``emit(..., gate_preview=...)`` 的 dict（含 ``characters_count``）。
+    """
+    total = db.query(Character).filter(Character.project_id == pid).count()
+    role_rank = case(
+        (Character.role == "protagonist", 0),
+        (Character.role == "antagonist", 1),
+        (Character.role == "supporting", 2),
+        else_=3,
+    )
+    chars = (
+        db.query(Character)
+        .filter(Character.project_id == pid)
+        .order_by(role_rank, Character.name)
+        .limit(40)
+        .all()
+    )
+    characters_preview = [
+        {
+            "name": c.name,
+            "role": (c.role or "").strip(),
+            "character_tier": (c.character_tier or "").strip(),
+            "faction": (c.faction or "").strip() or None,
+            "current_realm": (c.current_realm or "").strip() or None,
+            "gender": (c.gender or "").strip() or None,
+        }
+        for c in chars
+    ]
+    rel_cnt = (
+        db.query(CharacterRelationship)
+        .filter(CharacterRelationship.project_id == pid)
+        .count()
+    )
+    Fa = aliased(Character)
+    Ta = aliased(Character)
+    rel_rows = (
+        db.query(Fa.name, Ta.name, CharacterRelationship.relation_type)
+        .select_from(CharacterRelationship)
+        .join(Fa, CharacterRelationship.from_character_id == Fa.id)
+        .join(Ta, CharacterRelationship.to_character_id == Ta.id)
+        .filter(CharacterRelationship.project_id == pid)
+        .order_by(CharacterRelationship.relation_type, Fa.name, Ta.name)
+        .limit(15)
+        .all()
+    )
+    relations_sample = [
+        {
+            "from": a,
+            "to": b,
+            "relation_type": (t or "").strip() or "关联",
+        }
+        for a, b, t in rel_rows
+    ]
+    return {
+        "count": total,
+        "characters_count": total,
+        "characters_preview": characters_preview,
+        "characters_preview_truncated": total > len(characters_preview),
+        "relations_count": rel_cnt,
+        "relations_sample": relations_sample,
+    }
 
 
 async def node_gate_power_systems(state: BootstrapState, config: dict | None = None) -> dict:
@@ -85,7 +154,7 @@ async def node_gate_characters(state: BootstrapState, config: dict | None = None
         return {"ctx": ctx, "errors": [{"step": "gate_characters", "reason": "no_project"}]}
 
     while True:
-        cnt = db.query(Character).filter(Character.project_id == pid).count()
+        preview = _characters_gate_preview(db, pid)
         emit(
             run_id,
             "gate_pending",
@@ -93,10 +162,10 @@ async def node_gate_characters(state: BootstrapState, config: dict | None = None
             persist_status="awaiting_gate",
             step="characters",
             message="请确认核心人物卡后继续；「重新生成」将删除本步已写入的人物与关系后重跑。",
-            gate_preview={"characters_count": cnt},
+            gate_preview=preview,
         )
-        _persist(db, run_id, {}, gate_data={"kind": "characters", "count": cnt})
-        cmd = interrupt({"step": "characters", "kind": "characters_gate", "count": cnt})
+        _persist(db, run_id, {}, gate_data={"kind": "characters", **preview})
+        cmd = interrupt({"step": "characters", "kind": "characters_gate", "count": preview["characters_count"]})
         if not isinstance(cmd, dict):
             cmd = {}
         action = (cmd.get("action") or "approve").strip().lower()

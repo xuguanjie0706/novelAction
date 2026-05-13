@@ -111,6 +111,13 @@ TASK_PROFILES: dict[str, dict] = {
     "bootstrap.skills": {"temperature": 0.65, "top_p": 0.9},
     "bootstrap.items": {"temperature": 0.65, "top_p": 0.9},
     "bootstrap.volumes": {"temperature": 0.6, "top_p": 0.9},
+    "bootstrap.vol1_chapters": {
+        # 第一卷章级大纲：半结构化生成，需要创意但要服从因果链约束
+        "temperature": 0.65,
+        "top_p": 0.9,
+        "frequency_penalty": 0.15,
+        "presence_penalty": 0.1,
+    },
     "bootstrap.memory": {"temperature": 0.6, "top_p": 0.9},
     "bootstrap.relations": {"temperature": 0.65, "top_p": 0.9},
     "bootstrap.single_shot": {
@@ -132,6 +139,28 @@ TASK_PROFILES: dict[str, dict] = {
         "presence_penalty": 0.0,
     },
     "quality.outline_check": {"temperature": 0.2, "top_p": 0.8},
+    # ── 专项大纲质检（拆分自 outline_check，每个只检查一件事）────
+    "quality.causality_check": {
+        # 因果链审计：需要精确逻辑判断，温度极低
+        "temperature": 0.15,
+        "top_p": 0.75,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+    },
+    "quality.character_arc_check": {
+        # 人物弧审计：需要一定叙事理解，稍高于因果链
+        "temperature": 0.2,
+        "top_p": 0.8,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+    },
+    "quality.foreshadow_audit": {
+        # 伏笔审计：配对检查 + 主题判断，低温稳定
+        "temperature": 0.15,
+        "top_p": 0.75,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+    },
     "quality.coherence_check": {"temperature": 0.2, "top_p": 0.8},
     "quality.coherence_apply": {"temperature": 0.4, "top_p": 0.85},
     # ── 复盘 / 提取 ────────────────────────────────────────────

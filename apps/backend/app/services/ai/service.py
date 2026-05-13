@@ -17,6 +17,7 @@ from app.services.ai.debrief import DebriefMixin
 from app.services.ai.draft_stream import DraftStreamMixin
 from app.services.ai.memory_ai import MemoryMixin
 from app.services.ai.outline_ai import OutlineMixin
+from app.services.ai.outline_checks import OutlineChecksMixin
 from app.services.ai.quality import QualityMixin
 from app.services.ai.sampling import SamplingMixin
 from app.services.ai.writing_tools import WritingToolsMixin
@@ -29,6 +30,7 @@ class AIService(
     ChatMixin,
     MemoryMixin,
     OutlineMixin,
+    OutlineChecksMixin,
     DraftStreamMixin,
     DebriefMixin,
     WritingToolsMixin,

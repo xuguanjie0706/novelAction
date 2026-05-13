@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { BookOpen, ChevronRight, Loader2, Plus, Search, Sparkles, Trash2 } from 'lucide-react'
+import { AlertTriangle, BookOpen, ChevronRight, Loader2, Plus, Search, Sparkles, Trash2 } from 'lucide-react'
 import { bootstrapRunsApi, projectsApi } from '../api/client'
 import { useAppStore } from '../store'
 import type { Project } from '../types'
@@ -39,6 +39,76 @@ function getGradient(genre?: string) {
     if (genre.includes(key)) return GENRE_GRADIENTS[key]
   }
   return GENRE_GRADIENTS.default
+}
+
+/** 书架删除：与 TopBar 重置弹窗同一套白卡 + 警示区，替代原生 confirm。 */
+function BookshelfDeleteConfirmModal({
+  project,
+  onConfirm,
+  onCancel,
+  loading,
+}: {
+  project: Project
+  onConfirm: () => void
+  onCancel: () => void
+  loading: boolean
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !loading) onCancel()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [loading, onCancel])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="bookshelf-delete-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+    >
+      <div className="w-full max-w-md rounded-2xl border border-gray-100 bg-white p-6 shadow-2xl">
+        <div className="flex items-start gap-3">
+          <div className="shrink-0 rounded-xl bg-red-50 p-2">
+            <AlertTriangle size={20} className="text-red-500" aria-hidden />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 id="bookshelf-delete-title" className="text-base font-bold text-gray-900">
+              从书架删除作品
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-gray-600">
+              确定删除
+              <span className="mx-0.5 font-semibold text-gray-900">「{project.title}」</span>
+              ？
+            </p>
+            <div className="mt-3 rounded-xl border border-red-100 bg-red-50/80 px-3 py-2.5 text-xs leading-relaxed text-red-800/90">
+              将永久删除该小说及章节、设定等全部数据，且不可恢复。
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 flex gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={loading}
+            className="flex-1 rounded-xl bg-gray-100 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={loading}
+            className="flex-1 rounded-xl bg-red-500 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {loading ? '删除中…' : '确认删除'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function statusLabel(status: Project['status']) {
@@ -217,6 +287,7 @@ export default function BookshelfPage() {
   const navigate = useNavigate()
   const { setCurrentProject, removeGenTask } = useAppStore()
   const [projects, setProjects] = useState<Project[]>([])
+  const [deleteConfirmProject, setDeleteConfirmProject] = useState<Project | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -262,14 +333,15 @@ export default function BookshelfPage() {
     }
   }
 
-  const deleteProject = async (project: Project) => {
-    if (
-      !window.confirm(
-        `确定从书架删除「${project.title}」？\n将永久删除该小说及章节、设定等全部数据，且不可恢复。`,
-      )
-    ) {
-      return
-    }
+  const closeDeleteModal = useCallback(() => setDeleteConfirmProject(null), [])
+
+  const requestDeleteProject = (project: Project) => {
+    setDeleteConfirmProject(project)
+  }
+
+  const confirmDeleteProject = async () => {
+    const project = deleteConfirmProject
+    if (!project) return
     setDeletingId(project.id)
     try {
       await projectsApi.delete(project.id)
@@ -279,6 +351,7 @@ export default function BookshelfPage() {
       const active = readActiveBootstrapRun()
       if (active?.projectId === project.id) clearActiveBootstrapRun()
       setProjects((prev) => prev.filter((p) => p.id !== project.id))
+      setDeleteConfirmProject(null)
       toast.success('已删除')
       void refreshBootstrapResume()
     } catch {
@@ -362,6 +435,14 @@ export default function BookshelfPage() {
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-gray-950 lg:flex">
+      {deleteConfirmProject && (
+        <BookshelfDeleteConfirmModal
+          project={deleteConfirmProject}
+          loading={deletingId === deleteConfirmProject.id}
+          onCancel={closeDeleteModal}
+          onConfirm={() => void confirmDeleteProject()}
+        />
+      )}
       {showWizard && (
         <GenerateWizard
           onClose={onWizardClose}
@@ -474,7 +555,7 @@ export default function BookshelfPage() {
                     key={project.id}
                     project={project}
                     onOpen={() => navigate(`/bookshelf/${project.id}`)}
-                    onDelete={deleteProject}
+                    onDelete={requestDeleteProject}
                     deleting={deletingId === project.id}
                   />
                 ))}

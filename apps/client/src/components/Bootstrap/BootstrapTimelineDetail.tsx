@@ -281,8 +281,9 @@ export default function BootstrapTimelineDetail({
     )
   }
 
-  const offsetMs =
+  const offsetMsRaw =
     step.startedAt != null && generationStartMs != null ? step.startedAt - generationStartMs : null
+  const offsetMs = offsetMsRaw != null ? Math.max(0, offsetMsRaw) : null
   const durationMs =
     step.startedAt != null && step.completedAt != null ? step.completedAt - step.startedAt : null
 

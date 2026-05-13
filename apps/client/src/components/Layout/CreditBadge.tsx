@@ -192,7 +192,7 @@ export default function CreditBadge({ className }: Props) {
           {/* 底部：费率提示 + 钱包入口 */}
           <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex items-center justify-between gap-2">
             <p className="text-[10px] text-gray-400 leading-relaxed">
-              费率（每千 token）：重型 5/15 · 标准 1/3 · 本地免费
+              费率（每千 token）：重型 5/15 · 标准 1/3
             </p>
             <Link
               to="/wallet"

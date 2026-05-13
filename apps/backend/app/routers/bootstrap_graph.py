@@ -13,6 +13,7 @@ bootstrap_graph.py — LangGraph Bootstrap 路由
   POST   /bootstrap/runs/{run_id}/resume    用户确认/修改立项定位后继续
 
 SSE 协议（JSON lines，prefix: data:）：
+  每条事件含 ``ts``（服务端毫秒时间戳），重连回放时用于还原各步耗时。
   step_start    — {"step": "positioning", "label": "..."}
   step_done     — {"step": "...", "count": N, "preview": "..."}
   gate_pending  — {"step": "positioning|power_systems|characters|volumes", "message": "...", "positioning": {...}?, "gate_preview": {...}?}
@@ -101,6 +102,7 @@ class RunStatus(BaseModel):
     events: list[dict]
     error_message: Optional[str]
     logline: Optional[str] = None
+    created_at: Optional[str] = None
 
 
 class RunHistoryItem(BaseModel):
@@ -186,6 +188,7 @@ async def get_run(
         events=list(run.events or []),
         error_message=run.error_message,
         logline=run.logline,
+        created_at=run.created_at.isoformat() if run.created_at else None,
     )
 
 

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.services.embedding_service import semantic_search as _semantic_search
 
 from app.database import get_db
-from app.models import Chapter, Character, ChapterIndex, MemoryChunk, OutlineNode, Project, QualityDebt, ReaderPromise, StoryLine, WorldSetting
+from app.models import Chapter, Character, ChapterAnalysisRecord, ChapterIndex, MemoryChunk, OutlineNode, Project, QualityDebt, ReaderPromise, StoryLine, WorldSetting
 from app.services.ai_service import AIService
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 from app.utils.chapter_numbering import display_chapter_number
@@ -45,6 +45,60 @@ from app.routers.ai.draft_helpers import (
 )
 
 router = APIRouter()
+
+
+# ═══════════════════════════════════════════════════════════════
+# 读者模拟反馈：上章分析结果注入写章路径
+# ═══════════════════════════════════════════════════════════════
+
+def _build_reader_feedback_context(
+    db,
+    project_id: str,
+    prev_chapter,
+) -> str:
+    """
+    查询上一章最近一次 ChapterAnalysisRecord，将读者评分 / 劝退点 / 裁定 / 钩子建议
+    格式化为可追加到 writing_brief_context 的文本块，让本章写作主动规避已知弱点。
+
+    仅在上章存在分析记录时返回非空字符串；未分析过则静默跳过。
+
+    @param db: SQLAlchemy Session
+    @param project_id: 当前项目 UUID 字符串
+    @param prev_chapter: 上一章 Chapter ORM 对象（可为 None）
+    @returns 格式化后的读者反馈文本；无数据时返回空字符串
+    """
+    if prev_chapter is None:
+        return ""
+    try:
+        record = (
+            db.query(ChapterAnalysisRecord)
+            .filter(
+                ChapterAnalysisRecord.project_id == project_id,
+                ChapterAnalysisRecord.chapter_id == prev_chapter.id,
+            )
+            .order_by(ChapterAnalysisRecord.created_at.desc())
+            .first()
+        )
+    except Exception:
+        return ""
+    if record is None:
+        return ""
+
+    lines = ["\n【上章读者模拟反馈（本章写作必须回应）】"]
+    risk_zh = {"low": "低", "medium": "中", "high": "⚠️高"}
+    risk_label = risk_zh.get(record.drop_risk or "low", record.drop_risk or "")
+    lines.append(f"  综合评分：{record.score}/10  流失风险：{risk_label}")
+    if record.what_hooked:
+        lines.append(f"  ✅ 读者买单：{record.what_hooked[:120]}")
+    if record.what_repelled:
+        lines.append(f"  ⚠️ 读者劝退：{record.what_repelled[:120]}（本章须主动规避）")
+    if record.verdict:
+        lines.append(f"  模拟裁定：{record.verdict[:160]}")
+    if record.hook_suggestions:
+        suggestions = [str(s) for s in (record.hook_suggestions or [])[:2] if s]
+        if suggestions:
+            lines.append("  本章钩子优化建议：" + "；".join(suggestions)[:180])
+    return "\n".join(lines)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -520,6 +574,34 @@ async def _build_draft_context(
             parts.append(f"技能明细:{json.dumps(c.known_skills, ensure_ascii=False)[:1200]}")
         if large_context and c.owned_items:
             parts.append(f"持有物:{json.dumps(c.owned_items, ensure_ascii=False)[:1200]}")
+        # ── 声音档案：标志词 + 样本台词 + 最新演变备注（大上下文注入完整套，小上下文只注入口吻标签）──
+        _speech_kit = (c.speech_kit or {}) if isinstance(c.speech_kit, dict) else {}
+        if large_context and _speech_kit:
+            _sig_words = [str(w) for w in (_speech_kit.get("signature_words") or []) if w][:5]
+            if _sig_words:
+                parts.append(f"标志词:[{'、'.join(_sig_words)}]")
+            _samples = [str(s) for s in (_speech_kit.get("sample_dialogues") or []) if s][-3:]
+            if _samples:
+                parts.append("样本台词:「" + "」｜「".join(_samples) + "」")
+            _evo_notes = _speech_kit.get("recent_evolution_notes") or []
+            if _evo_notes:
+                _latest_evo = str(_evo_notes[-1])[:80]
+                if _latest_evo:
+                    parts.append(f"近期声音演变:{_latest_evo}")
+        elif not large_context and c.speech_style:
+            parts.append(f"口吻:{c.speech_style[:30]}")
+        # ── 成长弧阶段：找当前未完成的最近阶段，注入进度感知 ──
+        if large_context:
+            _arc_stages = c.arc_stages if isinstance(c.arc_stages, list) else []
+            _cur_stage = next(
+                (s for s in _arc_stages if isinstance(s, dict) and not s.get("completed")),
+                _arc_stages[-1] if _arc_stages else None,
+            )
+            if _cur_stage and isinstance(_cur_stage, dict):
+                _stage_name = (_cur_stage.get("name") or _cur_stage.get("stage") or "").strip()
+                _stage_goal = (_cur_stage.get("goal") or _cur_stage.get("description") or "").strip()
+                if _stage_name:
+                    parts.append(f"成长弧:[{_stage_name}]{f'({_stage_goal[:50]})' if _stage_goal else ''}")
         char_lines.append("".join(parts))
 
     char_summary = "\n".join(char_lines) if large_context else " | ".join(char_lines)
@@ -628,6 +710,36 @@ async def _build_draft_context(
         db=db, project_id=project_id, chapter=chapter,
         outline_node=outline_node, large_context=large_context,
     )
+
+    # ── 卷内章节进度感（本卷第X/Y章）──────────────────────────────────────────
+    # 查询当前章所属卷的 chapter_plan 总数，注入进度感知，帮助 AI 判断"现在是卷中位置"
+    # 防止开局章写出高潮感、收尾章仍在起铺垫的节奏错位问题。
+    _vol_progress_hint = ""
+    if outline_node and outline_node.parent_id:
+        try:
+            _vol_chapter_count = (
+                db.query(OutlineNode)
+                .filter(
+                    OutlineNode.project_id == project_id,
+                    OutlineNode.parent_id == outline_node.parent_id,
+                    OutlineNode.node_type == "chapter_plan",
+                )
+                .count()
+            )
+            if _vol_chapter_count > 0:
+                # outline_node.sort_order 是卷内从0起的偏移（chapter_number - 1）
+                _vol_ch_idx = (outline_node.sort_order or 0) + 1
+                # 如果卷内只记录了部分 chapter_plan，用已知最大sort_order+1做分母兜底
+                _denom = max(_vol_chapter_count, _vol_ch_idx)
+                _vol_progress_hint = (
+                    f"\n【卷内章节进度】本卷第 {_vol_ch_idx}/{_denom} 章"
+                    f"（{round(_vol_ch_idx / _denom * 100)}%）"
+                    f" — 节奏应与当前位置匹配，勿过早/过晚高潮"
+                )
+        except Exception:
+            pass
+    if _vol_progress_hint:
+        writing_brief_context = writing_brief_context + _vol_progress_hint
 
     if is_opening:
         # 开局期跳过伏笔台账 / 质检债务查询（该阶段双表几乎为空，DB 查询 + prompt 拼接都是浪费）
@@ -738,6 +850,13 @@ async def _build_draft_context(
     # 此处提取并格式化为字符串，传给 draft_assist_stream 的 prev_directives 参数，
     # 注入 system prompt 最高优先级区块，使复盘编辑指令真正在下一章写作中生效。
     prev_directives_str = _build_prev_directives(outline_node)
+
+    # ── 上章读者模拟反馈：注入已知劝退点 + 钩子建议，驱动本章主动优化 ────────────
+    # 从最近一次 chapter-analysis 的 ChapterAnalysisRecord 中提取评分、劝退点、
+    # 裁定与钩子建议，追加到 writing_brief_context，使反馈真正影响下一章写作。
+    _reader_feedback = _build_reader_feedback_context(db, project_id, prev_chapter)
+    if _reader_feedback:
+        writing_brief_context = writing_brief_context + _reader_feedback
 
     # ── hook_strength 趋势预警：近5章均值 < 3 时追加主编强制钩子指令 ─────────────
     # 防止章末钩子连续偏弱导致读者流失，当趋势下行时主动干预写章 prompt。

@@ -3,7 +3,7 @@
  *
  * 职责：
  * - 管理生成流程状态（phase / steps / gate / projectId）
- * - 新版串行：POST /runs → GET /events；支持刷新后 ``reconnectToRun`` 回放事件并重连 SSE
+ * - 新版串行：POST /runs → GET /events；支持刷新后 ``reconnectToRun`` 回放事件并重连 SSE（事件带 ``ts`` 时还原步耗时）
  * - single_shot：POST /stream
  * - 会话内 ``sessionStorage`` 记录 run_id（见 ``utils/bootstrapActiveRun``），便于书架/首页提示「继续生成」
  * - ``abortSse``：仅断开当前 fetch/SSE；``cancelRun``：调用 ``POST .../cancel`` 终止后端任务并清理本地状态
@@ -161,9 +161,24 @@ export function useBootstrapStream() {
       return
     }
     if (kind === 'characters') {
+      const gd = gateData as Record<string, unknown>
+      const count =
+        typeof gd.characters_count === 'number'
+          ? gd.characters_count
+          : typeof gd.count === 'number'
+            ? gd.count
+            : 0
       setGateStep('characters')
       setGateMessage('请确认人物库后继续')
-      setGatePreview({ characters_count: (gateData as { count?: number }).count ?? 0 })
+      setGatePreview({
+        characters_count: count,
+        ...(Array.isArray(gd.characters_preview) ? { characters_preview: gd.characters_preview } : {}),
+        ...(typeof gd.characters_preview_truncated === 'boolean'
+          ? { characters_preview_truncated: gd.characters_preview_truncated }
+          : {}),
+        ...(typeof gd.relations_count === 'number' ? { relations_count: gd.relations_count } : {}),
+        ...(Array.isArray(gd.relations_sample) ? { relations_sample: gd.relations_sample } : {}),
+      })
       setPhase('gate')
       return
     }
@@ -178,7 +193,9 @@ export function useBootstrapStream() {
   const handleEvent = useCallback((evt: Record<string, any>) => {
     const { event, step, label, count, preview, message, project_id, positioning, gate_preview } = evt
     const key = toKey(step)
-    const now = Date.now()
+    /** 优先用后端 ``emit`` 写入的 ``ts``（毫秒），重连 replay 时才能还原真实步间耗时 */
+    const now =
+      typeof evt.ts === 'number' && Number.isFinite(evt.ts) ? (evt.ts as number) : Date.now()
 
     if (event === 'step_start' && key) {
       setSteps(prev => prev.map(s =>
@@ -342,7 +359,6 @@ export function useBootstrapStream() {
     streamCompleteRef.current = false
     setErrorMsg('')
     setRunId(rid)
-    setGenStartMs(Date.now())
     setSteps(SEQ_STEP_KEYS.map(k => makeStep(k)))
     setGateStep(null)
     setGateMessage('')
@@ -365,6 +381,7 @@ export function useBootstrapStream() {
         project_id?: string | null
         error_message?: string | null
         logline?: string | null
+        created_at?: string | null
       }
       setActiveLogline((run.logline || opts?.loglineHint || '').trim())
 
@@ -376,8 +393,22 @@ export function useBootstrapStream() {
         })
       }
 
+      const anchorMs =
+        run.created_at && !Number.isNaN(Date.parse(run.created_at))
+          ? Date.parse(run.created_at)
+          : Date.now()
+      setGenStartMs(anchorMs)
+
       const evs = run.events || []
-      for (const ev of evs) handleEvent(ev)
+      let legacyTsCursor = anchorMs
+      for (const ev of evs) {
+        const evRec = ev as Record<string, unknown>
+        const hasTs = typeof evRec.ts === 'number' && Number.isFinite(evRec.ts as number)
+        const evToApply = hasTs
+          ? ev
+          : { ...evRec, ts: (legacyTsCursor += 200) }
+        handleEvent(evToApply as Record<string, any>)
+      }
 
       const hasGatePending = evs.some(e => e.event === 'gate_pending')
       if (run.status === 'awaiting_gate' && !hasGatePending) {

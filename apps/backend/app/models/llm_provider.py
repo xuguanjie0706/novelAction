@@ -20,6 +20,10 @@ class LlmProvider(Base):
 
     provider_type = Column(String(20), default="text", nullable=False, server_default="text")  # text=补全；image=生图网关
 
+    # 计费档位：heavy（高端大模型）/ standard（中端，默认）/ light（本地/免费，cost=0）
+    # 由管理员在后台显式配置，不依赖模型名关键词猜测。
+    tier = Column(String(20), default="standard", nullable=False, server_default="standard")
+
     enabled = Column(Boolean, default=True, nullable=False)  # 是否在前端可选
     is_default = Column(Boolean, default=False, nullable=False)  # 是否默认远程提供者
     sort_order = Column(Integer, default=0, nullable=False)  # 列表排序

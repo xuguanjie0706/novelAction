@@ -261,15 +261,22 @@ class OutlineMixin:
         """
         chapter_lines = []
         for ch in chapters:
-            chapter_lines.append(
-                " | ".join([
-                    f"第{ch.get('number', '?')}章：{ch.get('title', '未命名')}",
-                    f"核心事件：{ch.get('core_event', '')}",
-                    f"人物变化：{ch.get('character_change', '')}",
-                    f"伏笔：{ch.get('foreshadow', '')}",
-                    f"章末钩子：{ch.get('end_hook', '')}",
-                ])
-            )
+            # 拼装行时，若新字段（因果链）存在则带入，让质检看到完整上下文
+            parts = [
+                f"第{ch.get('number', '?')}章：{ch.get('title', '未命名')}",
+                f"核心事件：{ch.get('core_event', '')}",
+                f"人物变化：{ch.get('character_change', '')}",
+                f"伏笔：{ch.get('foreshadow', '')}",
+                f"章末钩子：{ch.get('end_hook', '')}",
+            ]
+            # 因果链字段（新大纲有，旧大纲为空——空时不拼，避免噪音）
+            choice = (ch.get("protagonist_choice") or "").strip()
+            cost = (ch.get("choice_cost") or "").strip()
+            if choice:
+                parts.append(f"主角选择：{choice}")
+            if cost:
+                parts.append(f"选择代价：{cost}")
+            chapter_lines.append(" | ".join(parts))
 
         system = "你是资深长篇网文主编，专门做大纲质检和结构化修订建议。严格返回JSON，不要任何额外文字。"
         prompt = f"""小说：《{project_title}》（{genre}）

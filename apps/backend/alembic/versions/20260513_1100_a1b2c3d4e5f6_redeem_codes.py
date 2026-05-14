@@ -1,6 +1,6 @@
 """兑换码系统：redeem_codes 表
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: g8h9i0j1k2l3
 Revises: f4a5b6c7d8e9
 
 变更：
@@ -25,7 +25,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers
-revision = "a1b2c3d4e5f6"
+revision = "g8h9i0j1k2l3"
 down_revision = "f4a5b6c7d8e9"
 branch_labels = None
 depends_on = None

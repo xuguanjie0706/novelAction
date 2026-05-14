@@ -51,14 +51,17 @@ class AIService(
             profile: 模型线路（``"default"`` 走本地 .env，``"gemini"`` 走远程兼容网关）。
             db: 已开启事务的 Session；为 None 时各操作自行开关连接。
             llm_provider_id: 使用管理后台持久化的 LlmProvider 时传入。
-            user_id: 当前登录用户 UUID；传入后每次 AI 调用自动触发积分扣费与预检。
+            user_id: 当前登录用户 UUID；非空时优先用于积分扣费与预检。
+                省略时回退到 ``llm_billing_context``（HTTP Bearer 中间件或 :func:`bind_llm_billing_user`）。
         """
         self.profile = profile
         self._db = db
-        self._user_id = user_id  # 积分扣费凭据，None 时跳过积分逻辑
+        self._user_id = user_id
         self.model = (settings.AI_MODEL or "").strip()
         self.base_url = settings.LLM_BASE_URL
         self.api_key = settings.LLM_API_KEY
+        # 计费档位：由 DB provider 的 tier 字段显式确定；本地线路回退关键词猜测
+        self._billing_tier: Optional[str] = None
         self._gemini_unconfigured = False
         if profile == "gemini":
             conn = resolve_gemini_connection(db, llm_provider_id)
@@ -66,6 +69,7 @@ class AIService(
                 self.base_url = normalize_openai_base_url(conn[0])
                 self.model = conn[1]
                 self.api_key = (conn[2] or "").strip() or "not-required"
+                self._billing_tier = conn[3] if len(conn) > 3 else None
             else:
                 self._gemini_unconfigured = True
         self._client = None

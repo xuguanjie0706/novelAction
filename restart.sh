@@ -22,9 +22,11 @@ NOVEL_LOCAL_ADMIN_PORT="${NOVEL_LOCAL_ADMIN_PORT:-3174}"
 kill_port() {
   local port=$1
   local pids
-  pids="$(lsof -ti ":${port}" 2>/dev/null || true)"
+  # 仅杀 LISTEN 进程：``lsof -ti :PORT`` 在 macOS 上会匹配「本端或远端涉及该端口」的套接字，
+  # 会把 **连到后端的 Vite/Node 代理** 一并列进来并 kill -9，导致「一重启前后端全挂」。
+  pids="$(lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null || true)"
   if [[ -n "${pids}" ]]; then
-    echo "正在结束占用端口 ${port} 的进程: ${pids}"
+    echo "正在结束在端口 ${port} 上监听的进程: ${pids}"
     # shellcheck disable=SC2086
     kill -9 ${pids} 2>/dev/null || true
   fi

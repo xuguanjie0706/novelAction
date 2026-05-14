@@ -3,6 +3,7 @@ import asyncio
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.requests import Request
 from sqlalchemy import text
 
 
@@ -515,6 +516,29 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+
+@app.middleware("http")
+async def llm_billing_user_context_middleware(request: Request, call_next):
+    """将 Bearer JWT 解析为计费用户 UUID，写入 ContextVar。
+
+    供 ``SamplingMixin`` 在 ``log_llm_call`` / 积分预检中统一读取，避免各路由漏传 ``AIService.user_id``。
+    使用 ``http`` 中间件而非 ``BaseHTTPMiddleware``，以保证与路由在同异步上下文内传播 ContextVar。
+    """
+    from app.services.llm_billing_context import (
+        billing_user_id_from_authorization_header,
+        pop_llm_billing_user,
+        push_llm_billing_user,
+    )
+
+    tok = push_llm_billing_user(
+        billing_user_id_from_authorization_header(request.headers.get("Authorization"))
+    )
+    try:
+        return await call_next(request)
+    finally:
+        pop_llm_billing_user(tok)
+
 
 @app.on_event("startup")
 async def _on_startup() -> None:

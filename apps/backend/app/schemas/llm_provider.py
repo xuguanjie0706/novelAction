@@ -12,6 +12,9 @@ class LlmProviderBase(BaseModel):
     model_name: str = Field(..., max_length=200)
     # text = 文本生成（默认）；image = 图片生成（兼容 /v1/images/generations）
     provider_type: str = Field("text", pattern=r"^(text|image)$")
+    # 计费档位：heavy（高端大模型）/ standard（中端，默认）/ light（本地/免费，cost=0）
+    # 由管理员显式设置，无需依赖模型名关键词猜测，支持任意自定义 API 网关。
+    tier: str = Field("standard", pattern=r"^(heavy|standard|light)$")
     enabled: bool = True
     is_default: bool = False
     sort_order: int = 0
@@ -29,6 +32,7 @@ class LlmProviderUpdate(BaseModel):
     base_url: Optional[str] = Field(None, max_length=2000)
     model_name: Optional[str] = Field(None, max_length=200)
     provider_type: Optional[str] = Field(None, pattern=r"^(text|image)$")
+    tier: Optional[str] = Field(None, pattern=r"^(heavy|standard|light)$")
     api_key: Optional[str] = None
     """传 null 或不传表示不改；传空字符串表示清空密钥"""
     enabled: Optional[bool] = None
@@ -44,6 +48,7 @@ class LlmProviderOut(BaseModel):
     base_url: str
     model_name: str
     provider_type: str = "text"
+    tier: str = "standard"
     has_api_key: bool
     api_key_hint: Optional[str] = None
     enabled: bool

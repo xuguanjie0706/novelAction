@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, WebSocket
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.services.llm_billing_context import bind_llm_billing_user
 from app.services.workflow_graph import workflow_runs
 
 ws_router = APIRouter(prefix="/projects/{project_id}/outline", tags=["outline-ws"])
@@ -44,4 +45,5 @@ async def outline_workflow_websocket(
         await websocket.close(code=4404)
         return
 
-    await workflow_runs.stream_to_websocket(run_id, websocket)
+    with bind_llm_billing_user(user.id):
+        await workflow_runs.stream_to_websocket(run_id, websocket)

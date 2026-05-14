@@ -67,7 +67,12 @@ class GenerationService:
         self.db = db
         self.user_id = user_id
         ai_profile = "default" if model_profile == "local" else "gemini"
-        self.ai = AIService(profile=ai_profile, db=db, llm_provider_id=llm_provider_id)
+        self.ai = AIService(
+            profile=ai_profile,
+            db=db,
+            llm_provider_id=llm_provider_id,
+            user_id=user_id,
+        )
 
     def hydrate_ctx_from_project(self, project: Project) -> dict:
         """从已落库项目拼装 ctx，供「补生成设定卡」类接口复用。"""

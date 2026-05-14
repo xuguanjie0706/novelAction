@@ -51,6 +51,7 @@ def log_llm_call(
     output_payload: Any = None,
     user_id: Optional[UUID] = None,
     task: Optional[str] = None,
+    tier_override: Optional[str] = None,
     db: Session | None = None,
 ) -> str | None:
     """落库 LLM 调用日志，并在成功时原子扣除用户积分。
@@ -70,6 +71,9 @@ def log_llm_call(
         output_payload: 响应摘要。
         user_id: 当前登录用户 UUID；提供时在 status="ok" 后自动扣费。
         task: 任务标识（写入积分流水的 task 字段）。
+        tier_override: 强制指定计费档位（heavy/standard/light）；
+            由 AIService._billing_tier 传入（来自 LlmProvider.tier DB 字段），
+            优先级高于 credit_service 关键词猜测，支持任意自定义模型名。
         db: 已开启事务的 Session；为 None 时自行开关连接。
 
     Returns:
@@ -121,7 +125,10 @@ def log_llm_call(
         if status == "ok" and user_id is not None:
             try:
                 from app.services import credit_service  # 延迟导入，避免循环依赖
-                cost = credit_service.compute_cost(model, prompt_tokens, completion_tokens)
+                cost = credit_service.compute_cost(
+                    model, prompt_tokens, completion_tokens,
+                    tier_override=tier_override,
+                )
                 credit_service.deduct(
                     user_id,
                     cost,

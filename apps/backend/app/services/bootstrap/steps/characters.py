@@ -167,4 +167,18 @@ debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对�
         for c in results
         if c.character_tier == "plot" and c.extra and c.extra.get("vol1_function")
     )
+    # 主角及核心角色的心理档案，供 vol1_chapter_plans / expand_outline 注入
+    # 包含驱动章节行为的底层字段：恐惧、欲望、价值观、人物弧线
+    ctx["char_profiles"] = {
+        c.name: {
+            "core_wound": (c.fear or "").strip(),
+            "current_desire": (c.motivation or "").strip(),
+            "biggest_lie": "",  # 由 arc 隐含，暂不单独生成；后续可扩展
+            "relationship_pressure": "",
+            "values": (c.values or "").strip(),
+            "arc": (c.arc or "").strip(),
+        }
+        for c in results
+        if c.role == "protagonist" or c.character_tier in ("core", "arc")
+    }
     return results

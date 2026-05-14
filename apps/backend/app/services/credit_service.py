@@ -52,20 +52,40 @@ _RATES: Dict[str, Dict[str, int]] = {
 }
 
 # 模型名前缀/关键词 → 档位映射；按 heavy → standard 顺序匹配，未命中归为 light
+#
+# ⚠️ 匹配策略说明：对于带版本号的模型（如 gemini-1.5-flash、gemini-3-flash），
+# 简单子串匹配会因为版本号夹在中间而失效（"gemini-flash" ∉ "gemini-3-flash"）。
+# Gemini 系列因此使用 _is_gemini_flash / _is_gemini_pro 辅助函数做双关键词组合匹配。
 _HEAVY_KEYWORDS = [
     "gpt-4",
     "claude-3-opus", "claude-opus-4", "claude-opus",
-    "gemini-1.5-pro", "gemini-2.0-pro", "gemini-pro",
     "o1", "o3",
 ]
 _STANDARD_KEYWORDS = [
     "gpt-3.5",
     "claude-3-sonnet", "claude-3-haiku", "claude-sonnet", "claude-haiku",
-    "gemini-1.5-flash", "gemini-2.0-flash", "gemini-flash",
     "qwen-max", "qwen-plus", "qwen-long",
     "deepseek-v3", "deepseek-r1", "deepseek-chat",
     "glm-4",
 ]
+
+
+def _is_gemini_flash(lower: str) -> bool:
+    """判断是否为 Gemini Flash 系列（standard 档位）。
+
+    处理 gemini-1.5-flash / gemini-2.0-flash / gemini-3-flash 等带版本号的命名，
+    这类名称中 "gemini-flash" 不是有效子串，需要拆分为双关键词判断。
+    """
+    return "gemini" in lower and "flash" in lower
+
+
+def _is_gemini_pro(lower: str) -> bool:
+    """判断是否为 Gemini Pro 系列（heavy 档位）。
+
+    处理 gemini-1.5-pro / gemini-2.0-pro / gemini-3-pro 等带版本号的命名。
+    注意：gemini-flash 也含 "pro" 前缀（如 gemini-pro-exp），用 flash 优先排除。
+    """
+    return "gemini" in lower and "pro" in lower and "flash" not in lower
 
 
 # ──────────────────────────────────────────────
@@ -75,7 +95,8 @@ _STANDARD_KEYWORDS = [
 def get_model_tier(model_name: str) -> str:
     """根据模型名确定计费档位。
 
-    按 heavy → standard → light 顺序进行子串匹配（不区分大小写）。
+    按 heavy → standard → light 顺序匹配（不区分大小写）。
+    Gemini 系列使用双关键词组合匹配以兼容带版本号命名（如 gemini-3-flash）。
     未命中任何关键词的视为 light（本地 / 自建模型，免费）。
 
     Args:
@@ -85,6 +106,11 @@ def get_model_tier(model_name: str) -> str:
         ``"heavy"`` | ``"standard"`` | ``"light"``
     """
     lower = (model_name or "").lower()
+    # Gemini 系列：使用双关键词组合匹配（兼容 gemini-1.5-flash / gemini-3-flash 等带版本号命名）
+    if _is_gemini_pro(lower):
+        return "heavy"
+    if _is_gemini_flash(lower):
+        return "standard"
     for kw in _HEAVY_KEYWORDS:
         if kw in lower:
             return "heavy"
@@ -98,20 +124,27 @@ def compute_cost(
     model_name: str,
     prompt_tokens: int,
     completion_tokens: int,
+    *,
+    tier_override: Optional[str] = None,
 ) -> int:
     """计算一次 AI 调用消耗的积分（向上取整，最低 0）。
 
     公式：``ceil((input_tokens * input_rate + output_tokens * output_rate) / 1000)``
 
     Args:
-        model_name: 模型名，用于判定档位。
+        model_name: 模型名，用于关键词猜测档位（``tier_override`` 为 None 时生效）。
         prompt_tokens: 输入 token 数（包含 system + user 消息）。
         completion_tokens: 输出 token 数。
+        tier_override: 显式指定档位（heavy/standard/light）；由 ``LlmProvider.tier``
+            DB 字段传入，优先级高于关键词猜测，用于支持任意自定义 API 网关和模型名。
 
     Returns:
         应扣积分数（≥ 0 的整数）；light 档位恒为 0。
     """
-    tier = get_model_tier(model_name)
+    if tier_override and tier_override in _RATES:
+        tier = tier_override
+    else:
+        tier = get_model_tier(model_name)
     rates = _RATES[tier]
     raw = (prompt_tokens * rates["input"] + completion_tokens * rates["output"]) / 1000.0
     return int(math.ceil(raw))

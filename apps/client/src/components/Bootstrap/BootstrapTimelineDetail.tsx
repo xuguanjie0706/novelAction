@@ -130,14 +130,25 @@ function PositioningContent({ data }: { data: Record<string, any> }) {
   )
 }
 
-function ConsistencyContent({ issues }: { issues: any[] }) {
-  if (issues.length === 0) {
+function ConsistencyContent({ issues, stepDoneCount }: { issues: any[]; stepDoneCount?: number | null }) {
+  const n = issues.length
+  const sseCount = stepDoneCount != null && stepDoneCount > 0 ? stepDoneCount : 0
+  if (n === 0 && sseCount === 0) {
     return (
       <Card>
         <div className="flex items-center gap-2 text-sm text-emerald-600">
           <span className="text-base">✓</span>
           <span>未检测到一致性问题，可直接开始写作</span>
         </div>
+      </Card>
+    )
+  }
+  if (n === 0 && sseCount > 0) {
+    return (
+      <Card>
+        <p className="text-sm text-amber-800">
+          已标记 <span className="font-semibold">{sseCount}</span> 处需确认项（与上方摘要一致）；若下方列表仍空白，请刷新或重新进入以拉取最新数据。
+        </p>
       </Card>
     )
   }
@@ -348,7 +359,12 @@ export default function BootstrapTimelineDetail({
           <PositioningContent data={positioningData} />
         )}
 
-        {step.key === 'consistency' && insights && <ConsistencyContent issues={insights.consistency_issues} />}
+        {step.key === 'consistency' && step.status === 'done' && (
+          <ConsistencyContent
+            issues={insights?.consistency_issues ?? []}
+            stepDoneCount={step.count}
+          />
+        )}
 
         {step.key === 'opening_contract' && insights && Object.keys(insights.opening_contract ?? {}).length > 0 && (
           <OpeningContractContent data={insights.opening_contract} />

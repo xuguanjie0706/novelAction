@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { App, Button, Form, Input, InputNumber, Modal, Space, Switch, Table, Tag, Typography } from 'antd'
+import { App, Button, Form, Input, InputNumber, Modal, Radio, Space, Switch, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { ApiOutlined, PlusOutlined, StarOutlined } from '@ant-design/icons'
 import { http } from '../api/http'
@@ -7,11 +7,26 @@ import type { LlmProvider, LlmTestConnectionResult } from '../types/llm'
 
 const { Text } = Typography
 
+/** 计费档位选项 */
+const TIER_OPTIONS = [
+  { label: '标准（中端模型）', value: 'standard' },
+  { label: '重度（高端大模型）', value: 'heavy' },
+  { label: '免费（本地/不扣积分）', value: 'light' },
+]
+
+/** 档位显示标签 */
+const TIER_TAG: Record<string, { color: string; text: string }> = {
+  heavy:    { color: 'red',    text: '重度' },
+  standard: { color: 'blue',   text: '标准' },
+  light:    { color: 'default', text: '免费' },
+}
+
 type FormValues = {
   name: string
   base_url: string
   model_name: string
   api_key?: string
+  tier: 'heavy' | 'standard' | 'light'
   enabled: boolean
   is_default: boolean
   sort_order: number
@@ -51,6 +66,7 @@ export default function LlmProvidersPage() {
     setEditing(null)
     form.resetFields()
     form.setFieldsValue({
+      tier: 'standard',
       enabled: true,
       is_default: false,
       sort_order: 0,
@@ -65,6 +81,7 @@ export default function LlmProvidersPage() {
       base_url: row.base_url,
       model_name: row.model_name,
       api_key: '',
+      tier: row.tier ?? 'standard',
       enabled: row.enabled,
       is_default: row.is_default,
       sort_order: row.sort_order,
@@ -81,6 +98,7 @@ export default function LlmProvidersPage() {
         base_url: v.base_url.trim(),
         model_name: v.model_name.trim(),
         provider_type: 'text',
+        tier: v.tier ?? 'standard',
         enabled: v.enabled,
         is_default: v.is_default,
         sort_order: v.sort_order ?? 0,
@@ -250,6 +268,15 @@ export default function LlmProvidersPage() {
       render: (v: boolean) => (v ? <Tag color="gold">默认</Tag> : null),
     },
     {
+      title: '计费档位',
+      dataIndex: 'tier',
+      width: 100,
+      render: (t: string) => {
+        const cfg = TIER_TAG[t] ?? TIER_TAG.standard
+        return <Tag color={cfg.color}>{cfg.text}</Tag>
+      },
+    },
+    {
       title: '排序',
       dataIndex: 'sort_order',
       width: 64,
@@ -361,6 +388,14 @@ export default function LlmProvidersPage() {
             }
           >
             <Input.Password placeholder={editing ? '不修改请留空' : '可选'} autoComplete="new-password" />
+          </Form.Item>
+          <Form.Item
+            name="tier"
+            label="计费档位"
+            extra="决定本提供者扣多少积分：重度（高端）> 标准（中端，默认）> 免费（本地/不扣积分）"
+            rules={[{ required: true, message: '请选择档位' }]}
+          >
+            <Radio.Group options={TIER_OPTIONS} optionType="button" buttonStyle="solid" />
           </Form.Item>
           <Form.Item name="enabled" label="启用" valuePropName="checked">
             <Switch />

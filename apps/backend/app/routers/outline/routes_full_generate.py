@@ -119,7 +119,7 @@ async def ai_full_generate_outline(
                 planned_chapters=planned_chapters,
                 node_generated_chapters=len(all_chapters),
             )
-            # 构建主角当前状态字符串（结合人物卡 + 滚动追踪到的最高境界）
+            # 构建主角当前状态字符串（外部状态：境界/位置/存活）
             protagonist = next((c for c in characters if c.role == "protagonist"), None)
             if protagonist:
                 ps_realm = (
@@ -132,11 +132,23 @@ async def ai_full_generate_outline(
                     f"当前位置：{protagonist.current_location or '未知'} | "
                     f"当前状态：{protagonist.current_status or 'alive'}"
                 )
+                # 主角内层心理驱动（恐惧/欲望/价值观/弧线），补充外部状态的盲区
+                psych_parts = []
+                if protagonist.fear:
+                    psych_parts.append(f"核心恐惧/创伤：{protagonist.fear}")
+                if protagonist.motivation:
+                    psych_parts.append(f"当前最强欲望：{protagonist.motivation}")
+                if protagonist.values:
+                    psych_parts.append(f"价值观：{protagonist.values}")
+                if protagonist.arc:
+                    psych_parts.append(f"人物弧线：{protagonist.arc}")
+                protagonist_psychology = " | ".join(psych_parts)
             else:
                 protagonist_state = (
                     f"主角已达最高境界：{rolling_max_realm}（rank{rolling_max_rank}）"
                     if rolling_max_rank else ""
                 )
+                protagonist_psychology = ""
             try:
                 result = await svc.expand_outline(
                     node_title=target_node.title,
@@ -155,6 +167,7 @@ async def ai_full_generate_outline(
                     batch_goal=batch_goal,
                     realm_whitelist=realm_whitelist,
                     protagonist_state=protagonist_state,
+                    protagonist_psychology=protagonist_psychology,
                 )
                 batch_chapters = [
                     _sanitize_generated_outline_chapter(ch, project.genre)
@@ -211,6 +224,14 @@ async def ai_full_generate_outline(
                     "pacing":        ch.get("pacing", "medium"),
                     "word_estimate": _word_est,
                     "end_hook":      ch.get("end_hook", ""),
+                    # 因果链四元组（欲望→障碍→选择→代价）
+                    "protagonist_want":      ch.get("protagonist_want", ""),
+                    "protagonist_obstacle":  ch.get("protagonist_obstacle", ""),
+                    "protagonist_choice":    ch.get("protagonist_choice", ""),
+                    "choice_cost":           ch.get("choice_cost", ""),
+                    # 反派视角对齐 & 读者情绪目标
+                    "villain_action":        ch.get("villain_action", ""),
+                    "reader_emotion_target": ch.get("reader_emotion_target", ""),
                 },
             ))
         db.flush()

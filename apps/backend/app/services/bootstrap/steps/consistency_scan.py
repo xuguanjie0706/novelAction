@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy.orm.attributes import flag_modified
+
 from app.services.bootstrap.parse import parse_json
 
 
@@ -80,9 +82,11 @@ async def gen_consistency_scan(svc: Any, project, ctx: dict) -> list:
         issues = []
 
     try:
-        extra = project.extra or {}
-        extra["consistency_issues"] = issues
-        project.extra = extra
+        # 必须换新 dict 并 flag_modified：原地改 JSON 列同一对象时 SQLAlchemy 可能不刷盘，
+        # 会导致 SSE count 与 getInsights 读到的 extra 不一致。
+        base = project.extra if isinstance(project.extra, dict) else {}
+        project.extra = {**base, "consistency_issues": issues}
+        flag_modified(project, "extra")
         svc.db.commit()
     except Exception:
         pass

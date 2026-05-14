@@ -13,6 +13,13 @@ export interface LlmProvider {
   model_name: string
   /** 'text' = 文本生成（默认）；'image' = 图片生成（/v1/images/generations） */
   provider_type: 'text' | 'image'
+  /**
+   * 计费档位，由管理员显式指定：
+   * - 'heavy'    高端大模型（GPT-4、Claude Opus 等），扣费最多
+   * - 'standard' 中端模型（默认），按标准费率扣费
+   * - 'light'    本地/免费模型，不扣积分
+   */
+  tier: 'heavy' | 'standard' | 'light'
   has_api_key: boolean
   api_key_hint: string | null
   enabled: boolean

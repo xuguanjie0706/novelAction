@@ -1,11 +1,16 @@
 """解析创作端「远程/Gemini」_profile 使用的连接信息。"""
+import logging
 from typing import Optional, Tuple
 from uuid import UUID
 
+from sqlalchemy import func
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.llm_provider import LlmProvider
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_openai_base_url(url: str) -> str:
@@ -35,9 +40,12 @@ def pick_active_provider(db: Session) -> Optional[LlmProvider]:
 def resolve_gemini_connection(
     db: Optional[Session],
     provider_id: Optional[UUID] = None,
-) -> Optional[Tuple[str, str, str]]:
-    """
-    返回 (base_url 原始, model_name, api_key 或空字符串)。
+) -> Optional[Tuple[str, str, str, str]]:
+    """返回 (base_url 原始, model_name, api_key 或空字符串, tier)。
+
+    tier 优先读 DB 记录的 ``tier`` 字段（由管理员显式配置）；
+    回退到环境变量时使用 ``credit_service.get_model_tier`` 做关键词猜测。
+
     - 指定 provider_id：使用该条（须 enabled）。
     - 未指定且 db 可用：数据库默认/启用的提供者 > 环境变量 GEMINI_*（兼容旧部署）。
     """
@@ -48,17 +56,19 @@ def resolve_gemini_connection(
             .first()
         )
         if row:
-            return (row.base_url, row.model_name, row.api_key or "")
+            return (row.base_url, row.model_name, row.api_key or "", row.tier or "standard")
         return None
     if db is not None:
         row = pick_active_provider(db)
         if row:
-            return (row.base_url, row.model_name, row.api_key or "")
+            return (row.base_url, row.model_name, row.api_key or "", row.tier or "standard")
     if settings.GEMINI_BASE_URL and settings.GEMINI_MODEL:
+        from app.services.credit_service import get_model_tier
         return (
             settings.GEMINI_BASE_URL,
             settings.GEMINI_MODEL,
             settings.GEMINI_API_KEY or "",
+            get_model_tier(settings.GEMINI_MODEL),
         )
     return None
 
@@ -69,7 +79,9 @@ def seed_llm_from_env_if_empty() -> None:
 
     db = SessionLocal()
     try:
-        if db.query(LlmProvider).count() > 0:
+        # 勿用 query(LlmProvider).count()：会 SELECT 全部映射列，缺迁移列（如 tier）时启动即崩。
+        row_n = db.query(func.count(LlmProvider.id)).scalar()
+        if (row_n or 0) > 0:
             return
         if not (settings.GEMINI_BASE_URL and settings.GEMINI_MODEL):
             return
@@ -83,7 +95,14 @@ def seed_llm_from_env_if_empty() -> None:
             sort_order=0,
         )
         db.add(p)
-        db.commit()
+        try:
+            db.commit()
+        except ProgrammingError:
+            db.rollback()
+            logger.warning(
+                "跳过从环境变量写入默认 LLM 提供者：数据库可能缺少 llm_providers.tier 等列，"
+                "请执行 alembic upgrade heads 或补齐迁移后再启动。"
+            )
     finally:
         db.close()
 

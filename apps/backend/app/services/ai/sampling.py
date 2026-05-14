@@ -29,6 +29,7 @@ from app.services.llm_token_budgets import (
     max_tokens_quality_micro_patch,
     max_tokens_suggest_stream,
 )
+from app.services.llm_billing_context import resolve_llm_billing_user_id
 from app.services.llm_call_log import log_llm_call
 from app.services.genre_kit import get_genre_guardrail, normalize_genre
 from app.services.xuanhuan_lexicon import (
@@ -50,12 +51,13 @@ class SamplingMixin:
             HTTPException 402: enforcement=hard 且余额不足时。
         """
         enforcement = settings.CREDIT_ENFORCEMENT
-        if enforcement == "off" or not getattr(self, "_user_id", None):
+        uid = resolve_llm_billing_user_id(getattr(self, "_user_id", None))
+        if enforcement == "off" or not uid:
             return
         if enforcement == "hard":
             from app.services import credit_service  # 延迟导入，避免循环依赖
             from fastapi import HTTPException
-            balance = credit_service.get_balance(self._user_id, db=self._db)
+            balance = credit_service.get_balance(uid, db=self._db)
             if balance < 1:
                 raise HTTPException(
                     status_code=402,
@@ -175,8 +177,9 @@ class SamplingMixin:
                     **sampling_kwargs,
                 },
                 output_payload={"text": content},
-                user_id=getattr(self, "_user_id", None),
+                user_id=resolve_llm_billing_user_id(getattr(self, "_user_id", None)),
                 task=task,
+                tier_override=getattr(self, "_billing_tier", None),
                 db=self._db,
             )
             return content
@@ -198,6 +201,9 @@ class SamplingMixin:
                     "max_tokens": max_tokens,
                     **sampling_kwargs,
                 },
+                user_id=resolve_llm_billing_user_id(getattr(self, "_user_id", None)),
+                task=task,
+                tier_override=getattr(self, "_billing_tier", None),
                 db=self._db,
             )
             raise
@@ -257,8 +263,9 @@ class SamplingMixin:
                     **sampling_kwargs,
                 },
                 output_payload={"text": "".join(output_chunks)},
-                user_id=getattr(self, "_user_id", None),
+                user_id=resolve_llm_billing_user_id(getattr(self, "_user_id", None)),
                 task=task,
+                tier_override=getattr(self, "_billing_tier", None),
                 db=self._db,
             )
         except Exception as e:
@@ -282,6 +289,9 @@ class SamplingMixin:
                     **sampling_kwargs,
                 },
                 output_payload={"text": "".join(output_chunks)},
+                user_id=resolve_llm_billing_user_id(getattr(self, "_user_id", None)),
+                task=task,
+                tier_override=getattr(self, "_billing_tier", None),
                 db=self._db,
             )
             raise

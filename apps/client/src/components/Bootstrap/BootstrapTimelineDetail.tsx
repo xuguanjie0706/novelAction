@@ -3,10 +3,17 @@
  *
  * 与书架/首页一致：``#f8fafc`` 底、白卡、灰字层次、琥珀主按钮。
  * 正文区保持 ``max-w-*`` 居中便于阅读；**生成中 / 完成** 的 CTA 放在**全宽底栏**并右对齐，占满右栏底边空白，与顶栏分工（生成中顶栏不再重复「终止」）。
+ *
+ * 一致性问题修复：
+ *  - ConsistencyContent 从本文件提取为独立组件（ConsistencyContent.tsx）
+ *  - 本文件持有 selectedIndices / fixState 等修复流程状态
+ *  - 底栏在 consistency 步骤 done 时展示「修复选中 (N)」按钮
  */
-import React from 'react'
-import { ChevronRight, Loader2, MousePointerClick } from 'lucide-react'
+import React, { useState, useCallback } from 'react'
+import { ChevronRight, Loader2, MousePointerClick, Wrench } from 'lucide-react'
 import type { StepState, Phase } from './hooks/useBootstrapStream'
+import ConsistencyContent, { type FixState } from './ConsistencyContent'
+import { projectsApi } from '../../api/client'
 
 function fmtDuration(ms: number): string {
   const s = ms / 1000
@@ -130,70 +137,6 @@ function PositioningContent({ data }: { data: Record<string, any> }) {
   )
 }
 
-function ConsistencyContent({ issues, stepDoneCount }: { issues: any[]; stepDoneCount?: number | null }) {
-  const n = issues.length
-  const sseCount = stepDoneCount != null && stepDoneCount > 0 ? stepDoneCount : 0
-  if (n === 0 && sseCount === 0) {
-    return (
-      <Card>
-        <div className="flex items-center gap-2 text-sm text-emerald-600">
-          <span className="text-base">✓</span>
-          <span>未检测到一致性问题，可直接开始写作</span>
-        </div>
-      </Card>
-    )
-  }
-  if (n === 0 && sseCount > 0) {
-    return (
-      <Card>
-        <p className="text-sm text-amber-800">
-          已标记 <span className="font-semibold">{sseCount}</span> 处需确认项（与上方摘要一致）；若下方列表仍空白，请刷新或重新进入以拉取最新数据。
-        </p>
-      </Card>
-    )
-  }
-
-  const severityColor = (s: string) =>
-    s === 'high' || s === 'critical' ? '#ef4444' : s === 'medium' ? '#f97316' : '#f59e0b'
-  const severityLabel = (s: string) =>
-    ({ critical: '严重', high: '严重', medium: '中等', low: '轻微' }[s] ?? s)
-
-  return (
-    <>
-      <p className="mb-3 text-sm text-gray-600">
-        发现{' '}
-        <span className="font-semibold text-amber-600">{issues.length}</span> 处待确认问题，不影响开始写作，建议进入第
-        3 章前处理。
-      </p>
-      {issues.map((issue: any, i: number) => {
-        const text = typeof issue === 'string' ? issue : (issue.description || issue.issue || JSON.stringify(issue))
-        const sev = issue.severity ?? (i === 0 ? 'high' : i === 1 ? 'medium' : 'low')
-        const color = severityColor(sev)
-        return (
-          <div
-            key={i}
-            className="mb-2 rounded-lg border border-gray-100 bg-white p-3 shadow-sm"
-            style={{ borderLeftWidth: 3, borderLeftColor: color }}
-          >
-            <div className="mb-1 flex items-center gap-2">
-              <span
-                className="rounded px-1.5 py-0.5 text-[10px] font-semibold"
-                style={{ background: `${color}18`, color }}
-              >
-                {severityLabel(sev)}
-              </span>
-              <span className="text-sm font-medium text-gray-900">
-                {typeof issue === 'object' ? (issue.title ?? `问题 ${i + 1}`) : `问题 ${i + 1}`}
-              </span>
-            </div>
-            <p className="text-xs leading-relaxed text-gray-600">{text}</p>
-            {issue.suggestion && <p className="mt-2 text-xs text-amber-700">▸ {issue.suggestion}</p>}
-          </div>
-        )
-      })}
-    </>
-  )
-}
 
 function OpeningContractContent({ data }: { data: Record<string, any> }) {
   const promises: any[] = Array.isArray(data.promises)
@@ -264,6 +207,13 @@ interface Props {
   errorMsg: string
   /** 终止请求进行中，禁用底部按钮 */
   terminating?: boolean
+  /**
+   * 当前选用的模型线路（``"local"`` | ``"gemini"``）。
+   * 传给一致性修复接口；省略时默认 ``"gemini"``（Bootstrap 使用的线路）。
+   */
+  modelProfile?: 'local' | 'gemini'
+  /** 管理后台 LlmProvider UUID，与 modelProfile 配合使用 */
+  llmProviderId?: string | null
 }
 
 export default function BootstrapTimelineDetail({
@@ -277,9 +227,55 @@ export default function BootstrapTimelineDetail({
   onCancel,
   errorMsg,
   terminating = false,
+  modelProfile = 'gemini',
+  llmProviderId = null,
 }: Props) {
   const scrollClass =
     'flex-1 min-h-0 overflow-y-auto bg-[#f8fafc] [scrollbar-width:thin] [scrollbar-color:#e5e7eb_transparent]'
+
+  // ── 一致性问题修复状态 ──────────────────────────────────────────────────
+  const [selectedConsistencyIndices, setSelectedConsistencyIndices] = useState<Set<number>>(new Set())
+  const [fixState, setFixState] = useState<FixState>({ loading: false, result: null, error: null })
+
+  const handleToggleIssue = useCallback((idx: number) => {
+    setSelectedConsistencyIndices((prev) => {
+      const next = new Set(prev)
+      if (next.has(idx)) next.delete(idx)
+      else next.add(idx)
+      return next
+    })
+  }, [])
+
+  const handleFixRequest = useCallback(async (indices: number[], userPrompt: string) => {
+    if (!projectId || indices.length === 0) return
+    setFixState({ loading: true, result: null, error: null })
+    try {
+      const res = await projectsApi.fixConsistencyIssues(projectId, {
+        selected_indices: indices,
+        user_prompt: userPrompt,
+        model_profile: modelProfile,
+        llm_provider_id: llmProviderId,
+      })
+      setFixState({ loading: false, result: res.data, error: null })
+      // 清除已成功修复条目的选中状态
+      const fixedSet = new Set(res.data.applied.map((a) => a.issue_index))
+      setSelectedConsistencyIndices((prev) => {
+        const next = new Set(prev)
+        fixedSet.forEach((i) => next.delete(i))
+        return next
+      })
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail ?? err?.message ?? '修复请求失败，请重试'
+      setFixState({ loading: false, result: null, error: msg })
+    }
+  }, [projectId, modelProfile, llmProviderId])
+
+  // 是否展示「修复选中」按钮（仅在 done 阶段且存在未修复问题时）
+  const consistencyIssues = insights?.consistency_issues ?? []
+  const hasUnfixedIssues =
+    phase === 'done' &&
+    consistencyIssues.some((iss: any) => iss?.status !== 'fixed')
+  // ──────────────────────────────────────────────────────────────────────────
 
   if (!step) {
     return (
@@ -363,6 +359,10 @@ export default function BootstrapTimelineDetail({
           <ConsistencyContent
             issues={insights?.consistency_issues ?? []}
             stepDoneCount={step.count}
+            selectedIndices={selectedConsistencyIndices}
+            onToggle={handleToggleIssue}
+            onFixRequest={handleFixRequest}
+            fixState={fixState}
           />
         )}
 
@@ -380,6 +380,41 @@ export default function BootstrapTimelineDetail({
 
       {phase === 'done' && projectId && (
         <div className="flex shrink-0 flex-col gap-3 border-t border-gray-200 bg-white/95 px-5 py-4 backdrop-blur-sm sm:flex-row sm:items-center sm:justify-end sm:px-8">
+          {/* 修复按钮：仅在存在未修复问题时显示 */}
+          {hasUnfixedIssues && (
+            <button
+              type="button"
+              disabled={fixState.loading}
+              onClick={() => {
+                // 若当前不在 consistency 步骤视图，通过提示引导用户切换；
+                // 若已有选中项，直接弹出修复面板（步骤视图由用户自行切换）
+                if (selectedConsistencyIndices.size === 0) {
+                  // 自动全选所有未修复问题并触发
+                  const allUnfixed = consistencyIssues
+                    .map((_: any, i: number) => i)
+                    .filter((i: number) => {
+                      const iss = consistencyIssues[i]
+                      return iss?.status !== 'fixed' && !fixState.result?.applied.some((a) => a.issue_index === i)
+                    })
+                  void handleFixRequest(allUnfixed, '')
+                } else {
+                  void handleFixRequest(Array.from(selectedConsistencyIndices), '')
+                }
+              }}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-amber-300 bg-white py-3 text-sm font-semibold text-amber-700 shadow-sm transition-colors hover:bg-amber-50 disabled:opacity-50 sm:w-auto sm:px-6"
+            >
+              {fixState.loading ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Wrench size={16} />
+              )}
+              {fixState.loading
+                ? 'AI 修复中…'
+                : selectedConsistencyIndices.size > 0
+                  ? `修复选中 (${selectedConsistencyIndices.size})`
+                  : '一键修复全部'}
+            </button>
+          )}
           <button
             type="button"
             onClick={onNavigate}

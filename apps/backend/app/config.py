@@ -22,28 +22,30 @@ class Settings(BaseSettings):
     GEMINI_MODEL: Optional[str] = None
 
     # chat.completions max_tokens — 勿超过所用模型/网关的实际上限（见各云厂商文档）
-    GEMINI_SINGLE_SHOT_MAX_TOKENS: int = 32768
-    GEMINI_SETTING_COMPLETION_MAX_TOKENS: int = 16384
-    # Bootstrap 串行各步大块 JSON（人物、设定卡、势力/技能等）的 chat.completions max_tokens 统一上限
-    # 各步实际输出通常 2000-6000 token；65536 易超出模型/网关硬限导致拒绝并触发重试瀑布
-    # 本地模型建议 8192，远程大上下文模型可在 .env 中按需调高（如 16384）
-    BOOTSTRAP_COMPLETION_MAX_TOKENS: int = 8192
-    GEMINI_EXPAND_OUTLINE_MAX_TOKENS: int = 20000
-    GEMINI_OUTLINE_QUALITY_MAX_TOKENS: int = 8192
-    GEMINI_CHAPTER_QUALITY_MAX_TOKENS: int = 8192
-    GEMINI_COHERENCE_CHECK_MAX_TOKENS: int = 8192
-    # 根据连贯性评测结果最小幅度修订正文（多章一次输出，需较大上限）
-    GEMINI_COHERENCE_APPLY_MAX_TOKENS: int = 32768
-    GEMINI_DRAFT_STREAM_MAX_TOKENS: int = 8192
-    GEMINI_PLAN_STRUCTURE_MAX_TOKENS: int = 8192
-    GEMINI_SUGGEST_STREAM_MAX_TOKENS: int = 4096
-    GEMINI_EXTRACT_MEMORY_MAX_TOKENS: int = 4096
+    # 本系统仅使用远程大上下文模型（Gemini / Claude / GPT-4o 等），LOCAL_* 为兼容保留。
+    GEMINI_SINGLE_SHOT_MAX_TOKENS: int = 65536
+    GEMINI_SETTING_COMPLETION_MAX_TOKENS: int = 32768
+    # Bootstrap 串行各步大块 JSON max_tokens
+    # 人物（13人×15字段）/ 设定卡 / 势力等单步输出通常 4000-12000 token
+    BOOTSTRAP_COMPLETION_MAX_TOKENS: int = 16384
+    GEMINI_EXPAND_OUTLINE_MAX_TOKENS: int = 32768
+    GEMINI_OUTLINE_QUALITY_MAX_TOKENS: int = 16384
+    GEMINI_CHAPTER_QUALITY_MAX_TOKENS: int = 16384
+    GEMINI_COHERENCE_CHECK_MAX_TOKENS: int = 16384
+    # 连贯性修订：多章一次输出，需最大上限
+    GEMINI_COHERENCE_APPLY_MAX_TOKENS: int = 65536
+    GEMINI_DRAFT_STREAM_MAX_TOKENS: int = 16384
+    GEMINI_PLAN_STRUCTURE_MAX_TOKENS: int = 32768
+    GEMINI_SUGGEST_STREAM_MAX_TOKENS: int = 8192
+    GEMINI_EXTRACT_MEMORY_MAX_TOKENS: int = 8192
+    # 按卷懒展开章纲：30章×15字段的完整 JSON 输出，单批需要 8000-16000 token；
+    # 60章分两批但每批同样需要充足空间；可在 .env 中按模型实际上限调高
+    VOL_EXPAND_CHAPTERS_MAX_TOKENS: int = 65536
 
     LOCAL_EXPAND_OUTLINE_MAX_TOKENS: int = 4096
     LOCAL_OUTLINE_QUALITY_MAX_TOKENS: int = 4096
     LOCAL_CHAPTER_QUALITY_MAX_TOKENS: int = 2048
     LOCAL_COHERENCE_CHECK_MAX_TOKENS: int = 2200
-    # 本地模型按章顺序修订，单章输出上限
     LOCAL_COHERENCE_APPLY_MAX_TOKENS: int = 16384
     LOCAL_DRAFT_STREAM_MAX_TOKENS: int = 4096
     LOCAL_PLAN_STRUCTURE_MAX_TOKENS: int = 2048
@@ -51,8 +53,7 @@ class Settings(BaseSettings):
     LOCAL_EXTRACT_MEMORY_MAX_TOKENS: int = 2048
 
     # 复盘（auto_debrief）max_tokens — JSON 输出包含六类资产子字段，必须足够大
-    # 旧默认 1500 几乎必然截断，导致 JSON 解析失败、复盘链路静默失效
-    GEMINI_AUTO_DEBRIEF_MAX_TOKENS: int = 8192
+    GEMINI_AUTO_DEBRIEF_MAX_TOKENS: int = 16384
     LOCAL_AUTO_DEBRIEF_MAX_TOKENS: int = 4096
 
     # ── Embedding（pgvector 语义检索）────────────────────────────────────────

@@ -13,6 +13,7 @@ import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import OutlineAIPanel from '../components/Outline/OutlineAIPanel'
 import ScenePanel from '../components/Outline/ScenePanel'
+import VolumeExpandButton from '../components/Outline/VolumeExpandButton'
 import { TargetWordsInput } from '../components/TargetWordsInput'
 import { collectExpandableNodes } from '../utils/outlineAiExpand'
 
@@ -489,6 +490,7 @@ export default function OutlinePage() {
     outlineTree, setOutlineTree, setActiveChapterId,
     addGenTask, outlineNeedsReload, setOutlineNeedsReload,
     currentProject, setCurrentProject,
+    aiBackendRoute,
   } = useAppStore()
   const [selected, setSelected] = useState<OutlineNode | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -843,7 +845,7 @@ export default function OutlinePage() {
     const canHaveChildren = node.node_type !== 'chapter_plan'
 
     return (
-      <div key={node.id}>
+      <div key={node.id} className={node.node_type === 'volume' ? 'relative' : undefined}>
         <div
           className={clsx(
             'flex items-center gap-1 py-1.5 px-2 cursor-pointer rounded-lg mx-1 group',
@@ -865,6 +867,14 @@ export default function OutlinePage() {
             {typeLabel(node.node_type)}
           </span>
           <span className="text-xs text-gray-800 truncate flex-1 min-w-0">{node.title}</span>
+          {node.node_type === 'volume' && projectId && (
+            <VolumeExpandButton
+              volumeNode={node}
+              projectId={projectId}
+              aiBackendRoute={aiBackendRoute}
+              onExpanded={reload}
+            />
+          )}
           <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
             {canHaveChildren && (
               <button

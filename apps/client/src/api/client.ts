@@ -126,6 +126,37 @@ export const projectsApi = {
   /** 部分更新写作质量门控配置（只传改变的字段） */
   updateWritingConfig: (id: string, data: Partial<WritingConfig>) =>
     api.patch<{ writing_config: WritingConfig }>(`/projects/${id}/writing-config`, data),
+  /**
+   * AI 辅助修复选中的一致性问题，直接写入 Character / Faction / Skill 表。
+   * @param id - 项目 ID
+   * @param data.selected_indices - 要修复的 consistency_issues 序号列表
+   * @param data.user_prompt - 用户补充说明（可选）
+   * @param data.model_profile - 模型线路（``"local"`` | ``"gemini"``）
+   * @param data.llm_provider_id - 管理后台 LlmProvider UUID（可选）
+   * @returns 修复结果：applied 已应用的操作列表，skipped 需手动处理的列表，message 汇总
+   */
+  fixConsistencyIssues: (
+    id: string,
+    data: {
+      selected_indices: number[]
+      user_prompt: string
+      model_profile: 'local' | 'gemini'
+      llm_provider_id: string | null
+    },
+  ) => api.post<{
+    applied: Array<{
+      issue_index: number
+      entity_type: string
+      entity_name: string
+      field: string
+      old_value: string | null
+      new_value: string
+      applied: boolean
+      reason: string
+    }>
+    skipped: Array<{ issue_index: number; reason: string; suggestion: string }>
+    message: string
+  }>(`/projects/${id}/consistency/fix`, data),
 }
 
 // ── Dashboard 首页聚合（跨项目）───────────────────────
@@ -375,6 +406,13 @@ export const outlineApi = {
     api.delete<{ deleted: number }>(`/projects/${pid}/outline/chapter-plans`),
   // AI 展开大纲 — SSE，使用原生 fetch（见 OutlineAIPanel.tsx）
   aiExpandUrl: (pid: string) => `/api/v1/projects/${pid}/outline/ai-expand`,
+  /**
+   * 按卷懒展开章纲 — SSE
+   * POST /outline/volumes/{volumeNodeId}/expand-chapters
+   * 使用原生 fetch 消费 SSE 流，见 VolumeExpandButton.tsx
+   */
+  expandVolChaptersUrl: (pid: string, volumeNodeId: string) =>
+    `/api/v1/projects/${pid}/outline/volumes/${volumeNodeId}/expand-chapters`,
   // 确认写入大纲树
   commitExpand: (pid: string, data: { parent_node_id: string; chapters: any[] }) =>
     api.post(`/projects/${pid}/outline/ai-expand/commit`, data),

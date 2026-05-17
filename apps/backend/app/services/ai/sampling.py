@@ -64,7 +64,7 @@ class SamplingMixin:
                     detail=f"积分不足（当前 {balance} 积分），请充值后继续使用",
                 )
 
-    def _is_retryable_llm_error(err: Exception) -> bool:
+    def _is_retryable_llm_error(self, err: Exception) -> bool:
         status_code = getattr(err, "status_code", None)
         if isinstance(status_code, int) and status_code in (408, 429, 500, 502, 503, 504):
             return True

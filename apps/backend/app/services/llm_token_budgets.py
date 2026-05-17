@@ -100,3 +100,13 @@ def max_tokens_extract_memory(profile: str) -> int:
 def max_tokens_bootstrap_completion() -> int:
     """Bootstrap 串行各步大块 JSON 的 ``max_tokens``，读 ``Settings.BOOTSTRAP_COMPLETION_MAX_TOKENS``。"""
     return int(settings.BOOTSTRAP_COMPLETION_MAX_TOKENS)
+
+
+def max_tokens_vol_expand_chapters() -> int:
+    """按卷懒展开章纲的单批 ``max_tokens``。
+
+    30章×15字段的完整 JSON 输出约需 8000-16000 token；
+    60章拆两批，每批同量。默认 32768，可在 .env 中用
+    ``VOL_EXPAND_CHAPTERS_MAX_TOKENS`` 覆盖（如 65536）。
+    """
+    return int(settings.VOL_EXPAND_CHAPTERS_MAX_TOKENS)

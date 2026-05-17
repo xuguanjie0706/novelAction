@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models import OutlineNode, OutlineRevision
+from app.routers.outline.helpers.expand_context import _outline_node_to_chapter_context
 
 def _outline_snapshot_payload(nodes: list[OutlineNode]) -> dict:
     ordered = sorted(

@@ -18,22 +18,77 @@ import re
 from typing import Any
 
 
+def _extract_json_span(text: str) -> str:
+    """截取最外层 JSON 片段（首个 {/[ 到末个 }/]），丢弃尾部说明文字。"""
+    start_obj = text.find("{")
+    start_arr = text.find("[")
+    if start_obj == -1 and start_arr == -1:
+        return text
+    if start_arr != -1 and (start_obj == -1 or start_arr < start_obj):
+        start, end_char = start_arr, "]"
+    else:
+        start, end_char = start_obj, "}"
+    end = text.rfind(end_char)
+    if end != -1 and end >= start:
+        return text[start : end + 1]
+    return text[start:]
+
+
+def _repair_llm_json_typos(text: str) -> str:
+    """修复 LLM 偶发的结构性笔误（在 normalize 之前执行）。"""
+    # 数组最后一项字符串误以 "] 收尾（应为 "），常见于 suggestions/issues
+    text = re.sub(r'([^\\])"\](\s*\n\s*\],)', r'\1"\2', text)
+    return text
+
+
+def _normalize_json_text(text: str) -> str:
+    """修复 LLM 常见非标准 JSON：智能引号、尾逗号、无引号键名、整行注释。"""
+    for old, new in (
+        ("\u201c", '"'),
+        ("\u201d", '"'),
+        ("\u2018", "'"),
+        ("\u2019", "'"),
+    ):
+        text = text.replace(old, new)
+    lines = []
+    for line in text.split("\n"):
+        if line.strip().startswith("//"):
+            continue
+        lines.append(line)
+    text = "\n".join(lines)
+    text = re.sub(r",(\s*[}\]])", r"\1", text)
+    text = re.sub(
+        r'([{\[,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:',
+        r'\1 "\2":',
+        text,
+    )
+    return text
+
+
 def parse_json(text: str) -> Any:
-    """容错 JSON 解析：去 markdown fence、去 think 标签、strip 空白。"""
-    # 去掉 <think>...</think>（部分兼容端点会输出 think 块）
+    """容错 JSON 解析：去 markdown fence、去 think 标签、修复常见 LLM 格式问题。"""
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     text = text.strip()
-    # 去掉 ```json ... ``` 或 ``` ... ```
     fence = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
     if fence:
         text = fence.group(1).strip()
-    # 找第一个 { 或 [ 开始截取
     start = min(
         (text.find("{") if text.find("{") != -1 else len(text)),
         (text.find("[") if text.find("[") != -1 else len(text)),
     )
     text = text[start:]
-    return json.loads(text)
+    text = _extract_json_span(text)
+    text = _repair_llm_json_typos(text)
+    candidates = (text, _normalize_json_text(text))
+    last_err: json.JSONDecodeError | None = None
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_err = exc
+            continue
+    assert last_err is not None
+    raise last_err
 
 
 def coerce_power_system_rank(value, levels: list, default: int | None) -> int | None:

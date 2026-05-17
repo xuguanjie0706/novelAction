@@ -35,7 +35,25 @@ kill_port() {
 kill_port "${NOVEL_LOCAL_BACKEND_PORT}"
 kill_port "${NOVEL_LOCAL_CLIENT_PORT}"
 kill_port "${NOVEL_LOCAL_ADMIN_PORT}"
-sleep 0.3
+
+# 清理上次 backend.pid（僵死 uvicorn 可能已不是 LISTEN，但仍占用 9000 / 导致 Address already in use）
+if [[ -f "${ROOT}/.local/logs/backend.pid" ]]; then
+  old_backend_pid="$(cat "${ROOT}/.local/logs/backend.pid" 2>/dev/null || true)"
+  if [[ -n "${old_backend_pid}" ]] && kill -0 "${old_backend_pid}" 2>/dev/null; then
+    echo "正在结束上次后端进程: ${old_backend_pid}"
+    kill -9 "${old_backend_pid}" 2>/dev/null || true
+  fi
+fi
+# 兜底：结束仍绑定后端端口的 python/uvicorn（仅限本机 127.0.0.1，避免误杀 Vite 出站连接）
+while read -r pid; do
+  [[ -n "${pid}" ]] || continue
+  cmd="$(ps -p "${pid}" -o comm= 2>/dev/null || true)"
+  if [[ "${cmd}" == *python* ]]; then
+    kill -9 "${pid}" 2>/dev/null || true
+  fi
+done < <(lsof -nP -iTCP:"${NOVEL_LOCAL_BACKEND_PORT}" -t 2>/dev/null || true)
+
+sleep 0.5
 
 mkdir -p "${ROOT}/.local/logs"
 
@@ -79,12 +97,75 @@ if [[ ! -d "${ROOT}/apps/client/node_modules" ]] || [[ ! -d "${ROOT}/apps/fronte
   exit 1
 fi
 
+# 后端在 import app.main 时会立即连库（create_all / 兼容迁移），PostgreSQL 未就绪会直接崩溃。
+# 注意：Docker 容器显示 Running ≠ Postgres 已 accept；刚 up 时常需数秒初始化。
+check_postgres_ready() {
+  (
+    cd "${ROOT}/apps/backend"
+    "${VENV_PYTHON}" -c "
+from sqlalchemy import create_engine, text
+from app.config import settings
+engine = create_engine(settings.DATABASE_URL)
+with engine.connect() as conn:
+    conn.execute(text('SELECT 1'))
+"
+  )
+}
+
+wait_for_postgres() {
+  local max_attempts=15
+  local attempt=1
+  while [[ "${attempt}" -le "${max_attempts}" ]]; do
+    if check_postgres_ready 2>/dev/null; then
+      return 0
+    fi
+    if [[ "${attempt}" -eq 1 ]]; then
+      echo "等待 PostgreSQL 就绪（容器刚启动时可能需要几秒）..."
+    fi
+    echo "  重试 ${attempt}/${max_attempts}..."
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+if ! wait_for_postgres; then
+  echo "错误: 无法连接 PostgreSQL，后端无法启动（与 embedding 等业务代码无关）。"
+  echo "  连接串见 apps/backend/.env 中的 DATABASE_URL（默认 localhost:5432）。"
+  echo ""
+  echo "  诊断（最后一次连接尝试的详细错误）："
+  check_postgres_ready || true
+  echo ""
+  echo "  若使用本仓库 Docker 数据库："
+  echo "    colima start                    # 若 Docker 报 docker.sock 不存在"
+  echo "    docker-compose up -d postgres redis"
+  echo "    docker ps                       # 确认 0.0.0.0:5432->5432 已映射"
+  echo ""
+  echo "  数据库就绪后重新执行: ./restart.sh"
+  exit 1
+fi
+
 (
   cd "${ROOT}/apps/backend"
   exec "${VENV_PYTHON}" -m uvicorn app.main:app --reload --host 127.0.0.1 --port "${NOVEL_LOCAL_BACKEND_PORT}"
 ) >"${ROOT}/.local/logs/backend.log" 2>&1 &
 echo "${!}" >"${ROOT}/.local/logs/backend.pid"
 echo "后端已启动 PID $(cat "${ROOT}/.local/logs/backend.pid")，日志: .local/logs/backend.log"
+
+_backend_listen_ok=0
+for _ in 1 2 3 4 5 6; do
+  if lsof -nP -iTCP:"${NOVEL_LOCAL_BACKEND_PORT}" -sTCP:LISTEN -t >/dev/null 2>&1; then
+    _backend_listen_ok=1
+    break
+  fi
+  sleep 1
+done
+if [[ "${_backend_listen_ok}" -eq 0 ]]; then
+  echo "警告: 端口 ${NOVEL_LOCAL_BACKEND_PORT} 未在监听，后端可能启动失败。最近日志："
+  tail -n 8 "${ROOT}/.local/logs/backend.log" 2>/dev/null || true
+  echo "  完整日志: tail -f .local/logs/backend.log"
+  echo "  若为 Address already in use，请再执行一次 ./restart.sh（会先释放端口）"
+fi
 
 (
   run_pnpm_dev apps/client "${NOVEL_LOCAL_CLIENT_PORT}"

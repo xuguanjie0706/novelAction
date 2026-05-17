@@ -282,16 +282,24 @@ async def check_semantic_search(query: str, top_k: int) -> None:
         # 直连数据库做 pgvector 查询
         from sqlalchemy import create_engine, text as sa_text
         engine = create_engine(settings.DATABASE_URL)
+
+        if len(vec) != settings.EMBEDDING_DIM:
+            _fail(
+                f"向量维度 {len(vec)} ≠ EMBEDDING_DIM={settings.EMBEDDING_DIM}，"
+                "请检查 EMBEDDING_MODEL 与 .env 配置"
+            )
+            return
+
         vec_str = "[" + ",".join(str(v) for v in vec) + "]"
 
         with engine.connect() as conn:
             t1 = time.perf_counter()
             rows = conn.execute(sa_text("""
                 SELECT id, title, memory_type, chapter_number,
-                       1 - (embedding <=> :qv::vector) AS cosine_sim
+                       1 - (embedding <=> CAST(:qv AS vector)) AS cosine_sim
                 FROM   memory_chunks
                 WHERE  embedding IS NOT NULL
-                ORDER  BY embedding <=> :qv::vector
+                ORDER  BY embedding <=> CAST(:qv AS vector)
                 LIMIT  :top_k
             """), {"qv": vec_str, "top_k": top_k}).fetchall()
             elapsed_search = (time.perf_counter() - t1) * 1000

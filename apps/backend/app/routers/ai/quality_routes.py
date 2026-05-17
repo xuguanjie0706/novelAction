@@ -30,6 +30,8 @@ from app.routers.ai.context import (
 )
 from app.routers.ai.quality_debt import sync_quality_debts
 from app.routers.ai.schemas import QualityCheckRequest
+from app.routers.ai.text_utils import plain_text
+from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 
 router = APIRouter()
 
@@ -459,6 +461,10 @@ async def reader_simulator(
     ).first()
     if not chapter:
         raise HTTPException(404, "Chapter not found")
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
 
     plain = plain_text(chapter.content or "")
     narrative, _ = split_plain_manuscript_and_index_block(plain)

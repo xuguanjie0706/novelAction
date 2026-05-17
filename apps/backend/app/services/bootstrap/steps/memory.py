@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -10,6 +11,16 @@ from app.services.bootstrap.parse import parse_json
 from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_memory_list(raw: str) -> list:
+    data = parse_json(raw)
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        mem = data.get("memory", [])
+        return mem if isinstance(mem, list) else []
+    return []
 
 
 async def gen_memory(svc: Any, project: Project, ctx: dict):
@@ -43,9 +54,21 @@ memory_type 只能是: event / character_state / foreshadow / setting / conflict
         max_tokens=max_tokens_bootstrap_completion(),
         task="bootstrap.memory",
     )
-    data = parse_json(raw)
-    if not isinstance(data, list):
-        data = data.get("memory", [])
+    try:
+        data = _parse_memory_list(raw)
+    except json.JSONDecodeError as first_err:
+        logger.warning("Bootstrap memory JSON parse failed, retrying: %s", first_err)
+        raw = await svc._call_with_retry(
+            system + " 上次输出不是合法 JSON。键名与字符串必须用英文双引号，禁止注释与尾逗号。",
+            prompt + "\n\n【修正】只输出一个合法 JSON 数组，不要 markdown 代码块或任何说明文字。",
+            max_tokens=max_tokens_bootstrap_completion(),
+            task="bootstrap.memory",
+        )
+        try:
+            data = _parse_memory_list(raw)
+        except json.JSONDecodeError as second_err:
+            logger.error("Bootstrap memory JSON parse failed after retry: %s", second_err)
+            raise second_err from first_err
 
     results = []
     for item in data:

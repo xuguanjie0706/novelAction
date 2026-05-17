@@ -38,6 +38,9 @@ export type StepKey =
   | 'skills' | 'items' | 'settings'
   | 'volumes' | 'memory' | 'relations'
   | 'opening_contract' | 'vol1_chapters' | 'ch1_scenes' | 'consistency'
+  // 番茄专属步骤
+  | 'contrast_design' | 'golden_finger' | 'face_slap_map'
+  | 'power_ladder' | 'opening_5chapters' | 'rhythm_map' | 'signal_audit'
   | 'all' | 'saving'
 
 export interface StepState {
@@ -60,7 +63,7 @@ export interface StepState {
 
 export interface StartParams {
   logline: string
-  mode: 'sequential' | 'single_shot'
+  mode: 'sequential' | 'single_shot' | 'fanqie'
   targetWords: number
   modelProfile: string
   llmProviderId?: string | null
@@ -87,6 +90,14 @@ export const STEP_META: Record<StepKey, {
   consistency:      { icon: '🔍', stepColor: '#ef4444', phase: 'qa',         stepNum: 'STEP 14',   desc: '交叉核验所有生成物，标出矛盾与需要确认的问题' },
   all:              { icon: '✨', stepColor: '#f59e0b', phase: 'foundation', stepNum: 'SINGLE',    desc: 'AI 单次全量生成世界蓝图（大上下文模式）' },
   saving:           { icon: '💾', stepColor: '#06b6d4', phase: 'foundation', stepNum: 'SAVE',      desc: '将生成结果批量写入数据库' },
+  // 番茄专属步骤
+  contrast_design:   { icon: '📉', stepColor: '#f97316', phase: 'foundation', stepNum: 'FQ-1',  desc: '设计主角落差（初始状态→触发事件），触发点锁定800字内' },
+  golden_finger:     { icon: '✋', stepColor: '#eab308', phase: 'foundation', stepNum: 'FQ-2',  desc: '设计金手指工程（类型/可视化/成长路线图），核心爽感引擎' },
+  face_slap_map:     { icon: '👋', stepColor: '#ef4444', phase: 'world',      stepNum: 'FQ-3',  desc: '规划打脸地图（5个对象，首次打脸≤第5章，类型多样性）' },
+  power_ladder:      { icon: '🪜', stepColor: '#06b6d4', phase: 'world',      stepNum: 'FQ-4',  desc: '构建权力阶梯（5阶社会结构），最小化世界观设计' },
+  opening_5chapters: { icon: '🚀', stepColor: '#f59e0b', phase: 'blueprint',  stepNum: 'FQ-5',  desc: '开局五章工程（算法生死线）：Ch1完读率>60%精确结构规划' },
+  rhythm_map:        { icon: '🎵', stepColor: '#8b5cf6', phase: 'blueprint',  stepNum: 'FQ-6',  desc: '爽点节奏图（前50章打标）+ 剧情储量池（3-5个备用支线弧）' },
+  signal_audit:      { icon: '✅', stepColor: '#22c55e', phase: 'qa',         stepNum: 'FQ-7',  desc: '番茄算法双校验：类型信号强度 + 爽感密度审计' },
 }
 
 const SEQ_STEP_KEYS: StepKey[] = [
@@ -96,6 +107,19 @@ const SEQ_STEP_KEYS: StepKey[] = [
   'volumes', 'memory', 'relations',
   'opening_contract', 'vol1_chapters', 'ch1_scenes', 'consistency',
 ]
+
+/** 番茄专属 Bootstrap 步骤列表（9阶段）*/
+const FANQIE_STEP_KEYS: StepKey[] = [
+  'positioning', 'project',
+  'contrast_design', 'golden_finger', 'face_slap_map',
+  'power_ladder', 'characters',
+  'opening_5chapters', 'rhythm_map', 'signal_audit',
+]
+
+function getStepKeys(mode: StartParams['mode']): StepKey[] {
+  if (mode === 'fanqie') return FANQIE_STEP_KEYS
+  return SEQ_STEP_KEYS
+}
 
 const STEP_ALIAS: Partial<Record<string, StepKey>> = {
   outline: 'volumes',
@@ -137,6 +161,8 @@ export function useBootstrapStream() {
   const streamCompleteRef = useRef(false)
   /** 供 ``cancel()`` 读取最新 run_id，避免闭包陈旧 */
   const runIdRef          = useRef<string | null>(null)
+  /** 当前运行模式；供 cancel / reconnect 等回调读取，避免闭包陈旧 */
+  const currentModeRef    = useRef<StartParams['mode']>('sequential')
 
   useEffect(() => {
     runIdRef.current = runId
@@ -190,6 +216,25 @@ export function useBootstrapStream() {
     }
   }, [])
 
+  /** 番茄图末步完成后拉取 run 快照收尾（兼容未 emit complete 的旧后端） */
+  const tryFinalizeFanqieRun = useCallback(async () => {
+    if (streamCompleteRef.current || currentModeRef.current !== 'fanqie') return
+    const rid = runIdRef.current
+    if (!rid) return
+    try {
+      const res = await authFetch(`/api/v1/bootstrap/runs/${rid}`)
+      if (!res.ok) return
+      const run = (await res.json()) as { project_id?: string | null; status?: string }
+      if (!run.project_id) return
+      streamCompleteRef.current = true
+      setProjectId(run.project_id)
+      setPhase('done')
+      clearActiveBootstrapRun()
+    } catch {
+      /* 忽略；用户仍可书架进入项目 */
+    }
+  }, [])
+
   const handleEvent = useCallback((evt: Record<string, any>) => {
     const { event, step, label, count, preview, message, project_id, positioning, gate_preview } = evt
     const key = toKey(step)
@@ -218,6 +263,9 @@ export function useBootstrapStream() {
           preview: preview ?? s.preview,
         }
       }))
+      if (key === 'signal_audit' && currentModeRef.current === 'fanqie') {
+        void tryFinalizeFanqieRun()
+      }
     } else if (event === 'error') {
       const msg = (typeof message === 'string' && message.trim()) ? message : '生成失败'
       if (key) {
@@ -253,7 +301,7 @@ export function useBootstrapStream() {
       setProjectId(null)
       setPositioning(null)
       setGenStartMs(null)
-      setSteps(SEQ_STEP_KEYS.map(k => makeStep(k)))
+      setSteps(getStepKeys(currentModeRef.current).map(k => makeStep(k)))
       setErrorMsg('')
     } else if (event === 'complete') {
       streamCompleteRef.current = true
@@ -261,7 +309,7 @@ export function useBootstrapStream() {
       setPhase('done')
       clearActiveBootstrapRun()
     }
-  }, [])
+  }, [tryFinalizeFanqieRun])
 
   async function readSse(res: Response) {
     if (!res.body) throw new Error('响应无流式正文')
@@ -287,6 +335,7 @@ export function useBootstrapStream() {
     if (isSubmittingRef.current) return
     isSubmittingRef.current = true
     streamCompleteRef.current = false
+    currentModeRef.current = params.mode
     const startMs = Date.now()
     setErrorMsg('')
     setGenStartMs(startMs)
@@ -296,7 +345,7 @@ export function useBootstrapStream() {
     if (params.mode === 'single_shot') {
       setSteps([makeStep('all', 'AI 全量生成（单次调用）'), makeStep('saving', '写入数据库')])
     } else {
-      setSteps(SEQ_STEP_KEYS.map(k => makeStep(k)))
+      setSteps(getStepKeys(params.mode).map(k => makeStep(k)))
       setGateStep(null)
       setGateMessage('')
       setGatePreview(null)
@@ -319,10 +368,12 @@ export function useBootstrapStream() {
         if (!res.ok) throw new Error(await res.text().catch(() => `请求失败 (${res.status})`))
         await readSse(res)
       } else {
+        // sequential 和 fanqie 均走 /runs 新协议
+        const apiMode = params.mode === 'fanqie' ? 'fanqie' : 'sequential'
         const runRes = await authFetch('/api/v1/bootstrap/runs', {
           method: 'POST', signal: abort.signal,
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...body, mode: 'sequential' }),
+          body: JSON.stringify({ ...body, mode: apiMode }),
         })
         if (!runRes.ok) throw new Error(await runRes.text().catch(() => `创建失败 (${runRes.status})`))
         const { run_id } = await runRes.json()
@@ -359,7 +410,6 @@ export function useBootstrapStream() {
     streamCompleteRef.current = false
     setErrorMsg('')
     setRunId(rid)
-    setSteps(SEQ_STEP_KEYS.map(k => makeStep(k)))
     setGateStep(null)
     setGateMessage('')
     setGatePreview(null)
@@ -376,6 +426,7 @@ export function useBootstrapStream() {
       if (!snapRes.ok) throw new Error(await snapRes.text().catch(() => `无法恢复 run (${snapRes.status})`))
       const run = await snapRes.json() as {
         status: string
+        mode?: string | null
         events?: Array<Record<string, any>>
         gate_data?: Record<string, any> | null
         project_id?: string | null
@@ -383,6 +434,14 @@ export function useBootstrapStream() {
         logline?: string | null
         created_at?: string | null
       }
+
+      // 根据快照中的 mode 还原步骤列表与 ref
+      const runMode: StartParams['mode'] =
+        run.mode === 'fanqie' ? 'fanqie'
+        : run.mode === 'single_shot' ? 'single_shot'
+        : 'sequential'
+      currentModeRef.current = runMode
+      setSteps(getStepKeys(runMode).map(k => makeStep(k)))
       setActiveLogline((run.logline || opts?.loglineHint || '').trim())
 
       if (run.project_id) {
@@ -446,7 +505,8 @@ export function useBootstrapStream() {
     payload: { action: 'approve' | 'regenerate', positioning?: Record<string, unknown> | null },
     params: Pick<StartParams, 'modelProfile' | 'llmProviderId'>,
   ) {
-    if (!runId) return
+    const rid = runIdRef.current ?? runId
+    if (!rid) return
     try {
       const body: Record<string, unknown> = {
         action: payload.action,
@@ -454,11 +514,22 @@ export function useBootstrapStream() {
         llm_provider_id: params.llmProviderId ?? null,
       }
       if (payload.positioning != null) body.positioning = payload.positioning
-      const res = await authFetch(`/api/v1/bootstrap/runs/${runId}/resume`, {
+      const res = await authFetch(`/api/v1/bootstrap/runs/${rid}/resume`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      if (!res.ok) throw new Error(await res.text().catch(() => `resume 失败 (${res.status})`))
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        let detail = text || `resume 失败 (${res.status})`
+        try {
+          const parsed = JSON.parse(text) as { detail?: unknown }
+          if (typeof parsed.detail === 'string') detail = parsed.detail
+          else if (parsed.detail != null) detail = JSON.stringify(parsed.detail)
+        } catch { /* 非 JSON 则沿用原文 */ }
+        throw new Error(detail)
+      }
+      setErrorMsg('')
+      setPhase('generating')
     } catch (err: any) {
       setErrorMsg(err.message || 'resume 失败')
       setPhase('gate')
@@ -497,7 +568,7 @@ export function useBootstrapStream() {
         setProjectId(null)
         setPositioning(null)
         setGenStartMs(null)
-        setSteps(SEQ_STEP_KEYS.map(k => makeStep(k)))
+        setSteps(getStepKeys(currentModeRef.current).map(k => makeStep(k)))
         setErrorMsg('')
         return true
       } catch (err: unknown) {
@@ -516,7 +587,7 @@ export function useBootstrapStream() {
     setProjectId(null)
     setPositioning(null)
     setGenStartMs(null)
-    setSteps(SEQ_STEP_KEYS.map(k => makeStep(k)))
+    setSteps(getStepKeys(currentModeRef.current).map(k => makeStep(k)))
     return true
   }
 

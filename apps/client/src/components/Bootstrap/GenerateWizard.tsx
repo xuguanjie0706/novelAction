@@ -46,7 +46,7 @@ interface Props {
   onRecoverConsumed?: () => void
 }
 
-type Mode = 'sequential' | 'single_shot'
+type Mode = 'sequential' | 'single_shot' | 'fanqie'
 
 /** 弹层（默认正常提交） vs 全屏工作台（默认恢复 run） */
 type BootstrapShell = 'modal' | 'workspace'
@@ -421,7 +421,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
             {/* 生成方案 */}
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-2">生成方案</label>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <button
                   onClick={() => setMode('sequential')}
                   className={clsx(
@@ -436,8 +436,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                     )}
                   </div>
                   <div className="text-xs text-gray-500 leading-relaxed">
-                    多步分别生成，含章级大纲 + 场景蓝图 + 一致性扫描<br />
-                    内容最完整，适合所有模型
+                    多步分别生成，含章级大纲 + 场景蓝图 + 一致性扫描。内容最完整，适合所有模型。
                   </div>
                 </button>
                 <button
@@ -449,8 +448,26 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                 >
                   <div className="text-sm font-semibold text-gray-800 mb-1">方案 B · 单次全量</div>
                   <div className="text-xs text-gray-500 leading-relaxed">
-                    1 次生成世界蓝图，速度快<br />
-                    适合大上下文远程模型，章级大纲需手动展开
+                    1 次生成世界蓝图，速度快。适合大上下文远程模型，章级大纲需手动展开。
+                  </div>
+                </button>
+                <button
+                  onClick={() => setMode('fanqie')}
+                  className={clsx(
+                    'p-3 rounded-xl border-2 text-left transition-all',
+                    mode === 'fanqie'
+                      ? 'border-orange-400 bg-orange-50'
+                      : 'border-gray-100 hover:border-orange-200'
+                  )}
+                >
+                  <div className="text-sm font-semibold text-gray-800 mb-1">
+                    🍅 方案 C · 番茄专属
+                    {mode === 'fanqie' && (
+                      <span className="ml-2 text-xs bg-orange-500 text-white px-1.5 py-0.5 rounded-full">已选</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500 leading-relaxed">
+                    金手指 + 打脸地图 + 开局五章算法工程，把番茄平台逻辑硬编码进生成管道。
                   </div>
                 </button>
               </div>
@@ -534,6 +551,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                   gateMessage={gateMessage}
                   gatePreview={gatePreview}
                   positioningData={positioningData}
+                  resumeError={errorMsg}
                   loading={resumeLoading}
                   terminating={terminating}
                   onDismiss={handleGateDismiss}

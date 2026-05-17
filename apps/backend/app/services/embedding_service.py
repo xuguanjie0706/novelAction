@@ -3,7 +3,7 @@ Embedding Service — 异步向量化 + pgvector 语义检索
 
 职责：
   1. embed_texts()          — 调用 /v1/embeddings 返回向量
-  2. embed_entity_async()   — 通用单条向量化（支持 MemoryChunk / Scene / Chapter）
+  2. embed_entity_async()   — 通用单条向量化（支持 MemoryChunk / Chapter）
   3. embed_chunks_bulk()    — 批量补全
   4. semantic_search()      — 余弦距离召回 MemoryChunk
   5. retrieve_relevant_memories_for_writing() — 写章节时自动拉取相关记忆片段
@@ -70,6 +70,23 @@ def _submit_to_event_loop(coro) -> None:
     else:
         logger.warning("No available event loop for embedding, task skipped")
 
+
+def _vector_to_pg_literal(vec: List[float]) -> str:
+    """将浮点列表转为 pgvector 文本字面量，供 CAST(... AS vector) 使用。"""
+    return "[" + ",".join(str(v) for v in vec) + "]"
+
+
+def _validate_embedding_dims(vec: List[float], *, context: str = "") -> List[float]:
+    """校验向量维度与 EMBEDDING_DIM 一致；不匹配时抛出 ValueError。"""
+    expected = settings.EMBEDDING_DIM
+    if len(vec) != expected:
+        suffix = f" ({context})" if context else ""
+        raise ValueError(
+            f"embedding dim mismatch{suffix}: got {len(vec)}, expected {expected}"
+        )
+    return vec
+
+
 # ---------------------------------------------------------------------------
 # 底层：调用 /v1/embeddings 端点
 # ---------------------------------------------------------------------------
@@ -113,7 +130,10 @@ async def embed_texts(texts: List[str]) -> List[List[float]]:
 
     # OpenAI 兼容格式：{"data": [{"embedding": [...], "index": 0}, ...]}
     ordered = sorted(data["data"], key=lambda x: x["index"])
-    return [item["embedding"] for item in ordered]
+    vectors = [item["embedding"] for item in ordered]
+    for i, vec in enumerate(vectors):
+        _validate_embedding_dims(vec, context=f"batch index {i}")
+    return vectors
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +155,7 @@ async def _do_embed_chunk(chunk_id: UUID, text: str, db_factory) -> None:
         vectors = await embed_texts([text])
         if not vectors:
             return
-        vec = vectors[0]
+        vec = _validate_embedding_dims(vectors[0])
 
         # 用独立 session，避免和主请求 session 竞争
         with db_factory() as db:
@@ -191,6 +211,11 @@ async def embed_chunks_bulk(
         with db_factory() as db:
             from app.models.memory import MemoryChunk
             for (cid, _), vec in zip(batch, vectors):
+                try:
+                    vec = _validate_embedding_dims(vec, context=str(cid))
+                except ValueError as exc:
+                    logger.warning("Skip chunk %s: %s", cid, exc)
+                    continue
                 chunk = db.query(MemoryChunk).filter(MemoryChunk.id == cid).first()
                 if chunk:
                     chunk.embedding = vec
@@ -254,31 +279,34 @@ async def semantic_search(
         return _fallback_query()
 
     try:
-        # 用 SQLAlchemy text() 直接写 pgvector 运算符（ORM 层暂无原生支持）
-        type_filter = ""
+        # CAST 避免 :name::vector 被 SQLAlchemy 误解析为绑定名 query_ve
+        vec_str = _vector_to_pg_literal(_validate_embedding_dims(query_vec, context="query"))
+
+        where_parts = [
+            "project_id = :project_id",
+            "embedding IS NOT NULL",
+        ]
+        params: dict = {
+            "project_id": str(project_id),
+            "query_vec": vec_str,
+            "top_k": top_k,
+        }
         if memory_types:
-            types_sql = ", ".join(f"'{t}'" for t in memory_types)
-            type_filter = f"AND memory_type IN ({types_sql})"
-
-        chapter_filter = ""
+            where_parts.append("memory_type = ANY(:memory_types)")
+            params["memory_types"] = memory_types
         if max_chapter is not None:
-            chapter_filter = f"AND (chapter_number IS NULL OR chapter_number <= {int(max_chapter)})"
+            where_parts.append(
+                "(chapter_number IS NULL OR chapter_number <= :max_chapter)"
+            )
+            params["max_chapter"] = int(max_chapter)
 
-        vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
-        sql = sa_text(f"""
-            SELECT id
-            FROM memory_chunks
-            WHERE project_id = :project_id
-              AND embedding IS NOT NULL
-              {type_filter}
-              {chapter_filter}
-            ORDER BY embedding <=> :query_vec::vector
-            LIMIT :top_k
-        """)
-        rows = db.execute(
-            sql,
-            {"project_id": str(project_id), "query_vec": vec_str, "top_k": top_k},
-        ).fetchall()
+        sql = sa_text(
+            "SELECT id FROM memory_chunks WHERE "
+            + " AND ".join(where_parts)
+            + " ORDER BY embedding <=> CAST(:query_vec AS vector)"
+            + " LIMIT :top_k"
+        )
+        rows = db.execute(sql, params).fetchall()
 
         if not rows:
             return _fallback_query()
@@ -297,11 +325,11 @@ async def semantic_search(
 
 
 # ---------------------------------------------------------------------------
-# 通用实体向量化（支持 Scene / Chapter / MemoryChunk）
+# 通用实体向量化（MemoryChunk / Chapter）
 # ---------------------------------------------------------------------------
 
 async def _do_embed_entity(entity_type: str, entity_id: UUID, text: str, db_factory) -> None:
-    """后台执行向量化并写回对应表的 embedding 字段。"""
+    """后台执行向量化并写回 MemoryChunk 或 Chapter 的 embedding 字段。"""
     try:
         from pgvector.sqlalchemy import Vector
     except ImportError:
@@ -315,15 +343,12 @@ async def _do_embed_entity(entity_type: str, entity_id: UUID, text: str, db_fact
         vectors = await embed_texts([text[:4000]])  # 截断避免超长
         if not vectors:
             return
-        vec = vectors[0]
+        vec = _validate_embedding_dims(vectors[0], context=entity_type)
 
         with db_factory() as db:
             if entity_type == "memory":
                 from app.models.memory import MemoryChunk
                 obj = db.query(MemoryChunk).filter(MemoryChunk.id == entity_id).first()
-            elif entity_type == "scene":
-                from app.models.scene import Scene
-                obj = db.query(Scene).filter(Scene.id == entity_id).first()
             elif entity_type == "chapter":
                 from app.models.chapter import Chapter
                 obj = db.query(Chapter).filter(Chapter.id == entity_id).first()
@@ -341,7 +366,7 @@ async def _do_embed_entity(entity_type: str, entity_id: UUID, text: str, db_fact
 
 def embed_entity_async(entity_type: str, entity_id: UUID, text: str, db_factory) -> None:
     """
-    非阻塞触发实体向量化。entity_type: 'memory' | 'scene' | 'chapter'
+    非阻塞触发实体向量化。entity_type: 'memory' | 'chapter'
     兼容 async 路由（create_task）与 sync 路由（run_coroutine_threadsafe）。
     db_factory 应传入 SessionLocal（不是 get_db），内部直接实例化 session。
     """

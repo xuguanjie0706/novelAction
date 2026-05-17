@@ -1502,8 +1502,8 @@ async def test_draft_prompt_includes_chapter_index_context():
 
     assert "【章节速查索引】" in captured["prompt"]
     assert "未回收伏笔：黑雾与魂殿有关" in captured["prompt"]
-    assert "【章节速查索引输出模板（必须追加在正文结尾）】" in captured["prompt"]
-    assert "### ch_章节号（3位补零）　章节标题" in captured["prompt"]
+    # 索引产出已改由 auto-debrief 负责，起草 prompt 不再要求稿末 ### ch_ 模板
+    assert "【章节速查索引输出模板（必须追加在正文结尾）】" not in captured["prompt"]
 
 
 @pytest.mark.asyncio

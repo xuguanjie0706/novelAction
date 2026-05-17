@@ -1147,6 +1147,8 @@ async function runGatedRewriteChapter(
   onError: (msg: string) => void,
   signal: AbortSignal,
   upsertChapter: (chapter: Chapter) => void,
+  setMemories: (memories: MemoryChunk[]) => void,
+  markChapterDebriefCommitted: (chapterId: string) => void,
 ) {
   const { projectId, params } = task
   const chapterId: string | undefined = typeof params.chapterId === 'string' ? params.chapterId : undefined
@@ -1192,7 +1194,6 @@ async function runGatedRewriteChapter(
     let buf = ''
     let currentAttempt = 1
     let draftAccumulated = ''     // 当前轮次文字累积（显示字数用）
-    let lastPassedDraft = ''      // 最终通过质检的那轮完整原始文本（含稿末索引块）
 
     const processLine = (line: string) => {
       const t = line.trim()
@@ -1302,7 +1303,6 @@ async function runGatedRewriteChapter(
 
       if (ev === 'gate_passed') {
         gateOutcome = 'passed'
-        lastPassedDraft = draftAccumulated  // 保存通过质检的那轮完整原始文本，供流结束后解析索引
         pushProgress({
           step: 'gate_result',
           label: `✅ 质量达标（第 ${obj.attempt} 轮）— 综合 ${(obj.overall_score as number).toFixed(1)} / 订阅 ${(obj.subscribe_intent as number).toFixed(1)}`,
@@ -1356,24 +1356,48 @@ async function runGatedRewriteChapter(
       upsertChapter(refreshed.data)
     } catch { /* ignore */ }
 
-    // 质检通过后：从通过轮次的原始文本中解析稿末索引入库
-    // 门控流程由后端负责多轮重写，前端在 gate_passed 确认后才入库，避免中间失败稿污染索引
-    if (gateOutcome === 'passed' && lastPassedDraft) {
-      const { indexMarkdown: passedIndex } = splitStreamedDraftText(lastPassedDraft)
-      if (passedIndex) {
-        pushProgress({ step: 'index', label: '正在写入 ChapterIndex（质量门控通过）…', done: false, error: false })
-        try {
-          const parsed = parseChapterIndexMarkdown(passedIndex)
-          const chapter_index = parsed ?? fallbackChapterIndexFromRawMarkdown(passedIndex)
-          await aiApi.chapterDebrief(projectId, {
-            chapter_id: chapterId,
-            chapter_index,
-            apply_source: 'queue_auto',
-          })
-          pushProgress({ step: 'index', label: `✓ 索引已入库（综合 ${lastOverall.toFixed(1)}）`, done: true, error: false })
-        } catch (e: any) {
-          pushProgress({ step: 'index', label: `索引入库失败：${formatApiError(e)}`, done: true, error: true })
+    // 起草阶段已不再输出稿末 ### ch_ 索引；情节档案/伏笔同步改由 auto-debrief → chapter-debrief 写入
+    if (gateOutcome === 'passed') {
+      pushProgress({ step: 'debrief', label: '正在自动复盘并写入线索页（情节档案/伏笔）…', done: false, error: false })
+      try {
+        const applied = await autoCommitGeneratedChapterDebrief(
+          projectId,
+          chapterId,
+          modelProfile,
+          llmProviderId,
+        )
+        if (applied.debriefPreview && typeof applied.debriefPreview === 'object') {
+          useAppStore.getState().setQueueDebriefUiSnapshot(chapterId, applied.debriefPreview as Record<string, unknown>)
         }
+        markChapterDebriefCommitted(chapterId)
+        const indexLabel = applied.chapterIndexSaved ? '情节档案已写入' : '情节档案未更新'
+        pushProgress({
+          step: 'debrief',
+          label: `✓ 复盘完成：${applied.characterCount} 个人物/${applied.storylineCount} 条故事线/${applied.memoryCount} 条记忆，${indexLabel}`,
+          done: true,
+          error: false,
+        })
+      } catch (e: any) {
+        pushProgress({
+          step: 'debrief',
+          label: `自动复盘失败，线索页可能为空，请在写作页手动「AI 复盘」：${formatApiError(e)}`,
+          done: true,
+          error: true,
+        })
+      }
+
+      pushProgress({ step: 'memory', label: '正在刷新记忆库…', done: false, error: false })
+      try {
+        const memoriesRes = await aiApi.listMemory(projectId)
+        setMemories(memoriesRes.data)
+        pushProgress({ step: 'memory', label: `✓ 记忆库已刷新：${memoriesRes.data.length} 条`, done: true, error: false })
+      } catch (e: any) {
+        pushProgress({
+          step: 'memory',
+          label: `记忆库刷新失败：${formatApiError(e)}`,
+          done: true,
+          error: true,
+        })
       }
     }
 
@@ -1627,7 +1651,16 @@ export default function GenerationQueuePanel() {
     } else if (task.type === 'rewrite_chapter') {
       await runRewriteChapter(task, pushProgress, onComplete, onError, abort.signal, upsertChapter, setMemories, markChapterDebriefCommitted)
     } else if (task.type === 'gated_rewrite_chapter') {
-      await runGatedRewriteChapter(task, pushProgress, onComplete, onError, abort.signal, upsertChapter)
+      await runGatedRewriteChapter(
+        task,
+        pushProgress,
+        onComplete,
+        onError,
+        abort.signal,
+        upsertChapter,
+        setMemories,
+        markChapterDebriefCommitted,
+      )
     } else {
       onError('未知任务类型')
     }

@@ -35,6 +35,7 @@ from app.services.xuanhuan_lexicon import (
     format_modern_blacklist_for_prompt,
     is_xuanhuan_like_genre,
 )
+from app.services.bootstrap.parse import parse_json
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 
 
@@ -201,22 +202,26 @@ class QualityMixin:
                     "error": f"quality_check_upstream_error: {first_exc.__class__.__name__}/{second_exc.__class__.__name__}",
                 }
         try:
-            import re
-            text = response.strip()
-            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-            if "```" in text:
-                fence = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
-                if fence:
-                    text = fence.group(1).strip()
-            start = text.find("{")
-            if start != -1:
-                text = text[start:]
-            return json.loads(text)
-        except Exception:
+            data = parse_json(response)
+            if not isinstance(data, dict):
+                raise ValueError("quality_check response is not a JSON object")
+            if data.get("suggestions") is None:
+                data["suggestions"] = []
+            if data.get("issues") is None:
+                data["issues"] = []
+            if data.get("dimensions") is None:
+                data["dimensions"] = {}
+            return data
+        except Exception as exc:
+            logger.warning("quality_check JSON parse failed: %s", exc)
             return {
                 "overall_score": 0,
+                "dimensions": {},
+                "issues": [],
+                "suggestions": [],
+                "summary": "质检结果解析失败，请重试",
                 "raw_response": response,
-                "error": "Failed to parse AI response"
+                "error": "Failed to parse AI response",
             }
 
     def _micro_patch_narrative_window(self, body: str) -> str:

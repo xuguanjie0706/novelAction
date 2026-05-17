@@ -173,7 +173,13 @@ export default function AIPanel({ projectId }: Props) {
         model_profile: modelProfileFromRoute(route),
         ...routeLlmProviderPayload(route),
       })
-      setReport(res.data)
+      const data = res.data as QualityReport & { error?: string }
+      if (data.error || (data.overall_score === 0 && !Object.keys(data.dimensions || {}).length)) {
+        toast.error(data.summary || '质检失败，请稍后重试')
+      }
+      setReport(data)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '质检请求失败')
     } finally {
       setLoading(false)
     }

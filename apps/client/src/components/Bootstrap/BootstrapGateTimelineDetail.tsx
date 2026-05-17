@@ -168,6 +168,8 @@ export interface BootstrapGateTimelineDetailProps {
   gateMessage: string
   gatePreview: Record<string, unknown> | null
   positioningData: Record<string, any> | null
+  /** resume 失败时由父级传入（闸门页原先不展示 errorMsg） */
+  resumeError?: string
   loading: boolean
   terminating?: boolean
   onDismiss: () => void
@@ -183,6 +185,7 @@ export default function BootstrapGateTimelineDetail({
   gateMessage,
   gatePreview,
   positioningData,
+  resumeError = '',
   loading,
   terminating = false,
   onDismiss,
@@ -266,6 +269,11 @@ export default function BootstrapGateTimelineDetail({
                   <p className="mt-2 text-sm leading-relaxed text-gray-600">
                     {gateMessage || '请确认当前步骤产出；根设定错误会在后续步骤被放大。'}
                   </p>
+                  {resumeError ? (
+                    <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                      {resumeError}
+                    </p>
+                  ) : null}
                 </div>
               </div>
               <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">

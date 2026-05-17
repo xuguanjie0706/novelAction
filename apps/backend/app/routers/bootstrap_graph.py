@@ -48,6 +48,11 @@ from app.services.bootstrap.graph import (
     subscribe,
     unsubscribe,
 )
+from app.services.bootstrap.graph_fanqie import (
+    resume_bootstrap_fanqie,
+    run_bootstrap_fanqie,
+)
+from app.schemas.bootstrap_fanqie_positioning import try_validate_fanqie_positioning
 from app.schemas.bootstrap_positioning import try_validate_positioning
 
 logger = logging.getLogger(__name__)
@@ -71,12 +76,19 @@ def _track_task(run_id: str, task: asyncio.Task) -> None:
 # ──────────────────────────────────────────────────────
 
 class StartRequest(BaseModel):
-    """POST /bootstrap/runs 请求体。"""
+    """POST /bootstrap/runs 请求体。
+
+    mode 说明：
+    - ``sequential``：通用串行流程（默认），适合起点/晋江向或自定义题材
+    - ``fanqie``：番茄专属流程，把平台算法逻辑硬编码进生成管道（金手指优先/打脸地图/开局五章工程）
+    - ``single_shot``：单次全量（大 context 模型专用）
+    """
     logline: str
     premise: Optional[str] = ""
     target_words: int = 1_200_000
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
+    mode: Literal["sequential", "fanqie", "single_shot"] = "sequential"
 
 
 class ResumeRequest(BaseModel):
@@ -97,6 +109,7 @@ class RunStatus(BaseModel):
     """GET /bootstrap/runs/{run_id} 响应体。"""
     run_id: str
     status: str
+    mode: str = "sequential"
     project_id: Optional[str]
     gate_data: Optional[dict]
     events: list[dict]
@@ -139,7 +152,7 @@ async def create_run(
     run = BootstrapRun(
         user_id=current_user.id,
         logline=req.logline,
-        mode="sequential",
+        mode=req.mode,
         model_profile=req.model_profile,
         status="pending",
         events=[],
@@ -149,9 +162,10 @@ async def create_run(
     db.refresh(run)
     run_id = str(run.id)
 
-    # 启动后台任务（不阻塞 HTTP 响应）
+    # 按 mode 分发到对应的后台任务
+    _run_fn = run_bootstrap_fanqie if req.mode == "fanqie" else run_bootstrap
     task = asyncio.create_task(
-        run_bootstrap(
+        _run_fn(
             run_id,
             logline=req.logline,
             premise=req.premise or "",
@@ -160,10 +174,10 @@ async def create_run(
             llm_provider_id=req.llm_provider_id,
             user_id=current_user.id,
         ),
-        name=f"bootstrap-{run_id[:8]}",
+        name=f"bootstrap-{req.mode}-{run_id[:8]}",
     )
     _track_task(run_id, task)
-    return {"run_id": run_id}
+    return {"run_id": run_id, "mode": req.mode}
 
 
 @router.get("/runs/{run_id}", summary="查询运行状态")
@@ -183,6 +197,7 @@ async def get_run(
     return RunStatus(
         run_id=str(run.id),
         status=run.status,
+        mode=run.mode or "sequential",
         project_id=str(run.project_id) if run.project_id else None,
         gate_data=run.gate_data,
         events=list(run.events or []),
@@ -306,15 +321,18 @@ async def resume_run(
             detail=f"Run is in status '{run.status}', expected 'awaiting_gate'",
         )
 
+    _resume_fn = (
+        resume_bootstrap_fanqie if run.mode == "fanqie" else resume_bootstrap
+    )
     task = asyncio.create_task(
-        resume_bootstrap(
+        _resume_fn(
             run_id,
             _build_resume_payload(run, req),
             model_profile=req.model_profile,
             llm_provider_id=req.llm_provider_id,
             user_id=current_user.id,
         ),
-        name=f"bootstrap-resume-{run_id[:8]}",
+        name=f"bootstrap-resume-{run.mode}-{run_id[:8]}",
     )
     _track_task(run_id, task)
     return {"ok": True, "run_id": run_id}
@@ -364,7 +382,10 @@ def _build_resume_payload(run: BootstrapRun, req: ResumeRequest) -> dict:
         raw = req.positioning if req.positioning is not None else gd.get("positioning")
         if not isinstance(raw, dict) or not raw:
             raise HTTPException(status_code=422, detail="缺少有效的 positioning，无法通过立项闸门")
-        normalized, err = try_validate_positioning(raw)
+        if run.mode == "fanqie":
+            normalized, err = try_validate_fanqie_positioning(raw)
+        else:
+            normalized, err = try_validate_positioning(raw)
         if err or normalized is None:
             raise HTTPException(status_code=422, detail=err or "positioning 校验失败")
         return {"action": "approve", "positioning": normalized}

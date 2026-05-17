@@ -574,6 +574,9 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                 onCancel={cancel}
                 terminating={terminating}
                 errorMsg={errorMsg}
+                onInsightsUpdate={(updated) =>
+                  setInsights(prev => prev ? { ...prev, ...updated } : (updated as typeof prev))
+                }
               />
             )}
           </div>

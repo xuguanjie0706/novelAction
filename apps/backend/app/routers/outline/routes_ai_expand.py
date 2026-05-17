@@ -129,6 +129,7 @@ async def ai_expand_outline(
         prior_chapters,
         protagonist_max_rank=prior_max_rank,
         protagonist_max_realm=prior_max_realm,
+        characters=characters,
     )
 
     # 第二卷及以后：带入「严格早于当前卷」的已落库章纲情节链 + 伏笔（与全局最近 N 章窗口互补）

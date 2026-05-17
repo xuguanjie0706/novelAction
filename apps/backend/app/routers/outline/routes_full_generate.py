@@ -111,6 +111,7 @@ async def ai_full_generate_outline(
                 context_chapters,
                 protagonist_max_rank=rolling_max_rank,
                 protagonist_max_realm=rolling_max_realm,
+                characters=characters,
             )
             batch_goal = _format_outline_batch_goal(
                 node_title=target_node.title,

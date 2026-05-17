@@ -130,6 +130,15 @@ TASK_PROFILES: dict[str, dict] = {
     "outline.full_structure": {"temperature": 0.55, "top_p": 0.9},
     "outline.expand": {"temperature": 0.7, "top_p": 0.9},
     "outline.character_gap": {"temperature": 0.55, "top_p": 0.9},
+    "outline.repair": {
+        # 大纲修复补丁：最小化改动任务，须在严格保留邻近章节连贯性的前提下做局部修正。
+        # temperature 从 0.65 降至 0.45，防止 AI "发挥创意"偏离原有结构，
+        # 引入新的一致性问题；presence_penalty 保留以抑制重复措辞。
+        "temperature": 0.45,
+        "top_p": 0.88,
+        "frequency_penalty": 0.1,
+        "presence_penalty": 0.1,
+    },
     # ── 质检 / 一致性（要稳定 JSON 与可比较打分）────────────────
     "quality.micro_patch": {"temperature": 0.15, "top_p": 0.75},
     "quality.check": {

@@ -33,9 +33,15 @@ def _format_rolling_continuity_state(
     chapters: list[dict],
     protagonist_max_rank: int | None = None,
     protagonist_max_realm: str | None = None,
+    characters: list | None = None,
 ) -> str:
     if not chapters:
         return ""
+
+    life_ledger = ""
+    if characters is not None:
+        from app.routers.outline.helpers.life_state import build_character_life_state_ledger
+        life_ledger = build_character_life_state_ledger(chapters, characters)
 
     last = chapters[-1]
     last_number = last.get("number") or "?"
@@ -53,10 +59,13 @@ def _format_rolling_continuity_state(
         if _clean_outline_text(chapter.get("core_event"), 120)
     ]
 
-    lines = [
+    lines = []
+    if life_ledger:
+        lines.append(life_ledger)
+    lines.extend([
         f"上一批最后章节：第{last_number}章《{last_title}》",
         f"下一批开篇必须承接：{last_hook}",
-    ]
+    ])
     if recent_foreshadows:
         lines.append(f"未回收/待处理伏笔：{'；'.join(recent_foreshadows)}")
     if recent_events:

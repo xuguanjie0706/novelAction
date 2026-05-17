@@ -38,6 +38,76 @@ async def _noop_outline_progress(_: dict[str, Any]) -> None:
     return None
 
 
+def _format_positioning_context(positioning: dict, opening_contract: dict) -> str:
+    """将立项定位与开局承诺格式化为质检锚点文本。
+
+    这是防止质检「漂移」的核心约束块：质检 AI 必须对照商业定位
+    （目标读者、爽点节奏、打脸节奏、禁忌红线）而非通用文学标准来打分。
+    同时注入开局承诺（chapter1_hook / chapter3_payoff），让前几卷的
+    质检能核验是否按约兑现了读者承诺。
+
+    Args:
+        positioning: project.extra.positioning dict（Step 0 立项会议产物）。
+        opening_contract: project.extra.opening_contract dict（Step 12 产物）。
+
+    Returns:
+        格式化后的约束文本；positioning 为空时返回空字符串。
+    """
+    if not positioning and not opening_contract:
+        return ""
+
+    lines: list[str] = []
+
+    if positioning:
+        lines.append("【立项定位约束（质检必须对照以下商业定位验证，而非通用文学标准）】")
+        if positioning.get("target_audience"):
+            lines.append(f"目标读者：{positioning['target_audience']}")
+        if positioning.get("tropes"):
+            tropes = positioning["tropes"]
+            if isinstance(tropes, list):
+                tropes = "、".join(str(t) for t in tropes)
+            lines.append(f"核心爽点/套路：{tropes}")
+        if positioning.get("selling_point"):
+            lines.append(f"核心卖点：{positioning['selling_point']}")
+        if positioning.get("face_slap_pattern"):
+            lines.append(f"打脸节奏要求：{positioning['face_slap_pattern']}")
+        if positioning.get("emotional_arc"):
+            lines.append(f"情感弧线预期：{positioning['emotional_arc']}")
+        if positioning.get("pace_type"):
+            lines.append(f"节奏类型：{positioning['pace_type']}")
+        if positioning.get("taboo_lines"):
+            taboo = positioning["taboo_lines"]
+            if isinstance(taboo, list):
+                taboo = "、".join(str(t) for t in taboo)
+            lines.append(f"⚠️ 禁忌红线（出现即为严重问题）：{taboo}")
+        lines.append(
+            "验证要求：质检时每条 issue 须说明违反了哪条定位约束（爽点缺失/禁忌触碰/节奏不符等），"
+            "不得以「人物弧缺乏成长」「主题深度不足」等纯文学标准替代商业网文定位标准。"
+        )
+
+    if opening_contract:
+        lines.append("\n【开局读者承诺（前10章须验证兑现情况）】")
+        if opening_contract.get("chapter1_hook"):
+            lines.append(f"第1章末承诺：{opening_contract['chapter1_hook']}")
+        if opening_contract.get("chapter3_payoff"):
+            lines.append(f"第3章小爽点承诺：{opening_contract['chapter3_payoff']}")
+        if opening_contract.get("chapter_rhythm"):
+            lines.append(f"前10章节奏承诺：{opening_contract['chapter_rhythm']}")
+        if opening_contract.get("opening_traps_to_avoid"):
+            traps = opening_contract["opening_traps_to_avoid"]
+            if isinstance(traps, list):
+                traps = "、".join(str(t) for t in traps)
+            lines.append(f"承诺规避的开局坑：{traps}")
+        if opening_contract.get("first_200_words_test"):
+            lines.append(f"第1章前200字核验标准：{opening_contract['first_200_words_test']}")
+        lines.append(
+            "验证要求：若当前卷包含前10章，须检查每条承诺是否按章节兑现；"
+            "未兑现者报告 type=reader_promise_breach 问题。"
+        )
+
+    return "\n".join(lines)
+
+
 async def _prepare_outline_quality_context(ctx: dict[str, Any]) -> dict[str, Any]:
     db: Session = ctx["db"]
     project_id: str = ctx["project_id"]
@@ -53,6 +123,12 @@ async def _prepare_outline_quality_context(ctx: dict[str, Any]) -> dict[str, Any
 
     story_core = project.story_core if isinstance(project.story_core, dict) else {}
     theme_statement = (req.theme_statement or story_core.get("theme") or "").strip()
+
+    # ── 立项定位上下文（质检/修复锚点，防漂移）────────────────────────────
+    extra = project.extra if isinstance(project.extra, dict) else {}
+    positioning = extra.get("positioning") or {}
+    opening_contract = extra.get("opening_contract") or {}
+    positioning_context = _format_positioning_context(positioning, opening_contract)
 
     volume_nodes = db.query(OutlineNode).filter(
         OutlineNode.project_id == project_id,
@@ -125,6 +201,7 @@ async def _prepare_outline_quality_context(ctx: dict[str, Any]) -> dict[str, Any
         "characters": characters,
         "foreshadows": foreshadows,
         "premise": project.premise or "",
+        "positioning_context": positioning_context,
     }
 
 
@@ -217,10 +294,10 @@ async def _quality_check_outline_volumes(ctx: dict[str, Any]) -> dict[str, Any]:
                 previous_chapters,
                 max_items=24 if req.model_profile == "gemini" else 8,
             ),
-            continuity_state=_format_rolling_continuity_state([
-                *previous_chapters[-8:],
-                *volume_chapters,
-            ]),
+            continuity_state=_format_rolling_continuity_state(
+                [*previous_chapters[-8:], *volume_chapters],
+                characters=ctx.get("characters"),
+            ),
             chapters=volume_chapters,
             word_budget_context="\n".join([
                 ctx.get("book_word_budget_context", ""),
@@ -234,6 +311,7 @@ async def _quality_check_outline_volumes(ctx: dict[str, Any]) -> dict[str, Any]:
                 ),
             ]),
             overdue_foreshadow_ledger=overdue_ledger,
+            positioning_context=ctx.get("positioning_context", ""),
         )
         if svc._truncation_warnings:
             await publish({
@@ -327,6 +405,7 @@ async def _quality_check_outline_book(ctx: dict[str, Any]) -> dict[str, Any]:
         chapters=chapters,
         word_budget_context=ctx.get("book_word_budget_context", ""),
         overdue_foreshadow_ledger=book_overdue_ledger,
+        positioning_context=ctx.get("positioning_context", ""),
     )
     if svc._truncation_warnings:
         await publish({
@@ -372,7 +451,27 @@ async def _quality_check_outline_book(ctx: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _relevant_repair_chapters(chapters: list[dict], quality_report: dict) -> list[dict]:
+def _relevant_repair_chapters(
+    chapters: list[dict],
+    quality_report: dict,
+    context_before: int = 2,
+    context_after: int = 1,
+) -> list[dict]:
+    """返回需要修复的章节列表，并附带前后邻近章节作为上下文参考。
+
+    邻近章节以 ``_context_only=True`` 标记，AI 仅用于理解前后文连贯性，
+    不会对其输出 patch。这样可防止修复后的章节与前后章节脱节。
+
+    Args:
+        chapters: 按章节顺序排列的章节 dict 列表（需含 number 字段）。
+        quality_report: 质检报告，含 issues 与 must_fix_chapter_numbers。
+        context_before: 每个问题章节前附带的邻近章节数（默认 2）。
+        context_after: 每个问题章节后附带的邻近章节数（默认 1）。
+
+    Returns:
+        含问题章节（``_context_only`` 缺省/False）和上下文章节
+        （``_context_only=True``）的有序列表，按章节号升序排列，无重复。
+    """
     issue_numbers: set[int] = set()
     for issue in quality_report.get("issues", []) if isinstance(quality_report, dict) else []:
         for number in issue.get("chapter_numbers", []) if isinstance(issue, dict) else []:
@@ -381,9 +480,47 @@ def _relevant_repair_chapters(chapters: list[dict], quality_report: dict) -> lis
     for number in quality_report.get("must_fix_chapter_numbers", []) if isinstance(quality_report, dict) else []:
         if isinstance(number, int):
             issue_numbers.add(number)
+
     if not issue_numbers:
+        # 没有质检数据时回退到全量章节（AI 自行判断），不加 context 标记
         return chapters
-    return [chapter for chapter in chapters if _chapter_number_value(chapter) in issue_numbers]
+
+    # 按章节号建立索引，方便邻近章节查找
+    sorted_chapters = sorted(chapters, key=lambda c: _chapter_number_value(c))
+    ch_by_number: dict[int, dict] = {_chapter_number_value(c): c for c in sorted_chapters}
+    all_numbers_sorted: list[int] = [_chapter_number_value(c) for c in sorted_chapters]
+
+    # 收集需要包含的所有章节号（问题章节 + 邻近缓冲区）
+    include_as_context: set[int] = set()
+    for num in issue_numbers:
+        try:
+            idx = all_numbers_sorted.index(num)
+        except ValueError:
+            continue
+        # 前 context_before 章
+        for j in range(max(0, idx - context_before), idx):
+            n = all_numbers_sorted[j]
+            if n not in issue_numbers:
+                include_as_context.add(n)
+        # 后 context_after 章
+        for j in range(idx + 1, min(len(all_numbers_sorted), idx + 1 + context_after)):
+            n = all_numbers_sorted[j]
+            if n not in issue_numbers:
+                include_as_context.add(n)
+
+    result: list[dict] = []
+    seen: set[int] = set()
+    for num in all_numbers_sorted:
+        if num in issue_numbers or num in include_as_context:
+            if num in seen:
+                continue
+            seen.add(num)
+            ch = dict(ch_by_number[num])   # 浅拷贝，避免污染原始数据
+            if num in include_as_context:
+                ch["_context_only"] = True  # 上下文章节，AI 不应输出 patch
+            result.append(ch)
+
+    return result
 
 
 async def _snapshot_outline_before_repair(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -438,7 +575,17 @@ async def _build_outline_repair_plan(ctx: dict[str, Any]) -> dict[str, Any]:
             project_core = project.story_core if isinstance(project.story_core, dict) else {}
             quality_report = project_core.get("outline_quality") or {}
 
-    relevant_chapters = _relevant_repair_chapters(chapters, quality_report)
+    repair_chapters = chapters
+    relevant_chapters = _relevant_repair_chapters(repair_chapters, quality_report)
+    realm_whitelist = sorted(_collect_power_system_whitelist(ctx.get("power_systems")))
+    from app.routers.outline.helpers.life_state import (
+        build_character_life_state_ledger,
+        build_death_continuity_patches,
+    )
+    life_ledger = build_character_life_state_ledger(
+        repair_chapters,
+        ctx.get("characters"),
+    )
     await publish({
         "event": "progress",
         "step": "repair_plan",
@@ -459,7 +606,47 @@ async def _build_outline_repair_plan(ctx: dict[str, Any]) -> dict[str, Any]:
             chapter_count=len(chapters if req.scope == "book" else relevant_chapters),
             scope_label="修复范围",
         ),
+        realm_whitelist=realm_whitelist,
+        character_life_state_ledger=life_ledger,
+        positioning_context=ctx.get("positioning_context", ""),
     )
+    det_patches = build_death_continuity_patches(
+        repair_chapters,
+        ctx.get("characters"),
+    )
+    if det_patches and isinstance(repair_plan, dict):
+        existing = repair_plan.get("patches") if isinstance(repair_plan.get("patches"), list) else []
+        # 按章号索引 AI 补丁，用于后续字段级合并
+        ai_patch_by_ch: dict[int, dict] = {}
+        for p in existing:
+            if isinstance(p, dict) and isinstance(p.get("chapter_number"), int):
+                ai_patch_by_ch[p["chapter_number"]] = p
+        merged = list(existing)
+        for det in det_patches:
+            ch_num = det.get("chapter_number")
+            det_fields = det.get("fields") or {}
+            if not isinstance(ch_num, int) or not det_fields:
+                continue
+            if ch_num not in ai_patch_by_ch:
+                # AI 未覆盖该章，直接追加确定性补丁
+                merged.append(det)
+            else:
+                # AI 已覆盖该章：字段级合并，确定性补丁仅填充 AI 未改的字段。
+                # 这样 AI 的核心叙事改动保留，确定性复活触发词也能写进去。
+                ai_patch = ai_patch_by_ch[ch_num]
+                ai_fields = ai_patch.get("fields") or {}
+                if not isinstance(ai_fields, dict):
+                    ai_fields = {}
+                for field, value in det_fields.items():
+                    if field not in ai_fields:
+                        ai_fields[field] = value
+                ai_patch["fields"] = ai_fields
+        repair_plan["patches"] = merged
+        if det_patches:
+            repair_plan["summary"] = (
+                f"{repair_plan.get('summary') or '修复补丁'}；"
+                f"含 {len(det_patches)} 条生死连续性硬规则补丁"
+            )
     # 截断警告：如果有字段被实际截断，推送提示给前端
     if svc._truncation_warnings:
         await publish({

@@ -16,6 +16,8 @@ import ScenePanel from '../components/Outline/ScenePanel'
 import VolumeExpandButton from '../components/Outline/VolumeExpandButton'
 import { TargetWordsInput } from '../components/TargetWordsInput'
 import { collectExpandableNodes } from '../utils/outlineAiExpand'
+import RepairConfirmModal, { clampMaxRounds, clampMinScore } from '../components/Outline/RepairConfirmModal'
+import type { RepairConfig } from '../components/Outline/RepairConfirmModal'
 
 type RevisionSnapshotNode = {
   id: string
@@ -506,14 +508,23 @@ export default function OutlinePage() {
   const [compareFilter, setCompareFilter] = useState<'all' | 'high' | 'structure' | 'content'>('high')
   const [selectedBookQualityRevisionId, setSelectedBookQualityRevisionId] = useState<string | null>(null)
   const [selectedVolumeQualityRevisionId, setSelectedVolumeQualityRevisionId] = useState<string | null>(null)
-  /** 单卷「修复本卷」：分数阈值、连续修复、最大轮数（写入队列 params） */
-  /** 与质检报告 / 时间线中的 score、总分 同刻度（0–100），非十分制 */
-  const [volumeRepairMinScore, setVolumeRepairMinScore] = useState(80)
-  const [volumeRepairContinuous, setVolumeRepairContinuous] = useState(true)
-  const [volumeRepairMaxRounds, setVolumeRepairMaxRounds] = useState(5)
+  /**
+   * 修复弹窗状态：scope 与目标卷节点。
+   * 打开弹窗后，用户在弹窗里确认配置；配置同步回 repairConfig。
+   */
+  const [repairModalOpen, setRepairModalOpen] = useState(false)
+  const [repairModalScope, setRepairModalScope] = useState<'volume' | 'book'>('volume')
+  const [repairModalVolumeNode, setRepairModalVolumeNode] = useState<OutlineNode | undefined>()
 
-  const clampVolumeRepairRounds = (n: number) => Math.min(20, Math.max(1, Math.round(n)))
-  const clampVolumeRepairMinScore = (n: number) => Math.min(100, Math.max(0, Math.round(n)))
+  /**
+   * 单卷修复配置，与质检报告总分同刻度（0–100）。
+   * 弹窗关闭后保留上次配置，方便连续操作。
+   */
+  const [repairConfig, setRepairConfig] = useState<RepairConfig>({
+    continuous: true,
+    maxRounds: 5,
+    minScore: 80,
+  })
 
   const reload = () => {
     if (!projectId) return
@@ -711,39 +722,52 @@ export default function OutlinePage() {
     toast.success('已加入质检队列，右下角可查看进度')
   }
 
+  /**
+   * 打开修复确认弹窗。
+   *
+   * scope='volume' 时需传入 volumeNode；弹窗关闭（取消或确认）后由弹窗回调处理后续。
+   *
+   * @param scope 修复范围：'volume' 单卷 | 'book' 全书 | 'all' 单卷+全书
+   * @param volumeNode scope='volume' 时目标卷节点（缺失时 toast 报错）
+   */
   const handleDispatchOutlineRepair = (scope: 'all' | 'volume' | 'book', volumeNode?: OutlineNode) => {
     if (!projectId) return
     if (scope === 'volume' && !volumeNode) {
       toast.error('请先选择要修复的卷')
       return
     }
-    const rounds = clampVolumeRepairRounds(volumeRepairMaxRounds)
-    const minScore = clampVolumeRepairMinScore(volumeRepairMinScore)
-    const ok = window.confirm(
-      scope === 'volume'
-        ? volumeRepairContinuous
-          ? `将对「${volumeNode?.title ?? ''}」执行连续 Graph 修复：最多 ${rounds} 轮；任一轮质检 status 为 pass，或总分 ≥ ${minScore}（与时间线 score 同为 0–100）时提前结束；每轮均保存修复前/后快照。继续？`
-          : `将对「${volumeNode?.title ?? ''}」执行单轮 Graph 修复，并自动保存修复前/后快照。继续？`
-        : '将执行全书 Graph 修复，并自动保存修复前/后快照。继续？',
-    )
-    if (!ok) return
+    // 全书修复不需要弹窗配置连续修复参数，直接走确认弹窗展示说明即可
+    setRepairModalScope(scope === 'all' ? 'book' : scope)
+    setRepairModalVolumeNode(volumeNode)
+    setRepairModalOpen(true)
+  }
+
+  /**
+   * 用户在弹窗中点击「开始修复」后的回调。
+   * 将配置写回 state（保留下次打开时的默认值），并派发队列任务。
+   *
+   * @param config 用户在弹窗中确定的修复配置
+   */
+  const handleRepairConfirm = (config: RepairConfig) => {
+    if (!projectId) return
+    setRepairConfig(config)   // 保留配置供下次打开使用
     const route = useAppStore.getState().aiBackendRoute
     const modelProfile = toOutlineApiModelProfile(route)
+    const rounds = clampMaxRounds(config.maxRounds)
+    const minScore = clampMinScore(config.minScore)
     addGenTask({
       type: 'outline_repair',
       projectId,
-      label: scope === 'volume'
-        ? volumeRepairContinuous
-          ? `单卷连续大纲修复（≤${rounds}轮·总分≥${minScore}或pass）：${volumeNode?.title ?? ''}`
-          : `单卷大纲修复：${volumeNode?.title ?? ''}`
-        : scope === 'book'
-          ? '全书大纲修复'
-          : '大纲修复：单卷 + 全书',
+      label: repairModalScope === 'volume'
+        ? config.continuous
+          ? `单卷连续大纲修复（≤${rounds}轮·总分≥${minScore}或pass）：${repairModalVolumeNode?.title ?? ''}`
+          : `单卷大纲修复：${repairModalVolumeNode?.title ?? ''}`
+        : '全书大纲修复',
       params: {
-        scope,
-        ...(volumeNode ? { volume_node_id: volumeNode.id } : {}),
-        ...(scope === 'volume'
-          ? volumeRepairContinuous
+        scope: repairModalScope,
+        ...(repairModalVolumeNode ? { volume_node_id: repairModalVolumeNode.id } : {}),
+        ...(repairModalScope === 'volume'
+          ? config.continuous
             ? {
               continuous_repair: true,
               continuous_max_rounds: rounds,
@@ -1202,59 +1226,6 @@ export default function OutlinePage() {
                 </p>
               </div>
               <div className="flex max-w-[min(100vw-2rem,52rem)] flex-nowrap items-center justify-end gap-x-1.5 gap-y-0 overflow-x-auto pb-0.5 sm:max-w-none sm:gap-x-2">
-                <label
-                  className="flex shrink-0 items-center gap-0.5 text-[11px] text-gray-600 whitespace-nowrap"
-                  title="与下方时间线 score、质检报告总分相同刻度（0–100）"
-                >
-                  总分≥
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={volumeRepairMinScore}
-                    onChange={e => {
-                      const v = parseInt(e.target.value, 10)
-                      if (!Number.isNaN(v)) setVolumeRepairMinScore(clampVolumeRepairMinScore(v))
-                    }}
-                    className="w-11 rounded border border-gray-200 px-0.5 py-0.5 text-center text-[11px] text-gray-800 tabular-nums focus:border-rose-300 focus:outline-none focus:ring-1 focus:ring-rose-200"
-                  />
-                </label>
-                <span className="text-[11px] text-gray-600 whitespace-nowrap">连续</span>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={volumeRepairContinuous}
-                  onClick={() => setVolumeRepairContinuous(v => !v)}
-                  className={clsx(
-                    'relative inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-rose-300 focus:ring-offset-1',
-                    volumeRepairContinuous ? 'border-rose-300 bg-rose-400' : 'border-gray-200 bg-gray-200',
-                  )}
-                >
-                  <span
-                    className={clsx(
-                      'inline-block h-4 w-4 translate-x-1 rounded-full bg-white shadow transition-transform',
-                      volumeRepairContinuous && 'translate-x-5',
-                    )}
-                  />
-                </button>
-                {volumeRepairContinuous && (
-                  <label className="flex shrink-0 items-center gap-0.5 text-[11px] text-gray-600 whitespace-nowrap">
-                    最多
-                    <input
-                      type="number"
-                      min={1}
-                      max={20}
-                      value={volumeRepairMaxRounds}
-                      onChange={e => {
-                        const v = parseInt(e.target.value, 10)
-                        if (!Number.isNaN(v)) setVolumeRepairMaxRounds(clampVolumeRepairRounds(v))
-                      }}
-                      className="w-10 rounded border border-gray-200 px-0.5 py-0.5 text-center text-[11px] text-gray-800 tabular-nums focus:border-rose-300 focus:outline-none focus:ring-1 focus:ring-rose-200"
-                    />
-                    轮
-                  </label>
-                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -1600,6 +1571,22 @@ export default function OutlinePage() {
           </div>
         </>
       )}
+
+      {/* 修复确认弹窗：替代 window.confirm，展示质检摘要 + 修复配置 */}
+      <RepairConfirmModal
+        open={repairModalOpen}
+        onClose={() => setRepairModalOpen(false)}
+        onConfirm={handleRepairConfirm}
+        scope={repairModalScope}
+        volumeTitle={repairModalVolumeNode?.title}
+        qualityReport={
+          repairModalScope === 'volume'
+            ? (displayedVolumeQuality ?? undefined)
+            : (displayedBookQuality ?? undefined)
+        }
+        value={repairConfig}
+        onChange={setRepairConfig}
+      />
     </div>
   )
 }

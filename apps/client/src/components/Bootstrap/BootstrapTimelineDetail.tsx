@@ -4,10 +4,11 @@
  * 与书架/首页一致：``#f8fafc`` 底、白卡、灰字层次、琥珀主按钮。
  * 正文区保持 ``max-w-*`` 居中便于阅读；**生成中 / 完成** 的 CTA 放在**全宽底栏**并右对齐，占满右栏底边空白，与顶栏分工（生成中顶栏不再重复「终止」）。
  *
- * 一致性问题修复：
+ * 一致性问题修复 + 自动重扫：
  *  - ConsistencyContent 从本文件提取为独立组件（ConsistencyContent.tsx）
- *  - 本文件持有 selectedIndices / fixState 等修复流程状态
- *  - 底栏在 consistency 步骤 done 时展示「修复选中 (N)」按钮
+ *  - 本文件持有 selectedIndices / fixState / rescanState 等修复流程状态
+ *  - 修复成功后自动调用 /consistency/rescan，结果通过 onInsightsUpdate 回调上报给父组件
+ *  - 底栏在 consistency 步骤 done 时展示「修复选中 (N)」按钮与重扫状态指示
  */
 import React, { useState, useCallback } from 'react'
 import { ChevronRight, Loader2, MousePointerClick, Wrench } from 'lucide-react'
@@ -194,6 +195,14 @@ interface Insights {
   opening_contract: Record<string, any>
 }
 
+/** 重扫进行中 / 完成 / 出错 三态 */
+interface RescanState {
+  loading: boolean
+  /** 重扫完成后的新问题列表；null 表示尚未扫描 */
+  issues: any[] | null
+  error: string | null
+}
+
 interface Props {
   step: StepState | null
   positioningData: Record<string, any> | null
@@ -209,11 +218,16 @@ interface Props {
   terminating?: boolean
   /**
    * 当前选用的模型线路（``"local"`` | ``"gemini"``）。
-   * 传给一致性修复接口；省略时默认 ``"gemini"``（Bootstrap 使用的线路）。
+   * 传给一致性修复 / 重扫接口；省略时默认 ``"gemini"``（Bootstrap 使用的线路）。
    */
   modelProfile?: 'local' | 'gemini'
   /** 管理后台 LlmProvider UUID，与 modelProfile 配合使用 */
   llmProviderId?: string | null
+  /**
+   * 重扫完成后将最新 insights 上报给父组件，父组件更新 setInsights 以刷新视图。
+   * @param updated - 覆盖写入后从后端返回的最新一致性问题列表
+   */
+  onInsightsUpdate?: (updated: { consistency_issues: any[] }) => void
 }
 
 export default function BootstrapTimelineDetail({
@@ -229,13 +243,15 @@ export default function BootstrapTimelineDetail({
   terminating = false,
   modelProfile = 'gemini',
   llmProviderId = null,
+  onInsightsUpdate,
 }: Props) {
   const scrollClass =
     'flex-1 min-h-0 overflow-y-auto bg-[#f8fafc] [scrollbar-width:thin] [scrollbar-color:#e5e7eb_transparent]'
 
-  // ── 一致性问题修复状态 ──────────────────────────────────────────────────
+  // ── 一致性问题修复 + 重扫状态 ────────────────────────────────────────────
   const [selectedConsistencyIndices, setSelectedConsistencyIndices] = useState<Set<number>>(new Set())
   const [fixState, setFixState] = useState<FixState>({ loading: false, result: null, error: null })
+  const [rescanState, setRescanState] = useState<RescanState>({ loading: false, issues: null, error: null })
 
   const handleToggleIssue = useCallback((idx: number) => {
     setSelectedConsistencyIndices((prev) => {
@@ -249,6 +265,7 @@ export default function BootstrapTimelineDetail({
   const handleFixRequest = useCallback(async (indices: number[], userPrompt: string) => {
     if (!projectId || indices.length === 0) return
     setFixState({ loading: true, result: null, error: null })
+    setRescanState({ loading: false, issues: null, error: null })
     try {
       const res = await projectsApi.fixConsistencyIssues(projectId, {
         selected_indices: indices,
@@ -264,11 +281,27 @@ export default function BootstrapTimelineDetail({
         fixedSet.forEach((i) => next.delete(i))
         return next
       })
+
+      // 有成功修复项时自动触发重扫，刷新 insights
+      if (res.data.applied.length > 0) {
+        setRescanState({ loading: true, issues: null, error: null })
+        try {
+          const scanRes = await projectsApi.rescanConsistency(projectId, {
+            model_profile: modelProfile,
+            llm_provider_id: llmProviderId,
+          })
+          setRescanState({ loading: false, issues: scanRes.data.issues, error: null })
+          onInsightsUpdate?.({ consistency_issues: scanRes.data.issues })
+        } catch (scanErr: any) {
+          const msg = scanErr?.response?.data?.detail ?? scanErr?.message ?? '重新扫描失败'
+          setRescanState({ loading: false, issues: null, error: msg })
+        }
+      }
     } catch (err: any) {
       const msg = err?.response?.data?.detail ?? err?.message ?? '修复请求失败，请重试'
       setFixState({ loading: false, result: null, error: msg })
     }
-  }, [projectId, modelProfile, llmProviderId])
+  }, [projectId, modelProfile, llmProviderId, onInsightsUpdate])
 
   // 是否展示「修复选中」按钮（仅在 done 阶段且存在未修复问题时）
   const consistencyIssues = insights?.consistency_issues ?? []
@@ -380,8 +413,30 @@ export default function BootstrapTimelineDetail({
 
       {phase === 'done' && projectId && (
         <div className="flex shrink-0 flex-col gap-3 border-t border-gray-200 bg-white/95 px-5 py-4 backdrop-blur-sm sm:flex-row sm:items-center sm:justify-end sm:px-8">
-          {/* 修复按钮：仅在存在未修复问题时显示 */}
-          {hasUnfixedIssues && (
+          {/* 重扫状态指示：修复成功后、按钮左侧显示 */}
+          {(rescanState.loading || rescanState.issues !== null || rescanState.error) && (
+            <div className="flex flex-1 items-center gap-2 text-xs">
+              {rescanState.loading && (
+                <>
+                  <Loader2 size={13} className="animate-spin text-amber-500" />
+                  <span className="text-gray-500">正在重新扫描一致性…</span>
+                </>
+              )}
+              {!rescanState.loading && rescanState.issues !== null && (
+                <span className="text-green-600">
+                  ✓ 重扫完成
+                  {rescanState.issues.filter((i: any) => i?.status !== 'fixed').length > 0
+                    ? `，仍有 ${rescanState.issues.filter((i: any) => i?.status !== 'fixed').length} 处待确认`
+                    : '，暂无矛盾项'}
+                </span>
+              )}
+              {!rescanState.loading && rescanState.error && (
+                <span className="text-red-500">重扫失败：{rescanState.error}</span>
+              )}
+            </div>
+          )}
+          {/* 修复按钮：仅在存在未修复问题且重扫未进行时显示 */}
+          {hasUnfixedIssues && !rescanState.loading && (
             <button
               type="button"
               disabled={fixState.loading}

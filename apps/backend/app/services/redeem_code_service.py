@@ -273,7 +273,7 @@ def list_batches(*, db: Optional[Session] = None) -> List[Dict[str, Any]]:
     Returns:
         批次摘要列表（按最新创建时间倒序）。
     """
-    from sqlalchemy import func as sa_func
+    from sqlalchemy import case, func as sa_func
 
     own = db is None
     db = db or SessionLocal()
@@ -285,10 +285,10 @@ def list_batches(*, db: Optional[Session] = None) -> List[Dict[str, Any]]:
                 RedeemCode.note,
                 sa_func.count(RedeemCode.id).label("total"),
                 sa_func.sum(
-                    sa_func.cast(RedeemCode.status == "active", sa_func.Integer)
+                    case((RedeemCode.status == "active", 1), else_=0)
                 ).label("active_count"),
                 sa_func.sum(
-                    sa_func.cast(RedeemCode.status == "redeemed", sa_func.Integer)
+                    case((RedeemCode.status == "redeemed", 1), else_=0)
                 ).label("redeemed_count"),
                 sa_func.max(RedeemCode.created_at).label("created_at"),
                 sa_func.min(RedeemCode.expires_at).label("expires_at"),

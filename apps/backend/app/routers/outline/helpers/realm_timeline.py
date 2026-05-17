@@ -9,6 +9,9 @@ from app.services.xuanhuan_lexicon import (
 )
 
 from app.routers.outline.helpers.constants import (
+    CULTIVATION_REALM_USAGE_PREFIXES,
+    CULTIVATION_REALM_USAGE_SUFFIXES,
+    CULTIVATION_TERM_FALSE_POSITIVE_PHRASES,
     PROTAGONIST_REALM_ATTRIBUTION_VERBS,
     TRADITIONAL_CULTIVATION_BLACKLIST,
 )
@@ -141,9 +144,75 @@ def _build_realm_rank_map(power_systems) -> tuple[dict[str, int], int | None, in
 
 
 def _scan_banned_terms(text: str, banned: set[str]) -> set[str]:
+    """现代/科幻禁词等：保持子串匹配（词表项本身不易误报）。"""
     if not text:
         return set()
     return {term for term in banned if term and term in text}
+
+
+def _occurrence_inside_false_positive_phrase(
+    text: str,
+    start: int,
+    term_len: int,
+    phrase: str,
+) -> bool:
+    pos = text.find(phrase)
+    while pos != -1:
+        if pos <= start and start + term_len <= pos + len(phrase):
+            return True
+        pos = text.find(phrase, pos + 1)
+    return False
+
+
+def _is_cultivation_realm_term_usage(text: str, start: int, term: str) -> bool:
+    """
+    判断 term 在 start 处是否按「境界/修为」语义使用，而非子串误命中（如 炼化神火）。
+    """
+    if not term:
+        return False
+    end = start + len(term)
+    after = text[end:]
+    before = text[:start]
+
+    for phrase in CULTIVATION_TERM_FALSE_POSITIVE_PHRASES.get(term, ()):
+        if _occurrence_inside_false_positive_phrase(text, start, len(term), phrase):
+            return False
+
+    for suf in CULTIVATION_REALM_USAGE_SUFFIXES:
+        if after.startswith(suf):
+            return True
+
+    window = before[-10:]
+    if any(prefix in window for prefix in CULTIVATION_REALM_USAGE_PREFIXES):
+        return True
+
+    prev_c = before[-1] if before else ""
+    next_c = after[0] if after else ""
+    boundary_chars = "，。！？；：、】【（）() \n|"
+    boundary_before = not prev_c or prev_c in boundary_chars
+    boundary_after = not next_c or next_c in boundary_chars
+    if boundary_before and boundary_after:
+        return True
+
+    return False
+
+
+def _scan_banned_cultivation_terms(text: str, banned: set[str]) -> set[str]:
+    """传统修真境界禁词：按境界语境匹配，避免 炼化神火 等复合词误报。"""
+    if not text or not banned:
+        return set()
+    hits: set[str] = set()
+    for term in banned:
+        pos = 0
+        while pos < len(text):
+            idx = text.find(term, pos)
+            if idx == -1:
+                break
+            if _is_cultivation_realm_term_usage(text, idx, term):
+                hits.add(term)
+                break
+            pos = idx + 1
+    return hits
 
 
 def _detect_outline_terminology_issues(
@@ -178,7 +247,7 @@ def _detect_outline_terminology_issues(
             str(chapter.get(field, ""))
             for field in ("title", "opening_hook", "core_event", "character_change", "foreshadow", "end_hook")
         )
-        cultivation_hits = sorted(_scan_banned_terms(text_blob, cultivation_pool))
+        cultivation_hits = sorted(_scan_banned_cultivation_terms(text_blob, cultivation_pool))
         modern_hits = sorted(_scan_banned_terms(text_blob, modern_pool))
 
         if cultivation_hits:

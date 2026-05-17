@@ -695,6 +695,56 @@ def test_hard_rule_terminology_blacklist_flags_zhujidan_when_system_uses_ling_we
     assert "金丹" in cultivation_issue["description"]
 
 
+def test_hard_rule_terminology_ignores_huashen_inside_lianhuashenhuo():
+    """「炼化神火」中的子串「化神」不是境界名，不得误报。"""
+    system = _ling_wen_power_system()
+    chapters = [
+        {
+            "number": 3,
+            "title": "一纸休书，火焚苍穹",
+            "core_event": "叶辰现场休妻并炼化神火，当场突破至聚气境五重。",
+            "character_change": "叶辰正式踏上聚气境逆袭之路。",
+            "foreshadow": "",
+            "end_hook": "三年之后，焚阳宗山顶见。",
+        }
+    ]
+    report = _detect_outline_hard_rule_issues(
+        chapters,
+        power_systems=[system],
+        genre="玄幻",
+        scope="volume",
+    )
+    cultivation_issues = [
+        i for i in report.get("issues", [])
+        if "修真术语" in i.get("description", "") and 3 in (i.get("chapter_numbers") or [])
+    ]
+    assert cultivation_issues == []
+
+
+def test_hard_rule_terminology_still_flags_huashen_realm_usage():
+    """真正的「化神境」表述仍须判 critical。"""
+    system = _ling_wen_power_system()
+    chapters = [
+        {
+            "number": 3,
+            "title": "破境",
+            "core_event": "叶辰一举突破化神境，威压席卷全场。",
+            "character_change": "叶辰跨入化神境初期。",
+            "foreshadow": "",
+            "end_hook": "全场震惊。",
+        }
+    ]
+    report = _detect_outline_hard_rule_issues(
+        chapters,
+        power_systems=[system],
+        genre="玄幻",
+        scope="volume",
+    )
+    assert report["status"] == "fail"
+    assert 3 in report["must_fix_chapter_numbers"]
+    assert any("化神" in i.get("description", "") for i in report.get("issues", []))
+
+
 def test_hard_rule_terminology_allows_custom_realm_names_in_whitelist():
     """合法的项目自定义境界（拓纹/凝旋/大荒）必须 100 分通过。"""
     system = _ling_wen_power_system()
@@ -939,6 +989,33 @@ def test_hard_rule_power_curve_pacing_only_fires_at_book_scope():
 
 def _gui_shou_character() -> Character:
     return Character(name="鬼手", alias=["鬼手长老", "断手前辈"])
+
+
+def test_hard_rule_character_death_ignores_possessive_sacrifice_for_protagonist():
+    """「叶辰的牺牲」不得判为叶辰死亡。"""
+    char = Character(name="叶辰", role="protagonist")
+    chapters = [
+        {
+            "number": 47,
+            "title": "丹房惊魂",
+            "core_event": "叶辰强夺灵草困住云飞扬。",
+            "character_change": "焚老对叶辰的牺牲感到欣慰，师徒羁绊加深。",
+            "end_hook": "古戒发热。",
+        },
+        {
+            "number": 50,
+            "title": "后续",
+            "core_event": "叶辰出手击退追兵。",
+            "character_change": "叶辰继续前行。",
+            "end_hook": "钩子",
+        },
+    ]
+    report = _detect_outline_hard_rule_issues(chapters, characters=[char])
+    death_issues = [
+        i for i in report.get("issues", [])
+        if "生死逻辑断层" in i.get("description", "")
+    ]
+    assert death_issues == []
 
 
 def test_hard_rule_character_death_flags_active_reappearance_without_revival():

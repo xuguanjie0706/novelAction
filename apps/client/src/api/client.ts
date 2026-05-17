@@ -157,6 +157,25 @@ export const projectsApi = {
     skipped: Array<{ issue_index: number; reason: string; suggestion: string }>
     message: string
   }>(`/projects/${id}/consistency/fix`, data),
+
+  /**
+   * 修复完成后对当前 DB 状态重新做全量一致性扫描，覆盖写入 Project.extra.consistency_issues。
+   * @param id - 项目 ID
+   * @param data.model_profile - 模型线路（``"local"`` | ``"gemini"``）
+   * @param data.llm_provider_id - 管理后台 LlmProvider UUID（可选）
+   * @returns 最新问题列表、数量及汇总消息
+   */
+  rescanConsistency: (
+    id: string,
+    data: {
+      model_profile: 'local' | 'gemini'
+      llm_provider_id: string | null
+    },
+  ) => api.post<{
+    issues: Array<{ severity?: string; description?: string; type?: string; suggestion?: string; status?: string }>
+    count: number
+    message: string
+  }>(`/projects/${id}/consistency/rescan`, data),
 }
 
 // ── Dashboard 首页聚合（跨项目）───────────────────────

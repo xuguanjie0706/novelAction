@@ -4,6 +4,8 @@ from __future__ import annotations
 from app.routers.outline.helpers.constants import (
     CHARACTER_ACTIVE_APPEARANCE_VERBS,
     CHARACTER_DEATH_MARKERS,
+    CHARACTER_DEATH_NEGATORS,
+    CHARACTER_DEATH_POSSESSIVE_FALSE,
     CHARACTER_REVIVAL_TRIGGERS,
     DESTINY_REVEAL_PATTERNS,
     PROTAGONIST_CONTEXT_HINTS,
@@ -116,6 +118,78 @@ def _name_near_marker(text: str, name: str, markers, window: int = 18) -> bool:
         pos = i + len(name)
 
 
+def _snippet_has_death_negator(snippet: str) -> bool:
+    return any(neg in snippet for neg in CHARACTER_DEATH_NEGATORS)
+
+
+def _death_marker_attributed_to_name(snippet: str, name: str, marker: str) -> bool:
+    """死亡词须归因于该角色，排除「叶辰的牺牲」等抽象/所有格误报。"""
+    if marker not in snippet or name not in snippet:
+        return False
+    if _snippet_has_death_negator(snippet):
+        return False
+    if marker == "牺牲":
+        if f"{name}的牺牲" in snippet or f"{name}之牺牲" in snippet:
+            return False
+        for false_hint in CHARACTER_DEATH_POSSESSIVE_FALSE:
+            if false_hint in snippet and f"{name}{false_hint}" in snippet:
+                return False
+    name_pos = snippet.find(name)
+    marker_pos = snippet.find(marker)
+    if name_pos == -1 or marker_pos == -1:
+        return False
+    between = snippet[min(name_pos, marker_pos) + len(name if name_pos < marker_pos else marker): max(name_pos, marker_pos)]
+    if between.strip() in ("的", "之", "对", "为", "向"):
+        if marker in ("牺牲", "死亡", "去世"):
+            return False
+    # 名字在前：赵执事战死 / 铁横被杀；名字在后：斩杀铁横
+    if name_pos <= marker_pos:
+        gap = snippet[name_pos + len(name): marker_pos]
+        if len(gap) <= 12:
+            return True
+    else:
+        gap = snippet[marker_pos + len(marker): name_pos]
+        if len(gap) <= 10 and any(v in gap for v in ("了", "掉", "死", "杀", "灭", "毙")):
+            return True
+        if any(gap.endswith(s) for s in ("杀", "斩", "诛", "灭", "毙")):
+            return True
+    return False
+
+
+def _name_death_declared(text: str, name: str, window: int = 22) -> bool:
+    """角色名附近是否以「该角色死亡」的语义出现死亡标记词。"""
+    if not name or not text:
+        return False
+    pos = 0
+    while True:
+        i = text.find(name, pos)
+        if i == -1:
+            return False
+        snippet = text[max(0, i - window): i + len(name) + window]
+        for marker in CHARACTER_DEATH_MARKERS:
+            if marker and _death_marker_attributed_to_name(snippet, name, marker):
+                return True
+        pos = i + len(name)
+
+
+def _name_active_appearance(text: str, name: str, window: int = 14) -> bool:
+    """角色是否在本章以活人行动方式出现（非仅被提及）。"""
+    if not name or not text:
+        return False
+    pos = 0
+    while True:
+        i = text.find(name, pos)
+        if i == -1:
+            return False
+        snippet = text[max(0, i - window): i + len(name) + window]
+        for verb in CHARACTER_ACTIVE_APPEARANCE_VERBS:
+            if verb and verb in snippet:
+                if any(r in snippet for r in ("残魂", "残识", "虚影", "幻象", "回忆", "传闻", "据说")):
+                    continue
+                return True
+        pos = i + len(name)
+
+
 def _collect_character_aliases(characters) -> dict[str, str]:
     """构造 {name_or_alias: canonical_name} 映射；按长度降序排序便于后续优先匹配长名。"""
     name_to_canonical: dict[str, str] = {}
@@ -142,30 +216,47 @@ def _detect_outline_character_death_continuity(
     """
     检测角色死亡后无机制再次主动登场。
     判断流程（按章节顺序）：
-      1. 章节文本中角色名 ±18 字符内出现死亡词 → 标记该角色为已宣告死亡。
-      2. 已宣告死亡的角色，若后续章节出现复活类触发词 → 视为机制说明，重置警戒。
-      3. 已宣告死亡且未交代复活时，再次出现主动登场动词 → critical issue。
-    仅扫描 core_event/character_change/end_hook 等剧情字段，不扫描 foreshadow（伏笔
-    可以提及死者而不构成实际登场）。
+      1. 章节正文中角色名附近出现「归因于该角色」的死亡词 → 标记已宣告死亡。
+      2. 已死亡角色若后续章出现复苏机制词 → 视为已交代。
+      3. 已死亡且未交代复苏时再次出现主动行动动词 → critical。
+    同时扫描 Character 表角色与章纲正文中高频 NPC 名（如未入库的城主/配角）。
     """
-    if not characters:
-        return []
-    name_to_canonical = _collect_character_aliases(characters)
-    if not name_to_canonical:
-        return []
-
     sorted_chapters = sorted(
         [c for c in chapters if isinstance(c.get("number"), int)],
         key=lambda c: c["number"],
     )
+    if not sorted_chapters:
+        return []
 
-    death_state: dict[str, int] = {}     # canonical -> first death chapter
-    explained_after: dict[str, int] = {}  # canonical -> chapter where revival explained
+    # 延迟导入避免与 life_state 循环依赖
+    from app.routers.outline.helpers.life_state import _extract_npc_death_events_from_text
+
+    name_to_canonical = _collect_character_aliases(characters)
+    death_state: dict[str, int] = dict(_extract_npc_death_events_from_text(sorted_chapters))
+    for raw, canonical in name_to_canonical.items():
+        if canonical in death_state:
+            continue
+        for chapter in sorted_chapters:
+            blob = " | ".join(
+                str(chapter.get(field, ""))
+                for field in ("title", "opening_hook", "core_event", "character_change", "end_hook")
+            )
+            if raw in blob and _name_death_declared(blob, raw, window=24):
+                death_state[canonical] = chapter["number"]
+                break
+
+    if not death_state:
+        return []
+
+    all_tracked_names: dict[str, str] = {n: n for n in death_state}
+    for raw, canonical in name_to_canonical.items():
+        if canonical in death_state:
+            all_tracked_names[raw] = canonical
+
+    explained_after: dict[str, int] = {}
     issues: list[dict] = []
     seen_pair: set[tuple[str, int]] = set()
-
-    # 长名优先匹配，避免 "鬼手长老" 命中 "鬼手"
-    sorted_names = sorted(name_to_canonical.keys(), key=len, reverse=True)
+    sorted_names = sorted(all_tracked_names.keys(), key=len, reverse=True)
 
     for chapter in sorted_chapters:
         number = chapter["number"]
@@ -177,23 +268,19 @@ def _detect_outline_character_death_continuity(
             continue
 
         for raw_name in sorted_names:
-            canonical = name_to_canonical[raw_name]
+            canonical = all_tracked_names[raw_name]
             if raw_name not in text_blob:
                 continue
-
-            # 1) 死亡宣告
             if canonical not in death_state:
-                if _name_near_marker(text_blob, raw_name, CHARACTER_DEATH_MARKERS, window=22):
+                if _name_death_declared(text_blob, raw_name, window=24):
                     death_state[canonical] = number
                 continue
 
-            # 2) 已死亡，本章是否给出复活机制
             if canonical not in explained_after:
                 if _name_near_marker(text_blob, raw_name, CHARACTER_REVIVAL_TRIGGERS, window=22):
                     explained_after[canonical] = number
                     continue
-                # 3) 检测主动登场
-                if _name_near_marker(text_blob, raw_name, CHARACTER_ACTIVE_APPEARANCE_VERBS, window=14):
+                if _name_active_appearance(text_blob, raw_name, window=16):
                     pair_key = (canonical, number)
                     if pair_key in seen_pair:
                         continue

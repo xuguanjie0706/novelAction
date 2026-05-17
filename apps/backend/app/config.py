@@ -55,8 +55,15 @@ class Settings(BaseSettings):
     GEMINI_AUTO_DEBRIEF_MAX_TOKENS: int = 8192
     LOCAL_AUTO_DEBRIEF_MAX_TOKENS: int = 4096
 
-    EMBEDDING_MODEL: str = "nomic-embed-text"         # Ollama 本地 embedding 模型
-    EMBEDDING_DIM: int = 768                          # nomic-embed-text 输出 768 维
+    # ── Embedding（pgvector 语义检索）────────────────────────────────────────
+    # EMBEDDING_BASE_URL / EMBEDDING_API_KEY 留空时自动跟随 LLM_BASE_URL / LLM_API_KEY，
+    # 方便「远程 LLM + 本地 Ollama embedding」解耦部署：
+    #   EMBEDDING_BASE_URL=http://localhost:11434/v1
+    #   EMBEDDING_API_KEY=ollama
+    EMBEDDING_BASE_URL: Optional[str] = None          # None = 跟随 LLM_BASE_URL
+    EMBEDDING_API_KEY: Optional[str] = None           # None = 跟随 LLM_API_KEY
+    EMBEDDING_MODEL: str = "nomic-embed-text"         # Ollama 本地 embedding 模型（需先 ollama pull nomic-embed-text）
+    EMBEDDING_DIM: int = 768                          # nomic-embed-text 输出 768 维；换模型时同步修改并重跑 migration
 
     # 封面落盘（相对路径相对于进程 cwd；留空则使用后端目录下 data/covers）
     COVER_STORAGE_DIR: str = ""

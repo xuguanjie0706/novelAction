@@ -78,21 +78,33 @@ async def embed_texts(texts: List[str]) -> List[List[float]]:
     """
     批量向量化。
     返回与 texts 等长的向量列表；任何单条失败会整批抛出异常，由上层决策。
+
+    端点优先级：
+      EMBEDDING_BASE_URL（独立 embedding 服务）> LLM_BASE_URL（兜底，如 Ollama 同端口）
+    对应 API key 同理，允许「远程 LLM + 本地 Ollama embedding」解耦部署。
     """
     if not texts:
         return []
+
+    base_url = settings.EMBEDDING_BASE_URL or settings.LLM_BASE_URL
+    api_key = settings.EMBEDDING_API_KEY or settings.LLM_API_KEY
 
     payload = {
         "model": settings.EMBEDDING_MODEL,
         "input": texts,
     }
     headers = {
-        "Authorization": f"Bearer {settings.LLM_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
+    logger.debug(
+        "embed_texts: model=%s base_url=%s texts_count=%d",
+        settings.EMBEDDING_MODEL, base_url, len(texts),
+    )
+
     async with httpx.AsyncClient(
-        base_url=settings.LLM_BASE_URL,
+        base_url=base_url,
         timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=5.0),
     ) as client:
         resp = await client.post("/embeddings", json=payload, headers=headers)

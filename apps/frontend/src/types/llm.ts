@@ -52,6 +52,17 @@ export interface LlmCallTokenUsage {
   estimated: boolean
 }
 
+/** 管理后台 LLM 调用记录的上下文问题类型（由后端解析） */
+export type LlmCallContextIssue = 'truncated' | 'limit_exceeded'
+
+/** 管理后台 LLM 调用列表（后端分页） */
+export interface LlmCallListResponse {
+  items: LlmCallRecord[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export interface LlmCallRecord {
   id: string
   created_at: string
@@ -61,6 +72,8 @@ export interface LlmCallRecord {
   status: 'ok' | 'error'
   duration_ms: number
   context: Record<string, unknown>
+  /** 输入被业务裁剪，或网关报上下文超限 */
+  context_issue?: LlmCallContextIssue | null
   token_usage: LlmCallTokenUsage
   error?: string | null
   input_payload?: unknown

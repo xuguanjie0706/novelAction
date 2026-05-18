@@ -56,6 +56,7 @@ from app.routers.ai.context import (
     format_world_setting_context,
 )
 from app.routers.ai.draft_routes import _build_draft_context
+from app.routers.ai.pre_write_for_draft import resolve_pre_write_brief_for_draft
 from app.routers.ai.draft_helpers import (
     hook_chapter_mandate_active,
     merge_writing_config,
@@ -932,46 +933,20 @@ async def gated_draft_stream(
         # 后续重写轮仍沿用同一份 pre_warn_brief_block（状态锁定在整轮写作期间不变）。
         pre_warn_brief_block: str = ""
         if cfg["pre_write_warning_enabled"]:
-            yield _sse({"event": "pre_warn_running"})
-            try:
-                db.refresh(chapter)
-                warn_result, warn_plan_summary = await _run_pre_write_warning_inline(
-                    db=db, chapter=chapter, project=project,
-                    project_id=project_id, svc=svc,
-                )
-                rag_ctx = warn_result.get("rag_context")
-                if isinstance(rag_ctx, dict) and rag_ctx.get("event") == "rag_context":
-                    yield _sse(rag_ctx)
-                # 格式化为简报块，通过专属参数传入（不污染 user_prompt）
-                pre_warn_brief_block = _build_pre_warn_prompt_block(warn_result)
-
-                warn_record = _persist_pre_write_warning_record(
-                    db,
-                    project=project,
-                    chapter=chapter,
-                    chapter_plan_summary=warn_plan_summary,
-                    model_profile=req.model_profile or "local",
-                    llm_provider_id=req.llm_provider_id,
-                    result=warn_result,
-                )
-
-                yield _sse({
-                    "event": "pre_warn_done",
-                    "ok": warn_result.get("ok", True),
-                    "risk_count": warn_result.get("risk_count", 0),
-                    "protagonist_fact_sheet": warn_result.get("protagonist_fact_sheet") or {},
-                    "writing_brief": warn_result.get("writing_brief") or {},
-                    "must_events": warn_result.get("must_events") or [],
-                    "hallucination_traps": warn_result.get("hallucination_traps") or [],
-                    "risks": (warn_result.get("risks") or [])[:5],
-                    "reminders": (warn_result.get("reminders") or [])[:5],
-                    "rag_retrieval_log_id": warn_result.get("rag_retrieval_log_id"),
-                    "record_id": str(warn_record.id),
-                })
-            except Exception as e:
-                # 预警失败不阻断写作，降级为无预警模式（pre_warn_brief_block 保持空字符串）
-                yield _sse({"event": "pre_warn_done", "ok": True, "risk_count": 0,
-                            "error": f"写前预警失败（已降级继续写作）：{e}"})
+            db.refresh(chapter)
+            pre_warn_brief_block, pre_warn_events = await resolve_pre_write_brief_for_draft(
+                db,
+                chapter=chapter,
+                project=project,
+                project_id=str(project_id),
+                svc=svc,
+                enabled=True,
+                model_profile=req.model_profile or "local",
+                llm_provider_id=str(req.llm_provider_id) if req.llm_provider_id else None,
+                persist_record=True,
+            )
+            for payload in pre_warn_events:
+                yield _sse(payload)
 
         for attempt in range(1, cfg["max_rewrite_attempts"] + 1):
             # ── 决定本轮策略 ───────────────────────────────────────────

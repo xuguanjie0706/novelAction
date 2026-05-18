@@ -53,7 +53,8 @@ class Settings(BaseSettings):
     LOCAL_EXTRACT_MEMORY_MAX_TOKENS: int = 2048
 
     # 复盘（auto_debrief）max_tokens — JSON 输出包含六类资产子字段，必须足够大
-    GEMINI_AUTO_DEBRIEF_MAX_TOKENS: int = 16384
+    # 复盘 JSON 通常 <4k token；thinking 模型在过大 max_tokens 时极易拖至数分钟无响应
+    GEMINI_AUTO_DEBRIEF_MAX_TOKENS: int = 8192
     LOCAL_AUTO_DEBRIEF_MAX_TOKENS: int = 4096
 
     # ── Embedding（pgvector 语义检索）────────────────────────────────────────

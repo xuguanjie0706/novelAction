@@ -14,6 +14,9 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
+/** 复盘类接口会调用 thinking 模型，单次可能超过 2 分钟；避免 axios 默认无超时却被代理/浏览器提前断开。 */
+const DEBRIEF_REQUEST_TIMEOUT_MS = 600_000
+
 installLlmFetchLogger()
 
 /**
@@ -615,7 +618,7 @@ export const aiApi = {
     force_refresh?: boolean
     /** 仅读服务端复盘缓存，不调用 LLM */
     cache_only?: boolean
-  }) => api.post(`/projects/${pid}/ai/auto-debrief`, data),
+  }) => api.post(`/projects/${pid}/ai/auto-debrief`, data, { timeout: DEBRIEF_REQUEST_TIMEOUT_MS }),
 
   /** 章节写完后批量提交状态更新 */
   chapterDebrief: (pid: string, data: {
@@ -680,7 +683,7 @@ export const aiApi = {
     }>
     /** 本章已兑现的承诺原文，用于模糊匹配 open 台账并标 fulfilled */
     fulfilled_promise_texts?: string[]
-  }) => api.post(`/projects/${pid}/ai/chapter-debrief`, data),
+  }) => api.post(`/projects/${pid}/ai/chapter-debrief`, data, { timeout: DEBRIEF_REQUEST_TIMEOUT_MS }),
 
   chapterCoherenceCheck: (
     pid: string,

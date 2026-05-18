@@ -73,7 +73,7 @@ function readStoredGenQueueState(): StoredGenQueuePayload {
         if (task.status !== 'running') return task
         const resumeProgress: GenProgressItem = {
           step: 'resume',
-          label: '页面已重载，任务中断——请确认项目状态后手动重新排队',
+          label: '刷新/重载页面时任务被中断（非服务端报错）——可点「重新排队」',
           done: true,
           error: true,
         }
@@ -81,7 +81,7 @@ function readStoredGenQueueState(): StoredGenQueuePayload {
         return {
           ...task,
           status: 'error' as const,
-          errorMsg: '页面重载导致任务中断，请手动重新排队',
+          errorMsg: '页面刷新或重载导致 SSE 断开；写作未失败，请重新排队',
           progress: hasResumeMark ? (task.progress ?? []) : [...(task.progress ?? []), resumeProgress],
         }
       })
@@ -189,6 +189,8 @@ interface AppState {
   pushGenProgress: (id: string, item: GenProgressItem) => void
   /** 删除已完成/出错的任务 */
   removeGenTask: (id: string) => void
+  /** 将中断/失败任务重置为 pending，便于一键重试 */
+  retryGenTask: (id: string) => void
   /** 大纲树是否需要刷新（队列任务完成后置 true，OutlinePage 检测到后 reload 并置 false） */
   outlineNeedsReload: boolean
   setOutlineNeedsReload: (v: boolean) => void
@@ -364,6 +366,23 @@ export const useAppStore = create<AppState>((set) => ({
       const nextQueue = state.genQueue.filter(t => t.id !== id)
       writeStoredGenQueueState(nextQueue, state.genQueueOpen)
       return { genQueue: nextQueue }
+    }),
+
+  retryGenTask: (id) =>
+    set((state) => {
+      const nextQueue = state.genQueue.map(t =>
+        t.id === id
+          ? {
+              ...t,
+              status: 'pending' as const,
+              errorMsg: undefined,
+              completedMsg: undefined,
+              progress: [],
+            }
+          : t,
+      )
+      writeStoredGenQueueState(nextQueue, true)
+      return { genQueue: nextQueue, genQueueOpen: true }
     }),
 
   outlineNeedsReload: false,

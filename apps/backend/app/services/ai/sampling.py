@@ -30,7 +30,7 @@ from app.services.llm_token_budgets import (
     max_tokens_suggest_stream,
 )
 from app.services.llm_billing_context import resolve_llm_billing_user_id
-from app.services.llm_call_log import log_llm_call
+from app.services.llm_call_log import log_llm_call, merge_truncation_into_context
 from app.services.genre_kit import get_genre_guardrail, normalize_genre
 from app.services.xuanhuan_lexicon import (
     format_modern_blacklist_for_prompt,
@@ -40,6 +40,12 @@ from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 
 
 class SamplingMixin:
+    def _log_context_payload(self, context: Optional[dict], task: Optional[str], sampling_kwargs: dict) -> dict:
+        """组装写入 ``llm_call_logs.context`` 的元数据（含截断警告）。"""
+        base = {**(context or {}), "task": task, "sampling": sampling_kwargs}
+        warnings = getattr(self, "_truncation_warnings", None) or []
+        return merge_truncation_into_context(base, warnings)
+
     def _preflight_credit_check(self) -> None:
         """积分预检：仅在 CREDIT_ENFORCEMENT=hard 且 user_id 已知时阻断调用。
 
@@ -162,7 +168,7 @@ class SamplingMixin:
                 mode=self.profile,
                 model=self.model,
                 llm_endpoint=f"{self.base_url.rstrip('/')}/chat/completions",
-                context={**(context or {}), "task": task, "sampling": sampling_kwargs},
+                context=self._log_context_payload(context, task, sampling_kwargs),
                 duration_ms=int((time.perf_counter() - start) * 1000),
                 status="ok",
                 prompt_text=f"{system}\n{prompt}",
@@ -188,7 +194,7 @@ class SamplingMixin:
                 mode=self.profile,
                 model=self.model,
                 llm_endpoint=f"{self.base_url.rstrip('/')}/chat/completions",
-                context={**(context or {}), "task": task, "sampling": sampling_kwargs},
+                context=self._log_context_payload(context, task, sampling_kwargs),
                 duration_ms=int((time.perf_counter() - start) * 1000),
                 status="error",
                 prompt_text=f"{system}\n{prompt}",
@@ -248,7 +254,7 @@ class SamplingMixin:
                 mode=self.profile,
                 model=self.model,
                 llm_endpoint=f"{self.base_url.rstrip('/')}/chat/completions",
-                context={**(context or {}), "task": task, "sampling": sampling_kwargs},
+                context=self._log_context_payload(context, task, sampling_kwargs),
                 duration_ms=int((time.perf_counter() - start) * 1000),
                 status="ok",
                 prompt_text=f"{system}\n{prompt}",
@@ -273,7 +279,7 @@ class SamplingMixin:
                 mode=self.profile,
                 model=self.model,
                 llm_endpoint=f"{self.base_url.rstrip('/')}/chat/completions",
-                context={**(context or {}), "task": task, "sampling": sampling_kwargs},
+                context=self._log_context_payload(context, task, sampling_kwargs),
                 duration_ms=int((time.perf_counter() - start) * 1000),
                 status="error",
                 prompt_text=f"{system}\n{prompt}",

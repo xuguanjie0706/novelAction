@@ -55,6 +55,49 @@ function ragContextSideEventHandler(
   }
 }
 
+/** 普通 draft-assist：RAG 快照 + 写前预警（简报注入正文 prompt） */
+function draftAssistSideEventHandler(
+  pushProgress: (item: GenProgressItem) => void,
+  phaseStep: (phase: string) => string,
+) {
+  return (obj: Record<string, unknown>) => {
+    const ev = obj.event
+    if (ev === 'rag_context') {
+      pushProgress({
+        step: phaseStep('rag'),
+        label: formatRagContextProgressLabel(obj),
+        done: true,
+        error: false,
+      })
+      return
+    }
+    if (ev === 'pre_warn_running') {
+      pushProgress({
+        step: phaseStep('pre_warn'),
+        label: '写前预警：主编审稿中（结果将注入本章正文 prompt）…',
+        done: false,
+        error: false,
+      })
+      return
+    }
+    if (ev === 'pre_warn_done') {
+      const ok = obj.ok !== false
+      const riskCount = typeof obj.risk_count === 'number' ? obj.risk_count : 0
+      const errMsg = typeof obj.error === 'string' ? obj.error : null
+      pushProgress({
+        step: phaseStep('pre_warn'),
+        label: errMsg
+          ? `写前预警：${errMsg}`
+          : ok
+            ? `写前预警完成（${riskCount} 处风险；简报已注入正文生成）`
+            : `写前预警：${riskCount} 处风险；简报已注入正文生成`,
+        done: true,
+        error: !!errMsg,
+      })
+    }
+  }
+}
+
 function manuscriptRawSnapshotForContinue(chapterContentHtml: string, accumulatedPlain: string): string {
   const prev = htmlToPlainForSplit(chapterContentHtml || '').trim()
   const acc = accumulatedPlain.trim()
@@ -807,7 +850,7 @@ async function runContinueChapters(
         },
         {
           signal,
-          onSideEvent: ragContextSideEventHandler(pushProgress, phaseStep('rag')),
+          onSideEvent: draftAssistSideEventHandler(pushProgress, phaseStep),
         },
       )
 
@@ -1454,7 +1497,25 @@ function progressRowKey(p: GenProgressItem, idx: number) {
   return p.progressKey ?? `p-${String(p.step)}-${idx}`
 }
 
-function TaskCard({ task, onRemove, onCancel }: { task: GenTask; onRemove: () => void; onCancel: () => void }) {
+function isTaskInterruptedByReload(task: GenTask): boolean {
+  return task.status === 'error' && (
+    !!task.errorMsg?.includes('页面刷新') ||
+    !!task.errorMsg?.includes('页面重载') ||
+    task.progress.some(p => p.step === 'resume')
+  )
+}
+
+function TaskCard({
+  task,
+  onRemove,
+  onCancel,
+  onRetry,
+}: {
+  task: GenTask
+  onRemove: () => void
+  onCancel: () => void
+  onRetry: () => void
+}) {
   const [expandedPk, setExpandedPk] = useState<string | null>(null)
   const isRunning = task.status === 'running'
   const isPending = task.status === 'pending'
@@ -1581,6 +1642,15 @@ function TaskCard({ task, onRemove, onCancel }: { task: GenTask; onRemove: () =>
       {task.errorMsg && (
         <p className="text-[11px] text-red-700 mt-1.5">{task.errorMsg}</p>
       )}
+      {isError && isTaskInterruptedByReload(task) && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-2 w-full rounded-lg border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] font-medium text-amber-900 hover:bg-amber-100"
+        >
+          重新排队（从中断处重跑整任务）
+        </button>
+      )}
       {isCancelled && (
         <p className="text-[11px] text-gray-500 mt-1.5">已取消</p>
       )}
@@ -1598,6 +1668,7 @@ export default function GenerationQueuePanel() {
   const updateGenTask = useAppStore(s => s.updateGenTask)
   const pushGenProgress = useAppStore(s => s.pushGenProgress)
   const removeGenTask = useAppStore(s => s.removeGenTask)
+  const retryGenTask = useAppStore(s => s.retryGenTask)
   const setOutlineNeedsReload = useAppStore(s => s.setOutlineNeedsReload)
   const setCurrentProject = useAppStore(s => s.setCurrentProject)
   const upsertChapter = useAppStore(s => s.upsertChapter)
@@ -1779,6 +1850,7 @@ export default function GenerationQueuePanel() {
                 task={task}
                 onRemove={() => removeGenTask(task.id)}
                 onCancel={() => cancelTask(task)}
+                onRetry={() => retryGenTask(task.id)}
               />
             ))}
           </div>

@@ -17,13 +17,27 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TypedDict
 from uuid import UUID
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.database import SessionLocal
 from app.models.llm_call_log import LlmCallLog
+
+# 列表查询不加载大 JSON 列，避免 1000 条 × 全量 prompt 拖垮接口
+_LLM_CALL_LIST_LOAD = load_only(
+    LlmCallLog.id,
+    LlmCallLog.mode,
+    LlmCallLog.model,
+    LlmCallLog.llm_endpoint,
+    LlmCallLog.status,
+    LlmCallLog.duration_ms,
+    LlmCallLog.context,
+    LlmCallLog.token_usage,
+    LlmCallLog.error,
+    LlmCallLog.created_at,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +47,65 @@ def estimate_tokens(text: str) -> int:
     if not text:
         return 0
     return max(1, (len(text) + 3) // 4)
+
+
+_CONTEXT_LIMIT_ERROR_HINTS = (
+    "context length",
+    "maximum context",
+    "context window",
+    "too many tokens",
+    "input is too long",
+    "request too large",
+    "exceeds the model",
+    "token limit",
+    "上下文长度",
+    "超过上下文",
+    "超出上下文",
+    "上下文超限",
+    "token 超限",
+)
+
+
+def is_context_limit_error(error: str | None) -> bool:
+    """判断 LLM 网关返回的错误是否属于「输入上下文超限」类。"""
+    if not error or not str(error).strip():
+        return False
+    low = str(error).lower()
+    return any(hint in low or hint in str(error) for hint in _CONTEXT_LIMIT_ERROR_HINTS)
+
+
+def merge_truncation_into_context(
+    context: Dict[str, Any] | None,
+    truncation_warnings: list[str] | None,
+) -> Dict[str, Any]:
+    """将 AIService 本次调用的截断警告写入落库 context，供管理后台展示。"""
+    merged = dict(context or {})
+    warnings = [w for w in (truncation_warnings or []) if isinstance(w, str) and w.strip()]
+    if warnings:
+        merged["context_truncated"] = True
+        merged["truncation_warnings"] = warnings
+    return merged
+
+
+def resolve_context_issue(
+    context: Dict[str, Any] | None,
+    error: str | None,
+    *,
+    status: str | None = None,
+) -> str | None:
+    """解析本条调用的上下文问题类型，供管理后台状态列展示。
+
+    Returns:
+        ``truncated``：业务侧主动裁剪了 prompt 字段；
+        ``limit_exceeded``：网关报错，通常因输入 token 超过模型窗口；
+        ``None``：无已知上下文问题。
+    """
+    ctx = context or {}
+    if ctx.get("context_truncated") or ctx.get("truncation_warnings"):
+        return "truncated"
+    if status == "error" and is_context_limit_error(error):
+        return "limit_exceeded"
+    return None
 
 
 def log_llm_call(
@@ -154,8 +227,9 @@ def log_llm_call(
     return log_id
 
 
-def _row_to_dict(row: LlmCallLog) -> Dict[str, Any]:
-    return {
+def _row_to_dict(row: LlmCallLog, *, include_payload: bool = True) -> Dict[str, Any]:
+    ctx = row.context or {}
+    out: Dict[str, Any] = {
         "id": str(row.id),
         "created_at": row.created_at.isoformat() if row.created_at else "",
         "mode": row.mode,
@@ -163,36 +237,85 @@ def _row_to_dict(row: LlmCallLog) -> Dict[str, Any]:
         "llm_endpoint": row.llm_endpoint,
         "status": row.status,
         "duration_ms": row.duration_ms,
-        "context": row.context or {},
+        "context": ctx,
+        "context_issue": resolve_context_issue(ctx, row.error, status=row.status),
         "token_usage": row.token_usage or {},
         "error": row.error,
-        "input_payload": row.input_payload,
-        "output_payload": row.output_payload,
     }
+    if include_payload:
+        out["input_payload"] = row.input_payload
+        out["output_payload"] = row.output_payload
+    return out
 
 
-def list_llm_calls(
-    limit: int = 200,
+class LlmCallListPage(TypedDict):
+    items: List[Dict[str, Any]]
+    total: int
+    page: int
+    page_size: int
+
+
+def _llm_calls_filtered_query(
+    db: Session,
     *,
     since: Optional[datetime] = None,
     until: Optional[datetime] = None,
+):
+    q = db.query(LlmCallLog)
+    if since is not None:
+        q = q.filter(LlmCallLog.created_at >= since)
+    if until is not None:
+        q = q.filter(LlmCallLog.created_at <= until)
+    return q
+
+
+def list_llm_calls(
+    *,
+    page: int = 1,
+    page_size: int = 20,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    include_payload: bool = False,
     db: Session | None = None,
-) -> List[Dict[str, Any]]:
-    """分页查询 LLM 调用日志（管理后台使用）。"""
+) -> LlmCallListPage:
+    """分页查询 LLM 调用日志（管理后台使用）。
+
+    默认 ``include_payload=False``：不读/不返回 ``input_payload``、``output_payload``；
+    详情见 :func:`get_llm_call`。
+    """
+    page = max(1, page)
+    page_size = max(1, min(page_size, 100))
+    offset = (page - 1) * page_size
+
     own_db = db is None
     db = db or SessionLocal()
     try:
-        q = db.query(LlmCallLog)
-        if since is not None:
-            q = q.filter(LlmCallLog.created_at >= since)
-        if until is not None:
-            q = q.filter(LlmCallLog.created_at <= until)
-        rows = (
-            q.order_by(LlmCallLog.created_at.desc())
-            .limit(max(1, min(limit, 2000)))
-            .all()
-        )
-        return [_row_to_dict(r) for r in rows]
+        q = _llm_calls_filtered_query(db, since=since, until=until)
+        total = int(q.count())
+        q = q.order_by(LlmCallLog.created_at.desc())
+        if not include_payload:
+            q = q.options(_LLM_CALL_LIST_LOAD)
+        rows = q.offset(offset).limit(page_size).all()
+        return {
+            "items": [_row_to_dict(r, include_payload=include_payload) for r in rows],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+    finally:
+        if own_db:
+            db.close()
+
+
+def get_llm_call(call_id: UUID, *, db: Session | None = None) -> Dict[str, Any] | None:
+    """按 id 返回单条调用日志（含全量 input/output payload）。"""
+    own_db = db is None
+    db = db or SessionLocal()
+    try:
+        row = db.query(LlmCallLog).filter(LlmCallLog.id == call_id).first()
+        if row is None:
+            return None
+        return _row_to_dict(row, include_payload=True)
     finally:
         if own_db:
             db.close()

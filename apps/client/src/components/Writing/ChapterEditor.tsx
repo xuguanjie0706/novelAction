@@ -22,6 +22,7 @@ import {
 } from '../../utils/draftChapterIndexSplit'
 import ChapterIndexEditPanel from './ChapterIndexEditPanel'
 import { chapterHasNarrativeBody, shouldUseGatedDraft } from '../../utils/writingConfigGate'
+import { formatApiError } from '../../utils/apiError'
 
 // ─── props ──────────────────────────────────────────────────────────────────
 interface Props {
@@ -790,7 +791,7 @@ export default function ChapterEditor({
       if (!window.confirm('「重新生成本章」将按大纲替换当前正文；若有旧稿会在保存前自动留版本快照。确定继续？')) return
       const route = useAppStore.getState().aiBackendRoute
       // 满足以下任一条件时走门控路由（gated_rewrite_chapter）：
-      //   1. pre_write_warning_enabled=true：需要写前预警，必须走门控路由才能触发
+      //   1. pre_write_warning_enabled=true：写前简报会在门控路由内联生成（普通续写走 draft-assist 也会注入）
       //   2. auto_quality_gate=true 且至少一个门槛 > 0：需要质检循环
       // 两者独立，均可单独启用；仅两者均关闭时才走轻量 rewrite_chapter。
       const useGated = shouldUseGatedDraft(writingConfig)
@@ -1035,10 +1036,42 @@ export default function ChapterEditor({
     }
   }, [storyLines])
 
+  /** 复盘前立即落库正文（服务端只读 DB，不读编辑器未保存内容） */
+  const flushChapterSaveForDebrief = useCallback(async (): Promise<boolean> => {
+    if (!editor) return hasHtmlTextContent(chapter.content)
+    clearTimeout(saveTimer.current)
+    const html = editor.getHTML()
+    if (!hasHtmlTextContent(html)) return false
+    if (html === chapter.content) return true
+    try {
+      const res = await chaptersApi.update(projectId, chapter.id, { content: html })
+      upsertChapter(res.data)
+      return true
+    } catch {
+      toast.error('保存正文失败，无法开始 AI 复盘')
+      return false
+    }
+  }, [editor, chapter.content, chapter.id, projectId, upsertChapter])
+
+  const debriefContentReady = useMemo(() => {
+    if (editor && hasHtmlTextContent(editor.getHTML())) return true
+    return hasHtmlTextContent(chapter.content)
+  }, [editor, chapter.content, editorHtmlTick])
+
   /** 调用 AI 自动分析章节，预填复盘面板 */
   const runAutoDebrief = async (forceRefresh = false) => {
+    if (!debriefContentReady) {
+      toast.error('本章尚无正文，请先生成或撰写并保存后再复盘')
+      return
+    }
     setAutoDebriefing(true)
     try {
+      const saved = await flushChapterSaveForDebrief()
+      if (!saved) {
+        toast.error('本章正文为空或未保存成功，无法复盘')
+        return
+      }
+      toast('AI 正在分析本章（thinking 模型可能需 2–5 分钟）…', { icon: '⏳', duration: 5000 })
       const route = useAppStore.getState().aiBackendRoute
       const res = await aiApi.autoDebrief(projectId, {
         chapter_id: chapter.id,
@@ -1052,11 +1085,15 @@ export default function ChapterEditor({
         toast.error(`AI 自动复盘解析失败：${data.error}`)
         return
       }
+      if (data.summary === '章节内容为空，无法分析') {
+        toast.error('服务端未读到本章正文，请先保存后再复盘')
+        return
+      }
 
       applyAutoDebriefData(data, data.cached ? 'cache' : 'llm')
       setDebriefFromQueueSnapshot(false)
-    } catch {
-      toast.error('AI 自动复盘失败，请手动填写')
+    } catch (e) {
+      toast.error(`AI 自动复盘失败：${formatApiError(e)}`)
     } finally {
       setAutoDebriefing(false)
     }
@@ -2032,6 +2069,7 @@ export default function ChapterEditor({
                   onSubmit={submitDebrief}
                   fromQueueSnapshot={debriefFromQueueSnapshot}
                   debriefHistoryTick={debriefHistoryTick}
+                  debriefContentReady={debriefContentReady}
                 />
               )}
 
@@ -2510,6 +2548,8 @@ interface DebriefPanelProps {
   fromQueueSnapshot?: boolean
   /** 变更时重新拉取本章复盘落库审计列表 */
   debriefHistoryTick?: number
+  /** 编辑器或已保存正文是否非空（控制 AI 分析按钮） */
+  debriefContentReady?: boolean
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -2552,6 +2592,7 @@ function DebriefPanel({
   onSubmit,
   fromQueueSnapshot = false,
   debriefHistoryTick = 0,
+  debriefContentReady = true,
 }: DebriefPanelProps) {
   const [applyRecords, setApplyRecords] = useState<Array<{
     id: string
@@ -2707,6 +2748,14 @@ function DebriefPanel({
         </div>
       </section>
 
+      {!debriefContentReady && (
+        <div className="rounded-novel border border-rose-200 bg-rose-50/90 px-3 py-2.5 text-[11px] text-rose-800 leading-relaxed">
+          <span className="font-semibold">本章尚无已保存正文。</span>
+          {' '}复盘只读取数据库中的章节内容。请先在左侧撰写并等待自动保存，或用 AI 队列生成本章后再分析。
+          <span className="block mt-1 text-rose-700/90">若刚写完的是上一章（例如第22章），请切换到该章再点「AI 自动复盘」。</span>
+        </div>
+      )}
+
       {/* AI 自动分析区 */}
       {hasAiSuggestions && aiSummary ? (
         <div className="rounded-novel border border-amber-200 bg-amber-50/80 px-3 py-2.5">
@@ -2728,7 +2777,7 @@ function DebriefPanel({
             <button
               type="button"
               onClick={() => onAutoDebrief(hasAiSuggestions)}
-              disabled={autoDebriefing || cacheHydrating || !chapter.content?.trim()}
+              disabled={autoDebriefing || cacheHydrating || !debriefContentReady}
               className="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-novel border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 transition-novel shrink-0"
             >
               <Bot size={11} className={autoDebriefing ? 'animate-pulse' : ''} />
@@ -3121,7 +3170,7 @@ function DebriefPanel({
             <button
               type="button"
               onClick={() => onAutoDebrief(hasAiSuggestions)}
-              disabled={autoDebriefing || cacheHydrating || submitting || !chapter.content?.trim()}
+              disabled={autoDebriefing || cacheHydrating || submitting || !debriefContentReady}
               className="flex items-center justify-center gap-1.5 text-xs py-2.5 px-3 border border-amber-300 text-amber-800 bg-amber-50 hover:bg-amber-100 rounded-xl font-semibold disabled:opacity-50 transition-novel shrink-0"
             >
               <Bot size={13} className={autoDebriefing ? 'animate-pulse' : ''} />

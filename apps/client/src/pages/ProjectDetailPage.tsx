@@ -865,7 +865,8 @@ function WritingConfigPanel({ projectId }: { projectId: string }) {
                   </span>
                 </p>
                 <p className="mt-0.5 text-xs text-gray-500 leading-relaxed">
-                  开启后，每次门控写作前以「三十年主编」视角生成写前简报：锁定主角境界/位置/技能，给出开篇策略、冲突节拍、章末钩子设计和幻觉预防清单，注入正文 prompt。
+                  开启后，每次 AI 生成本章正文前自动生成写前简报（主角状态锁定、开篇/冲突/钩子写法、必发事件、幻觉预防），
+                  <strong className="font-medium text-gray-700">优先注入写章 prompt 约束正文</strong>；侧栏可查阅同一份记录。
                 </p>
                 <p className="mt-1 text-xs text-amber-600">
                   ⚠️ 会额外消耗一次 AI 调用，小模型/本地模型效果有限，推荐配合 Gemini 线路使用。

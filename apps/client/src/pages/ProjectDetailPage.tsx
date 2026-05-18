@@ -758,7 +758,8 @@ function WritingConfigPanel({ projectId }: { projectId: string }) {
           <div>
             <p className="text-sm font-medium text-gray-800">启用质量门控循环</p>
             <p className="mt-0.5 text-xs text-gray-500">
-              开启后每次写章节将自动质检；未达标时按策略重写，最多重试 {cfg.max_rewrite_attempts} 次
+              开启后，空章点「生成」与「重写本章」会走门控流：自动质检，未达标按策略重写，最多 {cfg.max_rewrite_attempts} 次。
+              已有正文时「生成」为续写追加，仅单次质检、不循环重写。队列里出现「门控配置」「第 N 轮」「qc_result」即已生效。
             </p>
           </div>
           <button

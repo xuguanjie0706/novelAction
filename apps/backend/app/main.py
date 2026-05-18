@@ -56,7 +56,7 @@ class ForwardedHostASGIMiddleware:
 from app.config import settings
 from app.database import engine, Base
 from app.dependencies import get_current_user, verify_project_access
-from app.routers import projects, world_settings, characters, outline, chapters, chapter_indexes, ai, generate, admin_llm, llm_public, admin_llm_calls, admin_cover_image_calls
+from app.routers import projects, world_settings, characters, outline, chapters, chapter_indexes, ai, generate, admin_llm, llm_public, admin_llm_calls, admin_cover_image_calls, admin_rag_logs
 from app.routers import storylines, power_systems, skills, items, factions
 from app.routers import foreshadows, quality_debts
 from app.routers import scenes, reader_promises, locations as locations_router
@@ -69,6 +69,7 @@ from app.routers import credits as credits_router
 from app.routers import admin_credits as admin_credits_router
 from app.routers import admin_redeem_codes as admin_redeem_codes_router
 from app.routers import consistency_fix as consistency_fix_router
+from app.routers import jobs as jobs_router
 from app.services.llm_config import seed_llm_from_env_if_empty
 from app.services.cover_storage import ensure_cover_storage_dir, resolved_cover_storage_dir
 
@@ -490,6 +491,37 @@ def _ensure_bootstrap_runs_table() -> None:
         """))
 
 
+def _ensure_generation_jobs_table() -> None:
+    """为旧库补齐 generation_jobs 表（chapter_draft LangGraph 队列，Base.metadata.create_all 也会建，此处幂等兜底）。"""
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS generation_jobs (
+                id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                project_id        UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                user_id           UUID REFERENCES users(id) ON DELETE SET NULL,
+                job_type          VARCHAR(30) NOT NULL DEFAULT 'chapter_draft',
+                status            VARCHAR(30) NOT NULL DEFAULT 'pending',
+                current_node      VARCHAR(60),
+                progress_pct      INTEGER NOT NULL DEFAULT 0,
+                input_payload     JSON NOT NULL DEFAULT '{}',
+                user_input_schema JSON,
+                user_input        JSON,
+                events            JSON NOT NULL DEFAULT '[]',
+                result            JSON,
+                error_detail      TEXT,
+                created_at        TIMESTAMPTZ DEFAULT NOW(),
+                updated_at        TIMESTAMPTZ DEFAULT NOW(),
+                completed_at      TIMESTAMPTZ
+            )
+        """))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_generation_jobs_project_id ON generation_jobs (project_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_generation_jobs_user_id ON generation_jobs (user_id)"
+        ))
+
+
 # 自动建表（开发用，生产建议改用 Alembic）
 Base.metadata.create_all(bind=engine)
 _ensure_project_columns()
@@ -505,6 +537,7 @@ _ensure_llm_provider_columns()
 _ensure_chapter_coherence_report_columns()
 _ensure_cover_image_call_logs_columns()
 _ensure_bootstrap_runs_table()
+_ensure_generation_jobs_table()
 _ensure_locations_table()
 _ensure_scene_location_id_column()
 _claim_orphan_projects()
@@ -546,9 +579,17 @@ async def _on_startup() -> None:
     """
     启动时保存 uvicorn 主事件循环，供 sync 路由（线程池）中的 embed_*_async 使用。
     sync 路由通过 run_coroutine_threadsafe 将 embedding 协程提交到此 loop。
+
+    同时启动 generation job worker 恢复任务：
+    扫描服务器重启前残留的 running/waiting_input/pending 任务，
+    running/waiting_input → failed（MemorySaver 丢失），pending → 重新 enqueue。
     """
     from app.services.embedding_service import set_main_event_loop
     set_main_event_loop(asyncio.get_running_loop())
+
+    # 生成任务恢复（非阻塞，内部有 2s 延迟等 DB 连接池稳定）
+    from app.services.draft_graph.worker import recover_stale_jobs
+    asyncio.create_task(recover_stale_jobs(), name="draft-job-recovery")
 
 
 app.add_middleware(
@@ -587,10 +628,14 @@ app.include_router(generate.router, prefix="/api/v1", dependencies=[Depends(get_
 # bootstrap（新）：LangGraph 可排队 + human-in-the-loop 闸门；鉴权由路由内部 get_current_user 处理。
 app.include_router(bootstrap_graph_router.router, prefix="/api/v1")
 
+# 生成任务队列：章节起草 LangGraph 队列（断线重连 + human interrupt）；鉴权由路由内部处理。
+app.include_router(jobs_router.router, prefix="/api/v1")
+
 # 全局只读/管理：需登录但不绑项目。
 app.include_router(admin_llm.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(admin_llm_calls.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(admin_cover_image_calls.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+app.include_router(admin_rag_logs.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(llm_public.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 
 # 首页 dashboard：跨项目聚合，仅需登录态。

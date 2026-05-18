@@ -1417,6 +1417,47 @@ async def test_auto_debrief_extracts_chapter_index():
 
 
 @pytest.mark.asyncio
+async def test_auto_debrief_extracts_reader_promises():
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None, **kwargs):
+        assert "new_reader_promises" in prompt
+        return """
+        {
+          "character_updates": [],
+          "storyline_updates": [],
+          "memory_updates": [],
+          "chapter_index": {},
+          "new_reader_promises": [
+            {
+              "promise_text": "下一章林凡将直面天劫",
+              "promise_type": "chapter_ending",
+              "expected_within_chapters": 1,
+              "priority": 5,
+              "audience_aware": 4
+            }
+          ],
+          "fulfilled_promise_texts": ["三年前失踪的父亲终于现身"],
+          "summary": "承诺已提取。"
+        }
+        """
+
+    svc = AIService()
+    svc._call_ai = fake_call
+
+    result = await svc.auto_extract_debrief(
+        chapter_content="章末写林凡必须渡劫；父亲现身。",
+        chapter_title="第8章",
+        chapter_number=8,
+        character_states=[],
+        storylines=[],
+    )
+
+    assert len(result["new_reader_promises"]) == 1
+    assert result["new_reader_promises"][0]["promise_text"] == "下一章林凡将直面天劫"
+    assert result["new_reader_promises"][0]["promise_type"] == "chapter_ending"
+    assert result["fulfilled_promise_texts"] == ["三年前失踪的父亲终于现身"]
+
+
+@pytest.mark.asyncio
 async def test_auto_debrief_extracts_asset_updates_without_replacing_memory():
     captured = {}
 

@@ -136,6 +136,49 @@ async def gen_opening_5chapters(svc: Any, project: Project, ctx: dict) -> dict:
         # 创建前5章 OutlineNode（chapter_plan）——找或创建第一卷节点
         _ensure_chapter_plans(svc.db, project, data)
 
+        from app.services.bootstrap.reader_promise_seed import seed_reader_promises
+
+        fanqie_seeds: list[dict] = []
+        for ch_num in range(1, 6):
+            ch = data.get(f"chapter_{ch_num}") or {}
+            if not isinstance(ch, dict):
+                continue
+            hook = (ch.get("ending_hook") or "").strip()
+            if hook:
+                fanqie_seeds.append({
+                    "text": hook,
+                    "promise_type": "chapter_ending",
+                    "source_chapter_number": ch_num,
+                    "expected_chapter_window": 2 if ch_num < 5 else 1,
+                    "priority": 5 if ch_num >= 5 else 4,
+                    "audience_aware": 4,
+                    "contract_key": f"chapter_{ch_num}_ending_hook",
+                })
+            if ch_num == 5:
+                commit = (ch.get("commitment_hook") or "").strip()
+                if commit:
+                    fanqie_seeds.append({
+                        "text": commit,
+                        "promise_type": "chapter_ending",
+                        "source_chapter_number": 5,
+                        "expected_chapter_window": 1,
+                        "priority": 5,
+                        "audience_aware": 5,
+                        "contract_key": "chapter_5_commitment_hook",
+                    })
+        first_sentence = (data.get("first_sentence") or "").strip()
+        if first_sentence:
+            fanqie_seeds.append({
+                "text": first_sentence,
+                "promise_type": "name_implication",
+                "source_chapter_number": 1,
+                "expected_chapter_window": 0,
+                "priority": 2,
+                "audience_aware": 2,
+                "contract_key": "first_sentence",
+            })
+        seed_reader_promises(svc, project, fanqie_seeds, origin="bootstrap_fanqie_opening_5chapters")
+
         ctx["opening_5chapters"] = data
         return data
 

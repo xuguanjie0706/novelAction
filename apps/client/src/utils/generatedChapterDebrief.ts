@@ -56,6 +56,14 @@ export interface AutoDebriefResult {
   }
   summary?: string
   error?: string
+  new_reader_promises?: Array<{
+    promise_text: string
+    promise_type?: string
+    expected_within_chapters?: number
+    priority?: number
+    audience_aware?: number
+  }>
+  fulfilled_promise_texts?: string[]
 }
 
 export interface GeneratedChapterDebriefStats {
@@ -66,6 +74,8 @@ export interface GeneratedChapterDebriefStats {
   assetUpdatedCount: number
   chapterIndexSaved: boolean
   chapterIndexError?: string
+  promisesCreated?: number
+  promisesFulfilled?: number
   /** 提交 chapter-debrief 前保留的 AI 提取结果（服务端提交后会删缓存，供写作页复盘 Tab 恢复黄标） */
   debriefPreview?: AutoDebriefResult
 }
@@ -140,6 +150,8 @@ export async function autoCommitGeneratedChapterDebrief(
     memory_updates: memoryUpdates,
     asset_updates: data.asset_updates,
     new_characters: newCharacters as any,
+    new_reader_promises: (data.new_reader_promises || []).filter(p => p.promise_text?.trim()),
+    fulfilled_promise_texts: (data.fulfilled_promise_texts || []).filter(t => t.trim()),
     notes: data.summary ? `AI生成自动复盘：${data.summary}` : undefined,
     apply_source: 'queue_auto',
   }
@@ -161,6 +173,9 @@ export async function autoCommitGeneratedChapterDebrief(
   const updatedSls = Array.isArray(d?.updated_storylines) ? d.updated_storylines.length : storylineUpdates.length
   const addedMems = Array.isArray(d?.added_memories) ? d.added_memories.length : memoryUpdates.length
 
+  const promisesCreated = Number(d?.promises_created ?? 0)
+  const promisesFulfilled = Number(d?.promises_fulfilled ?? 0)
+
   return {
     characterCount: updatedChars,
     storylineCount: updatedSls,
@@ -169,6 +184,8 @@ export async function autoCommitGeneratedChapterDebrief(
     assetUpdatedCount,
     chapterIndexSaved: !!d?.chapter_index_saved,
     chapterIndexError: d?.chapter_index_error as string | undefined,
+    promisesCreated,
+    promisesFulfilled,
     debriefPreview: data,
   }
 }

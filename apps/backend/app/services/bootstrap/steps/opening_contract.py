@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.models import Project, ReaderPromise
+from app.models import Project
 from app.services.bootstrap.parse import parse_json
+from app.services.bootstrap.reader_promise_seed import seed_reader_promises
 
 
 async def gen_opening_contract(svc: Any, project: Project, ctx: dict) -> dict:
@@ -104,29 +105,20 @@ async def gen_opening_contract(svc: Any, project: Project, ctx: dict) -> dict:
                 "audience_aware": 1,
             },
         ]
-        try:
-            for m in milestone_map:
-                text = contract.get(m["key"])
-                if not text:
-                    continue
-                if isinstance(text, list):
-                    text = "；".join(str(t) for t in text if t)
-                if not text.strip():
-                    continue
-                rp = ReaderPromise(
-                    project_id=project.id,
-                    promise_text=str(text).strip(),
-                    promise_type=m["promise_type"],
-                    source_chapter_number=m["source_chapter_number"],
-                    expected_chapter_window=m["expected_chapter_window"],
-                    priority=m["priority"],
-                    audience_aware=m["audience_aware"],
-                    status="open",
-                    extra={"origin": "bootstrap_opening_contract", "contract_key": m["key"]},
-                )
-                svc.db.add(rp)
-            svc.db.commit()
-        except Exception:
-            pass
+        seed_entries = []
+        for m in milestone_map:
+            text = contract.get(m["key"])
+            if not text:
+                continue
+            seed_entries.append({
+                "text": text,
+                "promise_type": m["promise_type"],
+                "source_chapter_number": m["source_chapter_number"],
+                "expected_chapter_window": m["expected_chapter_window"],
+                "priority": m["priority"],
+                "audience_aware": m["audience_aware"],
+                "contract_key": m["key"],
+            })
+        seed_reader_promises(svc, project, seed_entries, origin="bootstrap_opening_contract")
 
     return contract

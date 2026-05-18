@@ -9,6 +9,7 @@ import {
   LogoutOutlined,
   PictureOutlined,
   ReadOutlined,
+  SearchOutlined,
   UserOutlined,
   WalletOutlined,
 } from '@ant-design/icons'
@@ -39,6 +40,7 @@ export default function AdminLayout() {
     if (loc.pathname.startsWith('/redeem-codes')) return ['/redeem-codes']
     if (loc.pathname.startsWith('/reading-review')) return ['/reading-review']
     if (loc.pathname.startsWith('/llm-calls')) return ['/llm-calls']
+    if (loc.pathname.startsWith('/rag-logs')) return ['/rag-logs']
     if (loc.pathname.startsWith('/cover-image-calls')) return ['/cover-image-calls']
     if (loc.pathname.startsWith('/image-providers')) return ['/image-providers']
     if (loc.pathname.startsWith('/llm')) return ['/llm']
@@ -102,6 +104,12 @@ export default function AdminLayout() {
               icon: <DatabaseOutlined />,
               label: 'LLM调用记录',
               onClick: () => navigate('/llm-calls'),
+            },
+            {
+              key: '/rag-logs',
+              icon: <SearchOutlined />,
+              label: 'RAG检索日志',
+              onClick: () => navigate('/rag-logs'),
             },
             {
               key: '/reading-review',

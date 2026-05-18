@@ -58,6 +58,10 @@ def chapter_debrief(
     # 境界序号单调性 guard：收集被阻止的降级操作，回传给前端提示作者检查
     realm_rank_warnings: List[str] = []
     synced_foreshadows = {"created": 0, "updated": 0, "resolved": 0}
+    directives_applied = 0
+    speech_kit_updated_count = 0
+    promises_created = 0
+    promises_fulfilled = 0
     asset_stats = {
         "created_items": 0,
         "updated_items": 0,
@@ -455,12 +459,137 @@ def chapter_debrief(
         _new_memory_chunks.append(memory)
         added_memories.append(memory.title)
 
+    # 复盘闭环：下一章 patch / 语风 / 读者承诺（须在 commit 前完成）
+    if req.next_chapter_directives:
+        for d in req.next_chapter_directives:
+            try:
+                target_id = d.get("outline_node_id")
+                patch = d.get("patch") or {}
+                if not patch:
+                    continue
+                node = None
+                if target_id:
+                    try:
+                        node = db.query(OutlineNode).filter(
+                            OutlineNode.id == UUID(str(target_id)),
+                            OutlineNode.project_id == project_id
+                        ).first()
+                    except Exception:
+                        node = None
+                if not node:
+                    current_sort = chapter.sort_order or 0
+                    node = db.query(OutlineNode).filter(
+                        OutlineNode.project_id == project_id,
+                        OutlineNode.sort_order > current_sort,
+                        OutlineNode.status != "done"
+                    ).order_by(OutlineNode.sort_order.asc()).first()
+                if node:
+                    extra = dict(node.extra or {})
+                    prev = extra.get("directives_from_prev") or []
+                    prev.append({
+                        "from_chapter_id": str(req.chapter_id),
+                        "from_chapter_title": chapter.title,
+                        "patch": patch,
+                        "reason": d.get("reason", ""),
+                        "applied_at": "now"
+                    })
+                    extra["directives_from_prev"] = prev[-5:]
+                    node.extra = extra
+                    directives_applied += 1
+            except Exception:
+                continue
+
+    if req.speech_kit_updates:
+        for sku in req.speech_kit_updates:
+            try:
+                cid = sku.get("character_id")
+                if not cid:
+                    continue
+                char = db.query(Character).filter(
+                    Character.id == UUID(str(cid)),
+                    Character.project_id == project_id
+                ).first()
+                if not char:
+                    continue
+                kit = dict(char.speech_kit or {})
+                old_words = set(kit.get("signature_words") or [])
+                new_words = [w.strip() for w in (sku.get("new_signature_words") or []) if w.strip()]
+                kit["signature_words"] = list(old_words | set(new_words))[:8]
+                old_dialogues = kit.get("sample_dialogues") or []
+                new_dialogues = [d.strip() for d in (sku.get("new_sample_dialogues") or []) if d.strip()]
+                kit["sample_dialogues"] = (old_dialogues + new_dialogues)[-8:]
+                if sku.get("evolution_note"):
+                    notes = kit.get("recent_evolution_notes") or []
+                    notes.append({
+                        "chapter_id": str(req.chapter_id),
+                        "chapter_title": chapter.title,
+                        "note": sku["evolution_note"][:200]
+                    })
+                    kit["recent_evolution_notes"] = notes[-5:]
+                char.speech_kit = kit
+                speech_kit_updated_count += 1
+            except Exception:
+                continue
+
+    if req.new_reader_promises:
+        for p in req.new_reader_promises:
+            try:
+                text = (p.get("promise_text") or "").strip()
+                if not text:
+                    continue
+                rp = ReaderPromise(
+                    project_id=project_id,
+                    promise_text=text[:500],
+                    promise_type=p.get("promise_type", "chapter_ending"),
+                    source_chapter_id=req.chapter_id,
+                    source_chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
+                    expected_chapter_window=int(p.get("expected_within_chapters") or 3),
+                    priority=int(p.get("priority") or 3),
+                    audience_aware=int(p.get("audience_aware") or 3),
+                    status="open",
+                )
+                db.add(rp)
+                promises_created += 1
+            except Exception:
+                continue
+
+    if req.fulfilled_promise_texts:
+        def _fuzzy_match(query: str, target: str, ngram: int = 4) -> bool:
+            if query in target or target[:20] in query:
+                return True
+            if len(query) >= ngram:
+                for i in range(len(query) - ngram + 1):
+                    if query[i:i + ngram] in target:
+                        return True
+            return False
+
+        open_promises = (
+            db.query(ReaderPromise)
+            .filter(
+                ReaderPromise.project_id == project_id,
+                ReaderPromise.status == "open",
+            )
+            .all()
+        )
+        for promise in open_promises:
+            for ft in req.fulfilled_promise_texts:
+                ft = ft.strip()
+                if ft and _fuzzy_match(ft, promise.promise_text or ""):
+                    promise.status = "fulfilled"
+                    promise.fulfilled_chapter_id = req.chapter_id
+                    promise.fulfilled_chapter_number = chapter.sort_order
+                    promises_fulfilled += 1
+                    break
+
     db.query(ChapterDebriefCache).filter(
         ChapterDebriefCache.project_id == project_id,
         ChapterDebriefCache.chapter_id == chapter.id,
     ).delete(synchronize_session=False)
 
     new_char_suffix = f"、新配角入库 {len(added_new_characters)} 个（{', '.join(added_new_characters)}）" if added_new_characters else ""
+    promise_suffix = ""
+    if promises_created or promises_fulfilled:
+        promise_suffix = f"、读者承诺新增{promises_created}条/兑现{promises_fulfilled}条"
     result_message = (
         f"已更新 {len(updated_chars)} 个人物状态、{len(updated_storylines)} 条故事线、"
         f"{len(added_memories)} 条记忆、章节索引={'已写入' if chapter_index_saved else '未更新'}、"
@@ -468,7 +597,7 @@ def chapter_debrief(
         f"回收{synced_foreshadows['resolved']}条、资产新增"
         f"{asset_stats['created_items'] + asset_stats['created_skills'] + asset_stats['created_factions']}条/"
         f"更新{asset_stats['updated_items'] + asset_stats['updated_skills'] + asset_stats['updated_factions']}条"
-        f"{new_char_suffix}"
+        f"{new_char_suffix}{promise_suffix}"
     )
 
     plain_for_hash = plain_text(chapter.content or "")
@@ -506,142 +635,6 @@ def chapter_debrief(
     for mc in _new_memory_chunks:
         embed_text = f"{mc.title or ''}\n{mc.content}".strip()
         embed_chunk_async(mc.id, embed_text, SessionLocal)
-
-    # 复盘闭环：应用 next_chapter_directives 到未来 OutlineNode.extra
-    directives_applied = 0
-    if req.next_chapter_directives:
-        for d in req.next_chapter_directives:
-            try:
-                target_id = d.get("outline_node_id")
-                patch = d.get("patch") or {}
-                if not patch:
-                    continue
-                node = None
-                if target_id:
-                    try:
-                        node = db.query(OutlineNode).filter(
-                            OutlineNode.id == UUID(str(target_id)),
-                            OutlineNode.project_id == project_id
-                        ).first()
-                    except Exception:
-                        node = None
-                if not node:
-                    # 自动匹配下一章（按 sort_order 找当前章之后的第一个未写节点）
-                    current_sort = chapter.sort_order or 0
-                    node = db.query(OutlineNode).filter(
-                        OutlineNode.project_id == project_id,
-                        OutlineNode.sort_order > current_sort,
-                        OutlineNode.status != "done"
-                    ).order_by(OutlineNode.sort_order.asc()).first()
-                if node:
-                    extra = dict(node.extra or {})
-                    prev = extra.get("directives_from_prev") or []
-                    prev.append({
-                        "from_chapter_id": str(req.chapter_id),
-                        "from_chapter_title": chapter.title,
-                        "patch": patch,
-                        "reason": d.get("reason", ""),
-                        "applied_at": "now"
-                    })
-                    extra["directives_from_prev"] = prev[-5:]  # 只保留最近5条，避免无限膨胀
-                    node.extra = extra
-                    directives_applied += 1
-            except Exception:
-                continue
-
-    # P1-4：人物语风指纹沉淀（speech_kit_updates）
-    speech_kit_updated_count = 0
-    if req.speech_kit_updates:
-        for sku in req.speech_kit_updates:
-            try:
-                cid = sku.get("character_id")
-                if not cid:
-                    continue
-                char = db.query(Character).filter(
-                    Character.id == UUID(str(cid)),
-                    Character.project_id == project_id
-                ).first()
-                if not char:
-                    continue
-                kit = dict(char.speech_kit or {})
-                # 合并 signature_words
-                old_words = set(kit.get("signature_words") or [])
-                new_words = [w.strip() for w in (sku.get("new_signature_words") or []) if w.strip()]
-                kit["signature_words"] = list(old_words | set(new_words))[:8]
-                # 合并 sample_dialogues
-                old_dialogues = kit.get("sample_dialogues") or []
-                new_dialogues = [d.strip() for d in (sku.get("new_sample_dialogues") or []) if d.strip()]
-                merged_dialogues = (old_dialogues + new_dialogues)[-8:]  # 最多保留8句
-                kit["sample_dialogues"] = merged_dialogues
-                # evolution_notes
-                if sku.get("evolution_note"):
-                    notes = kit.get("recent_evolution_notes") or []
-                    notes.append({
-                        "chapter_id": str(req.chapter_id),
-                        "chapter_title": chapter.title,
-                        "note": sku["evolution_note"][:200]
-                    })
-                    kit["recent_evolution_notes"] = notes[-5:]
-                char.speech_kit = kit
-                speech_kit_updated_count += 1
-            except Exception:
-                continue
-
-    # P1-5：读者期待管理（new_reader_promises → ReaderPromise）
-    promises_created = 0
-    if req.new_reader_promises:
-        for p in req.new_reader_promises:
-            try:
-                text = (p.get("promise_text") or "").strip()
-                if not text:
-                    continue
-                rp = ReaderPromise(
-                    project_id=project_id,
-                    promise_text=text[:500],
-                    promise_type=p.get("promise_type", "chapter_ending"),
-                    source_chapter_id=req.chapter_id,
-                    source_chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
-                    expected_chapter_window=int(p.get("expected_within_chapters") or 3),
-                    priority=int(p.get("priority") or 3),
-                    audience_aware=int(p.get("audience_aware") or 3),
-                    status="open",
-                )
-                db.add(rp)
-                promises_created += 1
-            except Exception:
-                continue
-
-    # P1-6：承诺兑现闭环（fulfilled_promise_texts → ReaderPromise.status = fulfilled）
-    # 数据来源：auto_debrief 从正文结构化提取，前端确认后随复盘一同提交。
-    # 匹配策略：精确子串优先，回退 4-gram 重叠（容忍 AI 轻微改写）。
-    promises_fulfilled = 0
-    if req.fulfilled_promise_texts:
-        def _fuzzy_match(query: str, target: str, ngram: int = 4) -> bool:
-            if query in target or target[:20] in query:
-                return True
-            if len(query) >= ngram:
-                for i in range(len(query) - ngram + 1):
-                    if query[i:i + ngram] in target:
-                        return True
-            return False
-
-        open_promises = (
-            db.query(ReaderPromise)
-            .filter(
-                ReaderPromise.project_id == project_id,
-                ReaderPromise.status == "open",
-            )
-            .all()
-        )
-        for promise in open_promises:
-            for ft in req.fulfilled_promise_texts:
-                ft = ft.strip()
-                if ft and _fuzzy_match(ft, promise.promise_text or ""):
-                    promise.status = "fulfilled"
-                    promise.fulfilled_chapter_id = req.chapter_id
-                    promise.fulfilled_chapter_number = chapter.sort_order
-                    promises_fulfilled += 1
-                    break  # 一条承诺只匹配一次
 
     return {
         "ok": True,
@@ -757,6 +750,29 @@ async def auto_debrief(
         for s in storylines
     ]
 
+    # 查询当前 open 承诺，注入 AI 以支持兑现检测
+    open_promise_records = (
+        db.query(ReaderPromise)
+        .filter(
+            ReaderPromise.project_id == project_id,
+            ReaderPromise.status == "open",
+        )
+        .order_by(ReaderPromise.priority.desc())
+        .limit(20)
+        .all()
+    )
+    open_promises_data = [
+        {
+            "id": str(p.id),
+            "promise_text": p.promise_text or "",
+            "promise_type": p.promise_type or "chapter_ending",
+            "source_chapter_number": p.source_chapter_number or "",
+            "priority": p.priority or 3,
+        }
+        for p in open_promise_records
+        if (p.promise_text or "").strip()
+    ]
+
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
         db=db,
@@ -769,6 +785,7 @@ async def auto_debrief(
         chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
         character_states=character_states,
         storylines=storylines_data,
+        open_promises=open_promises_data,
     )
     if isinstance(result, dict) and not result.get("error"):
         if not cached:

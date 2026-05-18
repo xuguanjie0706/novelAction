@@ -317,7 +317,7 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 ## 待完成功能
 
 - [ ] Scene 三层调度全链路（章纲 → 分场 → 逐场正文 → stitch）
-- [ ] ReaderPromise 深度闭环（写章时承诺注入 + 复盘自动检测回收）
+- [x] ReaderPromise 深度闭环（写章注入 open 承诺 + auto-debrief AI 识别新增/兑现 + 队列自动复盘同步提交）
 - [ ] Location 模型（当前 Scene.location_name 文本字段，location_id 已注释预留，P2-W7）
 - [ ] 人物关系图可视化（ReactFlow）
 - [ ] pgvector 语义记忆检索（`MemoryChunk.embedding` 字段已预留）

@@ -3,7 +3,7 @@ import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import CharacterCount from '@tiptap/extension-character-count'
 import Placeholder from '@tiptap/extension-placeholder'
-import { chaptersApi, aiApi, storylinesApi, foreshadowsApi, chapterIndexesApi, charactersApi } from '../../api/client'
+import { chaptersApi, aiApi, storylinesApi, foreshadowsApi, chapterIndexesApi, charactersApi, projectsApi } from '../../api/client'
 import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload, llmProviderIdFromRoute } from '../../store'
 import type { Chapter, Character, OutlineNode, StoryLine, Foreshadow, ChapterIndex, ChapterVersion, ChapterVersionDetail } from '../../types'
 import toast from 'react-hot-toast'
@@ -21,6 +21,7 @@ import {
   plainTextBlocksToHtml,
 } from '../../utils/draftChapterIndexSplit'
 import ChapterIndexEditPanel from './ChapterIndexEditPanel'
+import { chapterHasNarrativeBody, shouldUseGatedDraft } from '../../utils/writingConfigGate'
 
 // ─── props ──────────────────────────────────────────────────────────────────
 interface Props {
@@ -194,6 +195,14 @@ type AutoDebriefResponse = {
   error?: string
   cached?: boolean
   cache_only_miss?: boolean
+  new_reader_promises?: Array<{
+    promise_text: string
+    promise_type?: string
+    expected_within_chapters?: number
+    priority?: number
+    audience_aware?: number
+  }>
+  fulfilled_promise_texts?: string[]
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -303,7 +312,9 @@ export default function ChapterEditor({
   const {
     upsertChapter, removeChapter, setActiveChapterId,
     chapters, characters, storyLines, setStoryLines, setMemories, addGenTask,
+    setCurrentProject,
   } = useAppStore()
+  const currentProject = useAppStore(s => s.currentProject)
   /**
    * 项目级写作质量门控配置，从 currentProject.extra.writing_config 读取。
    * 用于判断「重新生成」按钮应走普通重写还是门控重写任务。
@@ -312,6 +323,25 @@ export default function ChapterEditor({
     const ex = (s.currentProject as any)?.extra
     return (ex && typeof ex === 'object') ? (ex.writing_config ?? null) : null
   })
+
+  useEffect(() => {
+    if (!projectId || currentProject?.id !== projectId) return
+    const ex = (currentProject.extra as Record<string, unknown> | undefined) ?? {}
+    if (ex.writing_config && typeof ex.writing_config === 'object') return
+    projectsApi.getWritingConfig(projectId)
+      .then(res => {
+        const cp = useAppStore.getState().currentProject
+        if (!cp || cp.id !== projectId) return
+        setCurrentProject({
+          ...cp,
+          extra: {
+            ...((cp.extra as Record<string, unknown>) ?? {}),
+            writing_config: res.data.writing_config,
+          } as typeof cp.extra,
+        })
+      })
+      .catch(() => { /* 静默；门控退化为关闭 */ })
+  }, [projectId, currentProject?.id, currentProject?.extra, setCurrentProject])
   const genQueue = useAppStore(s => s.genQueue)
   const queueCommittedDebriefIds = useAppStore(s => s.queueCommittedDebriefIds)
   const queueDebriefSnapshot = useAppStore(s => s.queueDebriefUiSnapshotByChapterId[chapter.id])
@@ -375,6 +405,8 @@ export default function ChapterEditor({
   const [aiSuggestedAssetUpdates, setAiSuggestedAssetUpdates] = useState<Record<string, unknown> | null>(null)
   const [aiNewCharacters, setAiNewCharacters] = useState<NewCharacterSuggestion[]>([])
   const [aiChapterIndex, setAiChapterIndex] = useState<AutoDebriefResponse['chapter_index'] | null>(null)
+  const [aiNewReaderPromises, setAiNewReaderPromises] = useState<NonNullable<AutoDebriefResponse['new_reader_promises']>>([])
+  const [aiFulfilledPromiseTexts, setAiFulfilledPromiseTexts] = useState<string[]>([])
 
   // ── 底部伏笔面板 ───────────────────────────────────────────────────
   const [bottomPanelOpen, setBottomPanelOpen]   = useState(false)
@@ -732,10 +764,7 @@ export default function ChapterEditor({
       //   1. pre_write_warning_enabled=true：需要写前预警，必须走门控路由才能触发
       //   2. auto_quality_gate=true 且至少一个门槛 > 0：需要质检循环
       // 两者独立，均可单独启用；仅两者均关闭时才走轻量 rewrite_chapter。
-      const useGated =
-        writingConfig?.pre_write_warning_enabled === true ||
-        (writingConfig?.auto_quality_gate === true &&
-          (writingConfig.min_overall_score > 0 || writingConfig.min_subscribe_intent > 0))
+      const useGated = shouldUseGatedDraft(writingConfig)
       const gatedLabel = (() => {
         const hasWarn = writingConfig?.pre_write_warning_enabled === true
         const hasGate = writingConfig?.auto_quality_gate === true &&
@@ -864,15 +893,41 @@ export default function ChapterEditor({
     }
 
     const route = useAppStore.getState().aiBackendRoute
+    const userPrompt = aiExtraPrompt.trim()
+    const modelProfile = modelProfileFromRoute(route)
+    const llmPayload = routeLlmProviderPayload(route)
+
+    // 单章且正文为空：与「重写本章」相同，走门控流（质检未达标会循环重写）
+    if (
+      targetChapters.length === 1 &&
+      shouldUseGatedDraft(writingConfig) &&
+      !chapterHasNarrativeBody(targetChapters[0].content)
+    ) {
+      const sole = targetChapters[0]
+      addGenTask({
+        type: 'gated_rewrite_chapter',
+        projectId,
+        label: `门控生成《${sole.title}》`,
+        params: {
+          chapterId: sole.id,
+          userPrompt,
+          modelProfile,
+          ...llmPayload,
+        },
+      })
+      toast.success('已加入 AI 队列：质量门控写作（自动质检+重写）')
+      return
+    }
+
     addGenTask({
       type: 'continue_chapters',
       projectId,
       label: `从《${chapter.title}》起续写 ${targetChapters.length} 章`,
       params: {
         chapterIds: targetChapters.map(c => c.id),
-        userPrompt: aiExtraPrompt.trim(),
-        modelProfile: modelProfileFromRoute(route),
-        ...routeLlmProviderPayload(route),
+        userPrompt,
+        modelProfile,
+        ...llmPayload,
       },
     })
     toast.success(`已加入 AI 队列：连续续写 ${targetChapters.length} 章`)
@@ -924,6 +979,8 @@ export default function ChapterEditor({
     setAiDebriefSummary(data.summary || '')
     const validNewChars = (data.new_characters || []).filter(nc => typeof nc.name === 'string' && nc.name.trim())
     setAiNewCharacters(validNewChars)
+    setAiNewReaderPromises((data.new_reader_promises || []).filter(p => p.promise_text?.trim()))
+    setAiFulfilledPromiseTexts((data.fulfilled_promise_texts || []).filter(t => t.trim()))
 
     const total = suggestedCharIds.size + suggestedSlIds.size
     const assetCount = data.asset_updates
@@ -932,12 +989,14 @@ export default function ChapterEditor({
         0,
       )
       : 0
-    if (total > 0 || assetCount > 0 || validNewChars.length > 0) {
+    const promiseCount = (data.new_reader_promises?.length ?? 0) + (data.fulfilled_promise_texts?.length ?? 0)
+    if (total > 0 || assetCount > 0 || validNewChars.length > 0 || promiseCount > 0) {
       if (!opts?.silent) {
         if (source === 'cache') {
           toast('已复用本章复盘结果', { icon: 'ℹ️' })
         } else {
-          toast.success(`AI 自动提取了 ${suggestedCharIds.size} 个人物变化、${suggestedSlIds.size} 条故事线更新、${assetCount} 条资产变化，请确认后提交`)
+          const promiseHint = promiseCount > 0 ? `、${promiseCount} 条读者承诺` : ''
+          toast.success(`AI 自动提取了 ${suggestedCharIds.size} 个人物变化、${suggestedSlIds.size} 条故事线更新、${assetCount} 条资产变化${promiseHint}，请确认后提交`)
         }
         setContextOpen(true)
         setContextTab('debrief')
@@ -1079,7 +1138,9 @@ export default function ChapterEditor({
       ),
     )
 
-    if (characterUpdates.length === 0 && storylineUpdates.length === 0 && !debriefNotes && !hasAssetUpdates && !hasChapterIndex) {
+    const hasReaderPromises = aiNewReaderPromises.length > 0 || aiFulfilledPromiseTexts.length > 0
+
+    if (characterUpdates.length === 0 && storylineUpdates.length === 0 && !debriefNotes && !hasAssetUpdates && !hasChapterIndex && !hasReaderPromises) {
       toast('没有需要提交的更新', { icon: 'ℹ️' })
       return
     }
@@ -1093,10 +1154,15 @@ export default function ChapterEditor({
         asset_updates: hasAssetUpdates ? effectiveAssetUpdates || undefined : undefined,
         new_characters: aiNewCharacters.length > 0 ? aiNewCharacters as any : undefined,
         chapter_index: aiChapterIndex || undefined,
+        new_reader_promises: aiNewReaderPromises.length > 0 ? aiNewReaderPromises : undefined,
+        fulfilled_promise_texts: aiFulfilledPromiseTexts.length > 0 ? aiFulfilledPromiseTexts : undefined,
         notes: debriefNotes || undefined,
         apply_source: 'manual_tab',
       })
-      toast.success(res.data.message)
+      const pc = Number((res.data as { promises_created?: number })?.promises_created ?? 0)
+      const pf = Number((res.data as { promises_fulfilled?: number })?.promises_fulfilled ?? 0)
+      const promiseToast = (pc > 0 || pf > 0) ? `（承诺 +${pc} / 兑现 ${pf}）` : ''
+      toast.success(`${res.data.message}${promiseToast}`)
       setDebriefHistoryTick((t) => t + 1)
       const refreshRequests: Promise<any>[] = [
         storylinesApi.list(projectId),
@@ -1117,6 +1183,8 @@ export default function ChapterEditor({
       setAiSuggestedAssetUpdates(null)
       setAiChapterIndex(null)
       setAiNewCharacters([])
+      setAiNewReaderPromises([])
+      setAiFulfilledPromiseTexts([])
       setDebriefNotes('')
     } catch {
       toast.error('复盘提交失败')
@@ -1925,6 +1993,10 @@ export default function ChapterEditor({
                   aiSuggestedSlIds={aiSuggestedSlIds}
                   aiSuggestedAssetUpdates={aiSuggestedAssetUpdates}
                   aiNewCharacters={aiNewCharacters}
+                  aiNewReaderPromises={aiNewReaderPromises}
+                  aiFulfilledPromiseTexts={aiFulfilledPromiseTexts}
+                  onRemoveNewPromise={(idx) => setAiNewReaderPromises(prev => prev.filter((_, i) => i !== idx))}
+                  onRemoveFulfilledPromise={(idx) => setAiFulfilledPromiseTexts(prev => prev.filter((_, i) => i !== idx))}
                   aiSummary={aiDebriefSummary}
                   onAutoDebrief={runAutoDebrief}
                   onSubmit={submitDebrief}
@@ -2389,6 +2461,16 @@ interface DebriefPanelProps {
   aiSuggestedSlIds?: Set<string>
   aiSuggestedAssetUpdates?: Record<string, unknown> | null
   aiNewCharacters?: NewCharacterSuggestion[]
+  aiNewReaderPromises?: Array<{
+    promise_text: string
+    promise_type?: string
+    expected_within_chapters?: number
+    priority?: number
+    audience_aware?: number
+  }>
+  aiFulfilledPromiseTexts?: string[]
+  onRemoveNewPromise?: (index: number) => void
+  onRemoveFulfilledPromise?: (index: number) => void
   aiSummary?: string
   onAutoDebrief?: (forceRefresh?: boolean) => void
   onSubmit: (selectedAssetUpdates?: Record<string, unknown>) => void
@@ -2429,6 +2511,10 @@ function DebriefPanel({
   aiSuggestedSlIds = new Set(),
   aiSuggestedAssetUpdates = null,
   aiNewCharacters = [],
+  aiNewReaderPromises = [],
+  aiFulfilledPromiseTexts = [],
+  onRemoveNewPromise,
+  onRemoveFulfilledPromise,
   aiSummary,
   onAutoDebrief,
   onSubmit,
@@ -2515,6 +2601,15 @@ function DebriefPanel({
     return sum + flags.filter(Boolean).length
   }, 0)
   const hasAiSuggestions = aiSuggestedCharIds.size > 0 || aiSuggestedSlIds.size > 0 || totalAssetCount > 0
+    || aiNewReaderPromises.length > 0 || aiFulfilledPromiseTexts.length > 0
+
+  const PROMISE_TYPE_LABEL: Record<string, string> = {
+    chapter_ending: '章末悬念',
+    volume_ending: '卷末钩子',
+    name_implication: '名字/开篇暗示',
+    chapter_comment_consensus: '章评共识',
+    protagonist_claim: '主角宣言',
+  }
 
   const buildSelectedAssetUpdates = (): Record<string, unknown> | undefined => {
     const picked: Record<string, unknown> = {}
@@ -2589,7 +2684,7 @@ function DebriefPanel({
           </div>
           <p className="text-[11px] text-amber-800 leading-relaxed">{aiSummary}</p>
           <p className="text-[10px] text-amber-500 mt-1">
-            已预填 {aiSuggestedCharIds.size} 个人物、{aiSuggestedSlIds.size} 条故事线、{totalAssetCount} 条资产变化{aiNewCharacters.length > 0 ? `、${aiNewCharacters.length} 个新配角` : ''}，请检查后提交
+            已预填 {aiSuggestedCharIds.size} 个人物、{aiSuggestedSlIds.size} 条故事线、{totalAssetCount} 条资产变化{aiNewCharacters.length > 0 ? `、${aiNewCharacters.length} 个新配角` : ''}{aiNewReaderPromises.length > 0 ? `、${aiNewReaderPromises.length} 条新承诺` : ''}{aiFulfilledPromiseTexts.length > 0 ? `、${aiFulfilledPromiseTexts.length} 条待兑现` : ''}，请检查后提交
           </p>
         </div>
       ) : (
@@ -2868,6 +2963,68 @@ function DebriefPanel({
               </div>
             ))}
           </div>
+        </section>
+      )}
+
+      {(aiNewReaderPromises.length > 0 || aiFulfilledPromiseTexts.length > 0) && (
+        <section className="rounded-novel border border-violet-200 bg-violet-50/50 px-3 py-2.5 space-y-2">
+          <span className="text-[10px] font-semibold text-violet-800 uppercase tracking-wider block">
+            读者承诺台账
+          </span>
+          {aiNewReaderPromises.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[9px] text-violet-700/80">本章新承诺（提交后写入台账）</p>
+              {aiNewReaderPromises.map((p, idx) => (
+                <div
+                  key={`new-promise-${idx}`}
+                  className="flex items-start gap-2 text-[11px] text-violet-950 bg-white/80 rounded border border-violet-100 px-2 py-1.5"
+                >
+                  <span className="flex-1 leading-relaxed">
+                    <span className="text-[9px] text-violet-600 mr-1">
+                      {PROMISE_TYPE_LABEL[p.promise_type || ''] || p.promise_type || '承诺'}
+                    </span>
+                    {p.promise_text}
+                    {typeof p.expected_within_chapters === 'number' && p.expected_within_chapters > 0 && (
+                      <span className="text-[9px] text-violet-500 ml-1">
+                        · {p.expected_within_chapters} 章内
+                      </span>
+                    )}
+                  </span>
+                  {onRemoveNewPromise && !fromQueueSnapshot && (
+                    <button
+                      type="button"
+                      onClick={() => onRemoveNewPromise(idx)}
+                      className="text-[9px] text-violet-500 hover:text-violet-800 shrink-0"
+                    >
+                      移除
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {aiFulfilledPromiseTexts.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[9px] text-violet-700/80">本章已兑现（提交后匹配 open 台账标 fulfilled）</p>
+              {aiFulfilledPromiseTexts.map((text, idx) => (
+                <div
+                  key={`fulfilled-${idx}`}
+                  className="flex items-start gap-2 text-[11px] text-emerald-900 bg-emerald-50/90 rounded border border-emerald-100 px-2 py-1.5"
+                >
+                  <span className="flex-1 leading-relaxed">{text}</span>
+                  {onRemoveFulfilledPromise && !fromQueueSnapshot && (
+                    <button
+                      type="button"
+                      onClick={() => onRemoveFulfilledPromise(idx)}
+                      className="text-[9px] text-emerald-600 hover:text-emerald-900 shrink-0"
+                    >
+                      移除
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       )}
 

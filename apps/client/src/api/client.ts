@@ -667,6 +667,16 @@ export const aiApi = {
     }
     notes?: string
     apply_source?: 'queue_auto' | 'manual_tab'
+    /** 本章新做出的读者承诺（章末钩子等） */
+    new_reader_promises?: Array<{
+      promise_text: string
+      promise_type?: string
+      expected_within_chapters?: number
+      priority?: number
+      audience_aware?: number
+    }>
+    /** 本章已兑现的承诺原文，用于模糊匹配 open 台账并标 fulfilled */
+    fulfilled_promise_texts?: string[]
   }) => api.post(`/projects/${pid}/ai/chapter-debrief`, data),
 
   chapterCoherenceCheck: (

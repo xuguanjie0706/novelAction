@@ -11,6 +11,59 @@ from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
+_VALID_PROMISE_TYPES = frozenset({
+    "chapter_ending",
+    "volume_ending",
+    "name_implication",
+    "chapter_comment_consensus",
+    "protagonist_claim",
+})
+
+
+def _clean_new_reader_promises(raw_list) -> list[dict]:
+    """解析 auto_debrief 的 new_reader_promises，供 chapter-debrief 落库。"""
+    out: list[dict] = []
+    for p in raw_list or []:
+        if not isinstance(p, dict):
+            continue
+        text = (p.get("promise_text") or "").strip()
+        if not text:
+            continue
+        ptype = p.get("promise_type") or "chapter_ending"
+        if ptype not in _VALID_PROMISE_TYPES:
+            ptype = "chapter_ending"
+        try:
+            window = max(0, min(50, int(p.get("expected_within_chapters") or 3)))
+        except Exception:
+            window = 3
+        try:
+            priority = max(1, min(5, int(p.get("priority") or 3)))
+        except Exception:
+            priority = 3
+        try:
+            audience = max(0, min(5, int(p.get("audience_aware") or 3)))
+        except Exception:
+            audience = 3
+        out.append({
+            "promise_text": text[:500],
+            "promise_type": ptype,
+            "expected_within_chapters": window,
+            "priority": priority,
+            "audience_aware": audience,
+        })
+    return out[:8]
+
+
+def _clean_fulfilled_promise_texts(raw_list) -> list[str]:
+    """解析本章已兑现承诺原文列表。"""
+    out: list[str] = []
+    for item in raw_list or []:
+        text = (item if isinstance(item, str) else str(item or "")).strip()
+        if text and text not in out:
+            out.append(text[:500])
+    return out[:12]
+
+
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -119,10 +172,12 @@ class DebriefMixin:
         chapter_number: int,
         character_states: List[dict],    # [{"id":…,"name":…,"current_realm":…,"current_location":…,"current_status":…}]
         storylines: List[dict],          # [{"id":…,"name":…,"line_type":…,"status":…,"core_conflict":…}]
+        open_promises: List[dict] = [],  # [{"id":…,"promise_text":…,"promise_type":…,"source_chapter_number":…,"priority":…}]
     ) -> dict:
         """
         AI 读取章节正文，对照人物当前状态和故事线，
         自动提取本章发生的状态变化和故事节拍。
+        open_promises：当前项目所有 status=open 的读者承诺，供 AI 判断本章是否兑现。
         返回结构化建议供前端预填复盘表单。
         """
         # 精简人物列表（token 控制）
@@ -143,6 +198,24 @@ class DebriefMixin:
             for s in storylines[:8]
         ]
         sl_text = "\n".join(sl_lines) or "（无故事线数据）"
+
+        # 读者承诺台账注入：按优先级降序，最多 20 条，供 AI 判断本章是否兑现
+        promise_lines = []
+        for p in (open_promises or [])[:20]:
+            pid = p.get("id", "")
+            text = (p.get("promise_text") or "").strip()
+            if not text:
+                continue
+            src = p.get("source_chapter_number") or "?"
+            prio = p.get("priority") or 3
+            ptype = p.get("promise_type") or "chapter_ending"
+            promise_lines.append(f"- [id:{pid}] 【{ptype}·优先级{prio}】第{src}章埋：{text}")
+        open_promises_text = (
+            "当前开放读者承诺（status=open，对照正文判断本章是否已兑现）：\n"
+            + "\n".join(promise_lines)
+            if promise_lines
+            else ""
+        )
 
         system = (
             "你是网络小说助手，从章节内容中提取人物状态、故事线、伏笔、信息来源和结构化资产变化，只返回JSON，不要任何解释。"
@@ -168,7 +241,7 @@ class DebriefMixin:
 
 当前故事线（对照基准）：
 {sl_text}
-
+{f"{chr(10)}{open_promises_text}{chr(10)}" if open_promises_text else ""}
 请分析本章内容，提取：
 1. 哪些人物的境界/位置/状态发生了变化
 2. 哪些人物习得了新技能
@@ -388,7 +461,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
     }}
   ],
   "fulfilled_promise_texts": [
-    "本章已兑现的承诺原文或提炼（每条一个字符串）；正文中以具体行动/对话/事件落实了之前的章末预告/主角宣言/名字暗示等，则视为兑现。若本章无兑现则留空数组 []。"
+    "已兑现承诺的原文（从上方「当前开放读者承诺」中选取，复制 promise_text 原文，不要改写）；正文中有对应具体行动/对话/事件落实的才算兑现。若本章无兑现则返回空数组 []。"
   ],
   "next_chapter_directives": [
     {{
@@ -526,6 +599,11 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                             new_characters.append({"name": name, "role": "supporting", "current_status": "alive"})
             new_characters = new_characters[:6]  # 单章最多6个新配角，防止失控
 
+            new_reader_promises = _clean_new_reader_promises(data.get("new_reader_promises"))
+            fulfilled_promise_texts = _clean_fulfilled_promise_texts(
+                data.get("fulfilled_promise_texts")
+            )
+
             return {
                 "character_updates": char_updates,
                 "storyline_updates": sl_updates,
@@ -533,6 +611,8 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                 "asset_updates": asset_updates,
                 "new_characters": new_characters,
                 "chapter_index": cleaned_index,
+                "new_reader_promises": new_reader_promises,
+                "fulfilled_promise_texts": fulfilled_promise_texts,
                 "summary": data.get("summary", ""),
             }
         except Exception as e:
@@ -550,6 +630,8 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                 },
                 "new_characters": [],
                 "chapter_index": {},
+                "new_reader_promises": [],
+                "fulfilled_promise_texts": [],
                 "summary": "",
                 "error": f"解析失败: {e}",
                 "raw": response[:300],

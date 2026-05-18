@@ -417,6 +417,9 @@ export const outlineApi = {
   /** 只读：从大纲章节计划「人物变化」聚合主角境界新高节点 */
   protagonistRealmTimeline: (pid: string) =>
     api.get(`/projects/${pid}/outline/protagonist-realm-timeline`),
+  /** 全书章序横轴 + 卷/故事线/势力/伏笔/承诺/境界甘特条 */
+  storyTimeline: (pid: string) =>
+    api.get(`/projects/${pid}/outline/story-timeline`),
   create: (pid: string, data: any) => api.post(`/projects/${pid}/outline/`, data),
   update: (pid: string, id: string, data: any) => api.patch(`/projects/${pid}/outline/${id}`, data),
   delete: (pid: string, id: string) => api.delete(`/projects/${pid}/outline/${id}`),

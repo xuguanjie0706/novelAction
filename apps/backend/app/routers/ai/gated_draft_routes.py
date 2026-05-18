@@ -44,6 +44,7 @@ from app.models import (
     MemoryChunk,
     OutlineNode,
     PowerSystem,
+    PreWriteWarningRecord,
     Project,
     StoryLine,
     WorldSetting,
@@ -81,6 +82,34 @@ def _count_words_plain(text: str) -> int:
     return chinese + english
 
 
+def _persist_pre_write_warning_record(
+    db: Session,
+    *,
+    project: Project,
+    chapter: Chapter,
+    chapter_plan_summary: str,
+    model_profile: str,
+    llm_provider_id: str | None,
+    result: dict,
+) -> PreWriteWarningRecord:
+    """门控/HTTP 写前预警共用落库，供写作侧栏 history 查阅。"""
+    ch_no = chapter.sort_order or 0
+    profile = model_profile if model_profile in ("local", "gemini") else "local"
+    rec = PreWriteWarningRecord(
+        project_id=project.id,
+        chapter_id=chapter.id,
+        chapter_number=ch_no,
+        chapter_plan_summary=chapter_plan_summary or "",
+        model_profile=profile,
+        llm_provider_id=llm_provider_id,
+        result=result,
+    )
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+    return rec
+
+
 async def _run_pre_write_warning_inline(
     db: Session,
     chapter: Chapter,
@@ -100,7 +129,7 @@ async def _run_pre_write_warning_inline(
     @param project: 已加载的 Project 对象
     @param project_id: 项目 UUID 字符串
     @param svc: 已初始化的 AIService 实例
-    @returns pre_write_warning 返回的 dict
+    @returns (pre_write_warning 结果 dict, 本次使用的 chapter_plan_summary)
     @raises Exception: AI 调用失败时向上抛出
     """
     # 记忆：用章节 outline 摘要做语义检索，优先拉与本章相关的记忆；
@@ -238,7 +267,7 @@ async def _run_pre_write_warning_inline(
         result = dict(result)
         result["rag_retrieval_log_id"] = str(_rag_log.id)
         result["rag_context"] = client_snapshot_from_log(_rag_log)
-    return result
+    return result, chapter_plan_summary
 
 
 def _build_pre_warn_prompt_block(warn_result: dict) -> str:
@@ -906,7 +935,7 @@ async def gated_draft_stream(
             yield _sse({"event": "pre_warn_running"})
             try:
                 db.refresh(chapter)
-                warn_result = await _run_pre_write_warning_inline(
+                warn_result, warn_plan_summary = await _run_pre_write_warning_inline(
                     db=db, chapter=chapter, project=project,
                     project_id=project_id, svc=svc,
                 )
@@ -915,6 +944,16 @@ async def gated_draft_stream(
                     yield _sse(rag_ctx)
                 # 格式化为简报块，通过专属参数传入（不污染 user_prompt）
                 pre_warn_brief_block = _build_pre_warn_prompt_block(warn_result)
+
+                warn_record = _persist_pre_write_warning_record(
+                    db,
+                    project=project,
+                    chapter=chapter,
+                    chapter_plan_summary=warn_plan_summary,
+                    model_profile=req.model_profile or "local",
+                    llm_provider_id=req.llm_provider_id,
+                    result=warn_result,
+                )
 
                 yield _sse({
                     "event": "pre_warn_done",
@@ -927,6 +966,7 @@ async def gated_draft_stream(
                     "risks": (warn_result.get("risks") or [])[:5],
                     "reminders": (warn_result.get("reminders") or [])[:5],
                     "rag_retrieval_log_id": warn_result.get("rag_retrieval_log_id"),
+                    "record_id": str(warn_record.id),
                 })
             except Exception as e:
                 # 预警失败不阻断写作，降级为无预警模式（pre_warn_brief_block 保持空字符串）

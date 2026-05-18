@@ -60,6 +60,7 @@ from app.routers import projects, world_settings, characters, outline, chapters,
 from app.routers import storylines, power_systems, skills, items, factions
 from app.routers import foreshadows, quality_debts
 from app.routers import scenes, reader_promises, locations as locations_router
+from app.routers import export as export_router
 from app.routers import cover as cover_router
 from app.routers import auth as auth_router
 from app.routers import admin_auth as admin_auth_router
@@ -657,6 +658,7 @@ app.include_router(skills.router, prefix="/api/v1", dependencies=_project_scoped
 app.include_router(items.router, prefix="/api/v1", dependencies=_project_scoped_dep)
 app.include_router(factions.router, prefix="/api/v1", dependencies=_project_scoped_dep)
 app.include_router(foreshadows.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(export_router.router, prefix="/api/v1", dependencies=_project_scoped_dep)
 app.include_router(quality_debts.router, prefix="/api/v1", dependencies=_project_scoped_dep)
 app.include_router(scenes.router, prefix="/api/v1", dependencies=_project_scoped_dep)
 app.include_router(reader_promises.router, prefix="/api/v1", dependencies=_project_scoped_dep)

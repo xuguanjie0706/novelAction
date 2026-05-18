@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  Plus, Loader2, RefreshCw, ChevronRight, ChevronDown, PenLine, FileText, BookOpen,
+  Plus, Loader2, RefreshCw, ChevronRight, ChevronDown, PenLine, FileText, BookOpen, Package,
 } from 'lucide-react'
 import { chaptersApi, outlineApi, storylinesApi } from '../api/client'
 import { useAppStore } from '../store'
 import ChapterEditor from '../components/Writing/ChapterEditor'
+import ExportPanel from '../components/Export/ExportPanel'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import type { Chapter, OutlineNode } from '../types'
@@ -60,6 +61,7 @@ export default function WritePage() {
   const [creating, setCreating] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [exportOpen, setExportOpen] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [sidebarHidden, setSidebarHidden] = useState(false)  // 专注模式时收起左侧
   const nextSortOrder = useMemo(
@@ -273,6 +275,7 @@ export default function WritePage() {
   }
 
   return (
+    <>
     <div className="flex h-full">
       {/* 左侧：大纲驱动章节导航（专注模式下隐藏）*/}
       <div className={clsx(
@@ -282,11 +285,18 @@ export default function WritePage() {
         <div className="px-3 py-2.5 border-b border-gray-100 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">写作</span>
-            <button type="button" onClick={createFreeChapter} disabled={creating}
-              title="新建独立章节（不挂大纲）"
-              className="p-1.5 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors">
-              <Plus size={14} />
-            </button>
+            <div className="flex items-center gap-0.5">
+              <button type="button" onClick={() => setExportOpen(true)}
+                title="导出 & 投稿"
+                className="p-1.5 rounded text-gray-400 hover:bg-amber-50 hover:text-amber-600 transition-colors">
+                <Package size={14} />
+              </button>
+              <button type="button" onClick={createFreeChapter} disabled={creating}
+                title="新建独立章节（不挂大纲）"
+                className="p-1.5 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors">
+                <Plus size={14} />
+              </button>
+            </div>
           </div>
           {hasOutline && unsyncedCount > 0 && (
             <button type="button" onClick={syncFromOutline} disabled={syncing}
@@ -367,5 +377,13 @@ export default function WritePage() {
         )}
       </div>
     </div>
+
+    {exportOpen && projectId && (
+      <ExportPanel
+        projectId={projectId}
+        onClose={() => setExportOpen(false)}
+      />
+    )}
+    </>
   )
 }

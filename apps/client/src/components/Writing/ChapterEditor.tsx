@@ -606,17 +606,46 @@ export default function ChapterEditor({
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  /** 门控队列内联写前预警完成（落库后需刷新侧栏，与手动「预警」API 同源） */
+  const gatedPreWarnDoneForChapter = useMemo(
+    () =>
+      genQueue.some(
+        t =>
+          t.projectId === projectId
+          && t.type === 'gated_rewrite_chapter'
+          && t.params?.chapterId === chapter.id
+          && (t.progress ?? []).some(p => p.step === 'pre_warn' && p.done && !p.error),
+      ),
+    [genQueue, projectId, chapter.id],
+  )
+  const gatedPreWarnSyncedRef = useRef(false)
+
+  const refreshWarnHistoryFromServer = useCallback(() => {
+    if (!chapter.id || !projectId) return
+    void aiApi.preWriteWarningHistory(projectId, chapter.id).then((r) => {
+      const rows = parsePreWriteWarningHistoryPayload(r.data)
+      setWarnHistory(rows)
+    }).catch(() => {
+      setWarnHistory([])
+    })
+  }, [chapter.id, projectId])
+
   /** 写前预警：打开 Tab 时拉取本章历史（响应体非数组时安全降级） */
   useEffect(() => {
     if (contextTab !== 'warn' || !chapter.id || !projectId) return
-    let cancelled = false
-    void aiApi.preWriteWarningHistory(projectId, chapter.id).then((r) => {
-      if (!cancelled) setWarnHistory(parsePreWriteWarningHistoryPayload(r.data))
-    }).catch(() => {
-      if (!cancelled) setWarnHistory([])
-    })
-    return () => { cancelled = true }
-  }, [contextTab, chapter.id, projectId])
+    refreshWarnHistoryFromServer()
+  }, [contextTab, chapter.id, projectId, refreshWarnHistoryFromServer])
+
+  /** 门控写作完成写前预警后自动刷新历史（用户可能已停在「预警」Tab） */
+  useEffect(() => {
+    if (!gatedPreWarnDoneForChapter) {
+      gatedPreWarnSyncedRef.current = false
+      return
+    }
+    if (gatedPreWarnSyncedRef.current) return
+    gatedPreWarnSyncedRef.current = true
+    refreshWarnHistoryFromServer()
+  }, [gatedPreWarnDoneForChapter, refreshWarnHistoryFromServer])
 
   /** 有历史且当前无展示结果时，默认显示最新一条 */
   useEffect(() => {
@@ -1341,6 +1370,7 @@ export default function ChapterEditor({
               && Array.isArray(t.params?.chapterIds)
               && t.params.chapterIds.includes(chapter.id))
             || (t.type === 'rewrite_chapter' && t.params?.chapterId === chapter.id)
+            || (t.type === 'gated_rewrite_chapter' && t.params?.chapterId === chapter.id)
           ),
       ),
     [genQueue, projectId, chapter.id],
@@ -2067,7 +2097,9 @@ export default function ChapterEditor({
 
                   {!warnLoading && !warnResult && (
                     <div className="text-xs text-novel-ink-faint text-center py-8 leading-relaxed">
-                      点击工具栏「预警」按钮<br />动笔前检查连续性、伏笔和人物OOC风险
+                      {gatedPreWarnDoneForChapter
+                        ? <>门控写作已完成写前预警，正在同步记录…<br />若仍为空请点「重新检测」</>
+                        : <>点击工具栏「预警」或门控生成后<br />可查看连续性、伏笔与写法简报</>}
                     </div>
                   )}
 

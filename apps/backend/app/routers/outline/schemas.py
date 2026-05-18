@@ -33,6 +33,32 @@ class ProtagonistRealmTimelineOut(BaseModel):
     source: str = "outline+debrief"
 
 
+class StoryTimelineLaneOut(BaseModel):
+    id: str
+    label: str
+    description: Optional[str] = None
+
+
+class StoryTimelineBarOut(BaseModel):
+    id: str
+    lane: str
+    label: str
+    start_chapter: int
+    end_chapter: int
+    status: Optional[str] = None
+    detail: Optional[str] = None
+
+
+class StoryTimelineOut(BaseModel):
+    """全书章序横轴 + 多泳道甘特条（卷/章/故事线/势力/伏笔/承诺/境界）。"""
+
+    max_chapter: int
+    chapter_plan_count: int = 0
+    written_chapter_count: int = 0
+    lanes: list[StoryTimelineLaneOut]
+    bars: list[StoryTimelineBarOut]
+
+
 class ChapterPlansClearResult(BaseModel):
     deleted: int
 

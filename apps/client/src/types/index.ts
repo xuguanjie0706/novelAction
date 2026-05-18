@@ -553,6 +553,32 @@ export interface CharacterChangeLog {
   created_at:     string
 }
 
+// ── 全局时间线甘特 ───────────────────────────────────────────
+
+export interface StoryTimelineLane {
+  id: string
+  label: string
+  description?: string | null
+}
+
+export interface StoryTimelineBar {
+  id: string
+  lane: string
+  label: string
+  start_chapter: number
+  end_chapter: number
+  status?: string | null
+  detail?: string | null
+}
+
+export interface StoryTimeline {
+  max_chapter: number
+  chapter_plan_count: number
+  written_chapter_count: number
+  lanes: StoryTimelineLane[]
+  bars: StoryTimelineBar[]
+}
+
 // ── 节奏地图：追读模拟 / 钩子检测 / 故事线悬空 ──────────────
 export interface ReaderSimulationResult {
   chapter_id: string

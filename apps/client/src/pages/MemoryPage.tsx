@@ -6,6 +6,7 @@ import { useAppStore } from '../store'
 import type { MemoryChunk } from '../types'
 import clsx from 'clsx'
 import { memoryDisplayChapter } from '../utils/chapterNumber'
+import MemoryRagPanel from '../components/Memory/MemoryRagPanel'
 
 const MEMORY_TYPES: { key: MemoryChunk['memory_type'] | 'all'; label: string; color: string }[] = [
   { key: 'all',             label: '全部',   color: 'bg-gray-100 text-gray-600' },
@@ -55,6 +56,9 @@ export default function MemoryPage() {
     return acc
   }, {})
   const sortedChapters = Object.keys(byChapter).map(Number).sort((a, b) => a - b)
+  const maxChapter = chapters.length
+    ? Math.max(...chapters.map(c => c.sort_order))
+    : undefined
 
   return (
     <div className="flex h-full">
@@ -159,6 +163,8 @@ export default function MemoryPage() {
           ))}
         </div>
       </div>
+
+      {projectId ? <MemoryRagPanel projectId={projectId} maxChapter={maxChapter} /> : null}
     </div>
   )
 }

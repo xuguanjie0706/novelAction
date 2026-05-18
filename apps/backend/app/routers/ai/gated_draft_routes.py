@@ -60,7 +60,10 @@ from app.routers.ai.draft_helpers import (
     merge_writing_config,
     prewrite_gate_violation,
 )
-from app.services.embedding_service import semantic_search as _semantic_search
+from app.services.rag_retrieval_service import (
+    client_snapshot_from_log,
+    retrieve_and_log_pre_write_memory,
+)
 from app.routers.ai.quality_debt import sync_quality_debts
 from app.routers.ai.schemas import GatedDraftRequest
 from app.routers.ai.text_utils import plain_text
@@ -112,11 +115,19 @@ async def _run_pre_write_warning_inline(
         _outline_node.summary if _outline_node else None,
         _outline_node.conflict if _outline_node else None,
     ])) or chapter.title or ""
-    _raw_mems = await _semantic_search(
-        db, project_id, _warn_query,
-        top_k=40,
-        max_chapter=chapter.sort_order,
-    ) if _warn_query else []
+    _rag_log = None
+    if _warn_query:
+        _raw_mems, _rag_log = await retrieve_and_log_pre_write_memory(
+            db,
+            project_id=project_id,
+            chapter_id=chapter.id,
+            query=_warn_query,
+            top_k=40,
+            max_chapter=chapter.sort_order,
+            commit=True,
+        )
+    else:
+        _raw_mems = []
     memory_chunks = [
         {"title": m.title or "", "content": m.content or "", "memory_type": m.memory_type or "event"}
         for m in _raw_mems
@@ -211,7 +222,7 @@ async def _run_pre_write_warning_inline(
     # 大纲五要素兜底（无 outline_node 时用章节标题）
     chapter_plan_summary = outline_context or f"第{chapter.sort_order or '?'}章《{chapter.title}》"
 
-    return await svc.pre_write_warning(
+    result = await svc.pre_write_warning(
         project_title=project.title,
         genre=project.genre or "玄幻",
         chapter_plan_summary=chapter_plan_summary,
@@ -223,6 +234,11 @@ async def _run_pre_write_warning_inline(
         outline_context=outline_context,
         phase=phase,
     )
+    if _rag_log is not None:
+        result = dict(result)
+        result["rag_retrieval_log_id"] = str(_rag_log.id)
+        result["rag_context"] = client_snapshot_from_log(_rag_log)
+    return result
 
 
 def _build_pre_warn_prompt_block(warn_result: dict) -> str:
@@ -832,6 +848,9 @@ async def gated_draft_stream(
 
     try:
         draft_ctx = await _build_draft_context(db, project_id, chapter, project, large_context)
+        rag_snapshot = draft_ctx.pop("rag_retrieval_snapshot", None)
+        rag_log_id = draft_ctx.pop("rag_retrieval_log_id", None)
+        db.commit()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"上下文构建失败：{e}") from e
 
@@ -850,6 +869,8 @@ async def gated_draft_stream(
         return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     async def event_stream() -> AsyncGenerator[str, None]:
+        if rag_snapshot:
+            yield _sse(rag_snapshot)
         # 推送生效配置
         yield _sse({
             "event": "gate_config",
@@ -889,6 +910,9 @@ async def gated_draft_stream(
                     db=db, chapter=chapter, project=project,
                     project_id=project_id, svc=svc,
                 )
+                rag_ctx = warn_result.get("rag_context")
+                if isinstance(rag_ctx, dict) and rag_ctx.get("event") == "rag_context":
+                    yield _sse(rag_ctx)
                 # 格式化为简报块，通过专属参数传入（不污染 user_prompt）
                 pre_warn_brief_block = _build_pre_warn_prompt_block(warn_result)
 
@@ -902,6 +926,7 @@ async def gated_draft_stream(
                     "hallucination_traps": warn_result.get("hallucination_traps") or [],
                     "risks": (warn_result.get("risks") or [])[:5],
                     "reminders": (warn_result.get("reminders") or [])[:5],
+                    "rag_retrieval_log_id": warn_result.get("rag_retrieval_log_id"),
                 })
             except Exception as e:
                 # 预警失败不阻断写作，降级为无预警模式（pre_warn_brief_block 保持空字符串）
@@ -952,6 +977,7 @@ async def gated_draft_stream(
                         "project_id": str(project_id),
                         "chapter_id": str(req.chapter_id),
                         "gated_attempt": attempt,
+                        "rag_retrieval_log_id": rag_log_id,
                     },
                 ):
                     accumulated += chunk

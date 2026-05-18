@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import List, Literal, Optional
 from uuid import UUID
 
@@ -7,7 +8,11 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import AiChatMessage, Chapter, Character, OutlineNode, PowerSystem, Project, StoryLine
+from app.models import AiChatMessage, Chapter, Character, Foreshadow, OutlineNode, PowerSystem, Project, StoryLine
+from app.services.rag_retrieval_service import (
+    patch_rag_log_output,
+    retrieve_and_log_suggest_memory,
+)
 from app.services.ai_service import AIService
 from app.routers.ai.chat_helpers import chat_context_label, query_chat_messages
 from app.routers.ai.context import (
@@ -17,6 +22,8 @@ from app.routers.ai.context import (
 )
 from app.routers.ai.schemas import ChatMessageOut, ChatStreamRequest, SuggestRequest
 from app.routers.ai.text_utils import truncate
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -175,6 +182,16 @@ async def suggest_stream(
     req: SuggestRequest,
     db: Session = Depends(get_db),
 ):
+    """
+    AI 写作建议流（SSE），已接入 RAG。
+
+    路由层在调用 AI 服务前自动组装三类上下文：
+    1. 语义相关记忆（MemoryChunk）：用 user_prompt + 章节正文前 120 字做 query；
+    2. 未收束伏笔（Foreshadow.status == 'open'）：按 priority 降序取前 3 条；
+    3. 人物状态摘要：按 realm_rank 降序取前 8 个主要人物。
+
+    上下文以 rag_context 字符串注入 AI 提示词，不影响现有响应格式。
+    """
     chapter = db.query(Chapter).filter(
         Chapter.id == req.chapter_id, Chapter.project_id == project_id
     ).first()
@@ -183,6 +200,91 @@ async def suggest_stream(
 
     chapter_content_snapshot = chapter.content or ""
     suggest_prompt = req.prompt
+    large_context = req.model_profile == "gemini"
+
+    # ── RAG: 语义记忆检索 ─────────────────────────────────────────────────────
+    # query = 作者问题 + 章节正文头部，充分利用问题语义定向召回
+    _plain_head = truncate(chapter_content_snapshot, 120)
+    _mem_query = f"{suggest_prompt} {_plain_head}".strip()
+    _mem_top_k = 12 if large_context else 5
+
+    # ── RAG: 未收束伏笔台账 ──────────────────────────────────────────────────
+    _open_foreshadows = (
+        db.query(Foreshadow)
+        .filter(Foreshadow.project_id == project_id, Foreshadow.status == "open")
+        .order_by(Foreshadow.priority.desc())
+        .limit(3)
+        .all()
+    )
+
+    # ── RAG: 主要人物状态 ─────────────────────────────────────────────────────
+    _characters = (
+        db.query(Character)
+        .filter(Character.project_id == project_id)
+        .order_by(Character.realm_rank.desc().nullslast())
+        .limit(8)
+        .all()
+    )
+
+    _mem_chunks: list = []
+    _suggest_rag_log = None
+    if _mem_query:
+        try:
+            _mem_chunks, _suggest_rag_log = await retrieve_and_log_suggest_memory(
+                db,
+                project_id=project_id,
+                chapter_id=chapter.id,
+                query=_mem_query,
+                top_k=_mem_top_k,
+                max_chapter=chapter.sort_order,
+                rag_context="",
+                extra_output={
+                    "open_foreshadow_count": len(_open_foreshadows),
+                    "character_count": len(_characters),
+                },
+                commit=False,
+            )
+        except Exception:
+            logger.warning(
+                "suggest_stream RAG memory retrieval failed",
+                exc_info=True,
+                extra={"project_id": str(project_id), "chapter_id": str(chapter.id)},
+            )
+            _mem_chunks = []
+
+    rag_parts: list[str] = []
+    if _mem_chunks:
+        mem_lines = [
+            f"第{m.chapter_number or '?'}章 {m.title or m.memory_type}: "
+            f"{(m.content or '')[:120]}"
+            for m in _mem_chunks
+        ]
+        rag_parts.append("近期情节记忆：\n" + "\n".join(f"  · {l}" for l in mem_lines))
+
+    if _open_foreshadows:
+        fore_lines = [
+            f"[{f.code or 'F'}] {f.title}"
+            + (f"：{(f.description or '')[:80]}" if f.description else "")
+            for f in _open_foreshadows
+        ]
+        rag_parts.append("未收束伏笔：\n" + "\n".join(f"  · {l}" for l in fore_lines))
+
+    if _characters:
+        char_lines = [
+            f"{c.name}（{c.current_realm or '境界未知'}，{c.current_status or 'alive'}）"
+            for c in _characters
+        ]
+        rag_parts.append("主要人物：" + "、".join(char_lines))
+
+    rag_context = "\n\n".join(rag_parts)
+
+    if _suggest_rag_log is not None:
+        patch_rag_log_output(
+            db,
+            _suggest_rag_log,
+            {"rag_context_preview": rag_context[:1200] if rag_context else ""},
+            commit=True,
+        )
 
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
@@ -194,6 +296,7 @@ async def suggest_stream(
         async for chunk in svc.suggest_stream(
             chapter_content=chapter_content_snapshot,
             user_prompt=suggest_prompt,
+            rag_context=rag_context,
         ):
             yield f"data: {json.dumps({'text': chunk})}\n\n"
         yield "data: [DONE]\n\n"

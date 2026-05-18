@@ -123,6 +123,8 @@ export interface SseParsed {
   error?: string
   done?: boolean
   event?: GatedDraftEvent
+  /** 非正文类事件（rag_context、truncation_warning 等） */
+  sideEvent?: Record<string, unknown>
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -162,8 +164,17 @@ export function parseSseDraftDataLine(line: string): SseParsed | null {
   if (raw === '[DONE]') return { done: true }
   try {
     const obj = JSON.parse(raw) as Record<string, unknown>
-    if (obj.event) {
-      return { event: obj as unknown as GatedDraftEvent }
+    if (typeof obj.event === 'string') {
+      const gatedTypes = new Set([
+        'gate_config', 'pre_warn_running', 'pre_warn_done',
+        'attempt_start', 'attempt_done', 'qc_running', 'qc_result',
+        'gate_passed', 'rewrite_queued', 'gate_failed',
+      ])
+      const parsed: SseParsed = { sideEvent: obj }
+      if (gatedTypes.has(obj.event)) {
+        parsed.event = obj as unknown as GatedDraftEvent
+      }
+      return parsed
     }
     return obj as SseParsed
   } catch {
@@ -181,7 +192,14 @@ export function parseSseDraftDataLine(line: string): SseParsed | null {
  *
  * @throws 若 HTTP 非 2xx 或流中有 `error` 字段
  */
-export async function accumulateDraftAssistStream(res: Response): Promise<string> {
+export type DraftAssistStreamOptions = {
+  onSideEvent?: (payload: Record<string, unknown>) => void
+}
+
+export async function accumulateDraftAssistStream(
+  res: Response,
+  options?: DraftAssistStreamOptions,
+): Promise<string> {
   if (!res.ok) {
     const errText = (await res.text().catch(() => '')).slice(0, 500)
     throw new Error(errText || `HTTP ${res.status}`)
@@ -201,12 +219,14 @@ export async function accumulateDraftAssistStream(res: Response): Promise<string
       const parsed = parseSseDraftDataLine(line)
       if (!parsed) continue
       if (parsed.error) throw new Error(parsed.error)
+      if (parsed.sideEvent) options?.onSideEvent?.(parsed.sideEvent)
       if (parsed.text) accumulated += parsed.text
     }
   }
   for (const line of buf.split('\n')) {
     const parsed = parseSseDraftDataLine(line)
     if (parsed?.error) throw new Error(parsed.error)
+    if (parsed?.sideEvent) options?.onSideEvent?.(parsed.sideEvent)
     if (parsed?.text) accumulated += parsed.text
   }
   return accumulated
@@ -215,6 +235,17 @@ export async function accumulateDraftAssistStream(res: Response): Promise<string
 // ─────────────────────────────────────────────────────────────
 // 门控流读取（gated-draft-stream）
 // ─────────────────────────────────────────────────────────────
+
+/** 将 SSE `rag_context` 事件格式化为队列进度文案 */
+export function formatRagContextProgressLabel(payload: Record<string, unknown>): string {
+  const q = String(payload.query ?? '').slice(0, 48)
+  const hits = payload.hits
+  const n = typeof payload.hit_count === 'number'
+    ? payload.hit_count
+    : Array.isArray(hits) ? hits.length : 0
+  const status = String(payload.status ?? 'ok')
+  return `RAG 记忆检索：「${q || '（空）'}」→ ${n} 条（${status}）`
+}
 
 /** 门控流读取的回调接口 */
 export interface GatedDraftCallbacks {
@@ -229,6 +260,8 @@ export interface GatedDraftCallbacks {
    * @param ev - 事件对象（见 GatedDraftEvent）
    */
   onEvent?: (ev: GatedDraftEvent) => void
+  /** rag_context、truncation_warning 等非门控事件 */
+  onSideEvent?: (payload: Record<string, unknown>) => void
   /** 不可恢复错误（含 HTTP 非 2xx 和流中 error 字段） */
   onError?: (err: Error) => void
 }
@@ -277,6 +310,10 @@ export async function consumeGatedDraftStream(
     }
 
     if (parsed.done) return
+
+    if (parsed.sideEvent) {
+      callbacks.onSideEvent?.(parsed.sideEvent)
+    }
 
     if (parsed.event) {
       const ev = parsed.event

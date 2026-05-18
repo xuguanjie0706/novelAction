@@ -14,8 +14,6 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.services.embedding_service import semantic_search as _semantic_search
-
 from app.database import get_db
 from app.models import Chapter, Character, ChapterAnalysisRecord, ChapterIndex, MemoryChunk, OutlineNode, Project, QualityDebt, ReaderPromise, StoryLine, WorldSetting
 from app.services.ai_service import AIService
@@ -37,6 +35,7 @@ from app.routers.ai.schemas import DraftAssistRequest
 from app.schemas.scene import ScenePlanRequest, ScenePlanResponse
 from app.models import Scene
 from app.routers.ai.text_utils import plain_text, strip_tail_meta_lines, truncate
+from app.services.rag_retrieval_service import retrieve_and_log_draft_context
 from app.routers.ai.draft_helpers import (
     _build_consistency_issues_block,
     _calc_hook_requirement,
@@ -633,37 +632,19 @@ async def _build_draft_context(
         outline_node.highlight if outline_node else None,
     ])) or chapter.title or ""
 
-    _semantic_top_k = 74 if large_context else 10  # 为 recency 锚留位
-    _semantic_chunks = await _semantic_search(
-        db, project_id, _mem_query,
-        top_k=_semantic_top_k,
+    _semantic_top_k = 74 if large_context else 10
+    _merged, memory_summary, _rag_log, rag_retrieval_snapshot = await retrieve_and_log_draft_context(
+        db,
+        project_id=project_id,
+        chapter_id=chapter.id,
+        query=_mem_query,
+        top_k_semantic=_semantic_top_k,
         max_chapter=chapter.sort_order,
-    ) if _mem_query else []
-
-    # 时序锚定：补充最近 6 条，防止纯语义化丢失时间连续性
-    _recent_chunks = (
-        db.query(MemoryChunk)
-        .filter(MemoryChunk.project_id == project_id)
-        .order_by(func.coalesce(MemoryChunk.chapter_number, 0).desc())
-        .limit(6)
-        .all()
+        recency_limit=6,
+        large_context=large_context,
+        commit=False,
     )
-    _seen_ids = {c.id for c in _semantic_chunks}
-    _merged = _semantic_chunks + [c for c in _recent_chunks if c.id not in _seen_ids]
-
-    # 兼容下游 (m, ch) 解包格式；ch=None 时 display_chapter_number 回退到 chapter_number
     mem_rows_draft: list[tuple] = [(m, None) for m in _merged]
-
-    if large_context:
-        memory_summary = "\n".join(
-            f"- 第{(m.chapter_number or '?')}章 "
-            f"{m.title or m.memory_type}: {truncate(m.content, 600)}"
-            for m, _ in mem_rows_draft
-        )
-    else:
-        memory_summary = " | ".join(
-            f"{m.title or m.memory_type}: {m.content[:60]}" for m, _ in mem_rows_draft
-        )
 
     prev_chapter = db.query(Chapter).filter(
         Chapter.project_id == project_id,
@@ -896,6 +877,8 @@ async def _build_draft_context(
         scene_blueprint=scene_blueprint,
         reader_promise_context=reader_promise_context,
         prev_directives=prev_directives_str,
+        rag_retrieval_log_id=str(_rag_log.id),
+        rag_retrieval_snapshot=rag_retrieval_snapshot,
     )
 
 
@@ -932,6 +915,9 @@ async def draft_assist_stream(
     large_context = req.model_profile == "gemini"
 
     ctx = await _build_draft_context(db, project_id, chapter, project, large_context)
+    rag_snapshot = ctx.pop("rag_retrieval_snapshot", None)
+    rag_log_id = ctx.pop("rag_retrieval_log_id", None)
+    db.commit()
 
     cfg_wm = merge_writing_config(project, None)
     viol = prewrite_gate_violation(
@@ -976,7 +962,11 @@ async def draft_assist_stream(
         )
         user_prompt_str = (user_prompt_str + focus_block).strip()
 
-    stream_log_ctx = {"project_id": str(project_id), "chapter_id": str(req.chapter_id)}
+    stream_log_ctx = {
+        "project_id": str(project_id),
+        "chapter_id": str(req.chapter_id),
+        "rag_retrieval_log_id": rag_log_id,
+    }
 
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
@@ -985,6 +975,8 @@ async def draft_assist_stream(
     )
 
     async def event_stream():
+        if rag_snapshot:
+            yield f"data: {json.dumps(rag_snapshot, ensure_ascii=False)}\n\n"
         try:
             async for chunk in svc.draft_assist_stream(
                 **ctx,

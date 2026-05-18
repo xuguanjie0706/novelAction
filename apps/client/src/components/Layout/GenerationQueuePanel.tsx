@@ -37,8 +37,24 @@ import {
   fallbackChapterIndexFromRawMarkdown,
   htmlToPlainForSplit,
 } from '../../utils/draftChapterIndexSplit'
+import { formatRagContextProgressLabel } from '../../utils/draftAssistSse'
 
 /** 续写：旧叙事 plain + 本次流式全文，便于与入库正文对照 */
+function ragContextSideEventHandler(
+  pushProgress: (item: GenProgressItem) => void,
+  step: number | string = 'rag_context',
+) {
+  return (obj: Record<string, unknown>) => {
+    if (obj.event !== 'rag_context') return
+    pushProgress({
+      step,
+      label: formatRagContextProgressLabel(obj),
+      done: true,
+      error: false,
+    })
+  }
+}
+
 function manuscriptRawSnapshotForContinue(chapterContentHtml: string, accumulatedPlain: string): string {
   const prev = htmlToPlainForSplit(chapterContentHtml || '').trim()
   const acc = accumulatedPlain.trim()
@@ -789,7 +805,10 @@ async function runContinueChapters(
           user_prompt: userPrompt.trim() || null,
           replace_existing: false,
         },
-        { signal },
+        {
+          signal,
+          onSideEvent: ragContextSideEventHandler(pushProgress, phaseStep('rag')),
+        },
       )
 
       if (!accumulated.trim()) throw new Error('未收到正文内容')
@@ -989,7 +1008,10 @@ async function runRewriteChapter(
         user_prompt: userPrompt.trim() || null,
         replace_existing: true,
       },
-      { signal },
+      {
+        signal,
+        onSideEvent: ragContextSideEventHandler(pushProgress, 'rag_context'),
+      },
     )
 
     if (!accumulated.trim()) throw new Error('未收到正文内容')
@@ -1208,6 +1230,16 @@ async function runGatedRewriteChapter(
 
       const ev = obj.event as string | undefined
 
+      if (ev === 'rag_context') {
+        pushProgress({
+          step: 'rag_context',
+          label: formatRagContextProgressLabel(obj),
+          done: true,
+          error: false,
+        })
+        return
+      }
+
       // 结构化事件处理
       if (ev === 'gate_config') {
         const warnEnabled = obj.pre_write_warning_enabled === true
@@ -1242,12 +1274,13 @@ async function runGatedRewriteChapter(
         const ok = obj.ok !== false
         const riskCount = typeof obj.risk_count === 'number' ? obj.risk_count : 0
         const errMsg = typeof obj.error === 'string' ? obj.error : null
+        const ragLogId = typeof obj.rag_retrieval_log_id === 'string' ? obj.rag_retrieval_log_id : null
         pushProgress({
           step: 'pre_warn',
           label: errMsg
             ? `写前预警：${errMsg}`
             : ok
-              ? `写前预警完成（发现 ${riskCount} 处风险，简报已注入 prompt）`
+              ? `写前预警完成（发现 ${riskCount} 处风险，简报已注入 prompt${ragLogId ? `；RAG log ${ragLogId.slice(0, 8)}` : ''}）`
               : `写前预警：发现 ${riskCount} 处风险需注意，简报已注入 prompt`,
           done: true,
           error: !!errMsg,

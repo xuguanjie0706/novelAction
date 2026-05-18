@@ -118,6 +118,7 @@ export async function postDraftAssistAccumulatedWithPrewriteRetry(
   options?: {
     signal?: AbortSignal
     resolveAck?: (err: DraftPrewriteBlockedError) => Promise<string[] | null>
+    onSideEvent?: (payload: Record<string, unknown>) => void
   },
 ): Promise<string> {
   let ack: string[] | undefined
@@ -140,7 +141,7 @@ export async function postDraftAssistAccumulatedWithPrewriteRetry(
       ack = next
       continue
     }
-    return accumulateDraftAssistStream(res)
+    return accumulateDraftAssistStream(res, { onSideEvent: options?.onSideEvent })
   }
 }
 

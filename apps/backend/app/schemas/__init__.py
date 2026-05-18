@@ -12,6 +12,7 @@ from app.schemas.chapter import (
 )
 from app.schemas.chapter_index import ChapterIndexCreate, ChapterIndexUpdate, ChapterIndexOut
 from app.schemas.memory import MemoryChunkCreate, MemoryChunkOut
+from app.schemas.rag import RagQueryRequest, RagQueryResponse, RagRetrievalLogOut, RagSearchHitOut
 from app.schemas.foreshadow import ForeshadowCreate, ForeshadowUpdate, ForeshadowOut
 from app.schemas.quality_debt import QualityDebtOut, QualityDebtUpdate
 from app.schemas.location import LocationCreate, LocationUpdate, LocationOut
@@ -27,6 +28,7 @@ __all__ = [
     "ChapterVersionTimelineItemOut",
     "ChapterIndexCreate", "ChapterIndexUpdate", "ChapterIndexOut",
     "MemoryChunkCreate", "MemoryChunkOut",
+    "RagQueryRequest", "RagQueryResponse", "RagRetrievalLogOut", "RagSearchHitOut",
     "ForeshadowCreate", "ForeshadowUpdate", "ForeshadowOut",
     "QualityDebtOut", "QualityDebtUpdate",
     "LocationCreate", "LocationUpdate", "LocationOut",

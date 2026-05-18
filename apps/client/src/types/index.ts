@@ -303,6 +303,45 @@ export interface MemoryChunk {
   created_at: string
 }
 
+/** 单条 RAG 语义命中（与后端 RagSearchHitOut 对齐） */
+export interface RagSearchHit {
+  rank: number
+  memory_id: string
+  score?: number | null
+  retrieval_source: 'semantic' | 'recency_anchor' | 'recency_fallback'
+  memory_type: string
+  title?: string | null
+  content: string
+  content_preview: string
+  chapter_number?: number | null
+  tags: string[]
+}
+
+/** POST /memory/rag-query 结构化响应 */
+export interface RagQueryResponse {
+  log_id: string
+  query: string
+  params: Record<string, unknown>
+  status: string
+  duration_ms: number
+  hits: RagSearchHit[]
+  memory_summary: string
+  answer_hint: string
+}
+
+/** 持久化 RAG 调用日志 */
+export interface RagRetrievalLog {
+  id: string
+  project_id: string
+  chapter_id?: string | null
+  source: string
+  status: string
+  duration_ms: number
+  input_payload: Record<string, unknown>
+  output_payload: Record<string, unknown>
+  created_at: string
+}
+
 // ── Generation Queue ──────────────────────────────────
 export type GenTaskStatus = 'pending' | 'running' | 'done' | 'error' | 'cancelled'
 export type GenTaskType = 'full_generate' | 'batch_expand' | 'outline_quality' | 'outline_repair' | 'continue_chapters' | 'rewrite_chapter' | 'gated_rewrite_chapter'

@@ -1,6 +1,6 @@
 import axios from 'axios'
 import toast from 'react-hot-toast'
-import type { AiChatMessage, Chapter, ChapterAnalysisResult, ChapterAnalysisStats, DashboardHome, HookCheckResult, Location, LlmOverview, ReaderPromise, ReaderSimulationResult, Scene, StorylineGapsResult, WorldSetting } from '../types'
+import type { AiChatMessage, Chapter, ChapterAnalysisResult, ChapterAnalysisStats, DashboardHome, HookCheckResult, Location, LlmOverview, RagQueryResponse, RagRetrievalLog, ReaderPromise, ReaderSimulationResult, Scene, StorylineGapsResult, WorldSetting } from '../types'
 import {
   extractUsage,
   finishLlmCall,
@@ -579,6 +579,31 @@ export const aiApi = {
   },
   listMemory: (pid: string, type?: string) =>
     api.get(`/projects/${pid}/ai/memory${type ? `?memory_type=${type}` : ''}`),
+  /** 结构化语义 RAG 查询（自然语言问记忆库） */
+  ragQuery: (
+    pid: string,
+    data: {
+      q: string
+      top_k?: number
+      max_chapter?: number
+      types?: string
+      chapter_id?: string
+      include_injected_summary?: boolean
+    },
+  ) => api.post<RagQueryResponse>(`/projects/${pid}/ai/memory/rag-query`, data),
+  listRagLogs: (
+    pid: string,
+    params?: { chapter_id?: string; source?: string; limit?: number },
+  ) => {
+    const q = new URLSearchParams()
+    if (params?.chapter_id) q.set('chapter_id', params.chapter_id)
+    if (params?.source) q.set('source', params.source)
+    if (params?.limit != null) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return api.get<RagRetrievalLog[]>(`/projects/${pid}/ai/memory/rag-logs${qs ? `?${qs}` : ''}`)
+  },
+  getRagLog: (pid: string, logId: string) =>
+    api.get<RagRetrievalLog>(`/projects/${pid}/ai/memory/rag-logs/${logId}`),
   /** AI 自动分析章节，提取人物/故事线变化建议（不写库，只返回建议） */
   autoDebrief: (pid: string, data: {
     chapter_id: string

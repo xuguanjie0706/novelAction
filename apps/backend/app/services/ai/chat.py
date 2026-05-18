@@ -43,10 +43,28 @@ class ChatMixin:
         self,
         chapter_content: str,
         user_prompt: str,
+        rag_context: str = "",
     ) -> AsyncGenerator[str, None]:
+        """
+        AI 写作建议流（SSE）。
+
+        Args:
+            chapter_content: 当前章节正文（取前 1500 字注入 prompt）。
+            user_prompt: 作者的具体问题或修改意图。
+            rag_context: 由路由层组装的 RAG 上下文块，包含语义相关记忆、
+                         未收束伏笔、人物状态等；空字符串表示无上下文可用。
+        """
         system = "你是经验丰富的网络小说写作顾问，帮助作者优化章节内容。"
+
+        rag_block = (
+            f"\n\n【相关上下文（供参考，不要在回答中复述这些内容）】\n{rag_context}"
+            if rag_context.strip()
+            else ""
+        )
+
         prompt = f"""当前章节内容（前1500字）：
 {chapter_content[:1500]}
+{rag_block}
 
 作者问题：{user_prompt}
 

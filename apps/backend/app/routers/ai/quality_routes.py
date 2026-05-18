@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.services.embedding_service import semantic_search as _semantic_search
+from app.services.rag_retrieval_service import retrieve_and_log_pre_write_memory
 
 from app.database import get_db
 from app.models import (
@@ -278,12 +279,21 @@ async def pre_write_warning(
     if not chapter:
         raise HTTPException(404, "Chapter not found")
 
-    # 加载记忆：用 chapter_plan_summary（五要素）做语义检索，相关度远优于时序排列
-    _pw_mems = await _semantic_search(
-        db, project_id, req.chapter_plan_summary or chapter.title or "",
-        top_k=40,
-        max_chapter=req.chapter_number if req.chapter_number else None,
-    )
+    # 加载记忆：语义检索 + RAG 日志（source=pre_write_warning）
+    _pw_query = (req.chapter_plan_summary or chapter.title or "").strip()
+    _pw_rag_log = None
+    if _pw_query:
+        _pw_mems, _pw_rag_log = await retrieve_and_log_pre_write_memory(
+            db,
+            project_id=project_id,
+            chapter_id=chapter.id,
+            query=_pw_query,
+            top_k=40,
+            max_chapter=req.chapter_number if req.chapter_number else chapter.sort_order,
+            commit=False,
+        )
+    else:
+        _pw_mems = []
     memory_chunks = [
         {"title": m.title or "", "content": m.content or "", "memory_type": m.memory_type or "event"}
         for m in _pw_mems
@@ -428,6 +438,8 @@ async def pre_write_warning(
     db.refresh(rec)
     out = dict(result)
     out["record_id"] = str(rec.id)
+    if _pw_rag_log is not None:
+        out["rag_retrieval_log_id"] = str(_pw_rag_log.id)
     return out
 
 

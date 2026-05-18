@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from uuid import UUID
 
 import httpx
@@ -229,32 +229,26 @@ async def embed_chunks_bulk(
 # 语义检索
 # ---------------------------------------------------------------------------
 
-async def semantic_search(
+async def semantic_search_scored(
     db: Session,
     project_id: str | UUID,
     query: str,
     top_k: int = 10,
     memory_types: Optional[List[str]] = None,
     max_chapter: Optional[int] = None,
-) -> list:
+) -> Tuple[List[Tuple["MemoryChunk", Optional[float], str]], str]:
     """
-    使用 pgvector 余弦距离召回最相关记忆条目。
+    语义检索并返回 (chunk, cosine_similarity, source) 三元组。
 
-    返回 MemoryChunk ORM 对象列表（已按相关度降序排列）。
-    若 pgvector 不可用或向量化失败，则回退到时间序最新 top_k 条。
-
-    Args:
-        db: SQLAlchemy session
-        project_id: 项目 UUID
-        query: 查询文本（如章节摘要或质检问题）
-        top_k: 最多返回条数
-        memory_types: 筛选记忆类型，None 表示全部
-        max_chapter: 只检索该章节编号及之前的记忆（防止未来伏笔泄漏）
+    status:
+      - ok: pgvector 语义命中
+      - fallback_recency: pgvector 不可用 / 无向量 / 查询失败后的时序兜底
+      - embed_failed: 向量化失败后的时序兜底
     """
     from app.models.memory import MemoryChunk, HAS_PGVECTOR
     from sqlalchemy import text as sa_text
 
-    def _fallback_query() -> list:
+    def _fallback_query() -> List[Tuple[MemoryChunk, Optional[float], str]]:
         """时间序兜底：最新 top_k 条（降序）。"""
         q = db.query(MemoryChunk).filter(MemoryChunk.project_id == str(project_id))
         if memory_types:
@@ -264,22 +258,22 @@ async def semantic_search(
                 (MemoryChunk.chapter_number == None)  # noqa: E711
                 | (MemoryChunk.chapter_number <= max_chapter)
             )
-        return q.order_by(MemoryChunk.created_at.desc()).limit(top_k).all()
+        rows = q.order_by(MemoryChunk.created_at.desc()).limit(top_k).all()
+        return [(r, None, "recency_fallback") for r in rows]
 
     if not HAS_PGVECTOR:
-        return _fallback_query()
+        return _fallback_query(), "fallback_recency"
 
     try:
         vectors = await embed_texts([query])
         if not vectors:
-            return _fallback_query()
+            return _fallback_query(), "fallback_recency"
         query_vec = vectors[0]
     except Exception as exc:  # noqa: BLE001
         logger.warning("semantic_search embed failed: %s — falling back to recency", exc)
-        return _fallback_query()
+        return _fallback_query(), "embed_failed"
 
     try:
-        # CAST 避免 :name::vector 被 SQLAlchemy 误解析为绑定名 query_ve
         vec_str = _vector_to_pg_literal(_validate_embedding_dims(query_vec, context="query"))
 
         where_parts = [
@@ -301,27 +295,60 @@ async def semantic_search(
             params["max_chapter"] = int(max_chapter)
 
         sql = sa_text(
-            "SELECT id FROM memory_chunks WHERE "
+            "SELECT id, (embedding <=> CAST(:query_vec AS vector)) AS distance FROM memory_chunks WHERE "
             + " AND ".join(where_parts)
-            + " ORDER BY embedding <=> CAST(:query_vec AS vector)"
+            + " ORDER BY distance ASC"
             + " LIMIT :top_k"
         )
         rows = db.execute(sql, params).fetchall()
 
         if not rows:
-            return _fallback_query()
+            return _fallback_query(), "fallback_recency"
 
-        ids = [r[0] for r in rows]
-        # 保持相关度顺序
+        id_distance = {r[0]: float(r[1]) for r in rows}
+        ids = list(id_distance.keys())
         chunks_map = {
             c.id: c
             for c in db.query(MemoryChunk).filter(MemoryChunk.id.in_(ids)).all()
         }
-        return [chunks_map[cid] for cid in ids if cid in chunks_map]
+        ranked: List[Tuple[MemoryChunk, Optional[float], str]] = []
+        for cid in ids:
+            chunk = chunks_map.get(cid)
+            if chunk is None:
+                continue
+            dist = id_distance.get(cid, 1.0)
+            similarity = max(0.0, min(1.0, 1.0 - dist))
+            ranked.append((chunk, similarity, "semantic"))
+        return ranked, "ok"
 
     except Exception as exc:  # noqa: BLE001
         logger.warning("semantic_search pgvector query failed: %s — falling back to recency", exc)
-        return _fallback_query()
+        return _fallback_query(), "fallback_recency"
+
+
+async def semantic_search(
+    db: Session,
+    project_id: str | UUID,
+    query: str,
+    top_k: int = 10,
+    memory_types: Optional[List[str]] = None,
+    max_chapter: Optional[int] = None,
+) -> list:
+    """
+    使用 pgvector 余弦距离召回最相关记忆条目。
+
+    返回 MemoryChunk ORM 对象列表（已按相关度降序排列）。
+    若 pgvector 不可用或向量化失败，则回退到时间序最新 top_k 条。
+    """
+    ranked, _status = await semantic_search_scored(
+        db,
+        project_id,
+        query,
+        top_k=top_k,
+        memory_types=memory_types,
+        max_chapter=max_chapter,
+    )
+    return [c for c, _score, _src in ranked]
 
 
 # ---------------------------------------------------------------------------

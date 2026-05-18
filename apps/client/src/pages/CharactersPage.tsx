@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Crown, User, Swords, Zap, BookOpen, Eye, Trash2, Heart, TrendingUp, FileText, Target, NotebookPen, Search, Users, History, Eraser, X, RotateCcw, Check, Loader2, Share2 } from 'lucide-react'
+import { Plus, Crown, User, Swords, Zap, BookOpen, Eye, Trash2, Heart, TrendingUp, FileText, Target, NotebookPen, Search, Users, History, Eraser, X, RotateCcw, Check, Loader2, Sparkles } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { charactersApi, outlineApi, aiApi } from '../api/client'
 import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload } from '../store'
 import type { Character, CharacterChangeLog } from '../types'
@@ -1017,9 +1018,9 @@ export default function CharactersPage() {
         {/* 顶栏：标题 + 返回按钮 */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 bg-white shrink-0">
           <div className="flex items-center gap-2">
-            <Share2 size={14} className="text-amber-500" />
+            <Sparkles size={14} className="text-indigo-500" />
             <span className="text-sm font-semibold text-gray-700">人物关系图</span>
-            <span className="text-xs text-gray-400">{characters.length} 人</span>
+            <span className="text-xs text-gray-400">{characters.length} 人 · 星座星图 / 阵营分层</span>
           </div>
           <button
             onClick={() => setPageView('list')}
@@ -1048,22 +1049,32 @@ export default function CharactersPage() {
             <span className="text-xs text-gray-400">
               {hasFilter ? `${filteredChars.length}/` : ''}{characters.length} 人
             </span>
-            {/* 关系图入口 */}
-            <button
-              onClick={() => setPageView('graph')}
-              title="查看关系图"
-              className="text-gray-400 hover:text-amber-500 transition-colors"
-            >
-              <Share2 size={14} />
-            </button>
             <button onClick={handleCreate} disabled={creating} className="text-amber-500 hover:text-amber-600 disabled:opacity-50">
               <Plus size={16} />
             </button>
           </div>
         </div>
 
+        {/* 关系图入口 */}
+        <div className="px-3 pt-2 pb-1 shrink-0 space-y-1">
+          <Link
+            to={`/project/${projectId}/relations`}
+            className="flex items-center justify-center gap-1.5 w-full py-2 rounded-lg text-xs font-medium bg-indigo-50 text-indigo-800 border border-indigo-200 hover:bg-indigo-100 transition-colors"
+          >
+            <Sparkles size={14} />
+            打开星座关系图
+          </Link>
+          <button
+            type="button"
+            onClick={() => setPageView('graph')}
+            className="w-full text-[10px] text-gray-400 hover:text-indigo-600 transition-colors"
+          >
+            或在本页内嵌查看
+          </button>
+        </div>
+
         {/* 搜索框 */}
-        <div className="px-3 pt-2.5 pb-1.5 shrink-0">
+        <div className="px-3 pt-1 pb-1.5 shrink-0">
           <div className="relative">
             <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input

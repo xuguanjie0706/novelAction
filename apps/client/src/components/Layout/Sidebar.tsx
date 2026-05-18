@@ -1,6 +1,6 @@
 import React from 'react'
 import { NavLink } from 'react-router-dom'
-import { BarChart2, BookOpen, Users, Map, FileText, Brain, Globe, Bookmark, BookMarked, GanttChart } from 'lucide-react'
+import { BarChart2, BookOpen, Users, Map, FileText, Brain, Globe, Bookmark, BookMarked, GanttChart, Sparkles } from 'lucide-react'
 import clsx from 'clsx'
 
 interface Props { projectId: string }
@@ -9,6 +9,7 @@ const NAV = [
   { to: 'outline',       icon: BookOpen, label: '大纲' },
   { to: 'write',         icon: FileText, label: '写作' },
   { to: 'characters',    icon: Users,    label: '人物' },
+  { to: 'relations',     icon: Sparkles, label: '关系图' },
   { to: 'worldbuilding', icon: Globe,    label: '世界' },
   { to: 'settings',      icon: Map,      label: '设定' },
   { to: 'timeline',      icon: GanttChart, label: '时间线' },

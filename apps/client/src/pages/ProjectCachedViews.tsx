@@ -11,8 +11,9 @@ import CluesPage from './CluesPage'
 import RhythmMapPage from './RhythmMapPage'
 import ReaderPromisesPage from './ReaderPromisesPage'
 import GlobalTimelinePage from './GlobalTimelinePage'
+import RelationsGraphPage from './RelationsGraphPage'
 
-const TABS = ['outline', 'write', 'characters', 'worldbuilding', 'settings', 'timeline', 'memory', 'clues', 'rhythmmap', 'promises'] as const
+const TABS = ['outline', 'write', 'characters', 'relations', 'worldbuilding', 'settings', 'timeline', 'memory', 'clues', 'rhythmmap', 'promises'] as const
 type Tab = (typeof TABS)[number]
 
 function isTab(s: string | undefined): s is Tab {
@@ -56,6 +57,7 @@ export default function ProjectCachedViews() {
       {wrap('outline',       <OutlinePage />)}
       {wrap('write',         <WritePage />)}
       {wrap('characters',    <CharactersPage />)}
+      {wrap('relations',     <RelationsGraphPage />)}
       {wrap('worldbuilding', <WorldBuildingPage />)}
       {wrap('settings',      <SettingsPage />)}
       {wrap('memory',        <MemoryPage />)}

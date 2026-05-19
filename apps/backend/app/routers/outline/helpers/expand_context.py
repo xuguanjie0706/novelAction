@@ -23,6 +23,8 @@ def _outline_node_to_chapter_context(node: OutlineNode) -> dict:
         "core_event": node.summary or "",
         "opening_hook": node.hook or "",
         "character_change": node.conflict or "",
+        # 实力里程碑常单独写突破/境界，需并入成长轨迹扫描
+        "power_milestone": getattr(node, "power_milestone", None) or "",
         "foreshadow": extra.get("foreshadow", ""),
         "end_hook": extra.get("end_hook") or node.highlight or "",
         "pacing": extra.get("pacing", "medium"),

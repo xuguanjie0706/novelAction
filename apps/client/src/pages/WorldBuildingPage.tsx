@@ -1,11 +1,16 @@
-import React, { useCallback, useEffect, useState, useMemo } from 'react'
+import React, { useCallback, useEffect, useState, useMemo, lazy, Suspense } from 'react'
 import { useParams } from 'react-router-dom'
-import { Plus, Trash2, ChevronRight, GitBranch, Zap, Sword, Package, Shield, Search, MapPin } from 'lucide-react'
+import { Plus, Trash2, ChevronRight, GitBranch, Zap, Sword, Package, Shield, Search, MapPin, Network, List } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { storylinesApi, powerSystemsApi, skillsApi, itemsApi, factionsApi, locationsApi } from '../api/client'
 import { useAppStore } from '../store'
 import type { StoryLine, PowerLevel, PowerSystem, Skill, Item, Faction, Location } from '../types'
+import PageSpinner from '../components/common/PageSpinner'
+
+const FactionRealmDiagram = lazy(
+  () => import('../components/WorldBuilding/FactionRealmDiagram'),
+)
 
 // ─────────────────────────────────────────────────────────
 //  Sub-tab 配置
@@ -1096,18 +1101,22 @@ const ACTIVE_PERIOD_META: Record<string, { label: string; color: string }> = {
 }
 
 function FactionsTab({ projectId }: { projectId: string }) {
-  const { factions, setFactions, upsertFaction, removeFaction } = useAppStore()
+  const { factions, setFactions, upsertFaction, removeFaction, powerSystems, setPowerSystems } = useAppStore()
   const [selected, setSelected] = useState<Faction | null>(null)
   const [form, setForm] = useState<Partial<Faction>>({})
   const [saving, setSaving] = useState(false)
   const [searchQ, setSearchQ]               = useState('')
   const [filterAlignment, setFilterAlignment] = useState('')
+  const [viewMode, setViewMode] = useState<'edit' | 'diagram'>('edit')
 
   useEffect(() => {
     factionsApi.list(projectId).then(r => {
       setFactions(r.data)
       if (r.data.length > 0) { setSelected(r.data[0]); setForm(r.data[0]) }
     })
+    if (powerSystems.length === 0) {
+      powerSystemsApi.list(projectId).then(r => setPowerSystems(r.data)).catch(() => {})
+    }
   }, [projectId])
 
   const selectItem = (s: Faction) => { setSelected(s); setForm({ ...s }) }
@@ -1148,6 +1157,45 @@ function FactionsTab({ projectId }: { projectId: string }) {
 
   const hasFilter = searchQ.trim() !== '' || filterAlignment !== ''
 
+  const parseNameList = (raw: string): string[] =>
+    raw.split(/[,，、]/).map(s => s.trim()).filter(Boolean)
+
+  const joinNameList = (arr: string[] | undefined): string =>
+    (arr ?? []).join('、')
+
+  if (viewMode === 'diagram') {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 bg-white shrink-0">
+          <div className="flex items-center gap-2">
+            <Network size={14} className="text-amber-600" />
+            <span className="text-sm font-semibold text-gray-700">势力 · 境界进阶关系图</span>
+            <span className="text-xs text-gray-400">
+              {factions.length} 势力 · {powerSystems[0]?.levels?.length ?? 0} 个境界层
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setViewMode('edit')}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors"
+          >
+            <List size={12} /> 返回列表编辑
+          </button>
+        </div>
+        <div className="flex-1 min-h-0">
+          <Suspense fallback={<PageSpinner label="关系图加载中…" />}>
+            <FactionRealmDiagram
+              factions={factions}
+              powerSystems={powerSystems}
+              selectedId={selected?.id}
+              onSelectFaction={f => { setSelected(f); setForm({ ...f }) }}
+            />
+          </Suspense>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex h-full">
       {/* 左栏 */}
@@ -1155,9 +1203,17 @@ function FactionsTab({ projectId }: { projectId: string }) {
         {/* 顶栏 */}
         <div className="flex items-center justify-between px-3 py-2.5 border-b border-gray-100 shrink-0">
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">势力组织</span>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <span className="text-xs text-gray-400">{hasFilter ? `${filtered.length}/` : ''}{factions.length}</span>
-            <button onClick={handleCreate} className="text-amber-500 hover:text-amber-600"><Plus size={16} /></button>
+            <button
+              type="button"
+              title="境界进阶关系图"
+              onClick={() => setViewMode('diagram')}
+              className="text-gray-400 hover:text-amber-600 transition-colors"
+            >
+              <Network size={15} />
+            </button>
+            <button type="button" onClick={handleCreate} className="text-amber-500 hover:text-amber-600"><Plus size={16} /></button>
           </div>
         </div>
         {/* 搜索 */}
@@ -1259,9 +1315,39 @@ function FactionsTab({ projectId }: { projectId: string }) {
                     options={Object.entries(ACTIVE_PERIOD_META).filter(([k]) => k !== '').map(([k, v]) => ({ value: k, label: v.label }))} />
                 </Field>
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label="实力级别"><TextInput value={form.strength_level ?? ''} onChange={f('strength_level')} placeholder="如：顶级宗门" /></Field>
+                  <Field label="实力级别"><TextInput value={form.strength_level ?? ''} onChange={f('strength_level')} placeholder="如：顶级宗门、含境界名" /></Field>
                   <Field label="成员规模"><TextInput value={form.member_count ?? ''} onChange={f('member_count')} placeholder="如：数万弟子" /></Field>
                 </div>
+                <Field label="最强战力"><TextInput value={form.top_power ?? ''} onChange={f('top_power')} placeholder="如：掌门·元婴后期（关系图纵轴匹配）" /></Field>
+              </Section>
+
+              <Section title="势力关系（关系图连线）" icon={<Network size={12} />} accent="bg-sky-50/60">
+                <Field label="上级势力">
+                  <Select
+                    value={form.parent_faction_id ?? ''}
+                    onChange={v => setForm(p => ({ ...p, parent_faction_id: v || undefined }))}
+                    options={[
+                      { value: '', label: '无（顶层势力）' },
+                      ...factions
+                        .filter(x => x.id !== selected.id)
+                        .map(x => ({ value: x.id, label: x.name })),
+                    ]}
+                  />
+                </Field>
+                <Field label="盟友势力">
+                  <TextInput
+                    value={joinNameList(form.allies)}
+                    onChange={v => setForm(p => ({ ...p, allies: parseNameList(v) }))}
+                    placeholder="多个用顿号分隔，如：紫霞谷、玄武帝国"
+                  />
+                </Field>
+                <Field label="敌对势力">
+                  <TextInput
+                    value={joinNameList(form.rivals)}
+                    onChange={v => setForm(p => ({ ...p, rivals: parseNameList(v) }))}
+                    placeholder="多个用顿号分隔"
+                  />
+                </Field>
               </Section>
 
               <Section title="描述与领地" icon={<ChevronRight size={12} />}>

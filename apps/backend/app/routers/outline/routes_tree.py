@@ -8,17 +8,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Chapter, Character, OutlineNode, PowerSystem, Project
+from app.models import Chapter, Character, CharacterChangeLog, OutlineNode, PowerSystem, Project
 from app.schemas import OutlineNodeCreate, OutlineNodeUpdate, OutlineNodeOut
 
 from app.routers.outline.helpers_core import (
-    DEBRIEF_REALM_MILESTONES_EXTRA_KEY,
-    _build_realm_rank_map,
     _collect_protagonist_anchor_names,
     _outline_node_to_chapter_context,
-    build_protagonist_realm_timeline,
+    build_character_growth_timeline,
     build_tree,
-    merge_outline_and_debrief_realm_milestones,
 )
 from app.routers.outline.schemas import (
     ChapterPlansClearResult,
@@ -52,32 +49,40 @@ def get_protagonist_realm_timeline(project_id: str, db: Session = Depends(get_db
     power_systems = db.query(PowerSystem).filter(PowerSystem.project_id == project_id).all()
     protagonist_names = _collect_protagonist_anchor_names(characters)
     protagonist = next((c for c in characters if getattr(c, "role", None) == "protagonist"), None)
+    if not protagonist:
+        return ProtagonistRealmTimelineOut(
+            protagonist_display_name=None,
+            protagonist_anchor_names=protagonist_names,
+            has_realm_whitelist=False,
+            anchored=False,
+            chapter_plans_scanned=0,
+            debrief_snapshots=0,
+            milestones=[],
+        )
 
-    built = build_protagonist_realm_timeline(
+    change_logs = (
+        db.query(CharacterChangeLog)
+        .filter(
+            CharacterChangeLog.project_id == project_id,
+            CharacterChangeLog.character_id == protagonist.id,
+        )
+        .order_by(CharacterChangeLog.created_at.asc())
+        .all()
+    )
+    payload = build_character_growth_timeline(
         chapters,
         power_systems,
-        protagonist_names=protagonist_names or None,
-    )
-    name_to_rank, _, _ = _build_realm_rank_map(power_systems)
-    debrief_rows: list[Any] = []
-    if protagonist and isinstance(getattr(protagonist, "extra", None), dict):
-        raw_hist = protagonist.extra.get(DEBRIEF_REALM_MILESTONES_EXTRA_KEY)
-        if isinstance(raw_hist, list):
-            debrief_rows = [x for x in raw_hist if isinstance(x, dict)]
-
-    merged_raw = merge_outline_and_debrief_realm_milestones(
-        built["milestones"],
-        debrief_rows,
-        name_to_rank,
+        protagonist,
+        change_logs=change_logs,
     )
     return ProtagonistRealmTimelineOut(
-        protagonist_display_name=getattr(protagonist, "name", None) if protagonist else None,
+        protagonist_display_name=getattr(protagonist, "name", None),
         protagonist_anchor_names=protagonist_names,
-        has_realm_whitelist=built["has_realm_whitelist"],
-        anchored=built["anchored"],
-        chapter_plans_scanned=built["chapter_plans_scanned"],
-        debrief_snapshots=len(debrief_rows),
-        milestones=[ProtagonistRealmMilestoneOut(**m) for m in merged_raw],
+        has_realm_whitelist=payload["has_realm_whitelist"],
+        anchored=payload["anchored"],
+        chapter_plans_scanned=payload["chapter_plans_scanned"],
+        debrief_snapshots=payload.get("debrief_snapshots", 0),
+        milestones=[ProtagonistRealmMilestoneOut(**m) for m in payload["milestones"]],
     )
 
 

@@ -253,6 +253,9 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 | Step 12 开局承诺 | `opening_contract` | `_gen_opening_contract` |
 | Step 12.5 第一卷章纲 | `vol1_chapters` | `_gen_vol1_chapter_plans` |
 | Step 13 第1章场景 | `ch1_scenes` | `_gen_ch1_scenes` |
+| Step 9.5 情绪节律图 | `emotion_arc` | `_gen_emotion_arc` |
+| Step 9.8 反派行动线 | `villain_arc` | `_gen_villain_arc` |
+| Step 11.5 核心谜题 | `core_mysteries` | `_gen_core_mysteries` |
 | Step 14 一致性扫描 | `consistency` | `_gen_consistency_scan` |
 
 ---
@@ -317,6 +320,15 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 - [x] AI 质检结合故事线进度 + 境界体系一致性检查（`quality_routes.py` 传入活跃故事线/境界体系/人物状态；`quality.py` 新增 `storyline_progress` + `realm_check` 独立维度，含独立评分与问题描述）
 - [x] Scene 三层调度全链路（`routers/ai/scene_routes.py`：`POST /ai/scene-plan-save` 生成并持久化分场 / `POST /ai/scene-draft/stream` SSE 逐场起草写回 scene.content / `POST /ai/scene-stitch` 缝合 → chapter.content；`services/ai/scene_draft.py` SceneDraftMixin）
 - [x] Scene 三层调度前端 UI（`api/scene.ts` API 封装 / `hooks/useScenePipeline.ts` 状态管理 / `components/Writing/ScenePipelinePanel.tsx` 面板；接入 ChapterEditor「分场」侧栏 Tab，缝合后自动刷新 chapter.content；旧直写保留为备选）
+- [x] **势力境界进阶关系图（2026-05-19）**：创作端世界观「势力」Tab · **React Flow**（`FactionRealmFlow/`，与人物关系图同栈；纵轴 `PowerSystem.levels` 分带 + 势力卡；连线来自 `parent_faction_id` / `allies` / `rivals`；缩放/小地图/选中高亮）
+- [x] **大纲生成防漂移（2026-05-19）**：`outline_planning.py` 新增 `chapter_word_budget_for_phase`（按 phase/pacing/标记动态字数）和 `build_book_budget_block`（全书预算约束注入 prompt）；`volumes.py` 初始化 `chapter_quota_total/used`；`vol1/vol_chapter_plans` 注入预算块、动态 `expected_words`、batch 数量校验、跨卷 `quota_used` 累计
+- [x] **卷间衔接强制承接（2026-05-19）**：`vol_chapter_plans.py` 自动查询上一卷 `OutlineNode.hook`，生成 `prev_vol_hook_block` 硬约束第1章 `opening_hook` 必须正面回应上卷末悬念
+- [x] **一致性扫描加深（2026-05-19）**：`consistency_scan.py` 两阶段：代码预检（死亡人物仍出场、技能境界要求矛盾、道具时机与章纲不符、卷排序缺口）+ AI 叙事层分析（新增反派行动时间线对齐检查）
+- [x] **伏笔台账双向关联（2026-05-19）**：新增 `bootstrap/foreshadow_sync.py`，解析章纲 foreshadow 字段"埋/加热/收"语法，`vol1/vol_chapter_plans` 落库时自动写/更新 `Foreshadow` 表（幂等设计）
+- [x] **全书情绪节律图 Step 9.5（2026-05-19）**：新增 `steps/emotion_arc.py`，生成每卷情绪收支（存入/消耗/净余额/主色调），写 `Project.extra['emotion_arc']`；`context_new_steps.py` 构建 editorial_prompt_block 注入块
+- [x] **反派独立行动线 Step 9.8（2026-05-19）**：新增 `steps/villain_arc.py`，为主要反派生成卷级行动计划（欲望/障碍/选择/代价/胜败/盲区布局），写 `Project.extra['villain_arc']`
+- [x] **全书跨卷伏笔预分配 Step 11.5（2026-05-19）**：新增 `steps/core_mysteries.py`，预定义 5-8 条核心谜题（identity/prophecy/prop/reversal/hook），每条锚定埋/加热/揭晓章节，写 `Foreshadow` 表 + `Project.extra['core_mysteries']`
+- [x] **Bootstrap 拓扑更新（2026-05-19）**：graph.py 新增三节点，执行链：`volumes → gate_vol → emotion_arc → villain_arc → memory → relations → core_mysteries → opening_contract → vol1_chapters → ch1_scenes → consistency`
 
 ## 待完成功能
 - [ ] ReaderPromise 深度闭环（写章注入 open 承诺 + auto-debrief AI 识别新增/兑现 + 队列自动复盘同步提交）：基础模型+router 已完成，完整闭环链路待实现

@@ -482,6 +482,18 @@ class GenerationService:
         from app.services.bootstrap.steps.consistency_scan import gen_consistency_scan
         return await gen_consistency_scan(self, project, ctx)
 
+    async def _gen_emotion_arc(self, project: Project, ctx: dict):
+        from app.services.bootstrap.steps.emotion_arc import gen_emotion_arc
+        return await gen_emotion_arc(self, project, ctx)
+
+    async def _gen_villain_arc(self, project: Project, ctx: dict):
+        from app.services.bootstrap.steps.villain_arc import gen_villain_arc
+        return await gen_villain_arc(self, project, ctx)
+
+    async def _gen_core_mysteries(self, project: Project, ctx: dict):
+        from app.services.bootstrap.steps.core_mysteries import gen_core_mysteries
+        return await gen_core_mysteries(self, project, ctx)
+
     async def _call_with_retry(
         self,
         system: str,

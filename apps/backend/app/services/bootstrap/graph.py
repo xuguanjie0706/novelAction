@@ -3,7 +3,8 @@ Bootstrap LangGraph StateGraph — 支持 human-in-the-loop 闸门。
 
 拓扑：START → positioning → gate(interrupt) → project → power_systems → gate_power(interrupt)
       → factions → storylines → characters → gate_chars(interrupt) → skills_items → settings
-      → volumes → gate_vol(interrupt) → memory → relations → opening_contract → vol1_chapters
+      → volumes → gate_vol(interrupt) → emotion_arc → villain_arc
+      → memory → relations → core_mysteries → opening_contract → vol1_chapters
       → ch1_scenes → consistency → END
 
 多个 ``interrupt_before`` 与节点内 ``interrupt()`` 配合：每道闸门先落库/推送 ``gate_pending``，
@@ -269,8 +270,11 @@ async def node_power_systems(s, c=None): return await _run_step(s, c, "power_sys
 async def node_factions(s, c=None):      return await _run_step(s, c, "factions",      "生成势力体系...", "_gen_factions")       # noqa: E501
 async def node_storylines(s, c=None):    return await _run_step(s, c, "storylines",    "生成故事线...",   "_gen_storylines")     # noqa: E501
 async def node_settings(s, c=None):      return await _run_step(s, c, "settings",      "生成世界观设定卡...", "_gen_settings")   # noqa: E501
-async def node_memory(s, c=None):        return await _run_step(s, c, "memory",        "生成记忆库种子...", "_gen_memory")       # noqa: E501
-async def node_opening_contract(s, c=None): return await _run_step(s, c, "opening_contract", "规划开局追读承诺...", "_gen_opening_contract")  # noqa: E501
+async def node_memory(s, c=None):          return await _run_step(s, c, "memory",          "生成记忆库种子...",      "_gen_memory")           # noqa: E501
+async def node_opening_contract(s, c=None): return await _run_step(s, c, "opening_contract", "规划开局追读承诺...",  "_gen_opening_contract")  # noqa: E501
+async def node_emotion_arc(s, c=None):     return await _run_step(s, c, "emotion_arc",     "规划全书情绪节律...",    "_gen_emotion_arc")       # noqa: E501
+async def node_villain_arc(s, c=None):     return await _run_step(s, c, "villain_arc",     "生成反派独立行动线...", "_gen_villain_arc")       # noqa: E501
+async def node_core_mysteries(s, c=None):  return await _run_step(s, c, "core_mysteries",  "预分配全书核心谜题...", "_gen_core_mysteries")    # noqa: E501
 
 
 # ──────────────────────────────────────────────────────
@@ -302,8 +306,11 @@ def _build_graph() -> StateGraph:
         ("settings",             node_settings),
         ("volumes",              node_volumes),
         ("gate_volumes",         node_gate_volumes),
+        ("emotion_arc",          node_emotion_arc),
+        ("villain_arc",          node_villain_arc),
         ("memory",               node_memory),
         ("relations",            node_relations),
+        ("core_mysteries",       node_core_mysteries),
         ("opening_contract",     node_opening_contract),
         ("vol1_chapters",        node_vol1_chapters),
         ("ch1_scenes",           node_ch1_scenes),
@@ -315,7 +322,8 @@ def _build_graph() -> StateGraph:
         START, "positioning", "gate", "project",
         "power_systems", "gate_power_systems", "factions", "storylines",
         "characters", "gate_characters", "skills_items", "settings",
-        "volumes", "gate_volumes", "memory", "relations",
+        "volumes", "gate_volumes", "emotion_arc", "villain_arc",
+        "memory", "relations", "core_mysteries",
         "opening_contract", "vol1_chapters",
         "ch1_scenes", "consistency", END,
     ]

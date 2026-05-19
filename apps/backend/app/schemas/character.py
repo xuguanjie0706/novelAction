@@ -169,6 +169,32 @@ class CharacterOut(BaseModel):
         from_attributes = True
 
 
+class CharacterGrowthMilestoneOut(BaseModel):
+    """单人物境界/成长里程碑（大纲 + 复盘 + 变更记录合并）。"""
+
+    chapter_number: int
+    chapter_title: str
+    realm_name: str
+    realm_rank: int
+    character_change: str
+    source: str = "outline"  # outline | debrief | changelog
+
+
+class CharacterGrowthTimelineOut(BaseModel):
+    """只读：某人物的成长时间轴。"""
+
+    character_id: str
+    character_display_name: Optional[str] = None
+    character_anchor_names: list[str] = []
+    has_realm_whitelist: bool
+    anchored: bool
+    chapter_plans_scanned: int
+    debrief_snapshots: int = 0
+    changelog_entries: int = 0
+    milestones: list[CharacterGrowthMilestoneOut]
+    source: str = "outline+debrief+changelog"
+
+
 class RelationshipCreate(BaseModel):
     from_character_id: uuid.UUID
     to_character_id: uuid.UUID

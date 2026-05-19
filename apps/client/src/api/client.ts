@@ -232,6 +232,9 @@ export const charactersApi = {
   listRelationships: (pid: string) => api.get(`/projects/${pid}/characters/relationships/all`),
   createRelationship: (pid: string, data: any) => api.post(`/projects/${pid}/characters/relationships`, data),
   getChangelog: (pid: string, cid: string) => api.get(`/projects/${pid}/characters/${cid}/changelog`),
+  /** 只读：大纲 + 复盘 + 变更记录合并的单人物成长/境界时间轴 */
+  growthTimeline: (pid: string, cid: string) =>
+    api.get(`/projects/${pid}/characters/${cid}/growth-timeline`),
   deleteChangelogEntry: (pid: string, cid: string, logId: string) => api.delete(`/projects/${pid}/characters/${cid}/changelog/${logId}`),
   clearChangelog: (pid: string, cid: string) => api.delete(`/projects/${pid}/characters/${cid}/changelog`),
   /** AI 生成 4 帧横排立绘雪碧图，写入 avatar_url 与 extra.sprite_sheet */

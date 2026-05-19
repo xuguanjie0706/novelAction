@@ -602,6 +602,12 @@ def build_vol_expand_ctx(
     # ── Tier 5 块 ──────────────────────────────────────────────────────────────
     pacing_block = _build_pacing_stats(db, project_id, volume_node)
 
+    # ── 新步骤产物块（Step 9.5/9.8/11.5）─────────────────────────────────────
+    from app.services.bootstrap.context_new_steps import build_new_steps_blocks
+    emotion_arc_block, villain_arc_block, core_mysteries_block = build_new_steps_blocks(
+        project, volume_node, ctx
+    )
+
     # ── 组合 editorial_prompt_block ───────────────────────────────────────────
     editorial_blocks = [
         b for b in [
@@ -610,6 +616,9 @@ def build_vol_expand_ctx(
             world_block,
             volumes_block,
             prev_vol_ending_block,
+            emotion_arc_block,
+            villain_arc_block,
+            core_mysteries_block,
             cast_block,
             relations_block,
             villain_block,

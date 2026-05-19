@@ -150,3 +150,91 @@ def normalize_volume_plan(
 def chunk_by_volume(items: Sequence[T], size: int = TARGET_CHAPTERS_PER_VOLUME) -> Iterable[Sequence[T]]:
     for start in range(0, len(items), size):
         yield items[start : start + size]
+
+
+# --------------------------------------------------------------------------
+# 章节字数预算（按阶段动态计算）
+# --------------------------------------------------------------------------
+
+def chapter_word_budget_for_phase(
+    phase: str,
+    pacing: str = "normal",
+    has_face_slap: bool = False,
+    has_emotional_beat: bool = False,
+) -> int:
+    """按叙事阶段+节奏标记计算章节预期字数。
+
+    设计动机：打破"全书一律2200字"的平线感，让字数配合叙事节奏呼吸。
+    climax 章需要展开空间，dark_hour 情感章需要内心戏字数，
+    opening fast 章节短促有力不拖沓。
+
+    Args:
+        phase: 卷阶段（opening/rising/turning/dark_hour/climax/ending）。
+        pacing: 章节节奏（fast/normal/slow/climax）。
+        has_face_slap: 本章有打脸场景，需要更多铺垫展开。
+        has_emotional_beat: 本章有情感高点，需要内心戏字数。
+
+    Returns:
+        预期字数，范围 [1800, 3500]。
+    """
+    base = {
+        "opening": 2200,
+        "rising": 2300,
+        "turning": 2400,
+        "dark_hour": 2700,
+        "climax": 3000,
+        "ending": 2200,
+    }.get(phase, TARGET_WORDS_PER_CHAPTER)
+
+    pacing_mod = {"fast": -200, "slow": 200, "climax": 500, "normal": 0}.get(pacing, 0)
+    slap_mod = 200 if has_face_slap else 0
+    emotion_mod = 200 if has_emotional_beat else 0
+
+    return min(3500, max(1800, base + pacing_mod + slap_mod + emotion_mod))
+
+
+def build_book_budget_block(
+    target_words: int,
+    total_chapters: int,
+    total_volumes: int,
+    volume_quota: int,
+    chapters_used_so_far: int = 0,
+    batch_start: int | None = None,
+    batch_end: int | None = None,
+) -> str:
+    """生成注入 chapter plan prompt 的全书预算约束块。
+
+    把全书目标、已用配额、本卷配额、本批任务数显式写入 prompt，
+    防止 AI 在跨卷/跨批生成时漂移章节数量。
+
+    Args:
+        target_words: 全书目标字数（项目硬锚点）。
+        total_chapters: 全书目标总章数（由 words_to_plan 计算）。
+        total_volumes: 全书卷数。
+        volume_quota: 本卷配额章数（planned_chapters，卷级大纲锁定）。
+        chapters_used_so_far: 此前所有卷已落库的章节数。
+        batch_start: 本批起始章号（1-based，相对本卷）。
+        batch_end: 本批结束章号（1-based，相对本卷）。
+
+    Returns:
+        可直接拼入 prompt 的多行约束文字块。
+    """
+    approx_wan = round(target_words / 10_000)
+    remaining_global = total_chapters - chapters_used_so_far
+    lines = [
+        "\n【全书字数预算（硬性约束，不得漂移）】",
+        f"  全书目标：{target_words:,}字（约{approx_wan}万字）/ 共{total_chapters}章 / {total_volumes}卷",
+        f"  已规划章数：{chapters_used_so_far}章，全书剩余配额：{remaining_global}章",
+        f"  本卷配额：{volume_quota}章（卷级大纲锁定，不得多生成也不得少生成）",
+    ]
+    if batch_start is not None and batch_end is not None:
+        batch_count = batch_end - batch_start + 1
+        lines.append(
+            f"  本批任务：第{batch_start}～{batch_end}章，"
+            f"必须恰好返回{batch_count}个章节（JSON数组长度={batch_count}）"
+        )
+    lines += [
+        "  ⚠️ 返回JSON数组长度必须严格等于本批任务章数，不得多也不得少",
+        "  ⚠️ expected_words 按阶段参考值填写，禁止全部写同一个数字",
+    ]
+    return "\n".join(lines)

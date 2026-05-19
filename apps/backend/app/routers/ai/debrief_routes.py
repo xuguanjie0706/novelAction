@@ -158,9 +158,7 @@ def chapter_debrief(
             else:
                 char.realm_rank = cu.realm_rank
 
-        if getattr(char, "role", None) == "protagonist" and (
-            cu.current_realm is not None or cu.realm_rank is not None
-        ):
+        if cu.current_realm is not None or cu.realm_rank is not None:
             realm_label = (
                 (cu.current_realm.strip()[:100] if isinstance(cu.current_realm, str) else "")
                 or (char.current_realm or "").strip()[:100]

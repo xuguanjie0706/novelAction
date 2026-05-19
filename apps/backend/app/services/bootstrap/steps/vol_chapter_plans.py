@@ -18,12 +18,21 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.models import OutlineNode, Project
+from app.services.bootstrap.foreshadow_sync import sync_chapter_foreshadow
 from app.services.bootstrap.parse import parse_json
 from app.services.llm_token_budgets import max_tokens_vol_expand_chapters
+from app.services.outline_planning import (
+    build_book_budget_block,
+    chapter_word_budget_for_phase,
+    words_to_plan,
+)
 from app.utils.chapter_numbering import normalize_chapter_plan_title
+
+logger = logging.getLogger(__name__)
 
 
 # ── 节奏约束（与 vol1 保持一致）─────────────────────────────────────────────
@@ -178,6 +187,31 @@ async def gen_vol_chapter_plans(
             f"volume_node.node_type 必须为 'volume'，实际为 '{volume_node.node_type}'"
         )
 
+    # ── 卷间衔接：强制读取上一卷末悬念钩子 ─────────────────────────────────
+    # 上一卷的 hook 是编辑层对读者的承诺；第1章前500字必须让读者感受到它仍在发酵。
+    prev_vol_hook_block = ""
+    if volume_node.sort_order and volume_node.sort_order > 0:
+        from app.models import OutlineNode as _ON
+        prev_vol = (
+            svc.db.query(_ON)
+            .filter(
+                _ON.project_id == project.id,
+                _ON.node_type == "volume",
+                _ON.sort_order == volume_node.sort_order - 1,
+            )
+            .first()
+        )
+        prev_hook = (prev_vol.hook or "").strip() if prev_vol else ""
+        if prev_hook:
+            prev_vol_hook_block = (
+                f"\n【上卷末悬念钩子（硬性承接约束）】\n"
+                f"  上一卷（{prev_vol.title}）末尾留下的悬念种子：\n"
+                f"  「{prev_hook}」\n"
+                f"  ⚠️ 本卷第1章的 opening_hook 必须在前500字内让读者感受到这个悬念仍在发酵，\n"
+                f"  不得另起炉灶或将其当作背景信息一笔带过。\n"
+                f"  第1章 choice_cost 中必须包含上卷末事件的直接后遗症。\n"
+            )
+
     written_summaries = written_summaries or []
     open_promises = open_promises or []
     memory_chunks = memory_chunks or []
@@ -185,6 +219,13 @@ async def gen_vol_chapter_plans(
     planned = (volume_node.extra or {}).get("planned_chapters", 30)
     if planned not in (30, 60):
         planned = 30
+
+    # ── 全书预算锚点（ctx 由 gen_volumes 初始化；兜底用 target_words 重算）──────
+    tw = int(project.target_words or 1_200_000)
+    plan = words_to_plan(tw)
+    quota_total = ctx.get("chapter_quota_total", plan["total_chapters"])
+    quota_total_volumes = ctx.get("chapter_quota_total_volumes", plan["total_volumes"])
+    quota_used = ctx.get("chapter_quota_used", 0)
 
     # ── 系统提示（总编辑级别，明确身份与职责）──────────────────────────────
     system = (
@@ -240,7 +281,6 @@ async def gen_vol_chapter_plans(
     # ── 已写上下文 ────────────────────────────────────────────────────────────
     written_block = _fmt_written_summaries(written_summaries)
 
-    words_per_chapter = 2200
     all_results: list[OutlineNode] = []
 
     batch_ranges = [(1, min(30, planned))]
@@ -249,6 +289,9 @@ async def gen_vol_chapter_plans(
 
     for batch_start, batch_end in batch_ranges:
         batch_count = batch_end - batch_start + 1
+        # 上卷 hook 约束只在第一批第一章有意义，后续批次置空避免重复注入
+        if batch_start > 1:
+            prev_vol_hook_block = ""
 
         # 批次延续锚：用前批最后4章的「选择代价」驱动下一批开头
         prev_summary = ""
@@ -279,6 +322,17 @@ async def gen_vol_chapter_plans(
                 f"  - {g}" for g in phase_guidance_lines
             )
 
+        # 全书预算约束块（防漂移核心）
+        budget_block = build_book_budget_block(
+            target_words=tw,
+            total_chapters=quota_total,
+            total_volumes=quota_total_volumes,
+            volume_quota=planned,
+            chapters_used_so_far=quota_used,
+            batch_start=batch_start,
+            batch_end=batch_end,
+        )
+
         # ── 完整 prompt 拼装 ──────────────────────────────────────────────────
         prompt = (
             f"# 创作任务：《{ctx.get('project_title', project.title)}》{volume_node.title}\n\n"
@@ -295,10 +349,12 @@ async def gen_vol_chapter_plans(
             + protag_psychology
             + "\n"
             + editorial_prompt_block  # Tier 1-5 富上下文
+            + prev_vol_hook_block     # 卷间衔接：上卷末悬念硬约束（仅第一批有效）
             + written_block           # 动态：已写章节摘要
             + memory_block            # 动态：记忆锚点
             + phase_block             # 节奏约束
             + prev_summary            # 批次延续锚
+            + budget_block            # 全书字数预算（防漂移）
             + f"\n\n# 生成要求\n"
             f"请为本卷第{batch_start}～{batch_end}章生成{batch_count}个章节计划，返回JSON数组：\n"
             "[\n"
@@ -335,9 +391,12 @@ async def gen_vol_chapter_plans(
             '    "power_milestone": "若本章有境界突破/技能习得/法宝获得则描述，否则填空",\n'
             '    "has_face_slap": false,\n'
             '    "has_emotional_beat": false,\n'
-            f'    "expected_words": {words_per_chapter}\n'
+            '    "expected_words": 2200\n'
             "  }\n"
-            "]\n\n"
+            "]\n"
+            "（expected_words 参考：opening/ending≈2000-2400，rising≈2300，turning≈2400，"
+            "dark_hour≈2600-2800，climax≈3000-3300；fast 节奏-200，slow/climax 节奏+200-500；"
+            "有打脸/情感高点+200。请按章节实际情况填写，不要全部填同一个数字。）\n\n"
             "# 编辑铁律（违反任何一条视为不合格输出）\n"
             "1. protagonist_want 必须是「主动欲望」而非「被动应付」——区别：主动=「他想要X」，被动=「他被迫处理Y」\n"
             "2. choice_cost 不能为空——零代价的选择不是戏剧，必须为下一章留下明确债务\n"
@@ -367,6 +426,15 @@ async def gen_vol_chapter_plans(
         char_name_to_id = ctx.get("char_name_to_id", {})
         storyline_ids_map = ctx.get("storyline_ids", {})
 
+        # 数量校验：AI 实际返回章数必须等于 batch_count
+        actual_count = len(batch_data)
+        if actual_count != batch_count:
+            logger.warning(
+                "vol_chapter_plans batch 数量漂移：期望%d章，实际收到%d章（项目=%s，卷=%s，批次=%d-%d）",
+                batch_count, actual_count, project.id, volume_node.id, batch_start, batch_end,
+            )
+            batch_data = batch_data[:batch_count]
+
         for item in batch_data:
             ch_num = item.get("chapter_number", batch_start)
             involved_ids = [
@@ -380,6 +448,15 @@ async def gen_vol_chapter_plans(
                 if n in storyline_ids_map
             ]
             end_hook_val = (item.get("end_hook") or "").strip() or None
+            pacing_val = item.get("pacing", "normal")
+            has_slap = bool(item.get("has_face_slap", False))
+            has_beat = bool(item.get("has_emotional_beat", False))
+            # AI 给出的 expected_words 优先，动态预算函数做兜底
+            ai_words = item.get("expected_words")
+            dynamic_words = chapter_word_budget_for_phase(
+                volume_node.phase or "rising", pacing_val, has_slap, has_beat
+            )
+            expected_words_val = ai_words if isinstance(ai_words, int) and 1500 <= ai_words <= 4000 else dynamic_words
             node = OutlineNode(
                 project_id=project.id,
                 parent_id=volume_node.id,
@@ -390,12 +467,12 @@ async def gen_vol_chapter_plans(
                 hook=(item.get("opening_hook") or "").strip() or None,
                 highlight=end_hook_val,
                 phase=volume_node.phase,
-                pacing=item.get("pacing", "normal"),
+                pacing=pacing_val,
                 emotional_tone=item.get("emotional_tone"),
                 power_milestone=item.get("power_milestone") or None,
                 involved_character_ids=involved_ids,
                 storyline_ids=sl_ids,
-                expected_words=item.get("expected_words", words_per_chapter),
+                expected_words=expected_words_val,
                 sort_order=ch_num - 1,
                 extra={
                     "foreshadow": (item.get("foreshadow") or "").strip(),
@@ -415,9 +492,14 @@ async def gen_vol_chapter_plans(
                 },
             )
             svc.db.add(node)
+            svc.db.flush()  # 让 node.id 可用，伏笔同步需要引用它
+            sync_chapter_foreshadow(svc.db, project.id, node, ch_num)
             all_results.append(node)
 
     if all_results:
         svc.db.commit()
+
+    # 全书配额计数器累加（供后续卷展开时读取，防止漂移）
+    ctx["chapter_quota_used"] = quota_used + len(all_results)
 
     return all_results

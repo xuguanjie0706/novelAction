@@ -1,6 +1,7 @@
-"""境界白名单、术语扫描、主角境界归因与里程碑时间轴。"""
+"""境界白名单、术语扫描、人物境界归因与成长里程碑时间轴。"""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.services.xuanhuan_lexicon import (
@@ -16,39 +17,78 @@ from app.routers.outline.helpers.constants import (
     TRADITIONAL_CULTIVATION_BLACKLIST,
 )
 
+def _collect_character_anchor_names(char) -> list[str]:
+    """单人物姓名 + 别名，用于境界归因扫描（去重保序）。"""
+    anchors: list[str] = []
+    name = getattr(char, "name", None)
+    if isinstance(name, str) and name.strip():
+        anchors.append(name.strip())
+    raw_aliases = getattr(char, "alias", None) or []
+    if isinstance(raw_aliases, list):
+        for a in raw_aliases:
+            if isinstance(a, str) and a.strip():
+                anchors.append(a.strip())
+    return list(dict.fromkeys(anchors))
+
+
 def _collect_protagonist_anchor_names(characters) -> list[str]:
     """主角姓名 + 别名，用于境界归因扫描（去重保序）。"""
     anchors: list[str] = []
     for char in characters or []:
         if getattr(char, "role", None) != "protagonist":
             continue
-        name = getattr(char, "name", None)
-        if isinstance(name, str) and name.strip():
-            anchors.append(name.strip())
-        raw_aliases = getattr(char, "alias", None) or []
-        if isinstance(raw_aliases, list):
-            for a in raw_aliases:
-                if isinstance(a, str) and a.strip():
-                    anchors.append(a.strip())
+        anchors.extend(_collect_character_anchor_names(char))
     return list(dict.fromkeys(anchors))
 
 
-def _protagonist_realm_attributed(
+def _chapter_growth_scan_text(chapter: dict) -> str:
+    """合并章纲中可能承载人物/境界变化的字段（人物变化 + 实力里程碑）。"""
+    parts = [
+        str(chapter.get("character_change") or ""),
+        str(chapter.get("power_milestone") or ""),
+    ]
+    return " | ".join(p for p in parts if p.strip())
+
+
+def _parse_chapter_number_label(label: Any) -> int | None:
+    """从「第15章」或纯数字章号解析整数。"""
+    if label is None:
+        return None
+    if isinstance(label, int):
+        return label if label > 0 else None
+    s = str(label).strip()
+    if not s:
+        return None
+    m = re.match(r"^\s*第\s*0*(\d+)", s)
+    if m:
+        return int(m.group(1))
+    try:
+        n = int(s)
+        return n if n > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _character_realm_attributed(
     text: str,
     realm_name: str,
-    protagonist_names: list[str],
+    character_names: list[str],
     *,
     max_span: int = 56,
+    role_label: str | None = None,
 ) -> bool:
     """
-    判断 text 中的 realm_name 是否应计作「主角境界描写」。
-    要求：与任一主角姓名/别名（或「主角」）同处一段短跨度内，且出现修为归因信号
-    （突破/晋升/以X境/从X境 等），避免「林烬遭遇灵王境强敌」把灵王境记成主角境界。
+    判断 text 中的 realm_name 是否应计作「该人物修为描写」。
+    要求：与任一姓名/别名（主角可额外匹配「主角」）同处短跨度内，且出现修为归因信号，
+    避免「林烬遭遇灵王境强敌」把灵王境记成该人物境界。
     """
-    anchors = [n for n in protagonist_names if isinstance(n, str) and n.strip()]
+    anchors = [n for n in character_names if isinstance(n, str) and n.strip()]
     if not anchors:
         return True
-    anchors = list(dict.fromkeys([*anchors, "主角"]))
+    if role_label == "protagonist":
+        anchors = list(dict.fromkeys([*anchors, "主角"]))
+    else:
+        anchors = list(dict.fromkeys(anchors))
     for pname in anchors:
         p_start = 0
         while True:
@@ -73,6 +113,18 @@ def _protagonist_realm_attributed(
                 r_start = r + 1
             p_start = p + 1
     return False
+
+
+def _protagonist_realm_attributed(
+    text: str,
+    realm_name: str,
+    protagonist_names: list[str],
+    *,
+    max_span: int = 56,
+) -> bool:
+    return _character_realm_attributed(
+        text, realm_name, protagonist_names, max_span=max_span, role_label="protagonist",
+    )
 
 
 def _extract_max_realm_from_chapters(
@@ -284,35 +336,51 @@ def _detect_outline_terminology_issues(
     return issues
 
 
+def _extract_character_realm_rank(
+    chapter: dict,
+    name_to_rank: dict[str, int],
+    *,
+    character_names: list[str] | None = None,
+    role_label: str | None = None,
+) -> int | None:
+    """
+    扫描章纲人物变化 + 实力里程碑，返回该章中计作「该人物修为」的境界最大 rank。
+
+    当传入 character_names（非空）时，仅统计与姓名共现且带修为归因语境的境界名。
+    未传或为空列表时：取文中白名单境界最大 rank（兼容无人物卡的质检）。
+    """
+    text = _chapter_growth_scan_text(chapter)
+    if not text or not name_to_rank:
+        return None
+    use_attribution = bool(character_names)
+    found_rank: int | None = None
+    for realm_name, rank in name_to_rank.items():
+        if not realm_name or realm_name not in text:
+            continue
+        if use_attribution and not _character_realm_attributed(
+            text,
+            realm_name,
+            character_names or [],
+            role_label=role_label,
+        ):
+            continue
+        if found_rank is None or rank > found_rank:
+            found_rank = rank
+    return found_rank
+
+
 def _extract_protagonist_realm_rank(
     chapter: dict,
     name_to_rank: dict[str, int],
     *,
     protagonist_names: list[str] | None = None,
 ) -> int | None:
-    """
-    仅扫描 character_change 字段（描述「谁的认知/处境/关系发生变化」），
-    返回该章节中计作「主角修为」的境界里最大的 rank。
-
-    当传入 protagonist_names（非空）时，仅统计与主角姓名/「主角」共现且带修为归因
-    语境的境界名，避免敌对/传闻中的高阶境界抬高 running_max 导致假阳性回退告警。
-    未传或为空列表时保持旧行为：取文中出现的白名单境界最大 rank（兼容无人物卡的质检）。
-    """
-    text = str(chapter.get("character_change") or "")
-    if not text or not name_to_rank:
-        return None
-    use_attribution = bool(protagonist_names)
-    found_rank: int | None = None
-    for realm_name, rank in name_to_rank.items():
-        if not realm_name or realm_name not in text:
-            continue
-        if use_attribution and not _protagonist_realm_attributed(
-            text, realm_name, protagonist_names or [],
-        ):
-            continue
-        if found_rank is None or rank > found_rank:
-            found_rank = rank
-    return found_rank
+    return _extract_character_realm_rank(
+        chapter,
+        name_to_rank,
+        character_names=protagonist_names,
+        role_label="protagonist",
+    )
 
 
 def _realm_display_name_for_rank(rank: int, name_to_rank: dict[str, int]) -> str:
@@ -482,25 +550,26 @@ def merge_outline_and_debrief_realm_milestones(
     return merged
 
 
-def build_protagonist_realm_timeline(
+def build_character_realm_timeline(
     chapter_contexts: list[dict],
     power_systems,
     *,
-    protagonist_names: list[str] | None = None,
+    character_names: list[str] | None = None,
+    role_label: str | None = None,
 ) -> dict[str, Any]:
     """
-    从章节计划的 character_change 聚合主角境界「创新高」节点（与战力曲线质检同源归因）。
+    从章节计划的人物变化 + 实力里程碑聚合该人物境界「创新高」节点。
     数据源为已入库的大纲 chapter_plan；无力量体系 levels 时无法解析境界名。
     """
     name_to_rank, _, _ = _build_realm_rank_map(power_systems)
     if not name_to_rank:
         return {
             "has_realm_whitelist": False,
-            "anchored": bool(protagonist_names),
+            "anchored": bool(character_names),
             "chapter_plans_scanned": 0,
             "milestones": [],
         }
-    anchors = [n for n in (protagonist_names or []) if isinstance(n, str) and n.strip()]
+    anchors = [n for n in (character_names or []) if isinstance(n, str) and n.strip()]
     use_names: list[str] | None = anchors if anchors else None
 
     sorted_chapters = sorted(
@@ -510,12 +579,17 @@ def build_protagonist_realm_timeline(
     running = 0
     milestones: list[dict[str, Any]] = []
     for ch in sorted_chapters:
-        rank = _extract_protagonist_realm_rank(ch, name_to_rank, protagonist_names=use_names)
+        rank = _extract_character_realm_rank(
+            ch,
+            name_to_rank,
+            character_names=use_names,
+            role_label=role_label,
+        )
         if rank is None or rank <= running:
             continue
         running = rank
         realm_label = _realm_display_name_for_rank(rank, name_to_rank)
-        cc = str(ch.get("character_change") or "")
+        cc = _chapter_growth_scan_text(ch)
         milestones.append(
             {
                 "chapter_number": int(ch["number"]),
@@ -531,4 +605,107 @@ def build_protagonist_realm_timeline(
         "anchored": bool(anchors),
         "chapter_plans_scanned": len(sorted_chapters),
         "milestones": milestones,
+    }
+
+
+def build_protagonist_realm_timeline(
+    chapter_contexts: list[dict],
+    power_systems,
+    *,
+    protagonist_names: list[str] | None = None,
+) -> dict[str, Any]:
+    return build_character_realm_timeline(
+        chapter_contexts,
+        power_systems,
+        character_names=protagonist_names,
+        role_label="protagonist",
+    )
+
+
+def milestones_from_changelog(
+    change_logs: list[Any],
+    name_to_rank: dict[str, int],
+) -> list[dict[str, Any]]:
+    """从 CharacterChangeLog 的 current_realm 变更提取里程碑（补全历史复盘数据）。"""
+    rows: list[dict[str, Any]] = []
+    for log in change_logs or []:
+        ch_num = _parse_chapter_number_label(getattr(log, "chapter_number", None))
+        if ch_num is None:
+            continue
+        changes = getattr(log, "changes", None) or []
+        if not isinstance(changes, list):
+            continue
+        for chg in changes:
+            if not isinstance(chg, dict) or chg.get("field") != "current_realm":
+                continue
+            after = str(chg.get("after") or "").strip()
+            if not after:
+                continue
+            rr = _rank_for_realm_label(after, name_to_rank) if name_to_rank else None
+            rows.append(
+                {
+                    "chapter_number": ch_num,
+                    "chapter_title": str(getattr(log, "chapter_title", None) or "")[:400],
+                    "realm_name": after,
+                    "realm_rank": rr if rr is not None else 0,
+                    "character_change": str(getattr(log, "summary", None) or "变更记录"),
+                    "source": "changelog",
+                }
+            )
+            break
+    return rows
+
+
+def build_character_growth_timeline(
+    chapter_contexts: list[dict],
+    power_systems,
+    character,
+    *,
+    change_logs: list[Any] | None = None,
+) -> dict[str, Any]:
+    """
+    合并大纲、复盘快照与变更记录，返回单人物成长时间轴 payload。
+    """
+    anchor_names = _collect_character_anchor_names(character)
+    role_label = getattr(character, "role", None)
+    built = build_character_realm_timeline(
+        chapter_contexts,
+        power_systems,
+        character_names=anchor_names or None,
+        role_label=role_label if role_label == "protagonist" else None,
+    )
+    name_to_rank, _, _ = _build_realm_rank_map(power_systems)
+    debrief_rows: list[Any] = []
+    extra = getattr(character, "extra", None)
+    if isinstance(extra, dict):
+        raw_hist = extra.get(DEBRIEF_REALM_MILESTONES_EXTRA_KEY)
+        if isinstance(raw_hist, list):
+            debrief_rows = [x for x in raw_hist if isinstance(x, dict)]
+
+    changelog_rows = milestones_from_changelog(change_logs or [], name_to_rank)
+    merged_outline_debrief = merge_outline_and_debrief_realm_milestones(
+        built["milestones"],
+        debrief_rows,
+        name_to_rank,
+    )
+    if changelog_rows:
+        merged = merge_outline_and_debrief_realm_milestones(
+            merged_outline_debrief,
+            changelog_rows,
+            name_to_rank,
+        )
+    else:
+        merged = merged_outline_debrief
+
+    return {
+        "character_id": str(getattr(character, "id", "")),
+        "character_display_name": getattr(character, "name", None),
+        "character_anchor_names": anchor_names,
+        "has_realm_whitelist": built["has_realm_whitelist"],
+        "anchored": built["anchored"],
+        "chapter_plans_scanned": built["chapter_plans_scanned"],
+        "debrief_snapshots": len(debrief_rows),
+        "changelog_entries": len(changelog_rows),
+        "milestones": merged,
+        "source": "outline+debrief+changelog",
     }

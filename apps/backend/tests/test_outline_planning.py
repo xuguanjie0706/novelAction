@@ -341,6 +341,25 @@ def test_build_protagonist_realm_timeline_milestones_from_character_change():
     assert out["milestones"][1]["realm_rank"] == 2
 
 
+def test_build_character_realm_timeline_includes_power_milestone():
+    ps = PowerSystem(
+        name="修真",
+        project_id=uuid.uuid4(),
+        levels=[
+            {"rank": 1, "name": "感灵境"},
+            {"rank": 2, "name": "拓纹境"},
+        ],
+    )
+    chapters = [
+        {"number": 3, "title": "试炼", "character_change": "配角围观。", "power_milestone": "苏晚晴突破至拓纹境。"},
+    ]
+    from app.routers.outline.helpers.realm_timeline import build_character_realm_timeline
+
+    out = build_character_realm_timeline(chapters, [ps], character_names=["苏晚晴"])
+    assert len(out["milestones"]) == 1
+    assert out["milestones"][0]["realm_rank"] == 2
+
+
 def test_build_protagonist_realm_timeline_empty_without_power_levels():
     ps = PowerSystem(name="空体系", project_id=uuid.uuid4(), levels=[])
     out = build_protagonist_realm_timeline(

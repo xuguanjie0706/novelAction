@@ -125,4 +125,12 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
     ctx["volumes_summary"] = " | ".join(
         f"{n.title}：{(n.summary or '')[:40]}" for n in results
     )
+
+    # ── 全书章节配额计数器（在此初始化，供 vol*_chapter_plans 累计使用）────
+    # 以 target_words 为单一数据源，与卷级 planned_chapters 之和保持一致
+    plan = words_to_plan(tw)
+    ctx["chapter_quota_total"] = plan["total_chapters"]
+    ctx["chapter_quota_total_volumes"] = plan["total_volumes"]
+    ctx["chapter_quota_used"] = 0  # 每次懒展开章纲后累加，防止跨卷漂移
+
     return results

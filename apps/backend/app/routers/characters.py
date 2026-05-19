@@ -2,11 +2,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.database import get_db
-from app.models import Character, CharacterRelationship, CharacterChangeLog
+from app.models import Character, CharacterRelationship, CharacterChangeLog, OutlineNode, PowerSystem
 from app.schemas.character import (
-    CharacterCreate, CharacterUpdate, CharacterOut,
-    RelationshipCreate, RelationshipOut
+    CharacterCreate,
+    CharacterUpdate,
+    CharacterOut,
+    CharacterGrowthTimelineOut,
+    CharacterGrowthMilestoneOut,
+    RelationshipCreate,
+    RelationshipOut,
 )
+from app.routers.outline.helpers.expand_context import _outline_node_to_chapter_context
+from app.routers.outline.helpers.realm_timeline import build_character_growth_timeline
 from app.schemas.character_change_log import CharacterChangeLogOut
 
 router = APIRouter(prefix="/projects/{project_id}/characters", tags=["characters"])
@@ -143,6 +150,58 @@ def delete_character(project_id: str, character_id: str, db: Session = Depends(g
         raise HTTPException(404, "Character not found")
     db.delete(char)
     db.commit()
+
+
+# --- 成长轨迹（境界时间轴）---
+
+@router.get("/{character_id}/growth-timeline", response_model=CharacterGrowthTimelineOut)
+def get_character_growth_timeline(
+    project_id: str,
+    character_id: str,
+    db: Session = Depends(get_db),
+):
+    """只读：从大纲人物变化/实力里程碑、复盘快照、变更记录合并该人物成长时间轴。"""
+    char = db.query(Character).filter(
+        Character.id == character_id,
+        Character.project_id == project_id,
+    ).first()
+    if not char:
+        raise HTTPException(404, "Character not found")
+
+    nodes = db.query(OutlineNode).filter(
+        OutlineNode.project_id == project_id,
+        OutlineNode.node_type == "chapter_plan",
+    ).all()
+    chapters = [_outline_node_to_chapter_context(n) for n in nodes]
+    power_systems = db.query(PowerSystem).filter(PowerSystem.project_id == project_id).all()
+    change_logs = (
+        db.query(CharacterChangeLog)
+        .filter(
+            CharacterChangeLog.project_id == project_id,
+            CharacterChangeLog.character_id == character_id,
+        )
+        .order_by(CharacterChangeLog.created_at.asc())
+        .all()
+    )
+
+    payload = build_character_growth_timeline(
+        chapters,
+        power_systems,
+        char,
+        change_logs=change_logs,
+    )
+    return CharacterGrowthTimelineOut(
+        character_id=payload["character_id"],
+        character_display_name=payload.get("character_display_name"),
+        character_anchor_names=payload.get("character_anchor_names") or [],
+        has_realm_whitelist=payload["has_realm_whitelist"],
+        anchored=payload["anchored"],
+        chapter_plans_scanned=payload["chapter_plans_scanned"],
+        debrief_snapshots=payload.get("debrief_snapshots", 0),
+        changelog_entries=payload.get("changelog_entries", 0),
+        milestones=[CharacterGrowthMilestoneOut(**m) for m in payload["milestones"]],
+        source=payload.get("source", "outline+debrief+changelog"),
+    )
 
 
 # --- 变更审计日志 ---

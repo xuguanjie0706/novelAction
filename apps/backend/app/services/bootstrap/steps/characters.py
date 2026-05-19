@@ -40,6 +40,9 @@ async def gen_characters(svc: Any, project: Project, ctx: dict):
     "background": "背景经历（3句话）",
     "motivation": "核心动机",
     "arc": "人物弧线（从X到Y的成长）",
+    "arc_stages": [
+      {{"stage": "阶段名", "realm": "此阶段境界", "state": "人物状态", "chapter_range": "预计章节范围如1-30"}}
+    ],
     "current_realm": "当前境界（或能力层级）",
     "speech_style": "说话风格（自由文本，一句话）",
     "speech_kit": {{
@@ -67,6 +70,7 @@ character_tier 代表该人物在全书中的叙事层级，只能是以下4个�
 - background = 背景填充：丰富世界厚度与氛围，无强情节绑定
 请根据每个人物在故事中的实际定位严格判断，不要全部填 core。
 debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对主角或某配角有欠债（仇怨或嫉妒型）；这些欠债要分散在不同卷引爆，制造持续的人物动力。
+arc_stages 要求：每人至少 2 个成长阶段（主角/核心反派 3-4 个）；realm 必须从境界白名单选择；chapter_range 覆盖全书跨度。
 
 ---
 【第二部分】再追加生成5个「开局配角」（仅第一卷活跃，character_tier 固定为 "plot"）：
@@ -124,6 +128,8 @@ debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对�
             char_extra["vol1_function"] = vol1_func
         faction_name = item.get("faction") or ""
         faction_id_val = ctx.get("faction_name_to_id", {}).get(faction_name) or None
+        raw_stages = item.get("arc_stages")
+        arc_stages = raw_stages if isinstance(raw_stages, list) else []
         c = Character(
             project_id=project.id,
             name=item.get("name", "未命名"),
@@ -137,6 +143,7 @@ debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对�
             background=item.get("background"),
             motivation=item.get("motivation"),
             arc=item.get("arc"),
+            arc_stages=arc_stages,
             current_realm=item.get("current_realm"),
             speech_style=item.get("speech_style"),
             speech_kit=item.get("speech_kit") or {},

@@ -102,6 +102,11 @@ def max_tokens_bootstrap_completion() -> int:
     return int(settings.BOOTSTRAP_COMPLETION_MAX_TOKENS)
 
 
+def max_tokens_scene_draft(large_context: bool) -> int:
+    """逐场起草的 ``max_tokens``：单场字数约 300-800，本地给 1200，Gemini 给 3000。"""
+    return 3000 if large_context else 1200
+
+
 def max_tokens_vol_expand_chapters() -> int:
     """按卷懒展开章纲的单批 ``max_tokens``。
 

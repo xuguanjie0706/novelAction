@@ -8,6 +8,7 @@ import type { Character, CharacterChangeLog } from '../types'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import RelationshipGraph from '../components/Characters/RelationshipGraph'
+import CharacterPortraitPanel from '../components/Characters/CharacterPortraitPanel'
 
 // ── 常量 ──────────────────────────────────────────────────
 
@@ -135,11 +136,35 @@ interface ProtagonistRealmTimelinePayload {
   source?: string
 }
 
-function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
+function CharacterAvatar({ char, size = 'md' }: { char: Character; size?: 'sm' | 'md' | 'lg' }) {
+  const dim = size === 'sm' ? 'w-7 h-7 text-xs' : size === 'lg' ? 'w-28 h-28 text-5xl' : 'w-10 h-10 text-sm'
+  if (char.avatar_url) {
+    return (
+      <img
+        src={char.avatar_url}
+        alt={char.name}
+        className={clsx(dim, 'rounded-full object-cover shrink-0 shadow-sm border border-white')}
+      />
+    )
+  }
+  return (
+    <div className={clsx(
+      dim, 'rounded-full flex items-center justify-center text-white font-bold shrink-0 shadow-sm',
+      char.role === 'protagonist' ? 'bg-gradient-to-br from-amber-300 to-amber-500'
+      : char.role === 'antagonist' ? 'bg-gradient-to-br from-red-300 to-red-500'
+      : 'bg-gradient-to-br from-gray-300 to-gray-400',
+    )}>
+      {char.name[0]}
+    </div>
+  )
+}
+
+function CharacterDetail({ char, projectId, onUpdate, onDelete, batchTargets }: {
   char: Character
   projectId: string
   onUpdate: (c: Character) => void
   onDelete: (id: string) => void
+  batchTargets?: Character[]
 }) {
   const [form, setForm] = useState<Character>({ ...char })
   const [saving, setSaving] = useState(false)
@@ -204,9 +229,7 @@ function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
       {/* 人物头部卡片 */}
       <div className="shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm px-8 py-7">
         <div className="flex items-start gap-8">
-          <div className="w-28 h-28 rounded-full bg-gradient-to-br from-amber-300 to-amber-500 flex items-center justify-center shrink-0 shadow-sm">
-            <span className="text-white text-5xl font-bold">{char.name[0]}</span>
-          </div>
+          <CharacterAvatar char={form} size="lg" />
           <div className="flex-1 min-w-0 pt-2">
             <div className="flex items-center gap-3 flex-wrap">
               <h2 className="text-4xl font-bold text-gray-900 leading-tight">{char.name}</h2>
@@ -326,6 +349,13 @@ function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
           )}
 
           {detailTab === 'appearance' && (
+            <div className="space-y-6">
+              <CharacterPortraitPanel
+                projectId={projectId}
+                character={form}
+                onUpdated={c => { setForm(c); onUpdate(c) }}
+                batchTargets={batchTargets}
+              />
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm space-y-4">
               <div className="text-sm font-semibold text-gray-700">外貌与风格</div>
               <Field label="外貌描述">
@@ -391,6 +421,7 @@ function CharacterDetail({ char, projectId, onUpdate, onDelete }: {
               </div>
 
               <SaveBtn />
+            </div>
             </div>
           )}
 
@@ -1185,12 +1216,7 @@ export default function CharactersPage() {
                     className={clsx('w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors border-l-2',
                       selected?.id === c.id ? 'bg-amber-50 border-l-amber-400' : 'border-l-transparent hover:bg-gray-50')}>
                     <div className="relative shrink-0">
-                      <div className={clsx('w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold',
-                        c.role === 'protagonist' ? 'bg-gradient-to-br from-amber-300 to-amber-500'
-                        : c.role === 'antagonist' ? 'bg-gradient-to-br from-red-300 to-red-500'
-                        : 'bg-gradient-to-br from-gray-300 to-gray-400')}>
-                        {c.name[0]}
-                      </div>
+                      <CharacterAvatar char={c} size="sm" />
                       <span className={clsx('absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border-2 border-white', sm.dot)} />
                     </div>
                     <div className="min-w-0 flex-1">
@@ -1236,7 +1262,7 @@ export default function CharactersPage() {
       {/* 右栏：人物详情 */}
       <div className="flex-1 overflow-hidden bg-[#FAF8F4]">
         {selected
-          ? <CharacterDetail char={selected} projectId={projectId!} onUpdate={upsertCharacter} onDelete={handleDelete} />
+          ? <CharacterDetail char={selected} projectId={projectId!} onUpdate={upsertCharacter} onDelete={handleDelete} batchTargets={filteredChars} />
           : <div className="flex items-center justify-center h-full text-gray-400 text-sm">选择左侧人物查看详情</div>
         }
       </div>

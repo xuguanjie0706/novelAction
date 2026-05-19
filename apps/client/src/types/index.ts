@@ -720,6 +720,8 @@ export interface Scene {
   hook: string | null
   hook_strength: number
   word_budget: number
+  /** 实际已写字数（后端 scene_draft/stream 写完后更新） */
+  actual_word_count: number
   pacing: ScenePacing
   sensory_focus: string
   status: SceneStatus

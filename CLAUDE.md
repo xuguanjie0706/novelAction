@@ -111,8 +111,8 @@ Project
   ├── Faction（势力/宗门/国家，支持父子层级）
   ├── Foreshadow（伏笔台账）
   ├── QualityDebt（质检欠债记录）
-  ├── Scene（章节分场，三层调度核心；表已建，router 待实现）
-  └── ReaderPromise（读者承诺台账；表已建，router 待实现）
+  ├── Scene（章节分场，三层调度核心；`scenes` CRUD + `ai/scene_routes` 三层写作 API）
+  └── ReaderPromise（读者承诺台账；模型 + router 已就位，写章/复盘深度闭环待完善）
 ```
 
 所有 UUID 主键，`project_id` 外键贯穿所有表。
@@ -149,14 +149,14 @@ Project
 - 关联：`Project` / `Chapter`（写完后绑定）/ `OutlineNode`
 - 关键字段：`order`、`pov_character_id`、`characters_on_stage`、`goal`、`conflict`、`turn`、`hook`、`hook_strength`、`word_budget`、`pacing`、`sensory_focus`、`status`（planned/written/reviewed）、`content`
 - `location_id`（ForeignKey `locations.id`）已**注释预留**，待 Location 模型（P2-W7）实现后启用；当前用 `location_name` 文本字段
-- **当前状态**：模型 + migration 已就位，router 待实现
+- **当前状态**：模型 + migration + `routers/scenes.py` + `routers/ai/scene_routes.py`（plan-save / draft/stream / stitch）；创作端 `ScenePipelinePanel`（ChapterEditor「分场」Tab）。整章 `gated-draft` 仍为备选写作路径。
 
 ### ReaderPromise 模型（v3，2026-05）
 
 读者承诺台账，记录章末/卷末预告、名字暗示、章评共识等对读者的显式或隐式承诺。
 - 关键字段：`promise_type`（chapter_ending / volume_ending / name_implication / ...）、`expected_chapter_window`、`status`（open / fulfilled / broken）、`priority`（1-5）、`audience_aware`（0-5）
 - 写章时 prompt 注入"本章必须/可以兑现的承诺"；复盘自动检测新承诺并标记回收
-- **当前状态**：模型 + migration 已就位，router 待实现
+- **当前状态**：模型 + migration + router 已就位；写章注入 open 承诺 + auto-debrief 自动回收的**深度闭环**见「待完成功能」
 
 ### Project.extra（v3，2026-05）
 JSON 杂物字段，当前已知键：
@@ -313,18 +313,18 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 - [x] Scene / ReaderPromise 模型 + router + Alembic migration
 - [x] 任务级采样配置（`llm_task_profiles.py`，quality/draft/bootstrap 分档温度）
 - [x] **Bootstrap 流派分流增强（2026-05-06）**：`_get_genre_kit_block` 注入 `_gen_characters`、` _gen_settings`、` _gen_storylines`、` _gen_power_systems`、` _gen_factions`、` _gen_key_skills`、` _gen_key_items` 七个步骤；前端角色页支持 `speech_kit` 结构化展示（标志性词语、样本台词、内心独白等）；大纲章节节点支持 POV + 戏份预算（`character_screen_time`、`pov_character_id`）展示与编辑。
+- [x] Bootstrap 技能/道具 `mastered_by` 关联真实 Character UUID（`steps/skills.py` + `steps/items.py` 从 `ctx["char_name_to_id"]` 做名字→UUID 映射，AI 输出名字时回退映射并写 warning 日志）
+- [x] AI 质检结合故事线进度 + 境界体系一致性检查（`quality_routes.py` 传入活跃故事线/境界体系/人物状态；`quality.py` 新增 `storyline_progress` + `realm_check` 独立维度，含独立评分与问题描述）
+- [x] Scene 三层调度全链路（`routers/ai/scene_routes.py`：`POST /ai/scene-plan-save` 生成并持久化分场 / `POST /ai/scene-draft/stream` SSE 逐场起草写回 scene.content / `POST /ai/scene-stitch` 缝合 → chapter.content；`services/ai/scene_draft.py` SceneDraftMixin）
+- [x] Scene 三层调度前端 UI（`api/scene.ts` API 封装 / `hooks/useScenePipeline.ts` 状态管理 / `components/Writing/ScenePipelinePanel.tsx` 面板；接入 ChapterEditor「分场」侧栏 Tab，缝合后自动刷新 chapter.content；旧直写保留为备选）
 
 ## 待完成功能
-
-- [ ] Scene 三层调度全链路（章纲 → 分场 → 逐场正文 → stitch）
-- [x] ReaderPromise 深度闭环（写章注入 open 承诺 + auto-debrief AI 识别新增/兑现 + 队列自动复盘同步提交）
+- [ ] ReaderPromise 深度闭环（写章注入 open 承诺 + auto-debrief AI 识别新增/兑现 + 队列自动复盘同步提交）：基础模型+router 已完成，完整闭环链路待实现
 - [ ] Location 模型（当前 Scene.location_name 文本字段，location_id 已注释预留，P2-W7）
 - [ ] 人物关系图可视化（ReactFlow）
 - [ ] pgvector 语义记忆检索（`MemoryChunk.embedding` 字段已预留）
 - [ ] 导出 TXT / EPUB
 - [ ] 登录鉴权（目前无 auth）
-- [ ] AI 质检时结合故事线进度与境界体系做一致性检查
-- [ ] Bootstrap 生成的技能/道具 mastered_by 字段关联真实 character UUID（目前只存名字）
 - [ ] 读者模拟器与主写章流程打通（低分项自动转 next_chapter_directives）
 - [ ] 伏笔台账升级：type / min_max_distance / paid_off_quality / volume_budget + audit 接口
 

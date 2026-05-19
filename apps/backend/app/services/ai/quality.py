@@ -129,6 +129,31 @@ class QualityMixin:
 4. 人物行为违背其价值观和动机
 5. 使用了尚未习得的技能或尚未获得的道具"""
 
+        # 根据传入数据决定是否追加专属维度说明，避免 AI 对空数据做无效评分
+        _extra_dim_doc = ""
+        if storylines_context:
+            _extra_dim_doc += (
+                '\n    "storyline_progress": {{"score": 8, "status": "pass",'
+                ' "comment": "本章推进了哪条故事线？有无与故事线状态矛盾的情节？（当前活跃故事线与本章内容的匹配度，0-10）"}},'
+            )
+        if power_systems_summary:
+            _extra_dim_doc += (
+                '\n    "realm_check": {{"score": 9, "status": "pass",'
+                ' "comment": "本章功法/技能/战力描写是否符合境界体系规则？有无超纲行为（如低境界人物秒杀高境界）？（0-10）"}},'
+            )
+
+        _extra_constraints = ""
+        if storylines_context:
+            _extra_constraints += (
+                "\n- storyline_progress < 6 时，issues 中必须加一条 type=\"storyline_neglect\" 的 warning，"
+                "指出哪条活跃故事线被本章完全忽略或与状态矛盾"
+            )
+        if power_systems_summary:
+            _extra_constraints += (
+                "\n- realm_check < 6 时，issues 中必须加一条 type=\"realm_violation\" 的 warning，"
+                "明确指出是哪个角色、在哪个场景、用了什么超出境界的能力"
+            )
+
         prompt = f"""请对以下章节进行质检，返回 JSON 格式。
 
 章节标题：{chapter_title}
@@ -156,13 +181,13 @@ class QualityMixin:
   "dimensions": {{
     "plot": {{"score": 9, "status": "pass", "comment": "情节推进是否有效"}},
     "character": {{"score": 8, "status": "pass", "comment": "人物行为是否符合设定"}},
-    "setting_consistency": {{"score": 7, "status": "warning", "comment": "境界/技能/位置是否前后一致"}},
+    "setting_consistency": {{"score": 7, "status": "warning", "comment": "人物位置/状态/持有物是否前后一致"}},
     "pacing": {{"score": 8, "status": "pass", "comment": "节奏是否合适"}},
     "hooks": {{"score": 9, "status": "excellent", "comment": "钩子和悬念是否到位"}},
     "outline_alignment": {{"score": 8, "status": "pass", "comment": "本章内容与大纲节点目标的匹配度"}},
     "face_slap_payoff": {{"score": 8, "status": "pass", "comment": "本章是否兑现之前积累的打脸/爽感期待？憋了几章的情绪有没有具体释放？（0-10）"}},
     "emotional_resonance": {{"score": 7, "status": "pass", "comment": "读者是否会为主角揪心/爽/心疼/愤怒？情感有没有被具体调动？（0-10）"}},
-    "subscribe_intent": {{"score": 8, "status": "pass", "comment": "章末付费订阅下一章的意愿估分——读完最后一句会不会忍不住翻页？7分以上合格（0-10）"}}
+    "subscribe_intent": {{"score": 8, "status": "pass", "comment": "章末付费订阅下一章的意愿估分——读完最后一句会不会忍不住翻页？7分以上合格（0-10）"}}{_extra_dim_doc}
   }},
   "issues": [{{"type": "warning", "description": "具体问题描述，如：林默在第X章记录位置为青云城，本章却出现在远水城"}}],
   "suggestions": ["具体可操作的修改建议"],
@@ -172,7 +197,7 @@ class QualityMixin:
 
 评分额外约束：
 - face_slap_payoff < 6 时，suggestions 必须包含一条"本章如何增加打脸兑现感"的具体操作
-- subscribe_intent < 7 时，issues 中必须加一条 type="low_hook" 的 warning，说明章末钩子哪里不够抓人
+- subscribe_intent < 7 时，issues 中必须加一条 type="low_hook" 的 warning，说明章末钩子哪里不够抓人{_extra_constraints}
 - 评分时先用编辑视角检查技术质量，再切换成「下班后刷手机的28岁读者」视角问：这章会让他熬夜追下一章吗？"""
 
         try:

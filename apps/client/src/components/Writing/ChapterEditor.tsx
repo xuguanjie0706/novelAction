@@ -12,7 +12,7 @@ import {
   Maximize2, Minimize2, Clock, ChevronDown, ChevronRight, Anchor, History,
   Feather, PenLine, ListPlus, CheckCircle, Circle,
   CheckSquare, TrendingUp, MapPin, Swords, Bot, Save, Trash2, ClipboardList, UserPlus,
-  ShieldAlert, ShieldCheck,
+  ShieldAlert, ShieldCheck, Layers,
 } from 'lucide-react'
 import clsx from 'clsx'
 import {
@@ -21,6 +21,7 @@ import {
   plainTextBlocksToHtml,
 } from '../../utils/draftChapterIndexSplit'
 import ChapterIndexEditPanel from './ChapterIndexEditPanel'
+import ScenePipelinePanel from './ScenePipelinePanel'
 import { chapterHasNarrativeBody, shouldUseGatedDraft } from '../../utils/writingConfigGate'
 import { formatApiError } from '../../utils/apiError'
 
@@ -1496,16 +1497,16 @@ export default function ChapterEditor({
             {wordCount.toLocaleString()} 字
           </span>
 
-          {/* 场景助手 */}
+          {/* 分场写作入口（三层调度：章纲→分场→正文→缝合） */}
           {!focusMode && (
             <button type="button"
               onClick={() => { setContextOpen(v => !(v && contextTab === 'scene')); setContextTab('scene') }}
-              title="场景助手（上章结尾 + 人物卡）"
+              title="分场写作（推荐）：生成分场 → 逐场起草 → 缝合进章节"
               className={clsx(TOP_TOOL_BUTTON_BASE,
                 contextOpen && contextTab === 'scene'
                   ? TOP_TOOL_BUTTON_ACTIVE
                   : TOP_TOOL_BUTTON_IDLE)}>
-              <Users size={14} />场景
+              <Layers size={14} />分场
             </button>
           )}
 
@@ -1993,50 +1994,19 @@ export default function ChapterEditor({
                 </div>
               )}
 
-              {/* ── 场景助手 Tab ── */}
+              {/* ── 分场写作 Tab（三层调度：章纲→分场→正文→缝合） ── */}
               {contextTab === 'scene' && (
-                <div className="p-4 space-y-4">
-
-                  {/* 上章结尾 */}
-                  <section>
-                    <div className="flex items-center gap-1.5 mb-2">
-                      <BookOpen size={11} className="text-novel-ink-muted" />
-                      <span className="text-[10px] font-semibold text-novel-ink-muted uppercase tracking-wider">上章结尾</span>
-                    </div>
-                    {prevChapter ? (
-                      prevTail ? (
-                        <div className="text-xs text-novel-ink leading-relaxed bg-novel-card border border-novel-border rounded-novel px-3 py-2.5 italic">
-                          <p className="text-[10px] text-novel-ink-faint mb-1 not-italic truncate">《{prevChapter.title}》</p>
-                          {prevTail}
-                        </div>
-                      ) : (
-                        <p className="text-xs text-novel-ink-faint italic px-1">（上章暂无内容）</p>
-                      )
-                    ) : (
-                      <p className="text-xs text-novel-ink-faint italic px-1">这是第一章，没有上一章</p>
-                    )}
-                  </section>
-
-                  <div className="border-t border-novel-border" />
-
-                  {/* 人物档案 */}
-                  <section>
-                    <div className="flex items-center gap-1.5 mb-2">
-                      <Users size={11} className="text-novel-ink-muted" />
-                      <span className="text-[10px] font-semibold text-novel-ink-muted uppercase tracking-wider">
-                        人物档案
-                      </span>
-                      <span className="text-[10px] text-novel-ink-faint">（{characters.length} 位）</span>
-                    </div>
-                    {characters.length === 0 ? (
-                      <p className="text-xs text-novel-ink-faint italic px-1">暂无人物，请在「人物」页创建</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {characters.map(c => <CharacterMiniCard key={c.id} character={c} />)}
-                      </div>
-                    )}
-                  </section>
-                </div>
+                <ScenePipelinePanel
+                  projectId={projectId}
+                  chapter={chapter}
+                  outlineNode={outlineNode}
+                  onStitchDone={async () => {
+                    try {
+                      const res = await chaptersApi.get(projectId, chapter.id)
+                      upsertChapter(res.data)
+                    } catch { /* 缝合后刷新失败时静默，用户可手动保存 */ }
+                  }}
+                />
               )}
 
               {/* ── 复盘 Tab ── */}

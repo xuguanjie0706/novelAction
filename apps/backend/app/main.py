@@ -62,6 +62,7 @@ from app.routers import foreshadows, quality_debts
 from app.routers import scenes, reader_promises, locations as locations_router
 from app.routers import export as export_router
 from app.routers import cover as cover_router
+from app.routers import character_portrait as character_portrait_router
 from app.routers import auth as auth_router
 from app.routers import admin_auth as admin_auth_router
 from app.routers import dashboard as dashboard_router
@@ -73,6 +74,10 @@ from app.routers import consistency_fix as consistency_fix_router
 from app.routers import jobs as jobs_router
 from app.services.llm_config import seed_llm_from_env_if_empty
 from app.services.cover_storage import ensure_cover_storage_dir, resolved_cover_storage_dir
+from app.services.character_portrait_storage import (
+    ensure_character_portrait_dir,
+    resolved_character_portrait_dir,
+)
 
 
 def _ensure_outline_node_columns() -> None:
@@ -664,12 +669,19 @@ app.include_router(scenes.router, prefix="/api/v1", dependencies=_project_scoped
 app.include_router(reader_promises.router, prefix="/api/v1", dependencies=_project_scoped_dep)
 app.include_router(locations_router.router, prefix="/api/v1", dependencies=_project_scoped_dep)
 app.include_router(cover_router.router, prefix="/api/v1", dependencies=_project_scoped_dep)
+app.include_router(character_portrait_router.router, prefix="/api/v1", dependencies=_project_scoped_dep)
 
 ensure_cover_storage_dir()
 app.mount(
     "/api/v1/covers/files",
     StaticFiles(directory=str(resolved_cover_storage_dir())),
     name="novel_cover_files",
+)
+ensure_character_portrait_dir()
+app.mount(
+    "/api/v1/character-portraits/files",
+    StaticFiles(directory=str(resolved_character_portrait_dir())),
+    name="novel_character_portrait_files",
 )
 
 

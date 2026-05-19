@@ -234,6 +234,23 @@ export const charactersApi = {
   getChangelog: (pid: string, cid: string) => api.get(`/projects/${pid}/characters/${cid}/changelog`),
   deleteChangelogEntry: (pid: string, cid: string, logId: string) => api.delete(`/projects/${pid}/characters/${cid}/changelog/${logId}`),
   clearChangelog: (pid: string, cid: string) => api.delete(`/projects/${pid}/characters/${cid}/changelog`),
+  /** AI 生成 4 帧横排立绘雪碧图，写入 avatar_url 与 extra.sprite_sheet */
+  generatePortrait: (
+    pid: string,
+    cid: string,
+    data: { llm_provider_id: string; prompt_override?: string; style_hint?: string; size?: string; quality?: string },
+  ) => api.post(`/projects/${pid}/characters/${cid}/portrait/generate`, data),
+  generatePortraitsBatch: (
+    pid: string,
+    data: {
+      llm_provider_id: string
+      character_ids: string[]
+      style_hint?: string
+      size?: string
+      quality?: string
+      skip_existing?: boolean
+    },
+  ) => api.post(`/projects/${pid}/characters/portraits/generate-batch`, data),
 }
 
 // ── StoryLines ────────────────────────────────────────

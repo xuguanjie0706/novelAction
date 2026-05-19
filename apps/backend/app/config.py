@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     COVER_MAX_EDGE: int = 1024
     COVER_WEBP_QUALITY: int = 82
 
+    # 人物立绘雪碧图落盘（留空则 data/character-portraits）
+    CHARACTER_PORTRAIT_STORAGE_DIR: str = ""
+    CHARACTER_PORTRAIT_MAX_EDGE: int = 1536
+    CHARACTER_PORTRAIT_WEBP_QUALITY: int = 85
+    CHARACTER_PORTRAIT_AVATAR_EDGE: int = 256
+
     # App
     SECRET_KEY: str = "change-me-in-production"
     DEBUG: bool = True

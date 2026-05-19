@@ -20,6 +20,7 @@ from app.services.ai.outline_ai import OutlineMixin
 from app.services.ai.outline_checks import OutlineChecksMixin
 from app.services.ai.quality import QualityMixin
 from app.services.ai.sampling import SamplingMixin
+from app.services.ai.scene_draft import SceneDraftMixin
 from app.services.ai.violation_check import ViolationCheckMixin
 from app.services.ai.writing_tools import WritingToolsMixin
 
@@ -36,6 +37,7 @@ class AIService(
     DebriefMixin,
     WritingToolsMixin,
     ViolationCheckMixin,
+    SceneDraftMixin,
     SamplingMixin,
 ):
     """统一使用 OpenAI 兼容协议（任意 base_url + api_key）。"""

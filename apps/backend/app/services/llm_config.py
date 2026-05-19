@@ -3,7 +3,7 @@ import logging
 from typing import Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -21,20 +21,26 @@ def normalize_openai_base_url(url: str) -> str:
     return u
 
 
-def pick_active_provider(db: Session) -> Optional[LlmProvider]:
-    row = (
-        db.query(LlmProvider)
-        .filter(LlmProvider.enabled.is_(True), LlmProvider.is_default.is_(True))
-        .first()
+def text_provider_type_clause():
+    """文案/补全线路：排除 provider_type=image（封面、立绘等生图网关）。"""
+    return or_(
+        LlmProvider.provider_type == "text",
+        LlmProvider.provider_type.is_(None),
+        LlmProvider.provider_type == "",
     )
+
+
+def pick_active_provider(db: Session) -> Optional[LlmProvider]:
+    base = db.query(LlmProvider).filter(
+        LlmProvider.enabled.is_(True),
+        text_provider_type_clause(),
+    )
+    row = base.filter(LlmProvider.is_default.is_(True)).first()
     if row:
         return row
-    return (
-        db.query(LlmProvider)
-        .filter(LlmProvider.enabled.is_(True))
-        .order_by(LlmProvider.sort_order.asc(), LlmProvider.updated_at.desc())
-        .first()
-    )
+    return base.order_by(
+        LlmProvider.sort_order.asc(), LlmProvider.updated_at.desc()
+    ).first()
 
 
 def resolve_gemini_connection(
@@ -52,7 +58,11 @@ def resolve_gemini_connection(
     if db is not None and provider_id is not None:
         row = (
             db.query(LlmProvider)
-            .filter(LlmProvider.id == provider_id, LlmProvider.enabled.is_(True))
+            .filter(
+                LlmProvider.id == provider_id,
+                LlmProvider.enabled.is_(True),
+                text_provider_type_clause(),
+            )
             .first()
         )
         if row:

@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models.llm_provider import LlmProvider
-from app.services.llm_config import pick_active_provider, resolve_gemini_connection
+from app.services.llm_config import (
+    pick_active_provider,
+    resolve_gemini_connection,
+    text_provider_type_clause,
+)
 
 router = APIRouter(prefix="/llm", tags=["llm-public"])
 
@@ -39,7 +43,7 @@ def llm_overview(db: Session = Depends(get_db)):
 
     enabled_rows = (
         db.query(LlmProvider)
-        .filter(LlmProvider.enabled.is_(True))
+        .filter(LlmProvider.enabled.is_(True), text_provider_type_clause())
         .order_by(LlmProvider.is_default.desc(), LlmProvider.sort_order.asc(), LlmProvider.updated_at.desc())
         .all()
     )

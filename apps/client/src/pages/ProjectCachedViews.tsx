@@ -1,20 +1,36 @@
-import React, { useEffect, useState } from 'react'
+import React, { Suspense, lazy, useEffect, useState } from 'react'
 import { Navigate, useParams } from 'react-router-dom'
 import clsx from 'clsx'
-import OutlinePage from './OutlinePage'
-import WritePage from './WritePage'
-import CharactersPage from './CharactersPage'
-import SettingsPage from './SettingsPage'
-import MemoryPage from './MemoryPage'
-import WorldBuildingPage from './WorldBuildingPage'
-import CluesPage from './CluesPage'
-import RhythmMapPage from './RhythmMapPage'
-import ReaderPromisesPage from './ReaderPromisesPage'
-import GlobalTimelinePage from './GlobalTimelinePage'
-import RelationsGraphPage from './RelationsGraphPage'
+import PageSpinner from '../components/common/PageSpinner'
+
+const OutlinePage = lazy(() => import('./OutlinePage'))
+const WritePage = lazy(() => import('./WritePage'))
+const CharactersPage = lazy(() => import('./CharactersPage'))
+const SettingsPage = lazy(() => import('./SettingsPage'))
+const MemoryPage = lazy(() => import('./MemoryPage'))
+const WorldBuildingPage = lazy(() => import('./WorldBuildingPage'))
+const CluesPage = lazy(() => import('./CluesPage'))
+const RhythmMapPage = lazy(() => import('./RhythmMapPage'))
+const ReaderPromisesPage = lazy(() => import('./ReaderPromisesPage'))
+const GlobalTimelinePage = lazy(() => import('./GlobalTimelinePage'))
+const RelationsGraphPage = lazy(() => import('./RelationsGraphPage'))
 
 const TABS = ['outline', 'write', 'characters', 'relations', 'worldbuilding', 'settings', 'timeline', 'memory', 'clues', 'rhythmmap', 'promises'] as const
 type Tab = (typeof TABS)[number]
+
+const TAB_PAGES: Record<Tab, React.LazyExoticComponent<() => JSX.Element>> = {
+  outline: OutlinePage,
+  write: WritePage,
+  characters: CharactersPage,
+  relations: RelationsGraphPage,
+  worldbuilding: WorldBuildingPage,
+  settings: SettingsPage,
+  memory: MemoryPage,
+  clues: CluesPage,
+  rhythmmap: RhythmMapPage,
+  promises: ReaderPromisesPage,
+  timeline: GlobalTimelinePage,
+}
 
 function isTab(s: string | undefined): s is Tab {
   return !!s && (TABS as readonly string[]).includes(s)
@@ -22,7 +38,7 @@ function isTab(s: string | undefined): s is Tab {
 
 /**
  * 项目内大纲 / 写作等 Tab：切换路由时不卸载已访问过的页面，保留本地状态并避免重复整页加载。
- * 切换项目时清空缓存，避免旧项目 UI 残留。
+ * 各 Tab 按路由懒加载 chunk，首次进入才下载对应页面（含 TipTap / 关系图等重型依赖）。
  */
 export default function ProjectCachedViews() {
   const { projectId, tab } = useParams<{ projectId: string; tab: string }>()
@@ -41,30 +57,25 @@ export default function ProjectCachedViews() {
     return <Navigate to={`/project/${projectId}/outline`} replace />
   }
 
-  const wrap = (key: Tab, node: React.ReactNode) =>
-    mounted[key] ? (
+  const wrap = (key: Tab) => {
+    if (!mounted[key]) return null
+    const Page = TAB_PAGES[key]
+    return (
       <div
         key={key}
         className={clsx('h-full min-h-0', tab !== key && 'hidden')}
         aria-hidden={tab !== key}
       >
-        {node}
+        <Suspense fallback={<PageSpinner />}>
+          <Page />
+        </Suspense>
       </div>
-    ) : null
+    )
+  }
 
   return (
     <div className="h-full min-h-0">
-      {wrap('outline',       <OutlinePage />)}
-      {wrap('write',         <WritePage />)}
-      {wrap('characters',    <CharactersPage />)}
-      {wrap('relations',     <RelationsGraphPage />)}
-      {wrap('worldbuilding', <WorldBuildingPage />)}
-      {wrap('settings',      <SettingsPage />)}
-      {wrap('memory',        <MemoryPage />)}
-      {wrap('clues',         <CluesPage />)}
-      {wrap('rhythmmap',     <RhythmMapPage />)}
-      {wrap('promises',      <ReaderPromisesPage />)}
-      {wrap('timeline',      <GlobalTimelinePage />)}
+      {TABS.map(t => wrap(t))}
     </div>
   )
 }

@@ -1,12 +1,14 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react'
+import React, { Suspense, lazy, useEffect, useState, useCallback, useMemo } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Plus, Loader2, RefreshCw, ChevronRight, ChevronDown, PenLine, FileText, BookOpen, Package,
 } from 'lucide-react'
 import { chaptersApi, outlineApi, storylinesApi } from '../api/client'
 import { useAppStore } from '../store'
-import ChapterEditor from '../components/Writing/ChapterEditor'
+import PageSpinner from '../components/common/PageSpinner'
 import ExportPanel from '../components/Export/ExportPanel'
+
+const ChapterEditor = lazy(() => import('../components/Writing/ChapterEditor'))
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import type { Chapter, OutlineNode } from '../types'
@@ -353,13 +355,15 @@ export default function WritePage() {
       {/* 右侧：编辑区 */}
       <div className="flex-1 min-w-0">
         {activeChapter ? (
-          <ChapterEditor
-            projectId={projectId!}
-            chapter={activeChapter}
-            outlineNode={activeOutlineNode}
-            prevChapter={prevChapter}
-            onFocusModeChange={setSidebarHidden}
-          />
+          <Suspense fallback={<PageSpinner label="编辑器加载中…" />}>
+            <ChapterEditor
+              projectId={projectId!}
+              chapter={activeChapter}
+              outlineNode={activeOutlineNode}
+              prevChapter={prevChapter}
+              onFocusModeChange={setSidebarHidden}
+            />
+          </Suspense>
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center gap-3 p-8">
             <PenLine size={32} className="text-gray-200" />

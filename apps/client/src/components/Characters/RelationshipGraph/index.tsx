@@ -3,7 +3,7 @@
  * - 星座星图：react-force-graph-3d（MIT，Three.js 3D 力导向 + 粒子连线）
  * - 阵营分层：ReactFlow 卡片布局
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2, Users } from 'lucide-react'
 import clsx from 'clsx'
 import { charactersApi } from '../../../api/client'
@@ -15,8 +15,14 @@ import { tierLayout } from './layouts'
 import { neighborIds } from './graphUtils'
 import { GraphSidebar } from './GraphSidebar'
 import { CharMiniCard } from './CharMiniCard'
-import { ConstellationForceGraph } from './ConstellationForceGraph'
-import { TierFlowGraph } from './TierFlowGraph'
+import PageSpinner from '../../common/PageSpinner'
+
+const ConstellationForceGraph = lazy(() =>
+  import('./ConstellationForceGraph').then(m => ({ default: m.ConstellationForceGraph })),
+)
+const TierFlowGraph = lazy(() =>
+  import('./TierFlowGraph').then(m => ({ default: m.TierFlowGraph })),
+)
 
 interface RelationshipGraphProps {
   projectId: string
@@ -150,27 +156,29 @@ export default function RelationshipGraph({ projectId }: RelationshipGraphProps)
           ))}
         </div>
 
-        {isConstellation ? (
-          <ConstellationForceGraph
-            characters={visibleCharacters}
-            relationships={visibleRelationships}
-            selectedId={selected?.id ?? null}
-            highlightIds={highlightIds}
-            onSelect={setSelected}
-          />
-        ) : (
-          <div className="absolute inset-0">
-            <TierFlowGraph
+        <Suspense fallback={<PageSpinner label="关系图渲染中…" />}>
+          {isConstellation ? (
+            <ConstellationForceGraph
               characters={visibleCharacters}
               relationships={visibleRelationships}
-              allCharacters={allCharacters}
-              positions={tierPositions}
               selectedId={selected?.id ?? null}
               highlightIds={highlightIds}
               onSelect={setSelected}
             />
-          </div>
-        )}
+          ) : (
+            <div className="absolute inset-0">
+              <TierFlowGraph
+                characters={visibleCharacters}
+                relationships={visibleRelationships}
+                allCharacters={allCharacters}
+                positions={tierPositions}
+                selectedId={selected?.id ?? null}
+                highlightIds={highlightIds}
+                onSelect={setSelected}
+              />
+            </div>
+          )}
+        </Suspense>
 
         {selected && !isConstellation && (
           <CharMiniCard

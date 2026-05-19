@@ -597,6 +597,23 @@ async def _on_startup() -> None:
     from app.services.draft_graph.worker import recover_stale_jobs
     asyncio.create_task(recover_stale_jobs(), name="draft-job-recovery")
 
+    import logging
+
+    from app.services.tencent_cos import normalized_cover_storage_backend
+
+    log = logging.getLogger(__name__)
+    backend = normalized_cover_storage_backend()
+    if backend == "local":
+        log.info("封面存储：本地磁盘（COVER_STORAGE_BACKEND=local，默认）")
+    else:
+        from app.services.tencent_cos import _require_cos_config
+
+        try:
+            _require_cos_config()
+            log.info("封面存储：腾讯云 COS 桶（COVER_STORAGE_BACKEND=cos）")
+        except ValueError as e:
+            log.error("封面 COS 配置不完整：%s", e)
+
 
 app.add_middleware(
     CORSMiddleware,

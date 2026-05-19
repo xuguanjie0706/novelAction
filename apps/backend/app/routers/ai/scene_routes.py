@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Chapter, Character, OutlineNode, Project, Scene
+from app.models import Chapter, Character, Foreshadow, OutlineNode, Project, ReaderPromise, Scene
 from app.services.ai_service import AIService
 from app.services.embedding_service import semantic_search as _semantic_search
 
@@ -132,6 +132,53 @@ async def scene_plan_save(
                 for d in dirs[-2:]
             )
 
+    # ── 约束数据：从 DB 拉取，无需额外 AI 调用 ──────────────────
+    # 角色当前状态（取有境界/位置信息的角色，最多 6 条）
+    char_state_rows = db.query(
+        Character.name,
+        Character.current_realm,
+        Character.current_status,
+        Character.current_location,
+    ).filter(
+        Character.project_id == project_id,
+    ).limit(12).all()
+    character_states = [
+        {
+            "name": r.name,
+            "current_realm": r.current_realm,
+            "current_status": r.current_status,
+            "current_location": r.current_location,
+        }
+        for r in char_state_rows
+        if r.current_realm or r.current_status or r.current_location
+    ][:6]
+
+    # 未闭合伏笔（priority≥3，按优先级降序，最多 5 条）
+    fw_rows = db.query(
+        Foreshadow.title, Foreshadow.description, Foreshadow.priority
+    ).filter(
+        Foreshadow.project_id == project_id,
+        Foreshadow.status == "open",
+        Foreshadow.priority >= 3,
+    ).order_by(Foreshadow.priority.desc()).limit(5).all()
+    open_foreshadows = [
+        {"title": r.title, "description": r.description, "priority": r.priority}
+        for r in fw_rows
+    ]
+
+    # 未兑现读者承诺（priority≥3，按优先级降序，最多 4 条）
+    rp_rows = db.query(
+        ReaderPromise.promise_text, ReaderPromise.promise_type, ReaderPromise.priority
+    ).filter(
+        ReaderPromise.project_id == project_id,
+        ReaderPromise.status == "open",
+        ReaderPromise.priority >= 3,
+    ).order_by(ReaderPromise.priority.desc()).limit(4).all()
+    open_reader_promises = [
+        {"promise_text": r.promise_text, "promise_type": r.promise_type, "priority": r.priority}
+        for r in rp_rows
+    ]
+
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
         db=db,
@@ -146,6 +193,9 @@ async def scene_plan_save(
         prev_directives=prev_directives,
         model_profile=req.model_profile,
         word_target=req.word_target,
+        character_states=character_states or None,
+        open_foreshadows=open_foreshadows or None,
+        open_reader_promises=open_reader_promises or None,
     )
 
     # 替换旧场景

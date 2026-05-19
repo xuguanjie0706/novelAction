@@ -3,7 +3,7 @@
 
 POST /api/v1/projects/{project_id}/cover/generate
   - 调用图片类型 LlmProvider（provider_type='image'）的 /v1/images/generations 接口
-  - 默认将结果压缩为 WebP 落盘，返回短路径 cover_url（/api/v1/covers/files/...）供入库与 <img src>
+  - 默认将结果压缩为 WebP 持久化；local 返回 /api/v1/covers/files/...，cos 返回腾讯云公网 URL
   - store_compressed=false 时仍返回 data_url / image_url（大响应）
   - 每次调用写入 cover_image_call_logs；网关成功但解码/压缩失败时落盘 data/covers/debug/<stem>/（meta.json + payload.b64.txt 等）
 
@@ -717,7 +717,7 @@ async def upload_cover(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    """上传本地图片作为封面，压缩为 WebP 后写入 data/covers。"""
+    """上传本地图片作为封面，压缩为 WebP 后写入本地或腾讯云 COS（见 COVER_STORAGE_BACKEND）。"""
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "项目不存在")
@@ -745,7 +745,7 @@ def generate_cover(
 ):
     """
     用指定的图片提供者为项目生成封面。
-    默认压缩为 WebP 落盘并返回 cover_url；前端可 PATCH /projects/{id} 将 cover_url 写入数据库。
+    默认压缩为 WebP 持久化并返回 cover_url（本地路径或 COS 公网 URL）；前端可 PATCH 写入项目。
     每次调用写入 cover_image_call_logs；解析/压缩失败时优先落盘 payload.b64.txt 便于回溯。
     """
     project = db.query(Project).filter(Project.id == project_id).first()

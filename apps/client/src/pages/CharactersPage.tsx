@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { Suspense, lazy, useEffect, useState, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import { Plus, Crown, User, Swords, Zap, BookOpen, Eye, Trash2, Heart, TrendingUp, FileText, Target, NotebookPen, Search, Users, History, Eraser, X, RotateCcw, Check, Loader2, Sparkles } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -7,8 +7,10 @@ import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload } from '../
 import type { Character, CharacterChangeLog } from '../types'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
-import RelationshipGraph from '../components/Characters/RelationshipGraph'
+import PageSpinner from '../components/common/PageSpinner'
 import CharacterPortraitPanel from '../components/Characters/CharacterPortraitPanel'
+
+const RelationshipGraph = lazy(() => import('../components/Characters/RelationshipGraph'))
 
 // ── 常量 ──────────────────────────────────────────────────
 
@@ -1062,7 +1064,9 @@ export default function CharactersPage() {
         </div>
         {/* ReactFlow 画布（占满剩余空间） */}
         <div className="flex-1 relative overflow-hidden">
-          <RelationshipGraph projectId={projectId!} />
+          <Suspense fallback={<PageSpinner label="关系图加载中…" />}>
+            <RelationshipGraph projectId={projectId!} />
+          </Suspense>
         </div>
       </div>
     )

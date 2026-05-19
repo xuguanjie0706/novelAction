@@ -267,11 +267,31 @@ class WritingToolsMixin:
         prev_directives: str = "",
         model_profile: str = "local",
         word_target: int = 2200,
+        character_states: Optional[List[dict]] = None,
+        open_foreshadows: Optional[List[dict]] = None,
+        open_reader_promises: Optional[List[dict]] = None,
     ) -> dict:
         """
         根据章纲生成结构化分场计划（4-8 场）。
+
         每场包含：POV、时间、地点、在场角色、目标、冲突、转折、钩子、字数预算、感官焦点、节奏。
-        这是把“节奏平、AI味”根治的关键一步。
+
+        Args:
+            chapter_title: 章节标题。
+            chapter_summary: 章节摘要（≤800 字）。
+            genre: 类型标签，用于 genre_kit guardrail。
+            positioning: 立项定位 dict（取 selling_point/taboo_lines）。
+            existing_characters: 角色列表 [{"id":..., "name":...}]，仅用于 prompt 展示；
+                                 POV 解析依赖调用方的 char_map。
+            prev_directives: 上一章复盘指令（最高优先级约束）。
+            model_profile: "local" / "gemini"。
+            word_target: 全章目标字数，分配各场预算基准。
+            character_states: 关键角色当前状态列表，每条含 name/current_realm/
+                              current_status/current_location（可选字段）。有数据时注入约束块。
+            open_foreshadows: 未闭合伏笔列表，每条含 title/description/priority。
+                              高优先级（priority≥4）在场景安排时需有意识回收或推进。
+            open_reader_promises: 未兑现读者承诺列表，每条含 promise_text/promise_type/priority。
+                                  高优先级在本章分场中必须有至少一场回应或推进。
         """
         system = (
             "你是资深网文分镜师。严格返回 JSON，不要任何额外文字。"
@@ -298,7 +318,52 @@ class WritingToolsMixin:
             char_lines = [f"- {c.get('name','')}（id:{c.get('id','')}）" for c in existing_characters[:8]]
             char_block = "\n当前主要角色：\n" + "\n".join(char_lines)
 
-        prompt = f"""{kit_block}{positioning_block}{prev_block}
+        # ── 约束注入块（仅有数据时才出现）──────────────────────
+        state_block = ""
+        if character_states:
+            lines = []
+            for cs in character_states[:6]:
+                parts = [cs.get("name", "?")]
+                if cs.get("current_realm"):
+                    parts.append(f"境界:{cs['current_realm']}")
+                if cs.get("current_status") and cs["current_status"] != "alive":
+                    parts.append(f"状态:{cs['current_status']}")
+                if cs.get("current_location"):
+                    parts.append(f"位置:{cs['current_location']}")
+                lines.append("  " + " | ".join(parts))
+            state_block = "\n【当前角色状态（分场须保持一致）】\n" + "\n".join(lines) + "\n"
+
+        foreshadow_block = ""
+        if open_foreshadows:
+            # 按优先级降序，优先展示高权重伏笔
+            sorted_fw = sorted(open_foreshadows, key=lambda x: -(x.get("priority") or 3))
+            lines = []
+            for fw in sorted_fw[:4]:
+                pri = fw.get("priority") or 3
+                marker = "⚡" if pri >= 4 else "·"
+                desc = (fw.get("description") or "")[:60]
+                lines.append(f"  {marker} {fw.get('title','?')}：{desc}")
+            foreshadow_block = (
+                "\n【未闭合伏笔（⚡=高优先，本章宜推进或回收）】\n"
+                + "\n".join(lines) + "\n"
+            )
+
+        promise_block = ""
+        if open_reader_promises:
+            sorted_rp = sorted(open_reader_promises, key=lambda x: -(x.get("priority") or 3))
+            lines = []
+            for rp in sorted_rp[:3]:
+                pri = rp.get("priority") or 3
+                marker = "⚡" if pri >= 4 else "·"
+                ptype = rp.get("promise_type") or ""
+                text = (rp.get("promise_text") or "")[:80]
+                lines.append(f"  {marker} [{ptype}] {text}")
+            promise_block = (
+                "\n【未兑现读者承诺（⚡=高优先，本章至少一场须回应或推进）】\n"
+                + "\n".join(lines) + "\n"
+            )
+
+        prompt = f"""{kit_block}{positioning_block}{prev_block}{state_block}{foreshadow_block}{promise_block}
 本章标题：《{chapter_title}》
 本章摘要：{chapter_summary[:800]}
 {char_block}

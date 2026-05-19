@@ -1,18 +1,24 @@
-import React, { useEffect } from 'react'
+import React, { Suspense, lazy, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
-import ProjectsPage from './pages/ProjectsPage'
-import BookshelfPage from './pages/BookshelfPage'
-import ProjectDetailPage from './pages/ProjectDetailPage'
-import BookshelfDetailPage from './pages/BookshelfDetailPage'
 import AppLayout from './components/Layout/AppLayout'
-import ProjectCachedViews from './pages/ProjectCachedViews'
-import ChapterCoherencePage from './pages/ChapterCoherencePage'
-import LoginPage from './pages/LoginPage'
-import WalletPage from './pages/WalletPage'
+import PageSpinner from './components/common/PageSpinner'
 import { projectsApi } from './api/client'
 import { useAppStore } from './store'
 import { useAuthStore } from './store/authStore'
+
+const LoginPage = lazy(() => import('./pages/LoginPage'))
+const ProjectsPage = lazy(() => import('./pages/ProjectsPage'))
+const BookshelfPage = lazy(() => import('./pages/BookshelfPage'))
+const ProjectDetailPage = lazy(() => import('./pages/ProjectDetailPage'))
+const BookshelfDetailPage = lazy(() => import('./pages/BookshelfDetailPage'))
+const ChapterCoherencePage = lazy(() => import('./pages/ChapterCoherencePage'))
+const WalletPage = lazy(() => import('./pages/WalletPage'))
+const ProjectCachedViews = lazy(() => import('./pages/ProjectCachedViews'))
+
+function withSuspense(children: React.ReactNode) {
+  return <Suspense fallback={<PageSpinner />}>{children}</Suspense>
+}
 
 // 进入项目时加载当前项目信息
 function ProjectLoader() {
@@ -35,7 +41,6 @@ function ProjectLoader() {
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { token, initializing } = useAuthStore()
 
-  // 应用初始化（校验本地 token）期间显示空白，避免闪烁跳转
   if (initializing) {
     return (
       <div className="min-h-screen bg-gray-950 flex items-center justify-center">
@@ -72,10 +77,6 @@ function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
-/**
- * 应用初始化：从 localStorage 读取 token 并调用 /auth/me 验证有效性。
- * 挂载一次即可，不产生额外渲染。
- */
 function AuthInitializer() {
   const { initialize } = useAuthStore()
   useEffect(() => { initialize() }, [])
@@ -88,22 +89,19 @@ export default function App() {
       <AuthInitializer />
       <Toaster position="top-right" toastOptions={{ duration: 3000 }} />
       <Routes>
-        {/* 公开路由：已登录时自动跳回首页 */}
         <Route
           path="/login"
           element={
             <PublicOnlyRoute>
-              <LoginPage />
+              {withSuspense(<LoginPage />)}
             </PublicOnlyRoute>
           }
         />
-
-        {/* 受保护路由：未登录时跳转 /login */}
         <Route
           path="/"
           element={
             <PrivateRoute>
-              <ProjectsPage />
+              {withSuspense(<ProjectsPage />)}
             </PrivateRoute>
           }
         />
@@ -111,16 +109,15 @@ export default function App() {
           path="/bookshelf"
           element={
             <PrivateRoute>
-              <BookshelfPage />
+              {withSuspense(<BookshelfPage />)}
             </PrivateRoute>
           }
         />
-        {/* 书架上的「小说详情」：封面、简介、生成 Run 日志、写作门控；结构化分区纪要在 /recap */}
         <Route
           path="/bookshelf/:projectId/recap"
           element={
             <PrivateRoute>
-              <BookshelfDetailPage />
+              {withSuspense(<BookshelfDetailPage />)}
             </PrivateRoute>
           }
         />
@@ -128,7 +125,7 @@ export default function App() {
           path="/bookshelf/:projectId"
           element={
             <PrivateRoute>
-              <ProjectDetailPage />
+              {withSuspense(<ProjectDetailPage />)}
             </PrivateRoute>
           }
         />
@@ -136,7 +133,7 @@ export default function App() {
           path="/coherence-check"
           element={
             <PrivateRoute>
-              <ChapterCoherencePage />
+              {withSuspense(<ChapterCoherencePage />)}
             </PrivateRoute>
           }
         />
@@ -144,7 +141,7 @@ export default function App() {
           path="/wallet"
           element={
             <PrivateRoute>
-              <WalletPage />
+              {withSuspense(<WalletPage />)}
             </PrivateRoute>
           }
         />
@@ -158,7 +155,7 @@ export default function App() {
           }
         >
           <Route index element={<Navigate to="outline" replace />} />
-          <Route path=":tab" element={<ProjectCachedViews />} />
+          <Route path=":tab" element={withSuspense(<ProjectCachedViews />)} />
         </Route>
       </Routes>
     </BrowserRouter>

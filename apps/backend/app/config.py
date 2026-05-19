@@ -67,12 +67,26 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "nomic-embed-text"         # Ollama 本地 embedding 模型（需先 ollama pull nomic-embed-text）
     EMBEDDING_DIM: int = 768                          # nomic-embed-text 输出 768 维；换模型时同步修改并重跑 migration
 
+    # 封面存储后端（默认本地磁盘，改 .env 即可切换，无需改代码）
+    #   local / disk / filesystem → data/covers + /api/v1/covers/files/...
+    #   cos / bucket / tencent_cos → 腾讯云对象存储（需 COS_*）
+    COVER_STORAGE_BACKEND: str = "local"
     # 封面落盘（相对路径相对于进程 cwd；留空则使用后端目录下 data/covers）
     COVER_STORAGE_DIR: str = ""
     # 封面生成失败时的调试包（meta + 原始 b64 等）；留空则使用 data/covers/debug
     COVER_DEBUG_DIR: str = ""
     COVER_MAX_EDGE: int = 1024
     COVER_WEBP_QUALITY: int = 82
+
+    # 腾讯云 COS（COVER_STORAGE_BACKEND=cos 时必填）
+    COS_SECRET_ID: Optional[str] = None
+    COS_SECRET_KEY: Optional[str] = None
+    COS_REGION: str = "ap-guangzhou"
+    COS_BUCKET: Optional[str] = None
+    COS_PREFIX: str = "novel-covers/"
+    COS_SCHEME: str = "https"
+    # 可选：自定义 CDN 域名，如 https://cdn.example.com（勿带末尾斜杠）
+    COS_PUBLIC_BASE_URL: Optional[str] = None
 
     # 人物立绘雪碧图落盘（留空则 data/character-portraits）
     CHARACTER_PORTRAIT_STORAGE_DIR: str = ""

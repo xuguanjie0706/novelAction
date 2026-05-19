@@ -1,19 +1,22 @@
+import { Suspense, lazy, type LazyExoticComponent } from 'react'
 import { ConfigProvider, App as AntApp } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AdminLayout from './layouts/AdminLayout'
 import RequireAdminAuth from './components/RequireAdminAuth'
-import AdminLoginPage from './pages/AdminLoginPage'
-import LlmCallLogsPage from './pages/LlmCallLogsPage'
-import LlmProvidersPage from './pages/LlmProvidersPage'
-import ImageProvidersPage from './pages/ImageProvidersPage'
-import CoverImageCallLogsPage from './pages/CoverImageCallLogsPage'
-import RagRetrievalLogsPage from './pages/RagRetrievalLogsPage'
-import DebriefListPage from './pages/DebriefListPage'
-import NovelManagementPage from './pages/NovelManagementPage'
-import ReadingReviewPage from './pages/ReadingReviewPage'
-import UserCreditsPage from './pages/UserCreditsPage'
-import RedeemCodesPage from './pages/RedeemCodesPage'
+import PageSpinner from './components/PageSpinner'
+
+const AdminLoginPage = lazy(() => import('./pages/AdminLoginPage'))
+const LlmCallLogsPage = lazy(() => import('./pages/LlmCallLogsPage'))
+const LlmProvidersPage = lazy(() => import('./pages/LlmProvidersPage'))
+const ImageProvidersPage = lazy(() => import('./pages/ImageProvidersPage'))
+const CoverImageCallLogsPage = lazy(() => import('./pages/CoverImageCallLogsPage'))
+const RagRetrievalLogsPage = lazy(() => import('./pages/RagRetrievalLogsPage'))
+const DebriefListPage = lazy(() => import('./pages/DebriefListPage'))
+const NovelManagementPage = lazy(() => import('./pages/NovelManagementPage'))
+const ReadingReviewPage = lazy(() => import('./pages/ReadingReviewPage'))
+const UserCreditsPage = lazy(() => import('./pages/UserCreditsPage'))
+const RedeemCodesPage = lazy(() => import('./pages/RedeemCodesPage'))
 
 export default function App() {
   return (
@@ -21,7 +24,14 @@ export default function App() {
       <AntApp>
         <BrowserRouter>
           <Routes>
-            <Route path="/login" element={<AdminLoginPage />} />
+            <Route
+              path="/login"
+              element={
+                <Suspense fallback={<PageSpinner />}>
+                  <AdminLoginPage />
+                </Suspense>
+              }
+            />
             <Route
               path="/"
               element={
@@ -31,20 +41,28 @@ export default function App() {
               }
             >
               <Route index element={<Navigate to="/novels" replace />} />
-              <Route path="novels" element={<NovelManagementPage />} />
-              <Route path="debriefs" element={<DebriefListPage />} />
-              <Route path="llm" element={<LlmProvidersPage />} />
-              <Route path="image-providers" element={<ImageProvidersPage />} />
-              <Route path="cover-image-calls" element={<CoverImageCallLogsPage />} />
-              <Route path="llm-calls" element={<LlmCallLogsPage />} />
-              <Route path="rag-logs" element={<RagRetrievalLogsPage />} />
-              <Route path="reading-review" element={<ReadingReviewPage />} />
-              <Route path="user-credits" element={<UserCreditsPage />} />
-              <Route path="redeem-codes" element={<RedeemCodesPage />} />
+              <Route path="novels" element={<LazyPage page={NovelManagementPage} />} />
+              <Route path="debriefs" element={<LazyPage page={DebriefListPage} />} />
+              <Route path="llm" element={<LazyPage page={LlmProvidersPage} />} />
+              <Route path="image-providers" element={<LazyPage page={ImageProvidersPage} />} />
+              <Route path="cover-image-calls" element={<LazyPage page={CoverImageCallLogsPage} />} />
+              <Route path="llm-calls" element={<LazyPage page={LlmCallLogsPage} />} />
+              <Route path="rag-logs" element={<LazyPage page={RagRetrievalLogsPage} />} />
+              <Route path="reading-review" element={<LazyPage page={ReadingReviewPage} />} />
+              <Route path="user-credits" element={<LazyPage page={UserCreditsPage} />} />
+              <Route path="redeem-codes" element={<LazyPage page={RedeemCodesPage} />} />
             </Route>
           </Routes>
         </BrowserRouter>
       </AntApp>
     </ConfigProvider>
+  )
+}
+
+function LazyPage({ page: Page }: { page: LazyExoticComponent<() => JSX.Element> }) {
+  return (
+    <Suspense fallback={<PageSpinner />}>
+      <Page />
+    </Suspense>
   )
 }

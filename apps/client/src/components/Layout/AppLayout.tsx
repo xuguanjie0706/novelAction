@@ -1,10 +1,12 @@
-import React from 'react'
+import React, { Suspense, lazy } from 'react'
 import { Outlet, useParams } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import TopBar from './TopBar'
-import AIPanel from '../AI/AIPanel'
-import GenerationQueuePanel from './GenerationQueuePanel'
+import PageSpinner from '../common/PageSpinner'
 import { useAppStore } from '../../store'
+
+const AIPanel = lazy(() => import('../AI/AIPanel'))
+const GenerationQueuePanel = lazy(() => import('./GenerationQueuePanel'))
 
 export default function AppLayout() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -25,11 +27,21 @@ export default function AppLayout() {
 
       {/* 右侧 AI 面板（可收起） */}
       {aiPanelOpen && (
-        <AIPanel projectId={projectId!} />
+        <Suspense
+          fallback={
+            <div className="w-80 shrink-0 border-l border-gray-200 bg-white flex items-center justify-center">
+              <PageSpinner label="AI 面板加载中…" />
+            </div>
+          }
+        >
+          <AIPanel projectId={projectId!} />
+        </Suspense>
       )}
 
       {/* 右下角大纲生成队列（全局悬浮，跨页面保持运行） */}
-      <GenerationQueuePanel />
+      <Suspense fallback={null}>
+        <GenerationQueuePanel />
+      </Suspense>
     </div>
   )
 }

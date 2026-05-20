@@ -38,6 +38,16 @@ def _parse_lay(raw: str) -> tuple[str, str]:
     return raw.strip(), ""
 
 
+def _title_from_text(text: str, *, max_len: int = 200) -> str:
+    """Foreshadow.title 必填；从描述/关键词截取可读标题。"""
+    t = (text or "").strip()
+    if not t:
+        return "伏笔"
+    if len(t) <= max_len:
+        return t
+    return t[: max_len - 1] + "…"
+
+
 def sync_chapter_foreshadow(
     db: "Session",
     project_id,
@@ -89,6 +99,7 @@ def _do_sync(db, project_id, outline_node, chapter_number: int, raw: str) -> Non
             continue
         fs = Foreshadow(
             project_id=project_id,
+            title=_title_from_text(content),
             description=content,
             laid_chapter_number=chapter_number,
             status="open",
@@ -110,11 +121,14 @@ def _do_sync(db, project_id, outline_node, chapter_number: int, raw: str) -> Non
         # 按 description 模糊匹配已有 open 伏笔
         fs = _find_foreshadow(db, project_id, keyword)
         if fs:
+            from sqlalchemy.orm.attributes import flag_modified
+
             extra = dict(fs.extra or {})
             heat_log = list(extra.get("heat_log") or [])
             heat_log.append({"chapter": chapter_number, "note": keyword})
             extra["heat_log"] = heat_log
             fs.extra = extra
+            flag_modified(fs, "extra")
             logger.debug("伏笔[加热] chapter=%d keyword=%s", chapter_number, keyword[:30])
 
     # ── 收 ────────────────────────────────────────────────────────────────

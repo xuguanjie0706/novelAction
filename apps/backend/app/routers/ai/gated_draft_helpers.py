@@ -10,7 +10,8 @@ gated_draft_helpers.py — 门控写作辅助函数（上下文构建 / 存库 /
   - _persist_pre_write_warning_record — 写前预警落库
   - _run_pre_write_warning_inline     — 门控内联写前预警（不走 HTTP）
   - _build_pre_warn_prompt_block      — 预警结果格式化为 prompt 块
-  - _build_location_context           — 空间连续性约束块
+  - _build_location_context           — 空间连续性约束块（按角色 current_location 汇总）
+  - _build_single_location_block      — 单场感官基准约束块（按 location_id 或 location_name 匹配）
   - _plain_text_from_html             — HTML → 纯文本
   - _save_chapter_content             — 保存章节正文 + ChapterVersion 快照
 """
@@ -413,6 +414,71 @@ def _build_location_context(db: Session, project_id: str) -> str:
         "不得引入矛盾感官细节。"
     )
     return block
+
+
+def _build_single_location_block(
+    db: Session,
+    project_id: str,
+    location_id=None,
+    location_name: str | None = None,
+) -> str:
+    """
+    为单个 Scene 构建感官基准约束块，注入逐场起草 prompt。
+
+    查找优先级：精确 location_id → 名称精确匹配 → 别名匹配 → 名称包含匹配。
+    仅当命中 Location 且存在 sensory_signature 时才生成非空约束块；
+    否则返回空字符串（不影响写章流程）。
+
+    @param db:            SQLAlchemy Session
+    @param project_id:    项目 UUID 字符串
+    @param location_id:   Scene.location_id（UUID 或 None）
+    @param location_name: Scene.location_name 文本兜底（location_id 未命中时使用）
+    @returns 格式化约束文本块；无匹配数据时返回 ""
+    """
+    loc: Location | None = None
+
+    if location_id:
+        loc = db.query(Location).filter(Location.id == location_id).first()
+
+    if not loc and location_name:
+        all_locs = (
+            db.query(Location)
+            .filter(Location.project_id == project_id)
+            .all()
+        )
+        loc_lower = location_name.strip().lower()
+        for candidate in all_locs:
+            if candidate.name.lower() == loc_lower:
+                loc = candidate
+                break
+        if not loc:
+            for candidate in all_locs:
+                if any(a.lower() == loc_lower for a in (candidate.aliases or [])):
+                    loc = candidate
+                    break
+        if not loc:
+            for candidate in all_locs:
+                if candidate.name.lower() in loc_lower or loc_lower in candidate.name.lower():
+                    loc = candidate
+                    break
+
+    if not loc or not loc.sensory_signature:
+        return ""
+
+    danger_labels = {
+        "safe": "安全", "neutral": "中性", "dangerous": "危险", "forbidden": "禁区",
+    }
+    lines = [
+        f"【⚠️ 当前场景地点感官基准（必须遵守）】",
+        f"地点：{loc.name}"
+        + (f"（{danger_labels.get(loc.danger_level or 'neutral', loc.danger_level)}）"
+           if loc.danger_level else ""),
+        f"感官基准：{loc.sensory_signature.strip()}",
+        "⚠️ 本场气味/光线/声音/温度描写必须与以上感官基准保持一致，不得引入矛盾感官细节。",
+    ]
+    if loc.controller:
+        lines.append(f"控制方：{loc.controller}（影响角色在此地的行为自由度）")
+    return "\n".join(lines)
 
 
 def _plain_text_from_html(html: str) -> str:

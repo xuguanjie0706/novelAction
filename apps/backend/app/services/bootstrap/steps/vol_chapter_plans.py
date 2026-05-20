@@ -511,15 +511,15 @@ async def gen_vol_chapter_plans(
     if all_results:
         from app.services.outline_linter.gate import finalize_volume_chapter_commit
 
-        committed = finalize_volume_chapter_commit(
+        finalize_volume_chapter_commit(
             svc, project, volume_node, all_results, ctx=ctx,
         )
-        if not committed:
+        if ctx.get("linter_blocked"):
             logger.error(
-                "章纲落库被 linter 阻断（卷=%s），请查看 volume.extra.linter_issues",
+                "章纲被 linter 阻断（卷=%s，已暂存 %d 章草稿）",
                 volume_node.id,
+                len(all_results),
             )
-            return []
 
     # 全书配额计数器累加（供后续卷展开时读取，防止漂移）
     ctx["chapter_quota_used"] = quota_used + len(all_results)

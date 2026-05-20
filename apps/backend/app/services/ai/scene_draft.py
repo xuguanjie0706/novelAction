@@ -42,6 +42,7 @@ class SceneDraftMixin:
         genre: str = "玄幻",
         positioning: Optional[dict] = None,
         memory_snippets: Optional[List[str]] = None,
+        location_context: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         为单个 Scene 流式生成正文。
@@ -66,6 +67,8 @@ class SceneDraftMixin:
             genre: 类型标签，用于加载 genre_kit guardrail。
             positioning: 立项定位 dict（取 selling_point/taboo_lines）。
             memory_snippets: 相关记忆片段（最多 6 条）。
+            location_context: 由 _build_single_location_block 生成的感官基准约束块；
+                              非空时注入 prompt，强制 AI 遵守地点感官一致性。
 
         Yields:
             逐 token 文本块（与 ``_stream_ai`` 返回格式一致）。
@@ -118,10 +121,13 @@ class SceneDraftMixin:
             f"{kit_block}"
         )
 
+        loc_context_block = (
+            f"\n{location_context}\n" if location_context else ""
+        )
+
         prompt = f"""章节：《{chapter_title}》
 章节摘要：{chapter_summary[:300]}
-{pos_block}{prev_block}{mem_block}
-
+{pos_block}{prev_block}{mem_block}{loc_context_block}
 ---
 【第 {scene_order} 场】{('  ' + scene_title) if scene_title else ''}
 时间：{time or '同日'}　　地点：{location_name or '未知'}

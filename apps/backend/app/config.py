@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     # 按卷懒展开章纲：30章×15字段的完整 JSON 输出，单批需要 8000-16000 token；
     # 60章分两批但每批同样需要充足空间；可在 .env 中按模型实际上限调高
     VOL_EXPAND_CHAPTERS_MAX_TOKENS: int = 65536
+    # Bootstrap Step 12.5 首卷章纲：远程 Gemini 等建议 ≥40960，可一次生成 60 章避免 30+30 断档
+    VOL1_CHAPTERS_MAX_TOKENS: int = 40960
 
     LOCAL_EXPAND_OUTLINE_MAX_TOKENS: int = 4096
     LOCAL_OUTLINE_QUALITY_MAX_TOKENS: int = 4096
@@ -57,6 +59,12 @@ class Settings(BaseSettings):
     GEMINI_AUTO_DEBRIEF_MAX_TOKENS: int = 8192
     LOCAL_AUTO_DEBRIEF_MAX_TOKENS: int = 4096
 
+    # ── 记忆时效衰减（RAG 重排序用）─────────────────────────────────────────
+    # importance_score 随章节距离指数衰减的系数 α（越大衰减越快）。
+    # 公式：effective_score = importance_score * exp(-α * chapter_distance)
+    # 默认 0.02 表示相隔 50 章衰减到约 37%；可在 .env 中按项目长度调整。
+    MEMORY_DECAY_ALPHA: float = 0.02
+
     # ── Embedding（pgvector 语义检索）────────────────────────────────────────
     # EMBEDDING_BASE_URL / EMBEDDING_API_KEY 留空时自动跟随 LLM_BASE_URL / LLM_API_KEY，
     # 方便「远程 LLM + 本地 Ollama embedding」解耦部署：
@@ -64,8 +72,8 @@ class Settings(BaseSettings):
     #   EMBEDDING_API_KEY=ollama
     EMBEDDING_BASE_URL: Optional[str] = None          # None = 跟随 LLM_BASE_URL
     EMBEDDING_API_KEY: Optional[str] = None           # None = 跟随 LLM_API_KEY
-    EMBEDDING_MODEL: str = "nomic-embed-text"         # Ollama 本地 embedding 模型（需先 ollama pull nomic-embed-text）
-    EMBEDDING_DIM: int = 768                          # nomic-embed-text 输出 768 维；换模型时同步修改并重跑 migration
+    EMBEDDING_MODEL: str = "BAAI/bge-m3"              # 默认远程 embedding 模型（SiliconFlow 等托管）；本地 Ollama 改 nomic-embed-text
+    EMBEDDING_DIM: int = 1024                         # BAAI/bge-m3 输出 1024 维；换模型时同步修改 .env 并执行 migration b3c4d5e6f7a8
 
     # 封面存储后端（默认本地磁盘，改 .env 即可切换，无需改代码）
     #   local / disk / filesystem → data/covers + /api/v1/covers/files/...

@@ -100,6 +100,9 @@ function StepNode({ step, isSelected, generationStartMs, onClick }: StepNodeProp
             )}
             {step.status === 'done' && <CheckCircle2 size={12} style={{ color }} />}
             {step.status === 'error' && <AlertCircle size={12} className="text-red-500" />}
+            {step.status === 'blocked' && (
+              <span className="text-[10px] text-gray-400">—</span>
+            )}
           </span>
         </div>
 
@@ -123,6 +126,9 @@ function StepNode({ step, isSelected, generationStartMs, onClick }: StepNodeProp
               </span>
             )}
             {step.status === 'error' && <span className="ml-auto text-[10px] text-red-500">失败</span>}
+            {step.status === 'blocked' && (
+              <span className="ml-auto text-[10px] text-gray-400">等待</span>
+            )}
           </div>
         )}
       </div>

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Any, Optional
 from datetime import datetime
 import uuid
 
@@ -19,6 +19,7 @@ class ForeshadowBase(BaseModel):
 
     status: str = Field(default="open", pattern="^(open|resolved|dropped)$")
     priority: int = Field(default=3, ge=1, le=5)
+    extra: Optional[dict[str, Any]] = None
 
 
 class ForeshadowCreate(ForeshadowBase):
@@ -40,6 +41,7 @@ class ForeshadowUpdate(BaseModel):
 
     status: Optional[str] = Field(default=None, pattern="^(open|resolved|dropped)$")
     priority: Optional[int] = Field(default=None, ge=1, le=5)
+    extra: Optional[dict[str, Any]] = None
 
 
 class ForeshadowOut(ForeshadowBase):

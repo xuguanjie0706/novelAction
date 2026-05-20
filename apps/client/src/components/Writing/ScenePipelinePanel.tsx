@@ -4,23 +4,26 @@
  * 职责：
  *   - 展示当前章节的分场列表及起草进度
  *   - 提供「生成分场」「起草单场」「全部起草」「缝合进章节」操作
+ *   - 支持将分场地点关联到 Location 库，触发感官基准约束注入写章 prompt
  *   - 缝合完成后通知父组件（ChapterEditor）刷新章节正文
  *
- * 数据流：props → useScenePipeline hook → 渲染；无直接 API 调用。
+ * 数据流：props → useScenePipeline hook → 渲染；
+ *         Location 列表在面板挂载时独立拉取（locationsApi.list）。
  *
  * @param projectId    项目 ID
  * @param chapter      当前章节（取 id / outline_node_id）
  * @param outlineNode  挂载的大纲节点（无时显示提示）
- * @param modelProfile 模型线路（"local" | "gemini"）
- * @param llmProviderId 指定 LlmProvider（可 null）
  * @param onStitchDone 缝合完成回调，参数为总字数；父组件据此刷新编辑器
  */
 
-import { RefreshCw, Wand2, ChevronRight, CheckCircle2, AlertCircle, Loader2, Layers } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { RefreshCw, Wand2, ChevronRight, CheckCircle2, AlertCircle, Loader2, Layers, MapPin } from 'lucide-react'
 import clsx from 'clsx'
-import type { Chapter, OutlineNode } from '../../types'
+import toast from 'react-hot-toast'
+import type { Chapter, Location, OutlineNode } from '../../types'
 import { useScenePipeline, type SceneDraftState } from '../../hooks/useScenePipeline'
 import { useAppStore, modelProfileFromRoute, llmProviderIdFromRoute } from '../../store'
+import { locationsApi, scenesApi } from '../../api/client'
 
 // ── Props ──────────────────────────────────────────────────────
 
@@ -34,26 +37,32 @@ interface Props {
 // ── 子组件：单场卡片 ───────────────────────────────────────────
 
 interface SceneCardProps {
+  sceneId: string
   order: number
   title?: string | null
   goal?: string | null
   conflict?: string | null
+  locationId?: string | null
+  locationName?: string | null
   wordBudget: number
   pacing: string
   status: string
   draftState?: SceneDraftState
+  locations: Location[]
   onDraft: () => void
+  onLocationChange: (sceneId: string, locationId: string | null, locationName: string | null) => void
   disabled: boolean
 }
 
 /**
  * 单个场景卡片：显示元信息、状态徽章、起草按钮与进度。
+ * 底部提供 Location 库选择器——选中后写章时会自动注入感官基准约束块。
  *
  * @param props SceneCardProps
  */
 function SceneCard({
-  order, title, goal, conflict, wordBudget, pacing, status,
-  draftState, onDraft, disabled,
+  sceneId, order, title, goal, conflict, locationId, locationName,
+  wordBudget, pacing, status, draftState, locations, onDraft, onLocationChange, disabled,
 }: SceneCardProps) {
   const isDone      = draftState?.status === 'done'  || status === 'written'
   const isStreaming = draftState?.status === 'streaming'
@@ -67,6 +76,20 @@ function SceneCard({
       : isError
         ? <span className="flex items-center gap-0.5 text-red-500 text-[10px]"><AlertCircle size={10} />出错</span>
         : <span className="text-[10px] text-novel-ink-faint">待写</span>
+
+  /** location_id 选中时，对应 Location 是否有感官基准 */
+  const linkedLoc = locationId ? locations.find(l => l.id === locationId) : null
+  const hasSensory = !!(linkedLoc?.sensory_signature)
+
+  const handleLocSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const val = e.target.value
+    if (val === '') {
+      onLocationChange(sceneId, null, locationName ?? null)
+    } else {
+      const picked = locations.find(l => l.id === val)
+      if (picked) onLocationChange(sceneId, picked.id, picked.name)
+    }
+  }
 
   return (
     <div className={clsx(
@@ -116,6 +139,41 @@ function SceneCard({
         </div>
       )}
 
+      {/* 地点关联行 */}
+      <div className="flex items-center gap-1.5 mt-1.5">
+        <MapPin size={9} className={clsx(
+          'shrink-0',
+          hasSensory ? 'text-emerald-500' : locationId ? 'text-novel-accent/60' : 'text-novel-ink-faint',
+        )} />
+        {locations.length > 0 ? (
+          <select
+            value={locationId ?? ''}
+            onChange={handleLocSelect}
+            title={hasSensory ? `感官基准：${linkedLoc?.sensory_signature}` : '选择地点库记录以注入感官约束'}
+            className={clsx(
+              'flex-1 text-[10px] bg-transparent border-0 outline-none cursor-pointer',
+              'truncate',
+              hasSensory ? 'text-emerald-600 font-medium' :
+              locationId ? 'text-novel-accent' : 'text-novel-ink-faint',
+            )}
+          >
+            <option value="">{locationName ?? '— 关联地点库 —'}</option>
+            {locations.map(loc => (
+              <option key={loc.id} value={loc.id}>
+                {loc.name}{loc.sensory_signature ? ' ✦' : ''}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="text-[10px] text-novel-ink-faint truncate">
+            {locationName ?? '未指定地点'}
+          </span>
+        )}
+        {hasSensory && (
+          <span className="shrink-0 text-[9px] text-emerald-500" title="已关联感官基准，写章时将注入约束">感官✓</span>
+        )}
+      </div>
+
       {/* 起草进度 */}
       {isStreaming && (
         <div className="mt-1.5">
@@ -157,6 +215,35 @@ export default function ScenePipelinePanel({ projectId, chapter, outlineNode, on
     modelProfile,
     llmProviderId,
   })
+
+  // ── Location 库（挂载时拉取一次；场景关联地点时使用）─────
+  const [locations, setLocations] = useState<Location[]>([])
+  useEffect(() => {
+    locationsApi.list(projectId)
+      .then(res => setLocations(res.data))
+      .catch(() => { /* 静默失败：地点库为空时选择器隐藏 */ })
+  }, [projectId])
+
+  /**
+   * 用户在场景卡片选择器中切换地点时调用。
+   * 乐观更新本地 scene 列表后 PATCH 后端；失败时回滚并提示。
+   *
+   * @param sceneId     目标场景 ID
+   * @param locationId  选中的 Location UUID（null = 解除关联）
+   * @param locationName 选中地点名称（保持文本字段同步）
+   */
+  const handleLocationChange = async (
+    sceneId: string,
+    locationId: string | null,
+    locationName: string | null,
+  ) => {
+    try {
+      await scenesApi.patch(projectId, sceneId, { location_id: locationId, location_name: locationName })
+      await pipeline.reload()
+    } catch {
+      toast.error('关联地点失败，请重试')
+    }
+  }
 
   // ── 无大纲节点提示 ──────────────────────────────────────
   if (!outlineNode) {
@@ -227,15 +314,20 @@ export default function ScenePipelinePanel({ projectId, chapter, outlineNode, on
           pipeline.scenes.map(scene => (
             <SceneCard
               key={scene.id}
+              sceneId={scene.id}
               order={scene.order}
               title={scene.title}
               goal={scene.goal}
               conflict={scene.conflict}
+              locationId={scene.location_id}
+              locationName={scene.location_name}
               wordBudget={scene.word_budget}
               pacing={scene.pacing}
               status={scene.status}
               draftState={pipeline.draftStates[scene.id]}
+              locations={locations}
               onDraft={() => pipeline.draftScene(scene.id)}
+              onLocationChange={handleLocationChange}
               disabled={pipeline.anyDrafting && pipeline.draftStates[scene.id]?.status !== 'streaming'}
             />
           ))

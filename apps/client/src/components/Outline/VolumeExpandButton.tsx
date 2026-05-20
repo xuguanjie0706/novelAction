@@ -175,8 +175,13 @@ const VolumeExpandButton: React.FC<Props> = ({
               }
               appendProgress(evt, suffix)
               if (blocked) {
+                const blockMsg =
+                  typeof payload.linter_message === 'string'
+                    ? payload.linter_message.trim()
+                    : ''
                 setError(
-                  '存在 critical 章纲问题，未写入数据库。请打开卷详情「章纲检测」处理后重新展开。'
+                  blockMsg ||
+                    '存在 critical 章纲问题。请打开卷详情「章纲检测」查看原因并修复后重新展开。'
                 )
               }
               setDone(!blocked)

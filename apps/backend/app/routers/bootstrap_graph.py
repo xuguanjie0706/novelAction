@@ -19,6 +19,7 @@ SSE 协议（JSON lines，prefix: data:）：
   gate_pending  — {"step": "positioning|power_systems|characters|volumes", "message": "...", "positioning": {...}?, "gate_preview": {...}?}
   gate_passed   — {"step": "...", "positioning": {...}?}
   error         — {"step": "...", "message": "..."}
+  step_halted   — {"step": "...", "message": "..."}  # 步骤失败已暂停，等待 retry_step
   complete      — {"project_id": "uuid"}
   __stream_end__— 内部哨兵，触发 SSE 连接关闭（不转发到客户端）
 
@@ -98,8 +99,10 @@ class ResumeRequest(BaseModel):
     - 立项闸门（step positioning）：须带 ``positioning``（或依赖 gate_data 中的备份）；
       ``action=regenerate`` 时忽略 positioning，由后端重新调用 Step 0。
     - 其他闸门（境界 / 人物 / 卷骨架）：仅需 ``action``；``regenerate`` 会删除本步产物并重跑。
+    - 步骤失败暂停（status=awaiting_retry）：``action=retry_step`` 且 ``step`` 与 gate_data.step 一致。
     """
-    action: Literal["approve", "regenerate"] = "approve"
+    action: Literal["approve", "regenerate", "retry_step"] = "approve"
+    step: Optional[str] = None
     positioning: Optional[dict] = None
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
@@ -297,7 +300,7 @@ async def stream_events(
     )
 
 
-@router.post("/runs/{run_id}/resume", summary="用户确认立项定位，继续生成")
+@router.post("/runs/{run_id}/resume", summary="用户确认闸门或重试失败步骤，继续生成")
 async def resume_run(
     run_id: str,
     req: ResumeRequest,
@@ -305,20 +308,25 @@ async def resume_run(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """
-    用户在前端确认（或编辑）立项定位后调用此端点，继续执行图的后半段。
+    用户确认闸门、或重试失败步骤后调用，从 LangGraph checkpoint 继续。
 
-    前置条件：run.status == "awaiting_gate"；否则返回 409。
-    后台任务从 MemorySaver checkpoint 恢复，gate 节点接收用户的 positioning 继续执行。
+    - ``awaiting_gate``：approve / regenerate（立项须 positioning）
+    - ``awaiting_retry``：仅 ``retry_step``，且 ``step`` 须与 gate_data 中记录一致
 
     @raises 404: run 不存在或不属于当前用户
     @raises 409: run 当前状态不允许 resume
     @returns {"ok": true, "run_id": "..."}
     """
     run = _get_owned_run(db, run_id, current_user.id)
-    if run.status != "awaiting_gate":
+    if run.status not in ("awaiting_gate", "awaiting_retry"):
         raise HTTPException(
             status_code=409,
-            detail=f"Run is in status '{run.status}', expected 'awaiting_gate'",
+            detail=f"Run is in status '{run.status}', expected 'awaiting_gate' or 'awaiting_retry'",
+        )
+    if run.status == "awaiting_retry" and req.action != "retry_step":
+        raise HTTPException(
+            status_code=409,
+            detail="当前等待重试失败步骤，请使用 action=retry_step",
         )
 
     _resume_fn = (
@@ -373,8 +381,21 @@ def _build_resume_payload(run: BootstrapRun, req: ResumeRequest) -> dict:
 
     立项闸门：校验 / 归一化 positioning；approve 时可从 gate_data 回退未改动的备份。
     其他闸门：仅转发 action。
+    步骤失败：retry_step + step 校验。
     """
     gd = run.gate_data if isinstance(run.gate_data, dict) else {}
+    if gd.get("kind") == "step_retry" or run.status == "awaiting_retry":
+        expected = str(gd.get("step") or "")
+        if req.action != "retry_step":
+            raise HTTPException(status_code=409, detail="当前仅允许 retry_step")
+        step = (req.step or "").strip()
+        if not step or step != expected:
+            raise HTTPException(
+                status_code=422,
+                detail=f"请重试步骤 {expected or '（未知）'}",
+            )
+        return {"action": "retry_step", "step": step}
+
     kind = gd.get("kind") or "positioning"
     if kind == "positioning":
         if req.action == "regenerate":

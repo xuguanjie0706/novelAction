@@ -12,7 +12,7 @@
  */
 import React, { useState, useCallback } from 'react'
 import { ChevronRight, Loader2, MousePointerClick, Wrench } from 'lucide-react'
-import type { StepState, Phase } from './hooks/useBootstrapStream'
+import type { LinterIssuePreview, StepState, Phase } from './hooks/useBootstrapStream'
 import ConsistencyContent, { type FixState } from './ConsistencyContent'
 import { projectsApi } from '../../api/client'
 import BootstrapStepIcon from './BootstrapStepIcon'
@@ -46,6 +46,25 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
       <span className="w-20 flex-shrink-0 text-xs text-gray-500">{label}</span>
       <span className="min-w-0 flex-1 text-gray-900">{value}</span>
     </div>
+  )
+}
+
+function LinterIssuesList({ issues }: { issues: LinterIssuePreview[] }) {
+  return (
+    <ul className="max-h-48 overflow-y-auto space-y-1 rounded-lg border border-red-100 bg-white/60 px-3 py-2 text-xs text-red-900">
+      {issues.map((issue, idx) => (
+        <li key={`${issue.rule_id}-${idx}`} className="leading-snug">
+          <span className="font-mono text-[10px] text-red-600">[{issue.rule_id}]</span>
+          {issue.chapter_number_in_volume != null && (
+            <span className="text-red-500/80"> 第{issue.chapter_number_in_volume}章 ·</span>
+          )}{' '}
+          {issue.message}
+          {issue.suggestion ? (
+            <span className="text-red-700/70"> — {issue.suggestion}</span>
+          ) : null}
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -215,6 +234,10 @@ interface Props {
   /** 与顶栏「终止生成」同源：请求后端取消并清理本地状态 */
   onCancel: () => void | Promise<void>
   errorMsg: string
+  /** 当前暂停等待重试的步骤（与失败步一致时展示重试按钮） */
+  haltedStep?: string | null
+  onRetryStep?: () => void | Promise<void>
+  retryLoading?: boolean
   /** 终止请求进行中，禁用底部按钮 */
   terminating?: boolean
   /**
@@ -241,6 +264,9 @@ export default function BootstrapTimelineDetail({
   onNavigate,
   onCancel,
   errorMsg,
+  haltedStep = null,
+  onRetryStep,
+  retryLoading = false,
   terminating = false,
   modelProfile = 'gemini',
   llmProviderId = null,
@@ -373,8 +399,30 @@ export default function BootstrapTimelineDetail({
         </div>
 
         {step.status === 'error' && (
-          <div className="mb-4 rounded-xl border border-red-100 bg-red-50/80 px-4 py-3 text-sm text-red-800">
-            ⚠ {step.detail || errorMsg || '该步骤生成失败，请检查后端日志'}
+          <div className="mb-4 space-y-3 rounded-xl border border-red-100 bg-red-50/80 px-4 py-3 text-sm text-red-800">
+            <p className="whitespace-pre-wrap leading-relaxed">
+              ⚠ {step.detail || errorMsg || '该步骤生成失败，请检查后端日志'}
+            </p>
+            {(step.linterBlockingRules?.length ?? 0) > 0 && (
+              <p className="text-xs text-red-700/90">
+                阻断规则：
+                <span className="font-mono ml-1">{step.linterBlockingRules!.join(', ')}</span>
+              </p>
+            )}
+            {(step.linterIssues?.length ?? 0) > 0 && (
+              <LinterIssuesList issues={step.linterIssues!} />
+            )}
+            {haltedStep === step.key && onRetryStep && (
+              <button
+                type="button"
+                disabled={retryLoading}
+                onClick={() => void onRetryStep()}
+                className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-red-700 disabled:opacity-50"
+              >
+                {retryLoading ? <Loader2 size={14} className="animate-spin" /> : null}
+                {retryLoading ? '重试中…' : '重试此步骤'}
+              </button>
+            )}
           </div>
         )}
 
@@ -485,9 +533,22 @@ export default function BootstrapTimelineDetail({
       {phase === 'generating' && (
         <div className="flex shrink-0 flex-col gap-3 border-t border-gray-200 bg-white/95 px-5 py-4 backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:px-8">
           <p className="text-xs leading-relaxed text-gray-500 sm:max-w-xl">
-            关闭将中断当前连接；未结束的生成可在书架顶部「继续」恢复。
+            {haltedStep
+              ? '生成已暂停：请先重试失败步骤，后续步骤不会继续，直到本步成功。'
+              : '关闭将中断当前连接；未结束的生成可在书架顶部「继续」恢复。'}
           </p>
           <div className="flex flex-wrap justify-end gap-2 sm:shrink-0">
+            {haltedStep && onRetryStep && (
+              <button
+                type="button"
+                disabled={retryLoading}
+                onClick={() => void onRetryStep()}
+                className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"
+              >
+                {retryLoading ? <Loader2 size={14} className="animate-spin" /> : null}
+                {retryLoading ? '重试中…' : '重试失败步骤'}
+              </button>
+            )}
             <button
               type="button"
               disabled={terminating}

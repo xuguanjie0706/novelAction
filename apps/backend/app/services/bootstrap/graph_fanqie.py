@@ -38,11 +38,13 @@ from app.services.bootstrap.graph import (
     _make_svc,
     _persist,
     _resolve_config,
+    _state_run_id,
     emit,
     subscribe,
     unsubscribe,
     _push,
     _handle_run_error,
+    restore_bootstrap_checkpoint_if_lost,
 )
 from app.services.bootstrap.steps.project import gen_project
 
@@ -65,7 +67,7 @@ async def _fanqie_step(
     """emit start → fn(svc, project, ctx) → emit done；超时/异常跳过不中断图。"""
     config = _resolve_config(config)
     db = config["configurable"]["db"]
-    run_id = state["run_id"]
+    run_id = _state_run_id(state, config)
     svc = _make_svc(config)
     emit(run_id, "step_start", db, step=step, label=label)
     ctx = dict(state.get("ctx") or {})
@@ -100,7 +102,7 @@ async def node_fanqie_positioning(state: BootstrapState, config: dict | None = N
 
     config = _resolve_config(config)
     db = config["configurable"]["db"]
-    run_id = state["run_id"]
+    run_id = _state_run_id(state, config)
     svc = _make_svc(config)
     emit(run_id, "step_start", db, step="positioning", label="召开番茄算法立项会议...")
     ctx = dict(state.get("ctx") or {})
@@ -121,7 +123,18 @@ async def node_fanqie_positioning(state: BootstrapState, config: dict | None = N
     emit(run_id, "gate_pending", db, persist_status="awaiting_gate",
          step="positioning", positioning=fanqie_pos,
          message="请确认番茄类型公式和核心爽感后点击「继续生成」")
-    _persist(db, run_id, {}, gate_data={"kind": "positioning", "positioning": fanqie_pos})
+    _persist(
+        db,
+        run_id,
+        {},
+        gate_data={
+            "kind": "positioning",
+            "positioning": fanqie_pos,
+            "logline": state["logline"],
+            "premise": state.get("premise") or "",
+            "target_words": state.get("target_words"),
+        },
+    )
     return {"positioning": fanqie_pos, "ctx": ctx, "completed_steps": ["positioning"]}
 
 
@@ -131,7 +144,7 @@ async def node_fanqie_gate(state: BootstrapState, config: dict | None = None) ->
 
     config = _resolve_config(config)
     db = config["configurable"]["db"]
-    run_id = state["run_id"]
+    run_id = _state_run_id(state, config)
     svc = _make_svc(config)
     positioning = dict(state.get("positioning") or {})
     ctx = dict(state.get("ctx") or {})
@@ -158,7 +171,18 @@ async def node_fanqie_gate(state: BootstrapState, config: dict | None = None) ->
             emit(run_id, "gate_pending", db, persist_status="awaiting_gate",
                  step="positioning", positioning=positioning,
                  message="请再次确认番茄立项定位后继续生成")
-            _persist(db, run_id, {}, gate_data={"kind": "positioning", "positioning": positioning})
+            _persist(
+                db,
+                run_id,
+                {},
+                gate_data={
+                    "kind": "positioning",
+                    "positioning": positioning,
+                    "logline": state["logline"],
+                    "premise": state.get("premise") or "",
+                    "target_words": state.get("target_words"),
+                },
+            )
             continue
         updated = user_input.get("positioning", positioning)
         if not isinstance(updated, dict):
@@ -174,7 +198,7 @@ async def node_project(state: BootstrapState, config: dict | None = None) -> dic
     """Step 1：创建 Project 记录（复用通用 gen_project）。"""
     config = _resolve_config(config)
     db = config["configurable"]["db"]
-    run_id = state["run_id"]
+    run_id = _state_run_id(state, config)
     svc = _make_svc(config)
     emit(run_id, "step_start", db, step="project", label="生成项目基础信息...")
     ctx = dict(state.get("ctx") or {})
@@ -335,6 +359,14 @@ async def resume_bootstrap_fanqie(
             "llm_provider_id": llm_provider_id,
             "user_id": user_id,
         }}
+        if run:
+            restore_bootstrap_checkpoint_if_lost(
+                fanqie_graph,
+                run_id=run_id,
+                run=run,
+                config=config,
+                positioning_node="fanqie_positioning",
+            )
         await fanqie_graph.ainvoke(Command(resume=dict(resume_payload)), config=config)
     except asyncio.CancelledError:
         emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")

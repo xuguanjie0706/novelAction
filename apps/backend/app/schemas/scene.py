@@ -34,6 +34,7 @@ class SceneUpdate(BaseModel):
     title: Optional[str] = None
     time: Optional[str] = None
     story_day: Optional[str] = None
+    location_id: Optional[UUID] = None
     location_name: Optional[str] = None
     pov_character_id: Optional[UUID] = None
     characters_on_stage: Optional[List[UUID]] = None
@@ -55,6 +56,7 @@ class SceneRead(SceneBase):
     project_id: UUID
     chapter_id: Optional[UUID] = None
     outline_node_id: Optional[UUID] = None
+    location_id: Optional[UUID] = None
     actual_word_count: int = 0
     status: str = "planned"
     content: Optional[str] = None

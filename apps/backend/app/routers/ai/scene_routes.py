@@ -23,7 +23,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Chapter, Character, Foreshadow, OutlineNode, Project, ReaderPromise, Scene
+from app.models import Chapter, Character, Foreshadow, Location, OutlineNode, Project, ReaderPromise, Scene
+from app.routers.ai.gated_draft_helpers import _build_single_location_block
 from app.services.ai_service import AIService
 from app.services.embedding_service import semantic_search as _semantic_search
 
@@ -123,6 +124,32 @@ async def scene_plan_save(
         {"id": cid, "name": name} for name, cid in char_map.items()
     ]
 
+    # 预加载 Location 列表：① 传给 AI 约束 location_name 选取；② 持久化时做名称→ID 匹配
+    all_locations = (
+        db.query(Location).filter(Location.project_id == project_id)
+        .order_by(Location.sort_order.asc()).all()
+    )
+    known_locations_for_ai = [
+        {"name": l.name, "aliases": l.aliases or [], "sensory_signature": l.sensory_signature or ""}
+        for l in all_locations
+    ]
+
+    def _resolve_location_id(loc_name: str | None) -> UUID | None:
+        """精确名 → 别名 → 包含匹配，返回 Location.id 或 None。"""
+        if not loc_name:
+            return None
+        low = loc_name.strip().lower()
+        for l in all_locations:
+            if l.name.lower() == low:
+                return l.id
+        for l in all_locations:
+            if any(a.lower() == low for a in (l.aliases or [])):
+                return l.id
+        for l in all_locations:
+            if l.name.lower() in low or low in l.name.lower():
+                return l.id
+        return None
+
     # 读取上一章复盘指令（若有）
     prev_directives = ""
     if node.extra:
@@ -197,6 +224,7 @@ async def scene_plan_save(
         character_states=character_states or None,
         open_foreshadows=open_foreshadows or None,
         open_reader_promises=open_reader_promises or None,
+        known_locations=known_locations_for_ai or None,
     )
 
     # 替换旧场景
@@ -216,6 +244,9 @@ async def scene_plan_save(
             if uid:
                 on_stage_ids.append(UUID(uid))
 
+        ai_loc_name: str | None = sc.get("location_name") or None
+        resolved_loc_id = _resolve_location_id(ai_loc_name)
+
         scene = Scene(
             project_id=project_id,
             outline_node_id=req.outline_node_id,
@@ -223,7 +254,8 @@ async def scene_plan_save(
             order=sc.get("order", i + 1),
             title=sc.get("title") or None,
             time=sc.get("time") or None,
-            location_name=sc.get("location_name") or None,
+            location_id=resolved_loc_id,
+            location_name=ai_loc_name,
             pov_character_id=UUID(pov_id) if pov_id else None,
             characters_on_stage=on_stage_ids,
             goal=sc.get("goal") or "",
@@ -250,6 +282,7 @@ async def scene_plan_save(
                 "order": s.order,
                 "title": s.title,
                 "time": s.time,
+                "location_id": str(s.location_id) if s.location_id else None,
                 "location_name": s.location_name,
                 "pov_character_id": str(s.pov_character_id) if s.pov_character_id else None,
                 "goal": s.goal,
@@ -357,6 +390,13 @@ async def scene_draft_stream(
     except Exception:
         pass
 
+    # 感官基准约束块：精确查库（location_id 优先）→ 名称模糊匹配
+    location_context = _build_single_location_block(
+        db, project_id,
+        location_id=scene.location_id,
+        location_name=scene.location_name,
+    )
+
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
         db=db,
@@ -386,6 +426,7 @@ async def scene_draft_stream(
                 genre=project.genre or "玄幻",
                 positioning=(project.extra or {}).get("positioning"),
                 memory_snippets=memory_snippets,
+                location_context=location_context,
             ):
                 full_text += chunk
                 yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"

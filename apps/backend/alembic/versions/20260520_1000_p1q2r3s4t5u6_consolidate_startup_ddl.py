@@ -194,6 +194,9 @@ def upgrade() -> None:  # noqa: C901
         "ALTER TABLE foreshadows ADD COLUMN IF NOT EXISTS volume_budget JSON"
     )
     op.execute(
+        "ALTER TABLE foreshadows ADD COLUMN IF NOT EXISTS extra JSON DEFAULT '{}'"
+    )
+    op.execute(
         "UPDATE foreshadows SET planned_action = 'resolve' WHERE planned_action IS NULL"
     )
     op.execute(

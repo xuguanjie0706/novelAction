@@ -267,7 +267,13 @@ class GenerationService:
                 yield _sse("error", step="volumes", message="卷级结构生成超时（4分钟），已跳过")
                 nodes = []
             except Exception as e:
-                yield _sse("error", step="volumes", message=f"卷级结构生成失败：{e}")
+                from app.services.llm_errors import format_llm_error_message
+
+                yield _sse(
+                    "error",
+                    step="volumes",
+                    message=f"卷级结构生成失败：{format_llm_error_message(e)}",
+                )
                 nodes = []
             yield _sse("step_done", step="volumes", count=len(nodes),
                        preview=f"共{len(nodes)}卷" if nodes else "（跳过）")

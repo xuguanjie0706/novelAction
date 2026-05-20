@@ -432,6 +432,16 @@ export const scenesApi = {
       scenes,
       replace_existing: true,
     }),
+
+  /**
+   * 部分更新单条分场（PATCH）。
+   * 常见用途：更新 location_id / location_name 以关联 Location 库记录。
+   * @param pid     项目 ID
+   * @param sceneId 目标场景 ID
+   * @param data    要更新的字段（仅传变更项）
+   */
+  patch: (pid: string, sceneId: string, data: Record<string, unknown>) =>
+    api.patch<Scene>(`/projects/${pid}/scenes/${sceneId}`, data),
 }
 
 /** 卷章纲 linter 报告（与后端 LinterReport.to_dict 对齐） */
@@ -646,8 +656,28 @@ export const aiApi = {
     if (llmProviderId) q.set('llm_provider_id', llmProviderId)
     return api.post(`/projects/${pid}/ai/extract-memory?${q.toString()}`)
   },
-  listMemory: (pid: string, type?: string) =>
-    api.get(`/projects/${pid}/ai/memory${type ? `?memory_type=${type}` : ''}`),
+  /**
+   * 列出项目记忆库。
+   * @param sortBy 排序方式：chapter（默认）/ importance / access_count / recent_access
+   */
+  listMemory: (pid: string, params?: { type?: string; sort_by?: string }) => {
+    const q = new URLSearchParams()
+    if (params?.type) q.set('memory_type', params.type)
+    if (params?.sort_by) q.set('sort_by', params.sort_by)
+    const qs = q.toString()
+    return api.get(`/projects/${pid}/ai/memory${qs ? `?${qs}` : ''}`)
+  },
+  /**
+   * AI 驱动的记忆冲突检测。
+   * 扫描项目记忆库，识别角色状态/时间线/属性/伏笔四类冲突，结果持久化写入 Project.extra。
+   */
+  detectConflicts: (pid: string, params?: { model_profile?: 'local' | 'gemini' }) => {
+    const q = new URLSearchParams()
+    if (params?.model_profile) q.set('model_profile', params.model_profile)
+    return api.post<import('../types').MemoryConflictReport>(
+      `/projects/${pid}/ai/memory/detect-conflicts${q.toString() ? `?${q}` : ''}`,
+    )
+  },
   /** 结构化语义 RAG 查询（自然语言问记忆库） */
   ragQuery: (
     pid: string,

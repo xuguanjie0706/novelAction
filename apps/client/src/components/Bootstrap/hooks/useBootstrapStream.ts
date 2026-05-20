@@ -28,7 +28,7 @@ const GATE_PENDING_STEPS: readonly GatePendingStep[] = [
 function isGatePendingStep(s: unknown): s is GatePendingStep {
   return typeof s === 'string' && (GATE_PENDING_STEPS as readonly string[]).includes(s)
 }
-export type StepStatus = 'pending' | 'running' | 'done' | 'error'
+export type StepStatus = 'pending' | 'running' | 'done' | 'error' | 'blocked'
 /** 时间轴分组阶段标识 */
 export type StepPhase = 'foundation' | 'world' | 'characters' | 'narrative' | 'blueprint' | 'qa'
 
@@ -42,6 +42,15 @@ export type StepKey =
   | 'contrast_design' | 'golden_finger' | 'face_slap_map'
   | 'power_ladder' | 'opening_5chapters' | 'rhythm_map' | 'signal_audit'
   | 'all' | 'saving'
+
+/** SSE linter_issues_top 单项（章纲阻断时附带） */
+export interface LinterIssuePreview {
+  rule_id: string
+  severity: string
+  message: string
+  suggestion?: string
+  chapter_number_in_volume?: number | null
+}
 
 export interface StepState {
   key: StepKey
@@ -59,6 +68,9 @@ export interface StepState {
   completedAt?: number
   count?: number
   preview?: string
+  /** vol1_chapters 等步骤 linter 阻断时的 Top 问题列表 */
+  linterIssues?: LinterIssuePreview[]
+  linterBlockingRules?: string[]
 }
 
 export interface StartParams {
@@ -140,6 +152,41 @@ function toKey(step: unknown): StepKey | null {
   return STEP_ALIAS[step] ?? null
 }
 
+/** 某步失败后，后续未开始的步骤标记为 blocked，避免 UI 显示仍在继续。 */
+function blockStepsAfter(steps: StepState[], failedKey: StepKey): StepState[] {
+  const idx = steps.findIndex(s => s.key === failedKey)
+  if (idx < 0) return steps
+  return steps.map((s, i) => {
+    if (i <= idx) return s
+    if (s.status === 'pending' || s.status === 'running') {
+      return {
+        ...s,
+        status: 'blocked',
+        inflight: 0,
+        detail: '等待前序步骤成功',
+        completedAt: Date.now(),
+      }
+    }
+    return s
+  })
+}
+
+/** 用户点击重试：从失败步起重置为 pending，清除 blocked。 */
+function resetStepsFromRetry(steps: StepState[], retryKey: StepKey): StepState[] {
+  const idx = steps.findIndex(s => s.key === retryKey)
+  if (idx < 0) return steps
+  return steps.map((s, i) => {
+    const fresh = makeStep(s.key)
+    if (s.key === retryKey) {
+      return { ...fresh, label: s.label }
+    }
+    if (i > idx && (s.status === 'blocked' || s.status === 'error')) {
+      return { ...fresh, label: s.label }
+    }
+    return s
+  })
+}
+
 /** @returns Bootstrap 生成流程的全部状态与操作 */
 export function useBootstrapStream() {
   const [phase, setPhase]                 = useState<Phase>('input')
@@ -153,6 +200,8 @@ export function useBootstrapStream() {
   const [gateStep, setGateStep]           = useState<GatePendingStep | null>(null)
   const [gateMessage, setGateMessage]     = useState('')
   const [gatePreview, setGatePreview]     = useState<Record<string, unknown> | null>(null)
+  const [haltedStep, setHaltedStep]       = useState<StepKey | null>(null)
+  const [retryLoading, setRetryLoading]   = useState(false)
   const [generationStartMs, setGenStartMs] = useState<number | null>(null)
   const [activeLogline, setActiveLogline]   = useState('')
 
@@ -243,19 +292,27 @@ export function useBootstrapStream() {
       typeof evt.ts === 'number' && Number.isFinite(evt.ts) ? (evt.ts as number) : Date.now()
 
     if (event === 'step_start' && key) {
+      setHaltedStep(prev => (prev === key ? null : prev))
       setSteps(prev => prev.map(s =>
         s.key === key
           ? { ...s, status: 'running', inflight: s.inflight + 1,
-              label: label ?? s.label, startedAt: s.startedAt ?? now }
+              label: label ?? s.label, startedAt: s.startedAt ?? now,
+              detail: undefined, completedAt: undefined }
           : s
       ))
     } else if (event === 'step_done' && key) {
       const linterBlocked = Boolean(evt.linter_blocked)
       const linterMsg =
         typeof evt.linter_message === 'string' ? evt.linter_message.trim() : ''
+      const linterIssuesTop = Array.isArray(evt.linter_issues_top)
+        ? (evt.linter_issues_top as LinterIssuePreview[])
+        : undefined
+      const linterBlockingRules = Array.isArray(evt.linter_blocking_rules)
+        ? (evt.linter_blocking_rules as string[])
+        : undefined
       let detail = [count != null ? `${count} 条` : '', preview ?? ''].filter(Boolean).join(' · ')
       if (linterBlocked) {
-        detail = preview ?? linterMsg ?? '章纲未落库（linter 阻断）'
+        detail = preview ?? linterMsg ?? '章纲质量门控未通过'
       }
       setSteps(prev => prev.map(s => {
         if (s.key !== key) return s
@@ -270,6 +327,8 @@ export function useBootstrapStream() {
           completedAt: now,
           count: count ?? s.count,
           preview: preview ?? s.preview,
+          linterIssues: linterBlocked ? linterIssuesTop : undefined,
+          linterBlockingRules: linterBlocked ? linterBlockingRules : undefined,
         }
       }))
       if (linterBlocked && (linterMsg || preview)) {
@@ -278,14 +337,17 @@ export function useBootstrapStream() {
       if (key === 'signal_audit' && currentModeRef.current === 'fanqie') {
         void tryFinalizeFanqieRun()
       }
-    } else if (event === 'error') {
+    } else if (event === 'error' || event === 'step_halted') {
       const msg = (typeof message === 'string' && message.trim()) ? message : '生成失败'
       if (key) {
-        setSteps(prev => prev.map(s =>
-          s.key === key
-            ? { ...s, status: 'error', inflight: Math.max(0, s.inflight - 1),
-                detail: msg, completedAt: now }
-            : s
+        setHaltedStep(key)
+        setSteps(prev => blockStepsAfter(
+          prev.map(s =>
+            s.key === key
+              ? { ...s, status: 'error', inflight: 0, detail: msg, completedAt: now }
+              : s
+          ),
+          key,
         ))
       }
       setErrorMsg(`${key ? `[${key}] ` : ''}${msg}`)
@@ -486,6 +548,17 @@ export function useBootstrapStream() {
         patchGateFromSnapshot(run.gate_data ?? undefined)
       }
 
+      if (run.status === 'awaiting_retry') {
+        const gd = run.gate_data as { step?: string; message?: string } | null | undefined
+        const failed = toKey(gd?.step)
+        const haltMsg = typeof gd?.message === 'string' ? gd.message : '步骤失败，请重试'
+        if (failed) {
+          setHaltedStep(failed)
+          setErrorMsg(haltMsg)
+          setSteps(prev => blockStepsAfter(prev, failed))
+        }
+      }
+
       if (run.status === 'done') {
         streamCompleteRef.current = true
         if (run.project_id) setProjectId(run.project_id)
@@ -510,6 +583,49 @@ export function useBootstrapStream() {
       if (err.name !== 'AbortError') setErrorMsg(err.message || '恢复失败')
     } finally {
       isSubmittingRef.current = false
+    }
+  }
+
+  async function retryFailedStep(
+    step: StepKey,
+    params: Pick<StartParams, 'modelProfile' | 'llmProviderId'>,
+  ) {
+    const rid = runIdRef.current ?? runId
+    if (!rid) return
+    setRetryLoading(true)
+    try {
+      const res = await authFetch(`/api/v1/bootstrap/runs/${rid}/resume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'retry_step',
+          step,
+          model_profile: params.modelProfile,
+          llm_provider_id: params.llmProviderId ?? null,
+        }),
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        throw new Error(text || `重试失败 (${res.status})`)
+      }
+      setHaltedStep(null)
+      setErrorMsg('')
+      setSteps(prev => resetStepsFromRetry(prev, step))
+      setPhase('generating')
+      if (streamCompleteRef.current) {
+        streamCompleteRef.current = false
+        abortRef.current?.abort()
+        const abort = new AbortController()
+        abortRef.current = abort
+        const evtRes = await authFetch(`/api/v1/bootstrap/runs/${rid}/events`, {
+          signal: abort.signal,
+        })
+        if (evtRes.ok) void readSse(evtRes)
+      }
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : '重试失败')
+    } finally {
+      setRetryLoading(false)
     }
   }
 
@@ -606,6 +722,7 @@ export function useBootstrapStream() {
   return {
     phase, steps, errorMsg, projectId, positioningData, runId, generationStartMs,
     gateStep, gateMessage, gatePreview, activeLogline,
-    startGenerate, reconnectToRun, handleResume, abortSse, cancelRun,
+    haltedStep, retryLoading,
+    startGenerate, reconnectToRun, handleResume, retryFailedStep, abortSse, cancelRun,
   }
 }

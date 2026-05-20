@@ -300,7 +300,32 @@ export interface MemoryChunk {
   content: string
   chapter_number?: number
   tags: string[]
+  /** AI 提取时赋值 0.0-1.0；检索时与时效衰减共同加权排序 */
+  importance_score: number
+  /** 被 RAG 召回的累计次数 */
+  access_count: number
+  /** 最近一次被召回时间（ISO 格式） */
+  last_accessed_at?: string | null
   created_at: string
+}
+
+/** 单条记忆冲突描述（与后端 MemoryConflictItem 对齐） */
+export interface MemoryConflictItem {
+  /** character_state | timeline | attribute | foreshadow */
+  conflict_type: string
+  /** high | medium | low */
+  severity: 'high' | 'medium' | 'low'
+  description: string
+  chunk_ids: string[]
+  chapter_refs: number[]
+}
+
+/** 记忆冲突检测报告（与后端 detect_memory_conflicts 返回值对齐） */
+export interface MemoryConflictReport {
+  total_chunks_scanned: number
+  conflicts: MemoryConflictItem[]
+  detected_at: string
+  error?: string
 }
 
 /** 单条 RAG 语义命中（与后端 RagSearchHitOut 对齐） */
@@ -710,6 +735,8 @@ export interface Scene {
   title: string | null
   time: string | null
   story_day: string | null
+  /** 关联 Location 库记录的 UUID；存在时写章会注入感官基准约束块 */
+  location_id: string | null
   location_name: string | null
   pov_character_id: string | null
   /** 在场人物 ID 列表 */

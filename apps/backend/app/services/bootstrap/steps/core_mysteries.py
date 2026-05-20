@@ -123,6 +123,7 @@ async def gen_core_mysteries(svc: Any, project, ctx: dict) -> list[dict]:
         try:
             fs = Foreshadow(
                 project_id=project.id,
+                title=name[:200],
                 description=f"【核心谜题】{name}：{description}",
                 laid_chapter_number=m.get("lay_chapter"),
                 planned_resolve_chapter=m.get("reveal_chapter"),

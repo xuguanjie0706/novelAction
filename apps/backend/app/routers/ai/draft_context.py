@@ -542,3 +542,141 @@ def _build_character_summary(
 
     char_summary = "\n".join(char_lines) if large_context else " | ".join(char_lines)
     return char_summary, chapter_manifest_names
+
+
+# ═══════════════════════════════════════════════════════════════
+# 情绪节律 + 反派行动线注入（Bootstrap Step 9.5 / 9.8 产物闭合）
+# ═══════════════════════════════════════════════════════════════
+
+def _build_narrative_arc_context(
+    project_extra: dict,
+    outline_node: "OutlineNode | None",
+    db: "Session | None" = None,
+) -> str:
+    """
+    从 ``Project.extra`` 中取出当前卷对应的 emotion_arc（情绪节律图）和
+    villain_arc（反派行动线），格式化为写章硬约束文本块。
+
+    Bootstrap Step 9.5 / 9.8 生成的高质量叙事规划通过此函数闭合回正文写章 prompt，
+    确保每章的情绪基调和反派行为逻辑与全书蓝图一致，而不是靠 AI 自由发挥。
+
+    卷索引解析优先级：
+    1. outline_node.parent（卷节点）.sort_order
+    2. outline_node.extra["vol_index"]
+    3. 兜底：取 emotion_arc / villain_arc 中第一条
+
+    @param project_extra: ``Project.extra`` 字典（可为空 dict）
+    @param outline_node: 当前章节的 OutlineNode（可为 None）
+    @param db: SQLAlchemy Session（解析父卷时使用；为 None 则跳过父节点查询）
+    @returns 格式化文本块；emotion_arc 和 villain_arc 均无数据时返回空字符串
+    """
+    if not isinstance(project_extra, dict):
+        return ""
+
+    emotion_arc: list = project_extra.get("emotion_arc") or []
+    villain_arc: list = project_extra.get("villain_arc") or []
+
+    if not emotion_arc and not villain_arc:
+        return ""
+
+    # ── 确定当前卷索引 ──────────────────────────────────────────
+    vol_index: int | None = None
+
+    if outline_node is not None:
+        # 优先从 extra 直接读 vol_index（bootstrap 有些版本会写入）
+        _extra_vi = (outline_node.extra or {}).get("vol_index")
+        if isinstance(_extra_vi, int):
+            vol_index = _extra_vi
+
+        # 次优：查父卷的 sort_order
+        if vol_index is None and db is not None and outline_node.parent_id is not None:
+            try:
+                vol_node = db.query(OutlineNode).filter(
+                    OutlineNode.id == outline_node.parent_id
+                ).first()
+                if vol_node is not None and vol_node.sort_order is not None:
+                    vol_index = int(vol_node.sort_order)
+            except Exception:
+                pass
+
+    # 兜底：取列表第一条（单卷/测试场景）
+    if vol_index is None:
+        vol_index = 0
+
+    # ── 按 vol_index 取对应条目 ──────────────────────────────────
+    def _find_by_vol(arc_list: list, idx: int) -> dict | None:
+        """按 vol_index 字段匹配；未命中则取 sort_order 等于 idx 的；再兜底取第一条。"""
+        if not arc_list:
+            return None
+        exact = next((v for v in arc_list if isinstance(v, dict) and v.get("vol_index") == idx), None)
+        if exact:
+            return exact
+        by_order = next((v for v in arc_list if isinstance(v, dict) and v.get("sort_order") == idx), None)
+        if by_order:
+            return by_order
+        return arc_list[0] if isinstance(arc_list[0], dict) else None
+
+    cur_emotion = _find_by_vol(emotion_arc, vol_index)
+    cur_villain = _find_by_vol(villain_arc, vol_index)
+
+    if cur_emotion is None and cur_villain is None:
+        return ""
+
+    lines: list[str] = ["【本卷叙事规划约束（写章必须贯彻，禁止随意突破）】"]
+
+    # ── 情绪节律块 ───────────────────────────────────────────────
+    if cur_emotion:
+        tone        = (cur_emotion.get("tone") or cur_emotion.get("main_tone") or "").strip()
+        deposit     = (cur_emotion.get("deposit") or cur_emotion.get("accumulate") or "").strip()
+        withdraw    = (cur_emotion.get("withdraw") or cur_emotion.get("release") or "").strip()
+        net_balance = (cur_emotion.get("net_balance") or cur_emotion.get("balance") or "").strip()
+
+        lines.append("▎情绪节律（情感账户状态）")
+        if tone:
+            lines.append(f"  当前卷基调：{tone}")
+        if deposit:
+            lines.append(f"  情绪储量（压抑蓄积）：{truncate(deposit, 120)}")
+        if withdraw:
+            lines.append(f"  释放节点：{truncate(withdraw, 120)}")
+        if net_balance:
+            lines.append(f"  净余额走向：{truncate(net_balance, 120)}")
+        # 生成硬约束指令
+        if tone and ("克制" in tone or "蓄力" in tone or "压抑" in tone):
+            lines.append(
+                "  ⚠️ 硬约束：本卷处于情绪蓄力阶段，禁止提前引爆大爽点；"
+                "本章以压迫、积累、暗流为主，高光瞬间控制在小规模，为后续卷保留爆发空间。"
+            )
+        elif tone and ("释放" in tone or "爆发" in tone or "高潮" in tone):
+            lines.append(
+                "  ✅ 约束：本卷处于情绪释放阶段，可安排显著爽点，但需同时埋下下一轮蓄力种子。"
+            )
+
+    # ── 反派行动线块 ─────────────────────────────────────────────
+    if cur_villain:
+        villain_name = (cur_villain.get("villain") or cur_villain.get("name") or "").strip()
+        desire       = (cur_villain.get("desire") or cur_villain.get("goal") or "").strip()
+        obstacle     = (cur_villain.get("obstacle") or "").strip()
+        choice       = (cur_villain.get("choice") or cur_villain.get("action") or "").strip()
+        cost         = (cur_villain.get("cost") or cur_villain.get("price") or "").strip()
+        blind_spot   = (cur_villain.get("blind_spot") or cur_villain.get("weakness") or "").strip()
+
+        name_label = f"反派【{villain_name}】" if villain_name else "反派"
+        lines.append(f"▎{name_label}本卷行动逻辑")
+        if desire:
+            lines.append(f"  欲望/目标：{truncate(desire, 100)}")
+        if obstacle:
+            lines.append(f"  当前障碍：{truncate(obstacle, 100)}")
+        if choice:
+            lines.append(f"  采取手段：{truncate(choice, 120)}")
+        if cost:
+            lines.append(f"  付出代价：{truncate(cost, 100)}")
+        if blind_spot:
+            lines.append(
+                f"  ⚠️ 盲点（AI 写反派时严禁越过此边界）：{truncate(blind_spot, 160)}"
+            )
+        lines.append(
+            "  写反派台词/行动时必须符合以上逻辑，"
+            "不得让反派表现出对其盲点已知悉或提前防范的迹象。"
+        )
+
+    return "\n".join(lines)

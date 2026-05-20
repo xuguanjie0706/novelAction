@@ -74,8 +74,28 @@ class SamplingMixin:
         status_code = getattr(err, "status_code", None)
         if isinstance(status_code, int) and status_code in (408, 429, 500, 502, 503, 504):
             return True
+        type_name = type(err).__name__.lower()
+        if any(k in type_name for k in ("connection", "timeout", "connect")):
+            return True
         msg = str(err).lower()
-        return any(key in msg for key in ("error code: 502", "bad gateway", "timeout", "temporarily unavailable"))
+        return any(
+            key in msg
+            for key in (
+                "error code: 502",
+                "bad gateway",
+                "timeout",
+                "timed out",
+                "temporarily unavailable",
+                "connection error",
+                "connection refused",
+                "connection reset",
+                "connect timeout",
+                "network unreachable",
+                "name or service not known",
+                "ssl",
+                "eof occurred",
+            )
+        )
 
     def _build_sampling_kwargs(
         self,

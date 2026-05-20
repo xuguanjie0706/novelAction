@@ -124,6 +124,63 @@ def _resolve_config(config: dict | None) -> dict:
     return config or get_config()
 
 
+def _state_run_id(state: BootstrapState | dict | None, config: dict | None) -> str:
+    """从图状态或 configurable.thread_id 解析 run_id（resume 丢 checkpoint 时的兜底）。"""
+    rid = (state or {}).get("run_id")
+    if rid:
+        return str(rid)
+    cfg = _resolve_config(config).get("configurable", {})
+    return str(cfg.get("thread_id") or "")
+
+
+def restore_bootstrap_checkpoint_if_lost(
+    graph,
+    *,
+    run_id: str,
+    run: BootstrapRun,
+    config: dict,
+    positioning_node: str = "positioning",
+) -> bool:
+    """
+    MemorySaver 随进程重启清空；awaiting_gate 的 resume 需从 DB 还原到 gate 前。
+
+    Returns:
+        True 表示已从 BootstrapRun 写入 checkpoint。
+    """
+    snap = graph.get_state(config)
+    values = (snap.values or {}) if snap else {}
+    if values.get("run_id"):
+        return False
+
+    gd = run.gate_data if isinstance(run.gate_data, dict) else {}
+    positioning = gd.get("positioning") or {}
+    logline = run.logline or gd.get("logline") or ""
+    premise = gd.get("premise") or ""
+    target_words = int(gd.get("target_words") or 1_000_000)
+    recovery: BootstrapState = {
+        "run_id": run_id,
+        "logline": logline,
+        "premise": premise,
+        "target_words": target_words,
+        "positioning": positioning,
+        "project_id": str(run.project_id) if run.project_id else None,
+        "ctx": {
+            "logline": logline,
+            "premise": premise,
+            "target_words": target_words,
+            "positioning": positioning,
+        },
+        "completed_steps": ["positioning"],
+        "errors": [],
+    }
+    graph.update_state(config, recovery, as_node=positioning_node)
+    logger.warning(
+        "Restored bootstrap checkpoint for run %s from DB (in-memory checkpointer was empty)",
+        run_id,
+    )
+    return True
+
+
 def _make_svc(config: dict | None):
     """从 RunnableConfig.configurable 构建 GenerationService（含 db + AIService）。"""
     config = _resolve_config(config)
@@ -143,29 +200,40 @@ def _make_svc(config: dict | None):
 
 async def _run_step(state: BootstrapState, config: dict | None,
                     step: str, label: str, fn_name: str, **fn_kwargs) -> dict:
-    """emit start → svc.<fn_name>(project, ctx) → emit done；超时/异常跳过不中断图。"""
+    """emit start → svc.<fn_name> → emit done；失败则 interrupt 等待用户重试，不继续后续步骤。"""
+    from app.services.bootstrap.step_failure import pause_for_step_retry, user_wants_step_retry
+    from app.services.llm_errors import format_llm_error_message
+
     config = _resolve_config(config)
     db = config["configurable"]["db"]
-    run_id = state["run_id"]
+    run_id = _state_run_id(state, config)
     svc = _make_svc(config)
-    emit(run_id, "step_start", db, step=step, label=label)
     ctx = dict(state.get("ctx") or {})
     from app.models import Project
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
-    try:
-        result = await asyncio.wait_for(
-            getattr(svc, fn_name)(project, ctx, **fn_kwargs),
-            timeout=300.0,
+
+    while True:
+        emit(run_id, "step_start", db, step=step, label=label)
+        try:
+            result = await asyncio.wait_for(
+                getattr(svc, fn_name)(project, ctx, **fn_kwargs),
+                timeout=300.0,
+            )
+        except asyncio.TimeoutError:
+            msg = f"{step} 超时（5 分钟），请重试或检查模型线路"
+        except Exception as exc:
+            msg = format_llm_error_message(exc)
+        else:
+            count = len(result) if isinstance(result, list) else (1 if result else 0)
+            emit(run_id, "step_done", db, step=step, count=count)
+            return {"ctx": ctx, "completed_steps": [step]}
+
+        user = await pause_for_step_retry(
+            state, config, step=step, message=msg, ctx=ctx,
         )
-    except asyncio.TimeoutError:
-        emit(run_id, "error", db, step=step, message=f"{step} 超时，已跳过")
-        return {"ctx": ctx, "completed_steps": [step], "errors": [{"step": step, "reason": "timeout"}]}
-    except Exception as exc:
-        emit(run_id, "error", db, step=step, message=f"{step} 失败：{exc}")
-        return {"ctx": ctx, "completed_steps": [step], "errors": [{"step": step, "reason": str(exc)}]}
-    count = len(result) if isinstance(result, list) else (1 if result else 0)
-    emit(run_id, "step_done", db, step=step, count=count)
-    return {"ctx": ctx, "completed_steps": [step]}
+        if user_wants_step_retry(user):
+            continue
+        return {"ctx": ctx, "errors": [{"step": step, "reason": msg}]}
 
 
 # ──────────────────────────────────────────────────────
@@ -176,7 +244,7 @@ async def node_positioning(state: BootstrapState, config: dict | None = None) ->
     """Step 0：立项会议。完成后置 status=awaiting_gate 并推送 gate_pending 给前端。"""
     config = _resolve_config(config)
     db = config["configurable"]["db"]
-    run_id = state["run_id"]
+    run_id = _state_run_id(state, config)
     svc = _make_svc(config)
     emit(run_id, "step_start", db, step="positioning", label="召开立项会议（题材定位）...")
     ctx = dict(state.get("ctx") or {})
@@ -193,7 +261,18 @@ async def node_positioning(state: BootstrapState, config: dict | None = None) ->
     emit(run_id, "gate_pending", db, persist_status="awaiting_gate",
          step="positioning", positioning=positioning,
          message="请确认或修改立项定位后点击「继续生成」")
-    _persist(db, run_id, {}, gate_data={"kind": "positioning", "positioning": positioning})
+    _persist(
+        db,
+        run_id,
+        {},
+        gate_data={
+            "kind": "positioning",
+            "positioning": positioning,
+            "logline": state["logline"],
+            "premise": state.get("premise") or "",
+            "target_words": state.get("target_words"),
+        },
+    )
     return {"positioning": positioning, "ctx": ctx, "completed_steps": ["positioning"]}
 
 
@@ -203,7 +282,7 @@ async def node_gate(state: BootstrapState, config: dict | None = None) -> dict:
 
     config = _resolve_config(config)
     db = config["configurable"]["db"]
-    run_id = state["run_id"]
+    run_id = _state_run_id(state, config)
     svc = _make_svc(config)
     positioning = dict(state.get("positioning") or {})
     ctx = dict(state.get("ctx") or {})
@@ -236,7 +315,18 @@ async def node_gate(state: BootstrapState, config: dict | None = None) -> dict:
             emit(run_id, "gate_pending", db, persist_status="awaiting_gate",
                  step="positioning", positioning=positioning,
                  message="请再次确认或修改立项定位后继续生成")
-            _persist(db, run_id, {}, gate_data={"kind": "positioning", "positioning": positioning})
+            _persist(
+                db,
+                run_id,
+                {},
+                gate_data={
+                    "kind": "positioning",
+                    "positioning": positioning,
+                    "logline": state["logline"],
+                    "premise": state.get("premise") or "",
+                    "target_words": state.get("target_words"),
+                },
+            )
             continue
         updated = user_input.get("positioning", positioning)
         if not isinstance(updated, dict):
@@ -251,7 +341,7 @@ async def node_project(state: BootstrapState, config: dict | None = None) -> dic
     """Step 1：生成项目基础信息并落库，回填 BootstrapRun.project_id。"""
     config = _resolve_config(config)
     db = config["configurable"]["db"]
-    run_id = state["run_id"]
+    run_id = _state_run_id(state, config)
     svc = _make_svc(config)
     emit(run_id, "step_start", db, step="project", label="生成项目基础信息...")
     ctx = dict(state.get("ctx") or {})
@@ -372,7 +462,7 @@ async def run_bootstrap(
         # graph 在 gate interrupt 处正常返回（非异常）；此时不关闭 SSE 流，
         # 让前端 SSE 连接保持活跃，等待 resume_bootstrap() 继续推送事件。
         run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
-        if not run or run.status != "awaiting_gate":
+        if not run or run.status not in ("awaiting_gate", "awaiting_retry"):
             _push(run_id, {"event": "__stream_end__"})
     except asyncio.CancelledError:
         emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")
@@ -407,6 +497,10 @@ async def resume_bootstrap(
             "llm_provider_id": llm_provider_id,
             "user_id": user_id,
         }}
+        if run:
+            restore_bootstrap_checkpoint_if_lost(
+                bootstrap_graph, run_id=run_id, run=run, config=config,
+            )
         await bootstrap_graph.ainvoke(
             Command(resume=dict(resume_payload)),
             config=config,
@@ -424,6 +518,8 @@ async def resume_bootstrap(
             run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
             if run and run.status in ("done", "failed", "cancelled"):
                 _push(run_id, {"event": "__stream_end__"})
+            elif run and run.status == "awaiting_retry":
+                pass  # 保持 SSE，等待用户 retry_step
         except Exception:
             pass
         db.close()

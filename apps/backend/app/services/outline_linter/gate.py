@@ -40,7 +40,7 @@ def finalize_volume_chapter_commit(
     """章纲全部生成完毕后的统一落库：先 linter，阻断则 rollback。
 
     Returns:
-        成功落库时返回 all_results；阻断时返回 [] 并在 volume.extra 标记 linter_blocked。
+        通过时返回 all_results；阻断时仍暂存章纲草稿并标记 volume.extra.linter_blocked。
     """
     if not all_results:
         return []
@@ -57,36 +57,55 @@ def finalize_volume_chapter_commit(
     report.finalize_status()
 
     if report_blocks_commit(report):
-        svc.db.rollback()
         from app.models import OutlineNode
+        from app.services.outline_linter.user_facing import build_linter_block_payload
+
+        for node in all_results:
+            node_extra = dict(node.extra or {})
+            node_extra["linter_hold"] = True
+            node.extra = node_extra
+            flag_modified(node, "extra")
 
         vol = (
             svc.db.query(OutlineNode)
             .filter(OutlineNode.id == volume_node.id)
             .first()
         )
+        block_payload = build_linter_block_payload(
+            report.to_dict(),
+            chapter_count=len(all_results),
+        )
         if vol:
             persist_linter_report(vol, report)
             extra = dict(vol.extra or {})
             extra["linter_blocked"] = True
             extra["linter_block_reason"] = (
-                f"critical 规则命中："
-                f"{[i.rule_id for i in report.issues if i.rule_id in BLOCKING_RULE_IDS][:6]}"
+                f"阻断规则：{block_payload.get('linter_blocking_rules') or []}"
             )
+            extra["linter_user_message"] = block_payload.get("linter_message", "")
             vol.extra = extra
             flag_modified(vol, "extra")
-            svc.db.commit()
+        svc.db.commit()
         logger.error(
-            "GEN-02 阻断落库：项目=%s 卷=%s critical=%d issues=%d",
+            "GEN-02 阻断正式落库（已暂存草稿 %d 章）：项目=%s 卷=%s critical=%d issues=%d rules=%s",
+            len(all_results),
             project.id,
             volume_node.title,
             report.critical_count,
             len(report.issues),
+            block_payload.get("linter_blocking_rules"),
         )
         if ctx is not None:
             ctx["linter_blocked"] = True
             ctx["linter_last_report"] = report.to_dict()
-        return []
+            ctx["linter_block_payload"] = block_payload
+        return all_results
+
+    for node in all_results:
+        node_extra = dict(node.extra or {})
+        if node_extra.pop("linter_hold", None) is not None:
+            node.extra = node_extra
+            flag_modified(node, "extra")
 
     svc.db.commit()
     from app.models import OutlineNode
@@ -95,6 +114,13 @@ def finalize_volume_chapter_commit(
     db_vol = svc.db.query(OutlineNode).filter(OutlineNode.id == volume_node.id).first()
     target = db_vol or volume_node
     persist(target, report)
+    if target.extra:
+        extra = dict(target.extra)
+        extra.pop("linter_blocked", None)
+        extra.pop("linter_block_reason", None)
+        extra.pop("linter_user_message", None)
+        target.extra = extra
+        flag_modified(target, "extra")
     svc.db.commit()
     _log_linter_report(project, target, report)
     if ctx is not None:

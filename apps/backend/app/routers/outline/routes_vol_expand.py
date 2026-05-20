@@ -333,6 +333,20 @@ async def expand_volume_chapters(
             linter_summary = vol_extra.get("linter_summary") or {}
 
             blocked = bool(vol_extra.get("linter_blocked"))
+            block_msg = str(vol_extra.get("linter_user_message") or "").strip()
+            if blocked and not block_msg:
+                from app.services.outline_linter.user_facing import build_linter_block_payload
+
+                block_msg = build_linter_block_payload(
+                    {
+                        "status": vol_extra.get("linter_status", "failed"),
+                        "issue_count": linter_summary.get("issue_count", 0),
+                        "critical_count": linter_summary.get("critical_count", 0),
+                        "high_count": linter_summary.get("high_count", 0),
+                        "issues": vol_extra.get("linter_issues") or [],
+                    },
+                    chapter_count=len(nodes),
+                ).get("linter_message", "")
             yield _sse(
                 "step_done",
                 step="expand_chapters",
@@ -343,16 +357,10 @@ async def expand_volume_chapters(
                 linter_critical_count=linter_summary.get("critical_count", 0),
                 linter_high_count=linter_summary.get("high_count", 0),
                 linter_blocked=blocked,
+                linter_message=block_msg or None,
             )
-            if blocked:
-                yield _sse(
-                    "error",
-                    step="expand_chapters",
-                    message=(
-                        "章纲已生成但存在 critical linter 问题，落库已阻断；"
-                        "请在大纲页「章纲检测」查看并修复后重新展开。"
-                    ),
-                )
+            if blocked and block_msg:
+                yield _sse("error", step="expand_chapters", message=block_msg)
 
         except Exception as exc:  # noqa: BLE001
             yield _sse("error", step="expand_chapters", message=str(exc))

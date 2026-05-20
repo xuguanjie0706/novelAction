@@ -39,6 +39,8 @@ class Foreshadow(Base):
     paid_off_quality = Column(Integer)                    # 回收质量 0-5（由 quality_check 打分）
     audience_aware = Column(Integer, default=3)           # 读者感知度 0-5（埋时读者是否明显感觉到是承诺）
     volume_budget = Column(JSON, default=dict)            # {volume: {"must_recover": N, "must_lay": M}} 每卷预算
+    # Bootstrap 章纲同步 / 核心谜题：theme_note、heat_log、source_outline_node_id 等
+    extra = Column(JSON, default=dict)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间（UTC）
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())  # 更新时间（UTC）

@@ -1,5 +1,6 @@
 import { Button, Layout, Menu, Popconfirm, Space, Typography, theme } from 'antd'
 import {
+  BarChartOutlined,
   BookOutlined,
   CheckSquareOutlined,
   DatabaseOutlined,
@@ -40,6 +41,7 @@ export default function AdminLayout() {
     if (loc.pathname.startsWith('/redeem-codes')) return ['/redeem-codes']
     if (loc.pathname.startsWith('/reading-review')) return ['/reading-review']
     if (loc.pathname.startsWith('/llm-calls')) return ['/llm-calls']
+    if (loc.pathname.startsWith('/rag-metrics')) return ['/rag-metrics']
     if (loc.pathname.startsWith('/rag-logs')) return ['/rag-logs']
     if (loc.pathname.startsWith('/cover-image-calls')) return ['/cover-image-calls']
     if (loc.pathname.startsWith('/image-providers')) return ['/image-providers']
@@ -110,6 +112,12 @@ export default function AdminLayout() {
               icon: <SearchOutlined />,
               label: 'RAG检索日志',
               onClick: () => navigate('/rag-logs'),
+            },
+            {
+              key: '/rag-metrics',
+              icon: <BarChartOutlined />,
+              label: 'RAG质量监控',
+              onClick: () => navigate('/rag-metrics'),
             },
             {
               key: '/reading-review',

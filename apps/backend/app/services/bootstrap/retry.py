@@ -16,9 +16,9 @@ async def call_with_retry(
     max_tokens: int = 2048,
     task: Optional[str] = None,
 ) -> str:
-    """调用 AI；失败时做一次外层补偿重试（间隔退避），避免与 ``_call_ai`` 内层重试叠加失控。"""
+    """调用 AI；可重试错误时外层退避重试（与 ``_call_ai`` 内层短退避互补）。"""
     last_err: BaseException | None = None
-    outer_delays = (3.0,)
+    outer_delays = (2.0, 5.0, 10.0)
     for attempt in range(len(outer_delays) + 1):
         try:
             return await ai._call_ai(
@@ -29,8 +29,10 @@ async def call_with_retry(
             )
         except Exception as e:
             last_err = e
-            if attempt < len(outer_delays):
-                await asyncio.sleep(outer_delays[attempt])
-            continue
+            if attempt >= len(outer_delays):
+                break
+            if not ai._is_retryable_llm_error(e):
+                break
+            await asyncio.sleep(outer_delays[attempt])
     assert last_err is not None
     raise last_err

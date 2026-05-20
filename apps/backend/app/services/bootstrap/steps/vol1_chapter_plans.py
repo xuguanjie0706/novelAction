@@ -17,6 +17,7 @@ from app.models import OutlineNode, Project
 from app.services.bootstrap.context_vol_expand import _build_reader_promises_block
 from app.services.bootstrap.foreshadow_sync import sync_chapter_foreshadow
 from app.services.bootstrap.parse import parse_json
+from app.services.llm_token_budgets import max_tokens_vol1_chapter_plans
 from app.services.outline_planning import (
     build_book_budget_block,
     chapter_word_budget_for_phase,
@@ -25,6 +26,26 @@ from app.services.outline_planning import (
 from app.utils.chapter_numbering import normalize_chapter_plan_title
 
 logger = logging.getLogger(__name__)
+
+# 实测：30 章 × 15 字段 JSON ≈ 16k completion tokens（见管理后台 llm_calls）
+_EST_COMPLETION_TOKENS_PER_CHAPTER = 520
+
+
+def _chapter_plan_batch_ranges(planned: int, max_completion_tokens: int) -> list[tuple[int, int]]:
+    """按输出 token 预算切批；预算足够时整卷单次生成，避免第 31 章 SEQ-07 断档。"""
+    if planned <= 0:
+        return []
+    max_in_one_shot = max(30, max_completion_tokens // _EST_COMPLETION_TOKENS_PER_CHAPTER)
+    if planned <= max_in_one_shot:
+        return [(1, planned)]
+    chunk = 30
+    ranges: list[tuple[int, int]] = []
+    start = 1
+    while start <= planned:
+        end = min(start + chunk - 1, planned)
+        ranges.append((start, end))
+        start = end + 1
+    return ranges
 
 
 def _get_chapter_phase_guidance(ch_num: int, total: int, phase: str) -> str:
@@ -183,9 +204,21 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
 
     all_results: list[OutlineNode] = []
 
-    batch_ranges = [(1, min(30, planned))]
-    if planned > 30:
-        batch_ranges.append((31, planned))
+    completion_budget = max_tokens_vol1_chapter_plans()
+    batch_ranges = _chapter_plan_batch_ranges(planned, completion_budget)
+    if len(batch_ranges) == 1:
+        logger.info(
+            "vol1_chapters 整卷单次生成：%d 章，max_tokens=%d",
+            planned,
+            completion_budget,
+        )
+    else:
+        logger.info(
+            "vol1_chapters 分批生成：%d 批 %s，max_tokens=%d/批",
+            len(batch_ranges),
+            batch_ranges,
+            completion_budget,
+        )
 
     for batch_start, batch_end in batch_ranges:
         batch_count = batch_end - batch_start + 1
@@ -282,7 +315,10 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
         for gen_attempt in range(2):
             try:
                 raw = await svc._call_with_retry(
-                    system, prompt, task="bootstrap.vol1_chapters", max_tokens=4096
+                    system,
+                    prompt,
+                    task="bootstrap.vol1_chapters",
+                    max_tokens=completion_budget,
                 )
                 batch_data = parse_json(raw)
                 if not isinstance(batch_data, list):
@@ -374,12 +410,14 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
     if all_results:
         from app.services.outline_linter.gate import finalize_volume_chapter_commit
 
-        committed = finalize_volume_chapter_commit(
+        finalize_volume_chapter_commit(
             svc, project, vol1, all_results, ctx=ctx,
         )
-        if not committed:
-            logger.error("第一卷章纲落库被 linter 阻断")
-            return []
+        if ctx.get("linter_blocked"):
+            logger.error(
+                "第一卷章纲被 linter 阻断（已暂存 %d 章草稿，见 volume.extra / SSE linter_message）",
+                len(all_results),
+            )
 
     ctx["vol1_chapter_count"] = len(all_results)
     # 全书配额计数器累加（供后续卷展开时读取，防止漂移）

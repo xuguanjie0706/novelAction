@@ -57,13 +57,20 @@ class MemoryMixin:
     "memory_type": "event",
     "title": "林默获得古传承",
     "content": "林默在鬼门关意外触发古老传承，获得...",
-    "tags": ["林默", "传承", "关键事件"]
+    "tags": ["林默", "传承", "关键事件"],
+    "importance_score": 0.9
   }},
   ...
 ]
 
-memory_type 只能是: event / character_state / foreshadow / setting / conflict"""
+importance_score 评分规则（0.0-1.0）：
+- 0.9-1.0：影响主线走向、人物生死、重要伏笔兑现
+- 0.6-0.8：角色状态重大变化、关键道具获取/丢失、势力变化
+- 0.3-0.5：普通事件、次要角色互动、背景信息
+- 0.0-0.2：可省略的细节、重复描述
 
+memory_type 只能是: event / character_state / foreshadow / setting / conflict
+"""
         response = await self._call_ai(
             system,
             prompt,

@@ -150,6 +150,9 @@ class MemoryUpdate(BaseModel):
     title: Optional[str] = None
     content: str
     tags: List[str] = []
+    importance_score: float = Field(default=0.5, ge=0.0, le=1.0)
+    """记忆重要度（0-1）。AI 复盘时可按情节权重赋值（如主角突破 → 0.9，路人出场 → 0.3）；
+    不传则默认 0.5，影响 RAG 召回优先级与时效衰减排序。"""
 
 
 class NewItemAsset(BaseModel):

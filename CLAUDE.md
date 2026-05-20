@@ -12,7 +12,7 @@
 
 > ⚠️ **设计原则**：系统是 AI 生成系统，不是辅助填写工具。所有新功能的出发点是"AI 能生成/校验/推进什么"，而非"给用户提供什么表单"。
 
-> ⚠️ **持久化优先（新增硬规则）**：从本条起，后续新增的业务内容（状态、产物、流程中间结果、AI 结构化输出）默认必须优先做数据库持久化存储（PostgreSQL）；禁止仅停留在前端内存、进程内变量或临时缓存。仅当存在明确性能或安全原因且已在文档中记录权衡时，才允许非持久化方案作为例外。
+> ⚠️ **持久化优先（硬规则）**：所有业务内容（状态、产物、流程中间结果、AI 结构化输出）默认必须做数据库持久化（PostgreSQL）；禁止仅停留在前端内存或进程内变量。仅当有明确性能/安全原因且已文档化时允许例外。
 
 **技术栈**：
 - 后端：FastAPI + SQLAlchemy + PostgreSQL（含 pgvector）
@@ -48,49 +48,48 @@
 | 远程 · 环境变量（无 DB 行） | `GEMINI_BASE_URL` + `GEMINI_MODEL`（兼容旧部署） |
 | 本地 | 仅 `apps/backend/.env` 的 `LLM_BASE_URL` + `LLM_API_KEY` + **`AI_MODEL`（必填）** |
 
+> **当前部署策略：仅使用远程线路，不配置本地线路。**
+
 ### 关键决策：统一用 OpenAI 兼容协议
 
-**原因**：不绑定任何 SDK；远程改管理后台或 `.env` 的 `GEMINI_*`；本地改 `.env` 的 `LLM_*` + `AI_MODEL`。
+不绑定任何 SDK；远程改管理后台或 `.env` 的 `GEMINI_*`；本地改 `.env` 的 `LLM_*` + `AI_MODEL`。
+
+### Embedding 配置（pgvector 语义检索）
+
+当前使用 **BAAI/bge-m3（1024 维）**，通过 SiliconFlow 等远程服务托管：
 
 ```env
-# 仅在使用「本地」线路时需要配置 AI_MODEL
-LLM_BASE_URL=http://localhost:11434/v1
-LLM_API_KEY=ollama
-# AI_MODEL=你的本地模型 id
-
-# 可选：无 DB 时的远程兜底（OpenAI 兼容层）
-# GEMINI_BASE_URL=https://...
-# GEMINI_API_KEY=...
-# GEMINI_MODEL=...
+EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
+EMBEDDING_API_KEY=你的_key
+EMBEDDING_MODEL=BAAI/bge-m3
+EMBEDDING_DIM=1024
 ```
 
-### 本地线路与短上下文（`model_profile=local`）
-
-- 小上下文时单次 prompt 需控制长度；`_parse_json()` 做容错（去 markdown fence、strip、部分网关夹带的 think 标签）
-- 若某兼容网关对 `thinking` 类参数报错，可在调用层按需加 `extra_body` 关闭（视网关文档）
+- embedding 列维度由 migration `b3c4d5e6f7a8`（768→1024）完成升级
+- 新记忆复盘后自动触发 embedding；存量补跑：`python verify_pgvector.py --reembed`
+- pgvector 不可用 / embedding 服务不通时，自动降级为 `importance_score DESC + chapter_number DESC` 时序兜底（`status=fallback_recency`）；可查 `rag_retrieval_log` 表 `status` 字段确认是否在走真实语义检索
 
 ### Gemini 迁移时的变化
 
-- Gemini 支持 100 万 token context，可以切换到**方案 B（单次全量生成）**
-- `generation_service.py` 里 `mode="single_shot"` 已预留，切换只需改前端请求参数
+- Gemini 支持 100 万 token context，可切换到**方案 B（单次全量生成）**
+- `bootstrap/service.py` 里 `mode="single_shot"` 已预留，切换只需改前端请求参数
 
 ### 任务级采样配置（v3，2026-05）
 
-> 设计动机：此前 `_call_ai` / `_stream_ai` 全程不传 `temperature`，质检（要稳定 JSON）和写正文（要文采变化）共用一个默认温度，是 AI 味的系统性根因。
+> 设计动机：质检（要稳定 JSON）和写正文（要文采变化）必须用不同温度，否则是 AI 味的系统性根因。
 
 - 配置文件：`apps/backend/app/services/llm_task_profiles.py`
-- 调用方约定：每次 `_call_ai` / `_stream_ai` 传 `task="<域>.<动作>"`（如 `quality.check`、`draft.opening`）；未识别走网关默认（向后兼容）。
-- 关键档位：
+- 调用方约定：每次 `_call_ai` / `_stream_ai` 传 `task="<域>.<动作>"`（如 `quality.check`、`draft.opening`）；未识别走网关默认。
 
 | 任务域 | temperature | 说明 |
 |---|---|---|
-| `quality.*` / `debrief.*` | 0.2-0.3 | 要稳定 JSON 与可比较打分 |
+| `quality.*` / `debrief.*` | 0.2-0.3 | 稳定 JSON 与可比较打分 |
 | `bootstrap.*` / `outline.*` | 0.55-0.75 | 半结构化生成 |
 | `draft.chapter` | 0.9 | 章节正文，加 frequency/presence_penalty 抑制重复 |
 | `draft.opening` / `draft.climax` | 0.95 | 开局期 / 高潮期允许更跳脱 |
 | `draft.dark_hour` | 0.75 | 至暗期需克制 |
 
-- 自定义覆写：调用方可传 `sampling={"temperature": 0.85}` 临时覆盖（A/B 测试用）。
+- 自定义覆写：调用方传 `sampling={"temperature": 0.85}` 临时覆盖（A/B 测试用）。
 - 阶段→任务名映射：`phase_to_draft_task(phase)` 在 `draft_assist_stream` 内部按 `OutlineNode.phase` 自动选档。
 
 ---
@@ -103,7 +102,7 @@ Project
   ├── Character + CharacterRelationship（人物 + 关系）
   ├── OutlineNode（树形：volume → arc → chapter_plan）
   ├── Chapter + ChapterVersion
-  ├── MemoryChunk（长篇记忆，后续接 pgvector embedding）
+  ├── MemoryChunk（长篇记忆，embedding 列已启用，走 pgvector 语义检索）
   ├── StoryLine（故事线：主线/支线/感情线/成长线/势力线...）
   ├── PowerSystem（境界/力量体系，含结构化 levels 数组）
   ├── Skill（功法/技能，关联 PowerSystem，记录掌握者）
@@ -112,7 +111,8 @@ Project
   ├── Foreshadow（伏笔台账）
   ├── QualityDebt（质检欠债记录）
   ├── Scene（章节分场，三层调度核心；`scenes` CRUD + `ai/scene_routes` 三层写作 API）
-  └── ReaderPromise（读者承诺台账；模型 + router 已就位，写章/复盘深度闭环待完善）
+  ├── ReaderPromise（读者承诺台账；模型 + router 已就位，写章/复盘深度闭环待完善）
+  └── RagRetrievalLog（每次 RAG 检索落库，含命中条目、status、duration_ms）
 ```
 
 所有 UUID 主键，`project_id` 外键贯穿所有表。
@@ -148,7 +148,7 @@ Project
 章节分场，三层调度（章纲 → 分场 → 逐场正文）的核心数据单元。
 - 关联：`Project` / `Chapter`（写完后绑定）/ `OutlineNode`
 - 关键字段：`order`、`pov_character_id`、`characters_on_stage`、`goal`、`conflict`、`turn`、`hook`、`hook_strength`、`word_budget`、`pacing`、`sensory_focus`、`status`（planned/written/reviewed）、`content`
-- `location_id`（ForeignKey `locations.id`）已**注释预留**，待 Location 模型（P2-W7）实现后启用；当前用 `location_name` 文本字段
+- `location_id`（ForeignKey `locations.id`）已**注释预留**，待 Location 模型实现后启用；当前用 `location_name` 文本字段
 - **当前状态**：模型 + migration + `routers/scenes.py` + `routers/ai/scene_routes.py`（plan-save / draft/stream / stitch）；创作端 `ScenePipelinePanel`（ChapterEditor「分场」Tab）。整章 `gated-draft` 仍为备选写作路径。
 
 ### ReaderPromise 模型（v3，2026-05）
@@ -160,9 +160,12 @@ Project
 
 ### Project.extra（v3，2026-05）
 JSON 杂物字段，当前已知键：
-- `extra.positioning`：Step 0 立项会议产物（`target_audience` / `tropes` / `reference_works` /
-  `selling_point` / `face_slap_pattern` / `emotional_arc` / `pace_type` / `taboo_lines`）。
-  写章节路径优先读 `Project.extra.positioning`，回退 `Project.story_core.positioning`。
+- `extra.positioning`：Step 0 立项会议产物（`target_audience` / `tropes` / `reference_works` / `selling_point` / `face_slap_pattern` / `emotional_arc` / `pace_type` / `taboo_lines`）。写章节路径优先读 `Project.extra.positioning`，回退 `Project.story_core.positioning`。
+- `extra.emotion_arc`：Step 9.5 产物，每卷情绪收支（存入/消耗/净余额/主色调）
+- `extra.villain_arc`：Step 9.8 产物，主要反派卷级行动计划
+- `extra.core_mysteries`：Step 11.5 产物，跨卷核心谜题预分配
+- `extra.opening_contract`：Step 12 产物，开局追读承诺清单
+- `extra.consistency_issues`：Step 14 产物，一致性矛盾列表
 
 ---
 
@@ -175,12 +178,14 @@ JSON 杂物字段，当前已知键：
 | `/api/v1/projects/{pid}/characters/` | 人物 |
 | `/api/v1/projects/{pid}/outline/` | 大纲树 |
 | `/api/v1/projects/{pid}/chapters/` | 章节 |
-| `/api/v1/projects/{pid}/ai/` | 质检/建议/记忆提取 |
+| `/api/v1/projects/{pid}/ai/` | 质检/建议/记忆提取/写章/复盘 |
 | `/api/v1/projects/{pid}/storylines/` | 故事线 CRUD |
 | `/api/v1/projects/{pid}/power-systems/` | 境界体系 CRUD |
 | `/api/v1/projects/{pid}/skills/` | 功法技能 CRUD |
 | `/api/v1/projects/{pid}/items/` | 道具法宝 CRUD |
 | `/api/v1/projects/{pid}/factions/` | 势力组织 CRUD |
+| `/api/v1/projects/{pid}/scenes/` | 分场 CRUD |
+| `/api/v1/projects/{pid}/reader-promises/` | 读者承诺 CRUD |
 | `POST /api/v1/bootstrap/stream` | **一句话→全量生成（SSE）** |
 
 ---
@@ -189,74 +194,53 @@ JSON 杂物字段，当前已知键：
 
 ### 方案 A：串行步进（Sequential）— 默认
 
+实际执行拓扑（graph.py 定义，非简单串行）：
+
 ```
 logline
-  → [Step0  立项会议]          # _gen_positioning：受众/爽点/打脸节奏/卖点
-  → [Step1  项目]              # _gen_project，把定位写进 Project.extra.positioning
-  → [Step2  境界体系]
-  → [Step3  势力]
-  → [Step4  故事线]
-  → [Step5  人物]
-  → [Step6  技能]
-  → [Step7  道具]
-  → [Step8  设定卡]
-  → [Step9  卷骨架]            # _gen_volumes 同时填 phase
-  → [Step10 记忆]
-  → [Step11 关系]
-  → [Step12 开局追读承诺清单]  # _gen_opening_contract：写 Project.extra + ReaderPromise 种子
-  → [Step12.5 第一卷章级大纲] # _gen_vol1_chapter_plans：生成 chapter_plan OutlineNode
-  → [Step13 第1章场景蓝图]    # _gen_ch1_scenes：生成 Scene records
-  → [Step14 全局一致性扫描]   # _gen_consistency_scan，结果写 Project.extra.consistency_issues
+  → [Step 0  立项会议]       positioning        _gen_positioning
+  → [Step 1  项目]           project            _gen_project
+  → [Step 2  境界体系]       power_systems      _gen_power_systems
+  → [Step 3  势力]           factions           _gen_factions
+  → [Step 4  故事线]         storylines         _gen_storylines
+  → [Step 5  人物]           characters         _gen_characters
+  → [Step 6  技能]           skills             _gen_key_skills
+  → [Step 7  道具]           items              _gen_key_items
+  → [Step 8  设定卡]         settings           _gen_settings
+  → [Step 9  卷骨架+phase]   volumes            _gen_volumes
+  → [gate_vol 卷质量门控]
+  → [Step 9.5 情绪节律图]   emotion_arc        _gen_emotion_arc
+  → [Step 9.8 反派行动线]   villain_arc        _gen_villain_arc
+  → [Step 10 记忆]           memory             _gen_memory
+  → [Step 11 关系]           relations          _gen_relations
+  → [Step 11.5 核心谜题]    core_mysteries     _gen_core_mysteries
+  → [Step 12 开局承诺]       opening_contract   _gen_opening_contract
+  → [Step 12.5 第一卷章纲]  vol1_chapters      _gen_vol1_chapter_plans
+  → [Step 13 第1章场景]      ch1_scenes         _gen_ch1_scenes
+  → [Step 14 一致性扫描]     consistency        _gen_consistency_scan
 ```
 
 - 每步独立 prompt，上下文逐步累积（压缩摘要 + 立项定位传入）
 - 单步失败重试 1 次，不影响其他步骤
-- SSE 每步推送 `step_start` / `step_done` / `error`
-- **Step 0 是新增的"立项会议"**：从一句话推导目标读者画像、爽点类型、打脸频率、情感线占比、节奏类型，作为后续各步的全局约束注入到所有 prompt。这是网文系统区别于"AI 自由发挥"的关键防线。
-- **Step 12** 为开局前十章生成追读承诺：保留 `Project.extra.opening_contract`，并写入 `ReaderPromise` 种子供写章查询。
-- **Step 12.5 + Step 13** 把设定落成可执行写作计划：先生成第一卷章节级 `chapter_plan`，再生成第1章场景级 `Scene` 蓝图。
-- **Step 14** 交叉核验所有生成物的关键字段，矛盾列表写入 `Project.extra.consistency_issues`，供前端展示"X 处需确认项"。
+- SSE 每步推送 `step_start` / `step_done` / `error` / `linter_blocked`
+- **Step 0 立项会议**：从一句话推导目标读者画像、爽点类型、打脸频率、情感线占比、节奏类型，作为后续各步的全局约束。这是网文系统区别于"AI 自由发挥"的关键防线。
+- **Step 12.5 + Step 13**：设定落成可执行写作计划，先生成第一卷章节级 `chapter_plan`，再生成第1章场景级 `Scene` 蓝图。
+- **Step 14**：交叉核验所有生成物，矛盾列表写入 `Project.extra.consistency_issues`。
 
-### 方案 B：单次全量（Single-shot）— 适合大 context 模型（Gemini）
+### 方案 B：单次全量（Single-shot）— 适合大 context 模型
 
 ```
 logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记忆）
 ```
 
-- 速度快，前后一致性最佳
-- 要求模型 context ≥ 32k，输出 token ≥ 4096
+- 速度快，前后一致性最佳；要求模型 context ≥ 32k，输出 token ≥ 4096
 
 ### 切换方式
 
-前端请求 `POST /api/v1/bootstrap/stream` 时传 `mode` 参数：
 ```json
-{ "logline": "...", "mode": "sequential" }   // 串行，适合生成更多的内容
-{ "logline": "...", "mode": "single_shot" }  // 单次全量，适合大上下文远程模型
+{ "logline": "...", "mode": "sequential" }
+{ "logline": "...", "mode": "single_shot" }
 ```
-
-### Bootstrap 步骤映射表（防漂移）
-
-| 文档步骤 | SSE `step` | 后端函数 |
-|---|---|---|
-| Step 0 立项会议 | `positioning` | `_gen_positioning` |
-| Step 1 项目 | `project` | `_gen_project` |
-| Step 2 境界体系 | `power_systems` | `_gen_power_systems` |
-| Step 3 势力 | `factions` | `_gen_factions` |
-| Step 4 故事线 | `storylines` | `_gen_storylines` |
-| Step 5 人物 | `characters` | `_gen_characters` |
-| Step 6 技能 | `skills` | `_gen_key_skills` |
-| Step 7 道具 | `items` | `_gen_key_items` |
-| Step 8 设定卡 | `settings` | `_gen_settings` |
-| Step 9 卷骨架 | `volumes` | `_gen_volumes` |
-| Step 10 记忆 | `memory` | `_gen_memory` |
-| Step 11 关系 | `relations` | `_gen_relations` |
-| Step 12 开局承诺 | `opening_contract` | `_gen_opening_contract` |
-| Step 12.5 第一卷章纲 | `vol1_chapters` | `_gen_vol1_chapter_plans` |
-| Step 13 第1章场景 | `ch1_scenes` | `_gen_ch1_scenes` |
-| Step 9.5 情绪节律图 | `emotion_arc` | `_gen_emotion_arc` |
-| Step 9.8 反派行动线 | `villain_arc` | `_gen_villain_arc` |
-| Step 11.5 核心谜题 | `core_mysteries` | `_gen_core_mysteries` |
-| Step 14 一致性扫描 | `consistency` | `_gen_consistency_scan` |
 
 ---
 
@@ -275,7 +259,7 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 | 设定类型 | 存储位置 | Bootstrap 步骤 |
 |---|---|---|
-| **题材定位** | `Project.extra.positioning` | **Step 0 `_gen_positioning`（v3）** |
+| **题材定位** | `Project.extra.positioning` | Step 0 `_gen_positioning` |
 | 境界体系 | `PowerSystem` + `levels[]` | Step 2 `_gen_power_systems` |
 | 势力组织 | `Faction`（含 `extra.active_period`） | Step 3 `_gen_factions` |
 | 故事线 | `StoryLine` | Step 4 `_gen_storylines` |
@@ -284,14 +268,19 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 | 关键道具/法宝 | `Item` | Step 7 `_gen_key_items` |
 | 纯叙事设定 | `WorldSetting`（分类存 `extra.category`） | Step 8 `_gen_settings` |
 | 卷级大纲 + phase | `OutlineNode`（volume） + `phase` | Step 9 `_gen_volumes` |
+| 情绪节律图 | `Project.extra.emotion_arc` | Step 9.5 `_gen_emotion_arc` |
+| 反派行动线 | `Project.extra.villain_arc` | Step 9.8 `_gen_villain_arc` |
 | 记忆种子 | `MemoryChunk` | Step 10 `_gen_memory` |
 | 人物关系 | `CharacterRelationship` | Step 11 `_gen_relations` |
+| 核心谜题 | `Foreshadow` + `Project.extra.core_mysteries` | Step 11.5 `_gen_core_mysteries` |
 | 开局追读承诺 | `Project.extra.opening_contract` + `ReaderPromise` | Step 12 `_gen_opening_contract` |
 | 第一卷章节蓝图 | `OutlineNode`（chapter_plan） | Step 12.5 `_gen_vol1_chapter_plans` |
 | 第1章场景蓝图 | `Scene` | Step 13 `_gen_ch1_scenes` |
 | 一致性矛盾列表 | `Project.extra.consistency_issues` | Step 14 `_gen_consistency_scan` |
 
-`WorldSetting` 只存**无专属结构化表的纯叙事内容**：作品立意、世界底层规则、历史谜团、地理格局、文化风俗。不再用文字卡存境界体系或势力描述（这些有专属表）。
+`WorldSetting` 只存**无专属结构化表的纯叙事内容**：作品立意、世界底层规则、历史谜团、地理格局、文化风俗。不再用文字卡存境界体系或势力描述。
+
+---
 
 ## 已完成功能
 
@@ -300,52 +289,37 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 - [x] 人物 + 关系 CRUD
 - [x] 大纲树（层级编辑）
 - [x] 章节写作（TipTap + 自动保存 + 版本快照）
-- [x] AI 质检（JSON 评分报告）
+- [x] AI 质检（JSON 评分报告，含故事线进度 + 境界体系一致性检查）
 - [x] AI 流式建议（SSE）
-- [x] 记忆提取
+- [x] 记忆提取 + **pgvector 语义检索**（embedding_service.py 完整实现；BAAI/bge-m3 1024维；复盘后自动触发 embed_chunk_async；写章路径：语义 Top-K + 时效衰减 + 最近 6 条时序锚定）
 - [x] 一句话生成（方案A串行 + 方案B单次）
 - [x] 故事线/境界体系/技能/道具/势力前端 UI（WorldBuildingPage 五标签页）
-- [x] Bootstrap 生成时结构化生成势力（Faction）、核心技能（Skill）、关键道具（Item）
-- [x] Bootstrap Step 12：开局追读承诺清单（`_gen_opening_contract`，写 `Project.extra` + `ReaderPromise` 种子）
-- [x] Bootstrap Step 12.5：第一卷章级大纲（`_gen_vol1_chapter_plans`，生成 `chapter_plan`）
-- [x] Bootstrap Step 13：第1章场景蓝图（`_gen_ch1_scenes`，生成 `Scene` records）
-- [x] Bootstrap Step 14：全局一致性扫描（`_gen_consistency_scan`，结果存 `Project.extra.consistency_issues`）
-- [x] 伏笔台账（`Foreshadow` 模型 + router）
-- [x] 质检欠债记录（`QualityDebt` 模型 + router）
-- [x] 封面图生成日志（`CoverImageCallLog` 模型 + router）
-- [x] Scene / ReaderPromise 模型 + router + Alembic migration
-- [x] 任务级采样配置（`llm_task_profiles.py`，quality/draft/bootstrap 分档温度）
-- [x] **Bootstrap 流派分流增强（2026-05-06）**：`_get_genre_kit_block` 注入 `_gen_characters`、` _gen_settings`、` _gen_storylines`、` _gen_power_systems`、` _gen_factions`、` _gen_key_skills`、` _gen_key_items` 七个步骤；前端角色页支持 `speech_kit` 结构化展示（标志性词语、样本台词、内心独白等）；大纲章节节点支持 POV + 戏份预算（`character_screen_time`、`pov_character_id`）展示与编辑。
-- [x] Bootstrap 技能/道具 `mastered_by` 关联真实 Character UUID（`steps/skills.py` + `steps/items.py` 从 `ctx["char_name_to_id"]` 做名字→UUID 映射，AI 输出名字时回退映射并写 warning 日志）
-- [x] AI 质检结合故事线进度 + 境界体系一致性检查（`quality_routes.py` 传入活跃故事线/境界体系/人物状态；`quality.py` 新增 `storyline_progress` + `realm_check` 独立维度，含独立评分与问题描述）
-- [x] Scene 三层调度全链路（`routers/ai/scene_routes.py`：`POST /ai/scene-plan-save` 生成并持久化分场 / `POST /ai/scene-draft/stream` SSE 逐场起草写回 scene.content / `POST /ai/scene-stitch` 缝合 → chapter.content；`services/ai/scene_draft.py` SceneDraftMixin）
-- [x] Scene 三层调度前端 UI（`api/scene.ts` API 封装 / `hooks/useScenePipeline.ts` 状态管理 / `components/Writing/ScenePipelinePanel.tsx` 面板；接入 ChapterEditor「分场」侧栏 Tab，缝合后自动刷新 chapter.content；旧直写保留为备选）
-- [x] **势力境界进阶关系图（2026-05-19）**：创作端世界观「势力」Tab · **React Flow**（`FactionRealmFlow/`，与人物关系图同栈；纵轴 `PowerSystem.levels` 分带 + 势力卡；连线来自 `parent_faction_id` / `allies` / `rivals`；缩放/小地图/选中高亮）
-- [x] **大纲生成防漂移（2026-05-19）**：`outline_planning.py` 新增 `chapter_word_budget_for_phase`（按 phase/pacing/标记动态字数）和 `build_book_budget_block`（全书预算约束注入 prompt）；`volumes.py` 初始化 `chapter_quota_total/used`；`vol1/vol_chapter_plans` 注入预算块、动态 `expected_words`、batch 数量校验、跨卷 `quota_used` 累计
-- [x] **卷间衔接强制承接（2026-05-19）**：`vol_chapter_plans.py` 自动查询上一卷 `OutlineNode.hook`，生成 `prev_vol_hook_block` 硬约束第1章 `opening_hook` 必须正面回应上卷末悬念
-- [x] **一致性扫描加深（2026-05-19）**：`consistency_scan.py` 两阶段：代码预检（死亡人物仍出场、技能境界要求矛盾、道具时机与章纲不符、卷排序缺口）+ AI 叙事层分析（新增反派行动时间线对齐检查）
-- [x] **伏笔台账双向关联（2026-05-19）**：新增 `bootstrap/foreshadow_sync.py`，解析章纲 foreshadow 字段"埋/加热/收"语法，`vol1/vol_chapter_plans` 落库时自动写/更新 `Foreshadow` 表（幂等设计）
-- [x] **全书情绪节律图 Step 9.5（2026-05-19）**：新增 `steps/emotion_arc.py`，生成每卷情绪收支（存入/消耗/净余额/主色调），写 `Project.extra['emotion_arc']`；`context_new_steps.py` 构建 editorial_prompt_block 注入块
-- [x] **反派独立行动线 Step 9.8（2026-05-19）**：新增 `steps/villain_arc.py`，为主要反派生成卷级行动计划（欲望/障碍/选择/代价/胜败/盲区布局），写 `Project.extra['villain_arc']`
-- [x] **全书跨卷伏笔预分配 Step 11.5（2026-05-19）**：新增 `steps/core_mysteries.py`，预定义 5-8 条核心谜题（identity/prophecy/prop/reversal/hook），每条锚定埋/加热/揭晓章节，写 `Foreshadow` 表 + `Project.extra['core_mysteries']`
-- [x] **Bootstrap 拓扑更新（2026-05-19）**：graph.py 新增三节点，执行链：`volumes → gate_vol → emotion_arc → villain_arc → memory → relations → core_mysteries → opening_contract → vol1_chapters → ch1_scenes → consistency`
-- [x] **章纲 linter v1.2（2026-05-19）**：`services/outline_linter/`（CH/SEQ/VL/OC/RP/CM）；`vol1/vol_chapter_plans` 落库后 linter + GEN-02 阻断；`POST .../outline/volumes/{id}/lint`；`repair-seed` + 修复工作流 `linter_context`；vol_expand / Bootstrap `vol1_chapters` SSE 回传 `linter_blocked`；创作端 `VolumeLinterPanel`
+- [x] Bootstrap 全量步骤（Step 0-14，含 9.5 情绪节律图 / 9.8 反派行动线 / 11.5 核心谜题）
+- [x] 伏笔台账双向关联（`foreshadow_sync.py`，幂等写入）
+- [x] 大纲生成防漂移（字数预算约束 + 卷间衔接强制承接）
+- [x] 章纲 linter v1.2（CH/SEQ/VL/OC/RP/CM；GEN-02 阻断；`VolumeLinterPanel`）
+- [x] Scene 三层调度全链路（plan-save / draft/stream / stitch）+ 前端 `ScenePipelinePanel`
+- [x] 势力境界进阶关系图（React Flow，FactionRealmFlow）
+- [x] 任务级采样配置（`llm_task_profiles.py`）
+- [x] Bootstrap 流派分流增强（`_get_genre_kit_block`；speech_kit；POV + 戏份预算）
+- [x] ReaderPromise 写章注入 + 读者模拟反馈闭环（基础链路）
+- [x] RagRetrievalLog 落库（每次检索可查 source / status / hits）
 
 ## 待完成功能
-- [ ] ReaderPromise 深度闭环（写章注入 open 承诺 + auto-debrief AI 识别新增/兑现 + 队列自动复盘同步提交）：基础模型+router 已完成，完整闭环链路待实现
-- [ ] Location 模型（当前 Scene.location_name 文本字段，location_id 已注释预留，P2-W7）
-- [ ] 人物关系图可视化（ReactFlow）
-- [ ] pgvector 语义记忆检索（`MemoryChunk.embedding` 字段已预留）
-- [ ] 导出 TXT / EPUB
-- [ ] 登录鉴权（目前无 auth）
-- [ ] 读者模拟器与主写章流程打通（低分项自动转 next_chapter_directives）
-- [ ] 伏笔台账升级：type / min_max_distance / paid_off_quality / volume_budget + audit 接口
+
+- [ ] **ReaderPromise 深度闭环**：auto-debrief AI 识别新增/兑现 + 队列自动复盘同步提交（基础模型+router 已完成，完整闭环链路待实现）
+- [ ] **Location 模型**（当前 Scene.location_name 文本字段，location_id 已注释预留）
+- [ ] **人物关系图可视化**（ReactFlow）
+- [ ] **导出 TXT / EPUB**
+- [ ] **登录鉴权**（目前无 auth）
+- [ ] **读者模拟器与主写章流程打通**（低分项自动转 next_chapter_directives）
+- [ ] **伏笔台账升级**：type / min_max_distance / paid_off_quality / volume_budget + audit 接口
 
 ---
 
-## 代码结构红线（架构级硬约束，2026-05 新增）
+## 代码结构红线（架构级硬约束）
 
-> 设计动机：本仓库已经出现「上帝文件」（`generation_service.py` 3149 行 / `ai_service.py` 2895 行 / `routers/outline.py` 3825 行 / `ChapterEditor.tsx` 2960 行）。它们不是被一次写出来的，而是**没有显式上限**导致的路径依赖膨胀。本节给出硬性红线 —— 触线时**必须先拆分再加新功能**，禁止「再加一段就好」式增量恶化。
+> 设计动机：本仓库已出现「上帝文件」，它们不是被一次写出来的，而是**没有显式上限**导致的路径依赖膨胀。本节给出硬性红线——触线时**必须先拆分再加新功能**，禁止「再加一段就好」式增量恶化。
 
 ### 规模上限（硬指标）
 
@@ -357,12 +331,12 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 | 单文件 `useState` / `useEffect` 总数（前端） | 20 | **40** |
 | 单 Prompt 字符串字面量行数 | 30 | **60**（超出抽到 `prompts/*.py`） |
 
-**触线处置**：超软警戒线必须在 PR 描述里说明计划；**超硬上限**的文件，PR 必须**同步包含拆分提交**（即「治旧」与「加新」同一 PR），否则评审一律退回。例外只允许两类：自动生成代码（schema、migration）、第三方供应文件。
+**触线处置**：超软警戒线必须在 PR 描述里说明计划；**超硬上限**的文件，PR 必须**同步包含拆分提交**（「治旧」与「加新」同一 PR），否则评审一律退回。例外只允许两类：自动生成代码（schema、migration）、第三方供应文件。
 
 ### 反 God-Object 原则
 
-- **Service 类按业务能力切包**，不按横切关注点切包。`AIService` 那种「只要共用 `_call_ai` 就什么都塞」的写法**禁止再新增方法**，新方法走 `services/ai/<capability>.py` 的 mixin / 自由函数路径（见下「拆分蓝图」）。
-- **路由文件按资源动词切包**，不按「同一前缀」无限堆。`routers/outline.py` 已达 3825 行，禁止新增 endpoint；新功能放 `routers/outline/<sub_resource>.py` 子模块。
+- **Service 类按业务能力切包**。新 AI 能力走 `services/ai/<capability>.py` 的 mixin / 自由函数路径；禁止往 `AIService` 直接堆方法。
+- **路由文件按资源动词切包**。新端点放 `routers/outline/routes_*.py` 子模块，禁止往 `helpers_core.py` 新增。
 - **React 组件 ≤ 400 行**；超过 1500 行的 `*Page.tsx` 必须先拆 `hooks/` + 子组件再迭代。
 
 ### 编排薄壳模式（Orchestration Shell）
@@ -372,116 +346,66 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 - **薄壳层**：`service.py` 只负责 SSE 事件循环、步骤分发、整体 try/except。不写业务 prompt、不写 DB 落库。
 - **步骤层**：每个步骤一个文件（如 `steps/positioning.py`），导出 `async def gen_xxx(ai, db, project, ctx) -> ...`。文件内拆 `_build_prompt` / `_persist` 两个私有函数。
 - **Prompt 层**：长 prompt（≥ 30 行字面量）抽到 `prompts/*.py`；带 ctx 插值的用 f-string 函数封装。
-- **Parse 层**：JSON 解析统一走 `parse.py`（如 `_parse_json` / `_coerce_*` / `_safe_int`），禁止在 step 文件内现写 try/except。
+- **Parse 层**：JSON 解析统一走 `parse.py`（`_parse_json` / `_coerce_*` / `_safe_int`），禁止在 step 文件内现写 try/except。
 
 新增步骤 = 新增一个 step 文件 + 薄壳里加一段 yield，**结构上不可能让薄壳回到 3000 行**。
 
 ---
 
-## Service / Router 拆分蓝图（落地清单）
+## 上帝文件登记册（治理基线，2026-05-21 更新）
 
-> 以下是目前已规划但**尚未落地**的拆分。新写代码前先看这里：若新功能属于以下任一模块，请直接放到拆分后的目标位置，**不要往旧的上帝文件里塞**。
-
-### `services/generation_service.py` → `services/bootstrap/` 包
-
-```
-services/bootstrap/
-├── __init__.py          # re-export GenerationService（保持外部 import 兼容）
-├── service.py           # class GenerationService：仅 __init__ / bootstrap / _sequential / _single_shot
-├── context.py           # hydrate_ctx_from_project / _get_genre_kit_block
-├── sse.py               # _sse / step_start / step_done helpers
-├── parse.py             # _parse_json / _safe_int / _coerce_power_system_rank
-├── retry.py             # _call_with_retry
-├── prompts/
-│   ├── single_shot.py   # _single_shot_prompt
-│   ├── blueprints.py    # _setting_blueprints_for_prompt + _setting_extra_with_defaults
-│   └── word_budget.py   # _book_length_constraints_for_prompt
-├── steps/               # 每个 Bootstrap step 一个文件（≤ 300 行）
-│   ├── positioning.py            # Step 0
-│   ├── project.py                # Step 1
-│   ├── power_systems.py          # Step 2
-│   ├── factions.py               # Step 3
-│   ├── storylines.py             # Step 4
-│   ├── characters.py             # Step 5
-│   ├── skills.py                 # Step 6
-│   ├── items.py                  # Step 7
-│   ├── settings.py               # Step 8（含 _gen_settings_append）
-│   ├── volumes.py                # Step 9
-│   ├── memory.py                 # Step 10
-│   ├── relations.py              # Step 11
-│   ├── opening_contract.py       # Step 12
-│   ├── vol1_chapter_plans.py     # Step 12.5
-│   ├── ch1_scenes.py             # Step 13
-│   └── consistency_scan.py       # Step 14
-├── save_all.py          # _save_all（single_shot 大写库）
-└── completion.py        # _complete_single_shot_data / _complete_missing_*
-```
-
-**约束**：拆分完成前，**禁止**在 `generation_service.py` 新增 `_gen_*` 方法或新 Step；新需求直接落到目标 `steps/*.py`，并以 thin re-export 的方式被旧文件引用。
-
-### `services/ai_service.py` → `services/ai/` 包
-
-按业务能力切，`class AIService` 用 mixin 拼装：
-
-```
-services/ai/
-├── __init__.py          # re-export AIService
-├── client.py            # _get_client / _clip_context / _large_context_enabled / _plain_text
-├── sampling.py          # _is_retryable_llm_error / _build_sampling_kwargs / _call_ai / _stream_ai
-├── quality.py           # quality_check / quality_debt_micro_patch
-├── coherence.py         # chapter_coherence_check / apply_coherence_revisions
-├── drafting.py          # draft_assist_stream / pre_write_warning / scene_plan
-├── chat.py              # suggest_stream / chat_stream
-├── outline.py           # expand_outline / outline_quality_check / outline_repair_plan / plan_full_structure
-├── debrief.py           # auto_extract_debrief
-├── reader_sim.py        # reader_psychology_sim
-├── memory.py            # extract_memory
-└── service.py           # class AIService(ClientMixin, SamplingMixin, QualityMixin, ...)
-```
-
-**约束**：拆分完成前，**禁止**在 `AIService` 新增公共方法；新 AI 能力走 `services/ai/<capability>.py` 的自由函数 + 同名 mixin。
-
-### `routers/outline.py` → `routers/outline/` 包
-
-按子资源切，主 `__init__.py` 聚合 `router`：
-
-```
-routers/outline/
-├── __init__.py          # APIRouter 聚合 + include_router 各子模块
-├── tree.py              # GET/POST/PATCH/DELETE 大纲树基本 CRUD
-├── quality.py           # outline_quality_check / outline_repair_plan
-├── embedding_dup.py     # compute_outline_chapter_vectors / analyze_outline_embedding_duplicates
-├── power_curve.py       # _detect_outline_power_curve_issues + 路由
-├── death_continuity.py  # _detect_outline_character_death_continuity + 路由
-├── theme_align.py       # _detect_outline_theme_alignment_issues + 路由
-├── foreshadow.py        # _detect_outline_foreshadow_issues + 路由
-├── revision.py          # _create_outline_revision / _create_quality_revision
-├── ai_expand.py         # POST /ai-expand 及 commit
-└── ws.py                # outline_workflow_websocket
-```
-
-**约束**：拆分完成前，禁止在 `routers/outline.py` 新增 endpoint。
-
-### 前端组件拆分蓝图
-
-| 当前文件 | 行数 | 目标结构 |
+| 文件 | 实测行数 | 状态 |
 |---|---:|---|
-| `apps/client/src/components/Writing/ChapterEditor.tsx` | 2960 | ✅ 已完成：`Writing/ChapterEditor/` 包（`index.tsx` + `types/utils/constants` + `PlanCard/CharacterMiniCard/DebriefPanel` + `hooks/useChapterAutosave/usePreWriteWarning/useDebriefRun`）；index.tsx 仍 2146 行，待继续拆 TopToolBar/WarnPanel/ContextSidePanel JSX |
-| `apps/client/src/pages/OutlinePage.tsx` | 2099 | `pages/Outline/` 包：树视图 / AI 扩展面板 / 质检面板 / Diff 视图分文件 |
-| `apps/client/src/components/Layout/GenerationQueuePanel.tsx` | 1789 | 拆 `QueueList` / `QueueItemDetail` / `useGenerationQueue` |
+| `apps/client/src/components/Writing/ChapterEditor/index.tsx` | 2146 | 🚫 严重违规（≥3x 硬上限）；冻结新增 props/`useState`；新功能走 `hooks/` 子 hook；JSX 待拆 TopToolBar/WarnPanel/ContextSidePanel |
+| `apps/client/src/pages/OutlinePage.tsx` | 2137 | 🚫 严重违规；冻结新增功能；待拆分为 `pages/Outline/` 包 |
+| `apps/backend/app/routers/outline/helpers_core.py` | 2166 | 🚫 冻结新增 endpoint；新路由进 `routers/outline/routes_*.py`，helpers_core 仅作为过渡集合 |
+| `apps/client/src/components/Layout/GenerationQueuePanel.tsx` | 1890 | 🚫 严重违规；下一次改动必须同步拆 QueueList / QueueItemDetail / useGenerationQueue |
+| `apps/frontend/src/pages/ReadingReviewPage.tsx` | 1538 | ⚠️ 超硬上限；待拆 ReviewList / SnapshotDiff / useReviewSubmit |
+| `apps/client/src/pages/WorldBuildingPage.tsx` | 1547 | 🚫 超硬上限；待按拆分蓝图迁移到 `pages/WorldBuilding/tabs/` |
+| `apps/client/src/pages/CharactersPage.tsx` | 1280 | ⚠️ 超两倍上限；冻结新增功能，下一次改动必须先拆分 |
+| `apps/backend/app/routers/outline/qa_internal.py` | 878 | 🚫 超硬上限（600）；新逻辑放 `routers/outline/routes_*.py`，禁止在此文件新增 |
+| `apps/backend/app/services/ai/context_builder.py` | 794 | 🚫 超硬上限；新功能禁止增入；待按职责拆分子模块 |
+| `apps/backend/app/services/ai/outline_ai.py` | 735 | 🚫 超硬上限；新功能禁止增入；待拆分 |
+| `apps/backend/app/services/ai/debrief.py` | 638 | 🚫 超硬上限；新功能禁止增入；待拆分 |
+| `apps/backend/app/services/bootstrap/context_vol_expand.py` | 634 | 🚫 超硬上限；新功能禁止增入；待拆分 |
+| `apps/client/src/components/Writing/ChapterEditor/DebriefPanel.tsx` | 707 | ⚠️ 超硬上限，待拆 HistorySection / CharUpdateSection / StorylineSection |
+
+> 任何一次让上表文件**增加 ≥ 50 行**的 PR 都必须同时包含等量或更多的「治旧」删除量；否则视为破坏红线。
+
+### 已退役（拆分完成）
+
+| 旧上帝文件 | 拆分去向 |
+|---|---|
+| `apps/backend/app/routers/outline.py`（3825行） | `routers/outline/`（routes_tree / routes_ai_expand / routes_quality / routes_full_generate / routes_workflow_ws / helpers_core / qa_internal / schemas）；原文件已删除 |
+| `apps/backend/app/services/generation_service.py`（3149行） | `services/bootstrap/`（steps/* + context / sse / parse / retry / save_all / completion）；残留 500 行编排壳 |
+| `apps/backend/app/services/ai_service.py`（2895行） | `services/ai/`（chat / quality / debrief / draft_stream / outline_ai / memory_ai / coherence / guardrails / sampling / writing_tools / client / service）；残留 10 行 re-export |
+| `apps/client/src/components/Writing/ChapterEditor.tsx`（3168行） | `Writing/ChapterEditor/` 包（index.tsx + types/utils/constants + PlanCard/CharacterMiniCard/DebriefPanel + hooks/）；残留 4 行壳 |
+| `apps/backend/app/routers/ai/gated_draft_routes.py` | gated_draft_helpers.py（461行）+ gated_draft_quality.py（367行）+ 编排壳（358行） |
+| `apps/backend/app/routers/ai/reader_simulation_routes.py` | reader_simulation_schemas.py（136行）+ reader_simulation_helpers.py（324行）+ 编排壳（534行） |
+
+---
+
+## 前端组件拆分蓝图（待落地）
+
+| 当前文件 | 实测行数 | 目标结构 |
+|---|---:|---|
+| `apps/client/src/pages/OutlinePage.tsx` | 2137 | `pages/Outline/` 包：树视图 / AI 扩展面板 / 质检面板 / Diff 视图分文件 |
+| `apps/client/src/components/Layout/GenerationQueuePanel.tsx` | 1890 | 拆 `QueueList` / `QueueItemDetail` / `useGenerationQueue` |
+| `apps/client/src/pages/WorldBuildingPage.tsx` | 1547 | `pages/WorldBuilding/tabs/`：见下方详细蓝图 |
 | `apps/frontend/src/pages/ReadingReviewPage.tsx` | 1538 | 拆 `ReviewList` / `SnapshotDiff` / `useReviewSubmit` |
-| `apps/client/src/pages/WorldBuildingPage.tsx` | 1547 | `pages/WorldBuilding/` 包：见下方详细蓝图 |
+| `apps/client/src/pages/CharactersPage.tsx` | 1280 | 拆 `CharacterList` / `CharacterEditor` / `useCharacterForm` |
+| `apps/client/src/components/Writing/ChapterEditor/index.tsx` | 2146 | 继续拆 `TopToolBar` / `WarnPanel` / `ContextSidePanel` JSX 块 |
 
 **约束**：上述文件**冻结新增功能**；新需求必须先开拆分 PR。
 
-#### WorldBuildingPage 拆分蓝图
+### WorldBuildingPage 拆分蓝图
 
 ```
 pages/WorldBuilding/
 ├── index.tsx                     # Tab 切换壳（≤ 80 行）；import lazy 各 Tab
 ├── shared/
 │   └── components.tsx            # Field / TextInput / TextArea / Select / SaveBtn
-│                                 # ChipSelect / Section / EditorHeader（当前 161 行）
+│                                 # ChipSelect / Section / EditorHeader（无状态展示组件，不含 API 调用）
 └── tabs/
     ├── StoryLinesTab.tsx         # 故事线 CRUD（约 147 行）
     ├── PowerSystemTab.tsx        # 境界体系 CRUD + levels 编辑（约 275 行）
@@ -491,47 +415,18 @@ pages/WorldBuilding/
     └── LocationsTab.tsx          # 地点 CRUD（约 108 行）
 ```
 
-切割原则：每个 Tab 对应独立的 CRUD 资源 + API 调用范围；`shared/components.tsx` 仅含无状态展示组件，不含 API 调用。
-
----
-
-## 上帝文件登记册（治理基线，2026-05-12 更新）
-
-| 文件 | 当前行数 | 状态 |
-|---|---:|---|
-| `apps/backend/app/routers/outline/helpers_core.py` | 2166 | 🚫 冻结新增 endpoint；新路由进 `routers/outline/routes_*.py`，helpers_core 仅作为待继续瘦身的过渡集合 |
-| `apps/client/src/components/Writing/ChapterEditor/index.tsx` | 2146 | 🚫 冻结新增 props/`useState`；禁止新增逻辑，新功能走 `hooks/` 子 hook；JSX 待进一步拆 TopToolBar/WarnPanel/ContextSidePanel |
-| `apps/client/src/components/Writing/ChapterEditor/DebriefPanel.tsx` | 707 | ⚠️ 超硬上限，待拆 HistorySection / CharUpdateSection / StorylineSection |
-| `apps/client/src/pages/OutlinePage.tsx` | 2099 | 🚫 冻结新增功能 |
-| `apps/client/src/components/Layout/GenerationQueuePanel.tsx` | 1789 | ⚠️ 警告区，下一次重大改动同步拆分 |
-| `apps/frontend/src/pages/ReadingReviewPage.tsx` | 1538 | ⚠️ 警告区 |
-| `apps/client/src/pages/WorldBuildingPage.tsx` | ~1547 | ⚠️ 警告区，见下方拆分蓝图 |
-
-### 已退役（2026-05-12 / 2026-05-20 拆分完成）
-
-| 旧上帝文件 | 拆分去向 | 当前残留 |
-|---|---|---:|
-| `apps/backend/app/routers/outline.py` | `apps/backend/app/routers/outline/`（`routes_tree` / `routes_ai_expand` / `routes_quality` / `routes_full_generate` / `routes_workflow_ws` / `helpers_core` / `qa_internal` / `schemas`） | 已删除 |
-| `apps/backend/app/services/generation_service.py` | `apps/backend/app/services/bootstrap/`（`steps/*` + `context` / `retry` / `save_all` / `completion`） | 500 行（瘦身后的编排壳，允许继续存在） |
-| `apps/backend/app/services/ai_service.py` | `apps/backend/app/services/ai/`（`chat` / `quality` / `debrief` / `draft_stream` / `outline_ai` / `memory_ai` / `coherence` / `guardrails` / `sampling` / `writing_tools` / `client` / `service`） | 10 行（仅作兼容 re-export） |
-| `apps/backend/app/routers/ai/gated_draft_routes.py` | `gated_draft_helpers.py`（461 行）+ `gated_draft_quality.py`（367 行）+ 编排壳（358 行） | — |
-| `apps/backend/app/routers/ai/reader_simulation_routes.py` | `reader_simulation_schemas.py`（136 行）+ `reader_simulation_helpers.py`（324 行）+ 编排壳（534 行） | — |
-| `apps/client/src/components/Writing/ChapterEditor.tsx`（3168 行） | `Writing/ChapterEditor/` 包：`index.tsx` + `types.ts` + `utils.ts` + `constants.tsx` + `PlanCard.tsx` + `CharacterMiniCard.tsx` + `DebriefPanel.tsx` + `hooks/usePreWriteWarning.ts` + `hooks/useChapterAutosave.ts` + `hooks/useDebriefRun.ts` | 4 行壳（re-export） |
-
-> 任何一次让上表文件**增加 ≥ 50 行**的 PR 都必须同时包含等量或更多的「治旧」删除量；否则视为破坏红线。
-
 ---
 
 ## 代码文档与注释契约（架构级）
 
-本节约束 **人机协作与长期演进**：注释不是为了「行数好看」，而是为了让 **公共 API、业务不变量、失败形态与边界** 在一屏内可被读懂；后续在本仓库改 **TypeScript/JavaScript** 时，以 **严格 JSDoc** 为默认交付标准。
+本节约束 **人机协作与长期演进**：注释不是为了「行数好看」，而是让 **公共 API、业务不变量、失败形态与边界** 在一屏内可被读懂。
 
 ### 原则
 
-- **公共表面优先**：凡 `export` 的函数、类、hook、跨模块复用的类型辅助，必须具备可被 IDE 悬停展示的说明；私有实现若含非显而易见的算法或协议约束，在关键分支处补 **局部块注释**。
+- **公共表面优先**：凡 `export` 的函数、类、hook、跨模块复用的类型辅助，必须具备可被 IDE 悬停展示的说明。
 - **意图优于复述**：不写「把 x 赋给 y」式废话；写 **为什么这样做**、**与哪条产品/架构决策对齐**、**违反时会怎样**。
-- **类型与文档分工**：TypeScript 类型表达「是什么」；JSDoc 补充 **业务语义、前置条件、副作用、与后端契约**（字段含义若与名称不完全一致，必须在 `@param` / 字段旁说明）。
-- **中英**：面向维护者与 AI 的注释以 **简体中文** 为主；已与对外 API/协议锁定的英文专有名词保持原文。
+- **类型与文档分工**：TypeScript 类型表达「是什么」；JSDoc 补充 **业务语义、前置条件、副作用、与后端契约**。
+- **语言**：面向维护者与 AI 的注释以 **简体中文** 为主；已与对外 API/协议锁定的英文专有名词保持原文。
 
 ### TypeScript / JavaScript（`apps/client`、`apps/frontend`）
 
@@ -539,38 +434,39 @@ pages/WorldBuilding/
 |------|----------|
 | 模块 | 文件职责复杂或入口非自解释时，使用 `@file` / 顶部块说明 **职责与禁止事项**。 |
 | `export function` / `export const` 工厂 | 完整 JSDoc：`@param`、`@returns`；异步函数说明 rejection 场景或统一错误形态。 |
-| React 组件（命名导出） | 说明 **数据来源**（store / props / URL）、**关键副作用**（订阅、阻塞导航）；props 非直观时逐项 `@param`。 |
+| React 组件（命名导出） | 说明 **数据来源**（store / props / URL）、**关键副作用**（订阅、阻塞导航）。 |
 | 自定义 Hook | 说明 **依赖**（哪些参数变化会触发重新请求）、**返回值契约**。 |
-| 复杂对象形态 | 使用 `@typedef` 或与 Zod/schema 同处的注释，标明 **不变量**（例如「永远与 project 维度同源」）。 |
 
-**推荐标签集合**（按需选用，避免堆砌）：`@param`、`@returns`、`@throws`、`@deprecated`、`@internal`（package 内边界）、`@example`（仅非平凡调用）、`@see`（指向规格或 OpenAPI）。
+**推荐标签集合**：`@param`、`@returns`、`@throws`、`@deprecated`、`@internal`、`@example`、`@see`。
 
 **反面模式**：整文件无注释但大量魔法字符串；仅英文拼音缩写无释义；注释与实现漂移（改代码必改注释）。
 
 ### Python（`apps/backend`）
 
-- **路由 handler、service 公共方法、复杂纯函数**：使用 **Google 风格 docstring**（`Args` / `Returns` / `Raises`）；与 TS 侧同一语义的概念用词保持一致，便于对读。
+- **路由 handler、service 公共方法、复杂纯函数**：使用 **Google 风格 docstring**（`Args` / `Returns` / `Raises`）。
 - **AI 路由**：实现位于 `apps/backend/app/routers/ai/` 包；新端点在同一子模块内保持 **模块顶注释说明资源边界**。
-
-### 验收心智（给审查者与 Agent）
-
-新 PR / 新文件：公共 `export` 是否补齐 JSDoc；是否说明了 **错误与空状态** 的意图；是否在架构接缝（API、store、路由）有据可查的一句话 **设计动机**。
-
----
 
 ---
 
 ## 开发建议（给未来的 Claude）
 
-0. **动手前先读「代码结构红线」与「上帝文件登记册」**：若改动文件已在登记册，**禁止**直接在原文件里加新功能；先按「拆分蓝图」的目标结构落新代码，再考虑老文件的迁移节奏。
-1. **改 AI 调用**：动 `apps/backend/app/services/ai_service.py` 时**只允许修改/重构现有方法**，新增能力一律按蓝图放 `services/ai/<capability>.py`；router 层永远不直连 openai
-2. **加新数据表**：在 `apps/backend/app/models/` 新建文件 → `models/__init__.py` 导出 → `schemas/` 对应 → `routers/` 路由 → `main.py` 注册
-3. **Prompt 优化**：prompt 字符串统一放在 service 层；超 30 行抽到 `*/prompts/*.py`；需要 JSON 时在提示词末尾强调「只返回 JSON」
-4. **JSON 解析**：所有 `_call_ai` 的 JSON 解析用 `_parse_json()` 统一处理，不要 try/except 分散在各处
-5. **pgvector**：embedding 字段已在 `MemoryChunk` 预留，启用时需 `CREATE EXTENSION vector;` 并取消 `memory.py` 中的条件导入
-6. **改创作端 UI**：主要改 `apps/client/`；**管理后台**改 `apps/frontend/`（与 client 独立依赖与构建）
-7. **TS/JS 注释**：新增或修改公共 `export` 时，遵循上文「代码文档与注释契约」，使用 **严格 JSDoc**；后端对应模块用 Google 风格 docstring。
-8. **PR 自检**：提交前对触线文件执行 `wc -l <file>`，超硬上限必须**先拆再合**；新建 step / capability / sub-router 必须落到拆分蓝图指定路径。
+0. **动手前先读「代码结构红线」与「上帝文件登记册」**：若改动文件已在登记册，**禁止**直接在原文件里加新功能；先按「拆分蓝图」落新代码，再考虑老文件的迁移节奏。
+
+1. **加新 AI 能力**：新能力走 `services/ai/<capability>.py` 的自由函数 + mixin，禁止往 `AIService`（现为 10 行 re-export 壳）直接堆方法；router 层永远不直连 OpenAI。
+
+2. **加新 Bootstrap Step**：新建 `services/bootstrap/steps/<step_name>.py`，在 `graph.py` 薄壳里加一个节点 + yield；禁止把逻辑写进编排壳。
+
+3. **加新数据表**：`models/` 新建文件 → `models/__init__.py` 导出 → `schemas/` 对应 → `routers/` 路由 → `main.py` 注册 → 写 Alembic migration。
+
+4. **Prompt 优化**：prompt 字符串统一放在 service 层；超 30 行抽到 `*/prompts/*.py`；需要 JSON 时在提示词末尾强调「只返回 JSON」。
+
+5. **JSON 解析**：所有 `_call_ai` 的 JSON 解析用 `_parse_json()` 统一处理，禁止 try/except 分散在各处。
+
+6. **Embedding**：写入记忆后调用 `embed_chunk_async(chunk_id, text, SessionLocal)` 触发异步向量化；写章 RAG 检索走 `retrieve_and_log_draft_context()`，结果自动落 `rag_retrieval_log`；换 embedding 模型时需同步改 `EMBEDDING_DIM` 并执行对应 migration。
+
+7. **改创作端 UI**：主要改 `apps/client/`；**管理后台**改 `apps/frontend/`（与 client 独立依赖与构建）。
+
+8. **PR 自检**：提交前对触线文件执行 `wc -l <file>`，超硬上限必须**先拆再合**；新建 step / capability / sub-router 必须落到蓝图指定路径。
 
 ---
 
@@ -583,8 +479,11 @@ bash bootstrap.sh
 # Docker 一键启动（含 backend + client + frontend 管理端）
 docker-compose up -d
 
-# 本地裸跑：后端 + 创作端 + 管理后台（pnpm；端口见 env.local.ports.example）
+# 本地裸跑：后端 + 创作端（pnpm；端口见 env.local.ports.example）
 ./restart.sh
+
+# 管理后台（另开终端，默认 http://localhost:3174）
+cd apps/frontend && pnpm run dev
 
 # 仅手动启后端
 cd apps/backend && source .venv/bin/activate && uvicorn app.main:app --reload --port 9000
@@ -592,6 +491,6 @@ cd apps/backend && source .venv/bin/activate && uvicorn app.main:app --reload --
 # 仅手动启创作端
 cd apps/client && pnpm run dev
 
-# 仅手动启管理后台（默认 http://localhost:3174）
-cd apps/frontend && pnpm run dev
+# embedding 存量补跑（换模型 / 新部署后执行）
+cd apps/backend && python verify_pgvector.py --reembed
 ```

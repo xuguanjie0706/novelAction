@@ -58,6 +58,7 @@ class BootstrapRun(Base):
             "pending     — 已创建，尚未开始\n"
             "running     — 图正在执行\n"
             "awaiting_gate — 在立项定位闸门暂停，等待用户确认/修改\n"
+            "awaiting_retry — 某步骤失败已暂停，等待用户 retry_step\n"
             "done        — 全部步骤完成\n"
             "failed      — 不可恢复错误"
         ),

@@ -142,13 +142,58 @@ def test_vol1_sse_payload_blocked():
                 "issue_count": 5,
                 "critical_count": 2,
                 "high_count": 1,
+                "issues": [
+                    {
+                        "rule_id": "CH-04",
+                        "severity": "critical",
+                        "scope": "chapter",
+                        "message": "第3章 choice_cost 为空",
+                        "suggestion": "补写代价",
+                        "chapter_number_in_volume": 3,
+                    },
+                    {
+                        "rule_id": "VL-01",
+                        "severity": "critical",
+                        "scope": "volume",
+                        "message": "章纲数量 28 与配额 30 不符",
+                    },
+                ],
             },
         },
     )
     assert payload["count"] == 0
     assert payload["linter_blocked"] is True
-    assert "未落库" in payload["preview"]
+    assert "CH-04" in payload["preview"]
     assert payload["linter_critical_count"] == 2
+    assert "CH-04" in payload["linter_message"]
+    assert payload["linter_blocking_rules"] == ["CH-04", "VL-01"]
+    assert len(payload["linter_issues_top"]) >= 1
+
+
+def test_build_linter_block_payload_with_draft():
+    from app.services.outline_linter.user_facing import build_linter_block_payload
+
+    out = build_linter_block_payload(
+        {
+            "status": "failed",
+            "critical_count": 1,
+            "high_count": 0,
+            "issue_count": 1,
+            "issues": [
+                {
+                    "rule_id": "CH-08",
+                    "severity": "critical",
+                    "scope": "chapter",
+                    "message": "第1章 core_event 为空",
+                    "chapter_number_in_volume": 1,
+                },
+            ],
+        },
+        chapter_count=30,
+    )
+    assert "草稿" in out["linter_message"]
+    assert out["linter_draft_saved"] is True
+    assert "CH-08" in out["preview"]
 
 
 def test_promise_fulfilled_in_window():

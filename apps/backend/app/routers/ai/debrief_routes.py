@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID, uuid4
@@ -21,7 +22,7 @@ from app.models import (
     StoryLine,
 )
 from app.services.ai_service import AIService
-from app.services.embedding_service import embed_chunk_async
+from app.services.embedding_service import embed_chunk_async, schedule_background_coro
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 from app.utils.chapter_numbering import display_chapter_number
 from app.routers.ai.debrief_assets import apply_asset_updates
@@ -29,6 +30,30 @@ from app.routers.ai.foreshadow import sync_chapter_index_foreshadows
 from app.routers.ai.normalization import normalize_character_status, normalize_storyline_status
 from app.routers.ai.schemas import AutoDebriefRequest, ChapterDebriefRequest
 from app.routers.ai.text_utils import chapter_debrief_content_hash, plain_text, truncate
+
+logger = logging.getLogger(__name__)
+
+
+async def _run_conflict_scan_async(project_id: str, model_profile: str) -> None:
+    """
+    复盘完成后后台异步触发记忆冲突检测（fire-and-forget）。
+
+    使用独立 DB session 避免与主请求 session 竞争；
+    失败只记录 warning，不影响已提交的复盘数据。
+    """
+    try:
+        from app.services.memory_conflict_detector import detect_memory_conflicts
+        svc = AIService(
+            "gemini" if model_profile == "gemini" else "default",
+            db=None,
+            llm_provider_id=None,
+        )
+        with SessionLocal() as db:
+            svc.db = db
+            await detect_memory_conflicts(db, project_id=project_id, ai_service=svc)
+        logger.info("conflict_scan done for project %s", project_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("conflict_scan failed for project %s: %s", project_id, exc)
 
 router = APIRouter()
 
@@ -326,6 +351,7 @@ def chapter_debrief(
             title=(mu.title or mu.memory_type).strip()[:200],
             content=content,
             tags=mu.tags[:8],
+            importance_score=mu.importance_score,
         )
         db.add(memory)
         _new_memory_chunks.append(memory)
@@ -452,6 +478,7 @@ def chapter_debrief(
             title="章节复盘备注",
             content=req.notes.strip(),
             tags=["复盘备注"],
+            importance_score=0.3,  # 作者备注属辅助信息，优先级低于正文事件记忆
         )
         db.add(memory)
         _new_memory_chunks.append(memory)
@@ -633,6 +660,10 @@ def chapter_debrief(
     for mc in _new_memory_chunks:
         embed_text = f"{mc.title or ''}\n{mc.content}".strip()
         embed_chunk_async(mc.id, embed_text, SessionLocal)
+
+    # 有新记忆写入时，后台触发记忆冲突检测（sync 路由经主 loop 跨线程提交）
+    if _new_memory_chunks:
+        schedule_background_coro(_run_conflict_scan_async(project_id, "default"))
 
     return {
         "ok": True,

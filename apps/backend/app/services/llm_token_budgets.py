@@ -115,3 +115,12 @@ def max_tokens_vol_expand_chapters() -> int:
     ``VOL_EXPAND_CHAPTERS_MAX_TOKENS`` 覆盖（如 65536）。
     """
     return int(settings.VOL_EXPAND_CHAPTERS_MAX_TOKENS)
+
+
+def max_tokens_vol1_chapter_plans() -> int:
+    """Bootstrap Step 12.5 第一卷章级大纲的单次 ``max_tokens``。
+
+    实测 30 章丰富 JSON ≈ 16k completion tokens；60 章整卷一次生成建议 ≥32k。
+    默认 40960（适配 Gemini / 远程大上下文）；``.env`` 用 ``VOL1_CHAPTERS_MAX_TOKENS`` 覆盖。
+    """
+    return int(settings.VOL1_CHAPTERS_MAX_TOKENS)

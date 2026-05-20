@@ -25,7 +25,9 @@ export function useBootstrapResumeBanner(projectId?: string | null) {
     try {
       if (projectId) {
         const res = await bootstrapRunsApi.listByProject(projectId)
-        const row = res.data.find(r => r.status === 'running' || r.status === 'awaiting_gate')
+        const row = res.data.find(r =>
+          r.status === 'running' || r.status === 'awaiting_gate' || r.status === 'awaiting_retry',
+        )
         if (row) {
           const snap: BootstrapResumeSnapshot = {
             runId: row.run_id,

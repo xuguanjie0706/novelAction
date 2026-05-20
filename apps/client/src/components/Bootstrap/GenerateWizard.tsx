@@ -60,11 +60,16 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
   const {
     phase, steps, errorMsg, projectId, positioningData, generationStartMs, runId,
     gateStep, gateMessage, gatePreview, activeLogline,
-    startGenerate: hookStart, reconnectToRun, handleResume, abortSse, cancelRun,
+    haltedStep, retryLoading,
+    startGenerate: hookStart, reconnectToRun, handleResume, retryFailedStep, abortSse, cancelRun,
   } = useBootstrapStream()
 
   /** 时间轴当前选中的步骤 key */
   const [selectedStepKey, setSelectedStepKey] = useState<StepKey | null>(null)
+
+  useEffect(() => {
+    if (haltedStep) setSelectedStepKey(haltedStep)
+  }, [haltedStep])
 
   // ── 本地 UI 状态 ──────────────────────────────────────────────
   const [logline, setLogline]               = useState('')
@@ -574,6 +579,12 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                 onCancel={cancel}
                 terminating={terminating}
                 errorMsg={errorMsg}
+                haltedStep={haltedStep}
+                retryLoading={retryLoading}
+                onRetryStep={() => {
+                  const step = haltedStep ?? selectedStepKey
+                  if (step) void retryFailedStep(step, resumeParams)
+                }}
                 onInsightsUpdate={(updated) =>
                   setInsights(prev => prev ? { ...prev, ...updated } : (updated as typeof prev))
                 }

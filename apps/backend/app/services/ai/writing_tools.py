@@ -270,6 +270,7 @@ class WritingToolsMixin:
         character_states: Optional[List[dict]] = None,
         open_foreshadows: Optional[List[dict]] = None,
         open_reader_promises: Optional[List[dict]] = None,
+        known_locations: Optional[List[dict]] = None,
     ) -> dict:
         """
         根据章纲生成结构化分场计划（4-8 场）。
@@ -292,6 +293,9 @@ class WritingToolsMixin:
                               高优先级（priority≥4）在场景安排时需有意识回收或推进。
             open_reader_promises: 未兑现读者承诺列表，每条含 promise_text/promise_type/priority。
                                   高优先级在本章分场中必须有至少一场回应或推进。
+            known_locations: 项目已建库地点列表（最多 10 条），每条含 name/aliases/sensory_signature。
+                             有数据时注入提示，要求 AI 的 location_name 优先从此列表选取，
+                             以保证写章时能命中感官基准约束。
         """
         system = (
             "你是资深网文分镜师。严格返回 JSON，不要任何额外文字。"
@@ -363,7 +367,23 @@ class WritingToolsMixin:
                 + "\n".join(lines) + "\n"
             )
 
-        prompt = f"""{kit_block}{positioning_block}{prev_block}{state_block}{foreshadow_block}{promise_block}
+        location_lib_block = ""
+        if known_locations:
+            loc_lines: list[str] = []
+            for loc in known_locations[:10]:
+                name = loc.get("name", "")
+                aliases = loc.get("aliases") or []
+                sig = (loc.get("sensory_signature") or "")[:50]
+                alias_str = f"（别名：{'、'.join(aliases[:3])}）" if aliases else ""
+                sig_str = f" 【感官：{sig}…】" if sig else ""
+                loc_lines.append(f"  - {name}{alias_str}{sig_str}")
+            location_lib_block = (
+                "\n【已知地点库（location_name 请优先从此列表精确选取，"
+                "确保写章时感官基准能被命中）】\n"
+                + "\n".join(loc_lines) + "\n"
+            )
+
+        prompt = f"""{kit_block}{positioning_block}{prev_block}{state_block}{foreshadow_block}{promise_block}{location_lib_block}
 本章标题：《{chapter_title}》
 本章摘要：{chapter_summary[:800]}
 {char_block}

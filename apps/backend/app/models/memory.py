@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Integer, JSON
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Float, Integer, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -32,8 +32,13 @@ class MemoryChunk(Base):
     chapter_number = Column(Integer)               # 发生在第几章
     tags = Column(JSON, default=list)              # ["林默", "青云宗", "关键伏笔"]
 
-    # pgvector embedding — 维度由 EMBEDDING_DIM 配置项决定（nomic-embed-text = 768）
-    # 如果 pgvector 未安装则跳过
+    # 重要度与访问统计（时效衰减检索 + 热度重排序依据）
+    importance_score = Column(Float, default=0.5)      # AI 提取时赋值 0.0-1.0；越高越优先召回
+    access_count = Column(Integer, default=0)          # 被 RAG 召回的累计次数
+    last_accessed_at = Column(DateTime(timezone=True)) # 最近一次被召回时间（UTC）
+
+    # pgvector embedding — 维度由 EMBEDDING_DIM 配置项决定（默认 BAAI/bge-m3 = 1024）
+    # 如果 pgvector 未安装则跳过；换模型/维度后需运行 migration b3c4d5e6f7a8 并补跑 verify_pgvector.py --reembed
     if HAS_PGVECTOR:
         embedding = Column(Vector(settings.EMBEDDING_DIM))  # pgvector 向量；维度见 EMBEDDING_DIM
 

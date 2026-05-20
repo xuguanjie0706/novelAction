@@ -29,7 +29,9 @@ export default function ActiveBootstrapResumeBar({
   const sub =
     snapshot.status === 'awaiting_gate'
       ? '等待你确认根设定'
-      : '生成正在进行中'
+      : snapshot.status === 'awaiting_retry'
+        ? '某步骤失败，等待重试'
+        : '生成正在进行中'
 
   return (
     <div

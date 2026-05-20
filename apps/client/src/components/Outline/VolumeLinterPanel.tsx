@@ -56,6 +56,9 @@ const VolumeLinterPanel: React.FC<Props> = ({
   const status = (extra.linter_status as string) || 'unknown'
   const summary = (extra.linter_summary as LinterSummary) || {}
   const issues = (extra.linter_issues as LinterIssueRow[]) || []
+  const userMessage =
+    typeof extra.linter_user_message === 'string' ? extra.linter_user_message.trim() : ''
+  const draftHeld = Boolean(extra.linter_blocked)
 
   const [running, setRunning] = useState(false)
   const [localReport, setLocalReport] = useState<LinterReport | null>(null)
@@ -131,7 +134,14 @@ const VolumeLinterPanel: React.FC<Props> = ({
 
       <p className="text-[11px] text-gray-500 mb-2">
         共 {issueCount} 项 · critical {criticalCount} · high {highCount}
+        {draftHeld ? ' · 卷已标阻断（章纲为草稿，修复后重新检测）' : ''}
       </p>
+
+      {userMessage ? (
+        <pre className="mb-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded border border-amber-100 bg-amber-50/80 px-2 py-1.5 text-[10px] text-amber-900 leading-snug">
+          {userMessage}
+        </pre>
+      ) : null}
 
       {topIssues.length > 0 ? (
         <ul className="space-y-1 max-h-40 overflow-y-auto text-[11px]">

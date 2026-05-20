@@ -55,6 +55,7 @@ from app.routers.ai.draft_helpers import (
 from app.routers.ai.draft_context import (
     _append_hook_trend_warning,
     _build_character_summary,
+    _build_narrative_arc_context,
     _build_prev_directives,
     _build_reader_feedback_context,
     _build_reader_promise_context,
@@ -329,6 +330,15 @@ async def _build_draft_context(
     writing_brief_context = _append_hook_trend_warning(
         db, project_id, chapter.sort_order or 0, writing_brief_context
     )
+
+    # 情绪节律 + 反派行动线（Bootstrap Step 9.5 / 9.8 产物闭合回写章路径）
+    _narrative_arc = _build_narrative_arc_context(
+        project_extra=project_extra if isinstance(project_extra, dict) else {},
+        outline_node=outline_node,
+        db=db,
+    )
+    if _narrative_arc:
+        writing_brief_context = writing_brief_context + "\n\n" + _narrative_arc
 
     return dict(
         chapter_title=chapter.title or "",

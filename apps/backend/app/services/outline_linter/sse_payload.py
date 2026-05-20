@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.outline_linter.user_facing import build_linter_block_payload
+
 
 def build_vol1_chapters_sse_payload(
     plans: list[Any],
@@ -15,31 +17,42 @@ def build_vol1_chapters_sse_payload(
 
     Returns:
         count, preview, linter_blocked, linter_status, linter_issue_count,
-        linter_critical_count, linter_high_count, linter_message（可选）
+        linter_critical_count, linter_high_count, linter_message,
+        linter_blocking_rules, linter_issues_top, linter_draft_saved（阻断时）
     """
     blocked = bool(ctx.get("linter_blocked"))
     report = ctx.get("linter_last_report") if isinstance(ctx.get("linter_last_report"), dict) else {}
     extra = volume_extra or {}
+    block_payload = (
+        ctx.get("linter_block_payload")
+        if isinstance(ctx.get("linter_block_payload"), dict)
+        else {}
+    )
 
     if blocked:
         issue_count = int(report.get("issue_count") or len(report.get("issues") or []))
         critical = int(report.get("critical_count") or 0)
         high = int(report.get("high_count") or 0)
         status = str(report.get("status") or extra.get("linter_status") or "failed")
+        draft_count = len(plans) if plans else 0
+        if not block_payload:
+            block_payload = build_linter_block_payload(report, chapter_count=draft_count)
         return {
-            "count": 0,
-            "preview": (
-                f"章纲未落库：linter {status}（critical {critical} / high {high} / 共 {issue_count} 项）"
+            "count": draft_count,
+            "preview": block_payload.get("preview")
+            or (
+                f"{'草稿已暂存' if draft_count else '未落库'} · linter {status}"
+                f"（critical {critical} / high {high} / 共 {issue_count} 项）"
             ),
             "linter_blocked": True,
             "linter_status": status,
             "linter_issue_count": issue_count,
             "linter_critical_count": critical,
             "linter_high_count": high,
-            "linter_message": (
-                "第一卷章纲存在 critical 问题，已阻断落库。"
-                "请进入项目 → 大纲 → 第一卷「章纲检测」查看并修复后重新生成。"
-            ),
+            "linter_message": block_payload.get("linter_message", ""),
+            "linter_blocking_rules": block_payload.get("linter_blocking_rules") or [],
+            "linter_issues_top": block_payload.get("linter_issues_top") or [],
+            "linter_draft_saved": bool(block_payload.get("linter_draft_saved")),
         }
 
     if plans:

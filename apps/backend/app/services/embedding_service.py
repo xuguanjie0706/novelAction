@@ -2,11 +2,17 @@
 Embedding Service — 异步向量化 + pgvector 语义检索
 
 职责：
-  1. embed_texts()          — 调用 /v1/embeddings 返回向量
-  2. embed_entity_async()   — 通用单条向量化（支持 MemoryChunk / Chapter）
-  3. embed_chunks_bulk()    — 批量补全
-  4. semantic_search()      — 余弦距离召回 MemoryChunk
-  5. retrieve_relevant_memories_for_writing() — 写章节时自动拉取相关记忆片段
+  1. embed_texts()                  — 调用 /v1/embeddings 返回向量
+  2. embed_entity_async()           — 通用单条向量化（支持 MemoryChunk / Chapter）
+  3. embed_chunks_bulk()            — 批量补全
+  4. semantic_search()              — 余弦距离召回 MemoryChunk
+  5. semantic_search_scored()       — 带时效衰减 + 重要度加权的语义检索
+  6. retrieve_relevant_memories_for_writing() — 写章节时自动拉取相关记忆片段
+
+时效衰减公式
+  final_score = semantic_sim * importance_score * decay_factor
+  decay_factor = exp(-DECAY_ALPHA * chapter_distance)
+  DECAY_ALPHA = 0.02（相隔 50 章衰减到约 37%，见 settings.MEMORY_DECAY_ALPHA）
 
 设计原则：
   - fire-and-forget，不阻塞主请求
@@ -23,6 +29,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 from uuid import UUID
 
@@ -30,6 +38,9 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import settings
+
+# 时效衰减系数：越大衰减越快（每 50 章衰减约 37%）；可通过 .env MEMORY_DECAY_ALPHA 调整
+_DECAY_ALPHA: float = settings.MEMORY_DECAY_ALPHA
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +61,22 @@ def set_main_event_loop(loop: asyncio.AbstractEventLoop) -> None:
     _main_event_loop = loop
 
 
+def schedule_background_coro(coro) -> None:
+    """
+    将协程 fire-and-forget 提交到 uvicorn 主事件循环。
+
+    sync 路由（线程池）与 async 路由均可调用；无可用 loop 时只记 warning。
+    用于 embedding、复盘后冲突扫描等后台任务。
+    """
+    _submit_to_event_loop(coro)
+
+
 def _submit_to_event_loop(coro) -> None:
     """
-    将协程安全地提交到 uvicorn 主事件循环。
+    将协程安全地提交到 uvicorn 主事件 loop。
     - 若当前线程已有运行中的 loop（async 路由），直接 create_task
     - 若在线程池中（sync 路由），通过 run_coroutine_threadsafe 跨线程提交
-    - 两者都不可用时记 warning，跳过 embedding（不影响主流程）
+    - 两者都不可用时记 warning，跳过任务（不影响主流程）
     """
     try:
         # async 上下文：直接在当前 loop 创建 task
@@ -229,6 +250,61 @@ async def embed_chunks_bulk(
 # 语义检索
 # ---------------------------------------------------------------------------
 
+def _compute_decay_factor(chunk_chapter: Optional[int], current_chapter: Optional[int]) -> float:
+    """
+    计算时效衰减系数。
+
+    公式：decay = exp(-DECAY_ALPHA * chapter_distance)
+    chapter_distance 为当前章节与记忆所在章节之差；
+    无法计算距离时返回 1.0（不衰减）。
+
+    Args:
+        chunk_chapter: 记忆条目所在章节编号（可为 None，视为设定类记忆不衰减）
+        current_chapter: 当前写作章节编号（max_chapter 参数）
+    Returns:
+        衰减系数 (0.0, 1.0]
+    """
+    if chunk_chapter is None or current_chapter is None:
+        return 1.0
+    distance = max(0, int(current_chapter) - int(chunk_chapter))
+    return math.exp(-_DECAY_ALPHA * distance)
+
+
+def _bulk_update_access_stats(
+    db: Session,
+    chunk_ids: List,
+    *,
+    commit: bool = False,
+) -> None:
+    """
+    批量更新命中条目的访问统计（access_count + last_accessed_at）。
+
+    使用 IN 子句而非 ANY(:ids) 以避免 SQLAlchemy 参数绑定差异；
+    commit=False 时只 flush，由外层事务统一提交。
+    """
+    from sqlalchemy import text as sa_text
+
+    if not chunk_ids:
+        return
+    try:
+        now = datetime.now(timezone.utc)
+        # 构建 IN 子句（id 为 UUID，转字符串后用单引号包裹）
+        id_literals = ", ".join(f"'{str(cid)}'" for cid in chunk_ids)
+        db.execute(
+            sa_text(
+                f"UPDATE memory_chunks "  # noqa: S608 — id_literals 来自内部 UUID，安全
+                f"SET access_count = COALESCE(access_count, 0) + 1, "
+                f"    last_accessed_at = :now "
+                f"WHERE id IN ({id_literals})"
+            ),
+            {"now": now},
+        )
+        if commit:
+            db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to update access stats: %s", exc)
+
+
 async def semantic_search_scored(
     db: Session,
     project_id: str | UUID,
@@ -236,20 +312,29 @@ async def semantic_search_scored(
     top_k: int = 10,
     memory_types: Optional[List[str]] = None,
     max_chapter: Optional[int] = None,
+    apply_decay: bool = True,
+    update_access: bool = True,
 ) -> Tuple[List[Tuple["MemoryChunk", Optional[float], str]], str]:
     """
-    语义检索并返回 (chunk, cosine_similarity, source) 三元组。
+    语义检索并返回 (chunk, weighted_score, source) 三元组。
+
+    加权公式（apply_decay=True 时生效）：
+        weighted_score = semantic_similarity * importance_score * decay_factor
 
     status:
       - ok: pgvector 语义命中
       - fallback_recency: pgvector 不可用 / 无向量 / 查询失败后的时序兜底
       - embed_failed: 向量化失败后的时序兜底
+
+    Args:
+        apply_decay: 是否启用时效衰减 + 重要度加权（默认 True）
+        update_access: 是否更新命中条目的 access_count / last_accessed_at（默认 True）
     """
     from app.models.memory import MemoryChunk, HAS_PGVECTOR
     from sqlalchemy import text as sa_text
 
     def _fallback_query() -> List[Tuple[MemoryChunk, Optional[float], str]]:
-        """时间序兜底：最新 top_k 条（降序）。"""
+        """时间序兜底：按 importance_score DESC, chapter_number DESC 排列。"""
         q = db.query(MemoryChunk).filter(MemoryChunk.project_id == str(project_id))
         if memory_types:
             q = q.filter(MemoryChunk.memory_type.in_(memory_types))
@@ -258,7 +343,14 @@ async def semantic_search_scored(
                 (MemoryChunk.chapter_number == None)  # noqa: E711
                 | (MemoryChunk.chapter_number <= max_chapter)
             )
-        rows = q.order_by(MemoryChunk.created_at.desc()).limit(top_k).all()
+        rows = (
+            q.order_by(
+                MemoryChunk.importance_score.desc().nullslast(),
+                MemoryChunk.chapter_number.desc().nullslast(),
+            )
+            .limit(top_k)
+            .all()
+        )
         return [(r, None, "recency_fallback") for r in rows]
 
     if not HAS_PGVECTOR:
@@ -283,7 +375,8 @@ async def semantic_search_scored(
         params: dict = {
             "project_id": str(project_id),
             "query_vec": vec_str,
-            "top_k": top_k,
+            # 多拉一倍候选，衰减后再截 top_k
+            "top_k": top_k * 2,
         }
         if memory_types:
             where_parts.append("memory_type = ANY(:memory_types)")
@@ -311,14 +404,33 @@ async def semantic_search_scored(
             c.id: c
             for c in db.query(MemoryChunk).filter(MemoryChunk.id.in_(ids)).all()
         }
+
         ranked: List[Tuple[MemoryChunk, Optional[float], str]] = []
         for cid in ids:
             chunk = chunks_map.get(cid)
             if chunk is None:
                 continue
             dist = id_distance.get(cid, 1.0)
-            similarity = max(0.0, min(1.0, 1.0 - dist))
-            ranked.append((chunk, similarity, "semantic"))
+            semantic_sim = max(0.0, min(1.0, 1.0 - dist))
+
+            if apply_decay:
+                importance = float(chunk.importance_score or 0.5)
+                decay = _compute_decay_factor(chunk.chapter_number, max_chapter)
+                weighted = semantic_sim * importance * decay
+            else:
+                weighted = semantic_sim
+
+            ranked.append((chunk, round(weighted, 4), "semantic"))
+
+        # 衰减后重排序，截取 top_k
+        ranked.sort(key=lambda x: x[1] or 0.0, reverse=True)
+        ranked = ranked[:top_k]
+
+        # 批量更新访问统计（fire-and-forget，失败不影响检索结果）
+        if update_access and ranked:
+            hit_ids = [c.id for c, _, _ in ranked]
+            _bulk_update_access_stats(db, hit_ids, commit=False)
+
         return ranked, "ok"
 
     except Exception as exc:  # noqa: BLE001

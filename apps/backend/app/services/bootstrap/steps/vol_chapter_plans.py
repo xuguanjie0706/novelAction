@@ -412,28 +412,40 @@ async def gen_vol_chapter_plans(
             "只返回 JSON 数组，不要任何解释文字。"
         )
 
-        try:
-            raw = await svc._call_with_retry(
-                system, prompt, task="bootstrap.vol_chapters",
-                max_tokens=max_tokens_vol_expand_chapters(),
+        batch_data: list = []
+        for gen_attempt in range(2):
+            try:
+                raw = await svc._call_with_retry(
+                    system, prompt, task="bootstrap.vol_chapters",
+                    max_tokens=max_tokens_vol_expand_chapters(),
+                )
+                batch_data = parse_json(raw)
+                if not isinstance(batch_data, list):
+                    batch_data = batch_data.get("chapters", [])
+            except Exception:
+                batch_data = []
+                break
+
+            actual_count = len(batch_data)
+            if actual_count == batch_count:
+                break
+            if gen_attempt == 0:
+                logger.warning(
+                    "GEN-01 批次数漂移，重试：期望%d章，实际%d章（卷=%s，批次=%d-%d）",
+                    batch_count, actual_count, volume_node.id, batch_start, batch_end,
+                )
+                continue
+            logger.warning(
+                "GEN-01 批次数仍不符，截断：期望%d章，实际%d章",
+                batch_count, actual_count,
             )
-            batch_data = parse_json(raw)
-            if not isinstance(batch_data, list):
-                batch_data = batch_data.get("chapters", [])
-        except Exception:
+            batch_data = batch_data[:batch_count]
+
+        if not batch_data:
             continue
 
         char_name_to_id = ctx.get("char_name_to_id", {})
         storyline_ids_map = ctx.get("storyline_ids", {})
-
-        # 数量校验：AI 实际返回章数必须等于 batch_count
-        actual_count = len(batch_data)
-        if actual_count != batch_count:
-            logger.warning(
-                "vol_chapter_plans batch 数量漂移：期望%d章，实际收到%d章（项目=%s，卷=%s，批次=%d-%d）",
-                batch_count, actual_count, project.id, volume_node.id, batch_start, batch_end,
-            )
-            batch_data = batch_data[:batch_count]
 
         for item in batch_data:
             ch_num = item.get("chapter_number", batch_start)
@@ -497,7 +509,17 @@ async def gen_vol_chapter_plans(
             all_results.append(node)
 
     if all_results:
-        svc.db.commit()
+        from app.services.outline_linter.gate import finalize_volume_chapter_commit
+
+        committed = finalize_volume_chapter_commit(
+            svc, project, volume_node, all_results, ctx=ctx,
+        )
+        if not committed:
+            logger.error(
+                "章纲落库被 linter 阻断（卷=%s），请查看 volume.extra.linter_issues",
+                volume_node.id,
+            )
+            return []
 
     # 全书配额计数器累加（供后续卷展开时读取，防止漂移）
     ctx["chapter_quota_used"] = quota_used + len(all_results)

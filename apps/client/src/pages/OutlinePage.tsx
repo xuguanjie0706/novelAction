@@ -14,6 +14,7 @@ import toast from 'react-hot-toast'
 import OutlineAIPanel from '../components/Outline/OutlineAIPanel'
 import ScenePanel from '../components/Outline/ScenePanel'
 import VolumeExpandButton from '../components/Outline/VolumeExpandButton'
+import VolumeLinterPanel from '../components/Outline/VolumeLinterPanel'
 import { TargetWordsInput } from '../components/TargetWordsInput'
 import { collectExpandableNodes } from '../utils/outlineAiExpand'
 import RepairConfirmModal, { clampMaxRounds, clampMinScore } from '../components/Outline/RepairConfirmModal'
@@ -513,6 +514,8 @@ export default function OutlinePage() {
    * 打开弹窗后，用户在弹窗里确认配置；配置同步回 repairConfig。
    */
   const [repairModalOpen, setRepairModalOpen] = useState(false)
+  const [repairUseLinterSeed, setRepairUseLinterSeed] = useState(false)
+  const [repairLinterMustFix, setRepairLinterMustFix] = useState<number[]>([])
   const [repairModalScope, setRepairModalScope] = useState<'volume' | 'book'>('volume')
   const [repairModalVolumeNode, setRepairModalVolumeNode] = useState<OutlineNode | undefined>()
 
@@ -739,6 +742,8 @@ export default function OutlinePage() {
     // 全书修复不需要弹窗配置连续修复参数，直接走确认弹窗展示说明即可
     setRepairModalScope(scope === 'all' ? 'book' : scope)
     setRepairModalVolumeNode(volumeNode)
+    setRepairUseLinterSeed(false)
+    setRepairLinterMustFix([])
     setRepairModalOpen(true)
   }
 
@@ -777,8 +782,14 @@ export default function OutlinePage() {
           : {}),
         model_profile: modelProfile,
         ...routeLlmProviderPayload(route),
+        use_linter_seed: repairUseLinterSeed,
+        ...(repairLinterMustFix.length
+          ? { linter_must_fix_chapter_numbers: repairLinterMustFix }
+          : {}),
       },
     })
+    setRepairUseLinterSeed(false)
+    setRepairLinterMustFix([])
     toast.success('已加入修复队列，右下角可查看进度')
   }
 
@@ -1412,6 +1423,12 @@ export default function OutlinePage() {
             }}
             onJumpToChapterPlan={jumpToChapterPlan}
             onQualityCheck={() => handleDispatchOutlineQuality('volume', selected)}
+            onRelintDone={reload}
+            onRequestRepairFromLinter={(chapters) => {
+              setRepairUseLinterSeed(true)
+              setRepairLinterMustFix(chapters)
+              handleDispatchOutlineRepair('volume', selected)
+            }}
           />
         ) : (
           <div className="flex flex-col items-center justify-center flex-1 text-gray-400 gap-2 min-h-[200px]">
@@ -1595,6 +1612,7 @@ export default function OutlinePage() {
 
 function NodeDetailPanel({
   node, projectId, onOpenChapter, onSaved, onAICommitDone, onJumpToChapterPlan, onQualityCheck,
+  onRelintDone, onRequestRepairFromLinter,
 }: {
   node: OutlineNode
   projectId: string
@@ -1603,11 +1621,13 @@ function NodeDetailPanel({
   onAICommitDone: () => void
   onJumpToChapterPlan: (chapterNumber: number) => void
   onQualityCheck: () => void
+  onRelintDone?: () => void
+  onRequestRepairFromLinter?: (mustFixChapters: number[]) => void
 }) {
   const { characters, storyLines } = useAppStore()
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState<'overview' | 'chapter' | 'scene' | 'quality' | 'ai'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'linter' | 'chapter' | 'scene' | 'quality' | 'ai'>('overview')
   const [form, setForm] = useState({
     title: node.title ?? '',
     summary: node.summary ?? '',
@@ -1681,6 +1701,7 @@ function NodeDetailPanel({
 
   const tabs = [
     { key: 'overview' as const, label: '基础' },
+    ...(node.node_type === 'volume' ? [{ key: 'linter' as const, label: '章纲检测' }] : []),
     ...(node.node_type === 'chapter_plan' ? [{ key: 'chapter' as const, label: '章节要素' }] : []),
     ...(node.node_type === 'chapter_plan' ? [{ key: 'scene' as const, label: '分场蓝图' }] : []),
     ...(isExpandable ? [{ key: 'quality' as const, label: '单卷质检' }] : []),
@@ -1761,6 +1782,15 @@ function NodeDetailPanel({
           </button>
         ))}
       </div>
+
+      {activeTab === 'linter' && node.node_type === 'volume' && (
+        <VolumeLinterPanel
+          volumeNode={node}
+          projectId={projectId}
+          onRelintDone={onRelintDone}
+          onRequestRepair={onRequestRepairFromLinter}
+        />
+      )}
 
       {activeTab === 'overview' && (
       <div className="space-y-4">

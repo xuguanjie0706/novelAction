@@ -97,6 +97,8 @@ class OutlineRepairRequest(BaseModel):
     llm_provider_id: Optional[UUID] = None
     scope: Literal["all", "volume", "book"] = "all"
     volume_node_id: Optional[UUID] = None
+    use_linter_seed: bool = True
+    linter_must_fix_chapter_numbers: Optional[list[int]] = None
 
 
 class OutlineSnapshotRequest(BaseModel):

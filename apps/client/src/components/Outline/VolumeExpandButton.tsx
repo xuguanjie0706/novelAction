@@ -164,8 +164,22 @@ const VolumeExpandButton: React.FC<Props> = ({
 
             if (evt === 'step_done') {
               const count: number = payload.chapter_count ?? 0
-              appendProgress(evt, `，共生成 ${count} 章`)
-              setDone(true)
+              const linterStatus: string = payload.linter_status ?? 'ok'
+              const linterIssues: number = payload.linter_issue_count ?? 0
+              const blocked: boolean = Boolean(payload.linter_blocked)
+              let suffix = blocked
+                ? `，生成 ${count} 章但落库被 linter 阻断`
+                : `，共生成 ${count} 章`
+              if (!blocked && linterStatus !== 'ok' && linterIssues > 0) {
+                suffix += ` · linter ${linterStatus}（${linterIssues} 项）`
+              }
+              appendProgress(evt, suffix)
+              if (blocked) {
+                setError(
+                  '存在 critical 章纲问题，未写入数据库。请打开卷详情「章纲检测」处理后重新展开。'
+                )
+              }
+              setDone(!blocked)
               onExpanded()
             } else if (evt === 'context_ready') {
               const w: number = payload.written_count ?? 0
@@ -206,6 +220,14 @@ const VolumeExpandButton: React.FC<Props> = ({
           <span className="text-[10px] text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full font-medium">
             ✓ {chapterPlanCount}章
           </span>
+          {volumeNode.extra?.linter_status && volumeNode.extra.linter_status !== 'ok' && (
+            <span
+              className="text-[10px] text-amber-700 bg-amber-50 px-1 py-0.5 rounded-full"
+              title="章纲 linter 有问题，点开卷详情查看"
+            >
+              ⚠
+            </span>
+          )}
           <button
             title="重新生成章纲（会覆盖已有）"
             disabled={running}

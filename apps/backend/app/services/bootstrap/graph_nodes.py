@@ -181,8 +181,20 @@ async def node_vol1_chapters(state: BootstrapState, config: dict | None = None) 
                 "errors": [{"step": "vol1_chapters", "reason": reason}]}
     # 仅保存可序列化的主键列表，供下一步场景蓝图使用。
     ctx["_vol1_plan_ids"] = [str(p.id) for p in plans]
-    emit(run_id, "step_done", db, step="vol1_chapters", count=len(plans),
-         preview=f"第一卷共{len(plans)}章蓝图" if plans else "（跳过）")
+    vol1 = volumes[0] if volumes else None
+    if vol1 and db:
+        db.refresh(vol1)
+    from app.services.outline_linter.sse_payload import build_vol1_chapters_sse_payload
+
+    sse = build_vol1_chapters_sse_payload(
+        plans,
+        ctx,
+        volume_extra=(vol1.extra if vol1 and isinstance(vol1.extra, dict) else None),
+    )
+    linter_message = sse.pop("linter_message", None)
+    if sse.get("linter_blocked") and linter_message:
+        emit(run_id, "error", db, step="vol1_chapters", message=linter_message)
+    emit(run_id, "step_done", db, step="vol1_chapters", **sse)
     return {"ctx": ctx, "completed_steps": ["vol1_chapters"]}
 
 

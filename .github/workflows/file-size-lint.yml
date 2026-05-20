@@ -1,0 +1,57 @@
+# 文件行数红线检查（依据 CLAUDE.md「代码结构红线」）
+#
+# 规则：
+#   ⚠️ 超软警戒线（>400 行）：打印告警，不阻断 PR
+#   🚫 超硬上限（>600 行）：报错，PR 不可合并
+#
+# 豁免：scripts/check_file_sizes.py 的 EXEMPTED_SUFFIXES 列表中的文件
+#        在 CLAUDE.md「上帝文件登记册」有说明的超限文件可暂时豁免。
+#
+# 维护：新增豁免文件请同步更新 scripts/check_file_sizes.py 的 EXEMPTED_SUFFIXES
+#        并在 CLAUDE.md 登记册中说明拆分计划与时间表。
+
+name: File Size Lint
+
+on:
+  push:
+    paths:
+      - 'apps/backend/**/*.py'
+      - 'apps/client/src/**/*.ts'
+      - 'apps/client/src/**/*.tsx'
+      - 'apps/frontend/src/**/*.ts'
+      - 'apps/frontend/src/**/*.tsx'
+      - 'scripts/check_file_sizes.py'
+      - '.github/workflows/file-size-lint.yml'
+  pull_request:
+    paths:
+      - 'apps/backend/**/*.py'
+      - 'apps/client/src/**/*.ts'
+      - 'apps/client/src/**/*.tsx'
+      - 'apps/frontend/src/**/*.ts'
+      - 'apps/frontend/src/**/*.tsx'
+      - 'scripts/check_file_sizes.py'
+      - '.github/workflows/file-size-lint.yml'
+  workflow_dispatch:
+
+jobs:
+  file-size-lint:
+    name: Check file sizes (400 warn / 600 error)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run file size lint (warn-only)
+        # 先以 warn-only 模式输出完整报告（方便查阅所有文件状态）
+        run: python scripts/check_file_sizes.py --warn-only --root .
+
+      - name: Run file size lint (enforce hard limit)
+        # 再以严格模式检查，超硬上限则 fail
+        run: python scripts/check_file_sizes.py --root .

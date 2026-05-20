@@ -1,10 +1,11 @@
 """
 scene_routes.py — 三层调度 AI 端点
 
-资源边界：本模块仅负责 Scene 三层调度链路：
+资源边界：本模块负责 Scene 三层调度链路 + 分场计划生成：
   章纲 → 分场持久化 → 逐场起草（SSE）→ 场景缝合 → chapter.content
 
 端点：
+  POST /ai/scene-plan             章纲 → 分场计划（仅返回，不持久化；原 draft_routes）
   POST /ai/scene-plan-save        章纲 → 分场（AI 生成并持久化到 scenes 表）
   POST /ai/scene-draft/stream     逐场起草（SSE；写完自动存回 scene.content）
   POST /ai/scene-stitch           场景缝合（scenes → chapter.content 草稿）
@@ -490,4 +491,69 @@ async def scene_stitch(
         "scene_count": len(written),
         "chapter_id": chapter_id_str,
         "content_preview": stitched[:200],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# P2-W5-1：分场计划（仅返回，不持久化）
+# 从 draft_routes.py 迁入，与三层调度逻辑统一在本模块。
+# ═══════════════════════════════════════════════════════════════
+
+from app.schemas.scene import ScenePlanRequest, ScenePlanResponse  # noqa: E402
+
+
+@router.post("/scene-plan", response_model=ScenePlanResponse)
+async def scene_plan_endpoint(
+    project_id: str,
+    req: ScenePlanRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    章纲 → 分场（Scene Plan），仅返回计划，不写入数据库。
+
+    输入：OutlineNode 或 Chapter 的摘要信息。
+    输出：结构化 4-8 场计划（POV、目标、冲突、转折、钩子、字数预算等），
+    供前端展示、分场微调、后续逐场生成正文使用。
+    如需生成并持久化，请使用 POST /ai/scene-plan-save。
+    """
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    chars = db.query(Character).filter(Character.project_id == project_id).limit(12).all()
+    existing_characters = [{"id": str(c.id), "name": c.name, "role": c.role} for c in chars]
+
+    prev_directives = ""
+    if req.outline_node_id:
+        node = db.query(OutlineNode).filter(OutlineNode.id == req.outline_node_id).first()
+        if node and node.extra:
+            dirs = node.extra.get("directives_from_prev") or []
+            if dirs:
+                prev_directives = "; ".join([
+                    d.get("patch", {}).get("adjust_pacing", "") or d.get("reason", "")
+                    for d in dirs[-2:]
+                ])
+
+    svc = AIService(
+        "gemini" if req.model_profile == "gemini" else "default",
+        db=db,
+        llm_provider_id=req.llm_provider_id,
+    )
+
+    result = await svc.scene_plan(
+        chapter_title=req.chapter_title or "未命名章节",
+        chapter_summary=req.chapter_summary or "",
+        genre=req.genre or project.genre or "玄幻",
+        positioning=(project.extra or {}).get("positioning") if hasattr(project, "extra") else None,
+        existing_characters=existing_characters,
+        prev_directives=prev_directives,
+        model_profile=req.model_profile,
+        word_target=2200,
+    )
+
+    scenes = result.get("scenes", [])
+    return {
+        "scenes": scenes,
+        "total_word_budget": result.get("total_word_budget", 2200),
+        "notes": result.get("notes", ""),
     }

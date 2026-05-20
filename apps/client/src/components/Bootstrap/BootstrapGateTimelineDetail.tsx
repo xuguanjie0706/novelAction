@@ -9,6 +9,7 @@ import { ArrowRight, Loader2, RefreshCw, ScrollText } from 'lucide-react'
 import PositioningGatePanel, { type PositioningGatePanelHandle } from './PositioningGatePanel'
 import type { GatePendingStep } from './hooks/useBootstrapStream'
 import { STEP_META } from './hooks/useBootstrapStream'
+import BootstrapStepIcon from './BootstrapStepIcon'
 
 const LOG_PREFIX = '[BootstrapGate]'
 
@@ -258,7 +259,7 @@ export default function BootstrapGateTimelineDetail({
             />
             <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-start">
               <div className="flex min-w-0 flex-1 gap-3">
-                <span className="flex-shrink-0 text-3xl leading-none">{meta?.icon}</span>
+                <BootstrapStepIcon iconKey={gateStep} size={32} title={GATE_LABEL[gateStep]} />
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
                     <span>{meta?.stepNum}</span>
@@ -291,7 +292,7 @@ export default function BootstrapGateTimelineDetail({
           )}
           {!isPos && (
             <div className="rounded-xl border border-gray-100 bg-white px-4 py-8 text-center shadow-sm sm:px-8">
-              <div className="text-5xl leading-none opacity-90">{meta?.icon}</div>
+              <BootstrapStepIcon iconKey={gateStep} size={48} title={GATE_LABEL[gateStep]} />
               {summary && (
                 <p className="mx-auto mt-4 max-w-md rounded-xl border border-gray-100 bg-gray-50 px-4 py-2.5 text-sm font-medium text-gray-800">
                   {summary}

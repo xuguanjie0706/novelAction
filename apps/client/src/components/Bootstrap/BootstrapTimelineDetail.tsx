@@ -15,6 +15,7 @@ import { ChevronRight, Loader2, MousePointerClick, Wrench } from 'lucide-react'
 import type { StepState, Phase } from './hooks/useBootstrapStream'
 import ConsistencyContent, { type FixState } from './ConsistencyContent'
 import { projectsApi } from '../../api/client'
+import BootstrapStepIcon from './BootstrapStepIcon'
 
 function fmtDuration(ms: number): string {
   const s = ms / 1000
@@ -333,7 +334,7 @@ export default function BootstrapTimelineDetail({
         <div className="mx-auto max-w-2xl px-5 py-6 sm:max-w-3xl sm:px-8">
         <div className="mb-6 flex flex-col gap-4 border-b border-gray-200 pb-6 sm:flex-row sm:items-start">
           <div className="flex min-w-0 flex-1 gap-3">
-            <span className="flex-shrink-0 text-3xl leading-none">{step.icon}</span>
+            <BootstrapStepIcon iconKey={step.key} size={32} title={step.label} />
             <div className="min-w-0">
               <h2 className="text-lg font-bold text-gray-950">{step.label}</h2>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">

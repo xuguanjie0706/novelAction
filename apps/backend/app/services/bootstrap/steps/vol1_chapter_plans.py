@@ -14,6 +14,7 @@ from typing import Any
 import logging
 
 from app.models import OutlineNode, Project
+from app.services.bootstrap.context_vol_expand import _build_reader_promises_block
 from app.services.bootstrap.foreshadow_sync import sync_chapter_foreshadow
 from app.services.bootstrap.parse import parse_json
 from app.services.outline_planning import (
@@ -161,6 +162,8 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
             f"  节奏规划：{opening_contract.get('chapter_rhythm', '')}\n"
         )
 
+    reader_promises_block = _build_reader_promises_block(svc.db, str(project.id))
+
     plot_npc_hint = ctx.get("plot_npc_summary", "")
     positioning = ctx.get("positioning") or {}
     tropes = "、".join(positioning.get("tropes", []))
@@ -232,7 +235,7 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
 【故事线】{storyline_summary}
 【关系触发事件（可在对应章节引爆）】{relation_triggers}
 【反派时间线】{villain_hint}
-【核心爽点类型】{tropes or '（未设定）'}  节奏类型：{pace_type}{power_hint}{protag_psychology}{contract_hint}{phase_block}{prev_summary}{budget_block}
+【核心爽点类型】{tropes or '（未设定）'}  节奏类型：{pace_type}{power_hint}{protag_psychology}{contract_hint}{reader_promises_block}{phase_block}{prev_summary}{budget_block}
 
 请为本卷第{batch_start}～{batch_end}章生成{batch_count}个章节计划，返回JSON数组：
 [
@@ -246,7 +249,8 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
     "opening_hook": "开篇钩子：前500字核心手段，如何让读者第一句无法放下（≤30字）",
     "core_event": "核心事件：必须是主角选择的直接后果，格式「因[choice]→[result]」（≤60字）",
     "character_change": "人物变化：谁的认知/处境/关系发生了不可逆变化（≤30字）",
-    "foreshadow": "伏笔管理：埋[伏笔内容|主题:与全书立意的关联] 收[伏笔内容]（无则填空）",
+    "foreshadow": "伏笔管理：埋[伏笔内容|主题:与全书立意的关联] 收[伏笔内容] 加热[伏笔代号+推进方式]（无则填空）",
+    "promise_fulfilled": "本章兑现了哪条读者承诺（填承诺原文关键词片段，无则填空字符串）",
     "villain_action": "反派这一章在做什么（即便不是本章视角），以及如何逼迫主角",
     "end_hook": "章末钩子：读完最后一句停不下来的原因，具体到手法（≤30字，禁用「留下悬念」）",
     "reader_emotion_target": "本章结束时读者的目标情绪（exciting/tense/sad/romantic/mysterious/warm/anxious/epic）",
@@ -271,30 +275,39 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
 7. opening phase 每3章内至少有1次主角主动发起的胜利或资源获取
 8. storyline_refs 要交叉出现，不要只推进主线
 9. foreshadow 字段：本卷内至少2条贯穿始终的伏笔线，埋入章写「埋[xxx|主题:yyy]」，回收章写「收[xxx]」
+10. 🔴🟠级读者承诺必须在承诺窗口内的某一章填写 promise_fulfilled（与承诺原文有关键词重叠），不得拖欠
 只返回JSON数组，不要解释。"""
 
-        try:
-            raw = await svc._call_with_retry(
-                system, prompt, task="bootstrap.vol1_chapters", max_tokens=4096
-            )
-            batch_data = parse_json(raw)
-            if not isinstance(batch_data, list):
-                batch_data = batch_data.get("chapters", [])
-        except Exception:
+        batch_data: list = []
+        for gen_attempt in range(2):
+            try:
+                raw = await svc._call_with_retry(
+                    system, prompt, task="bootstrap.vol1_chapters", max_tokens=4096
+                )
+                batch_data = parse_json(raw)
+                if not isinstance(batch_data, list):
+                    batch_data = batch_data.get("chapters", [])
+            except Exception:
+                batch_data = []
+                break
+
+            actual_count = len(batch_data)
+            if actual_count == batch_count:
+                break
+            if gen_attempt == 0:
+                logger.warning(
+                    "GEN-01 批次数漂移，重试：期望%d章，实际%d章（批次=%d-%d）",
+                    batch_count, actual_count, batch_start, batch_end,
+                )
+                continue
+            logger.warning("GEN-01 批次数仍不符，截断：期望%d 实际%d", batch_count, actual_count)
+            batch_data = batch_data[:batch_count]
+
+        if not batch_data:
             continue
 
         char_name_to_id = ctx.get("char_name_to_id", {})
         storyline_ids_map = ctx.get("storyline_ids", {})
-
-        # 数量校验：AI 实际返回章数必须等于 batch_count
-        actual_count = len(batch_data)
-        if actual_count != batch_count:
-            logger.warning(
-                "vol1_chapter_plans batch 数量漂移：期望%d章，实际收到%d章（项目=%s，批次=%d-%d）",
-                batch_count, actual_count, project.id, batch_start, batch_end,
-            )
-            # 截断多余项，不允许超量落库
-            batch_data = batch_data[:batch_count]
 
         for item in batch_data:
             ch_num = item.get("chapter_number", batch_start)
@@ -337,6 +350,7 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
                 sort_order=ch_num - 1,
                 extra={
                     "foreshadow": (item.get("foreshadow") or "").strip(),
+                    "promise_fulfilled": (item.get("promise_fulfilled") or "").strip(),
                     "end_hook": end_hook_val or "",
                     "has_face_slap": item.get("has_face_slap", False),
                     "has_emotional_beat": item.get("has_emotional_beat", False),
@@ -358,7 +372,14 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
             all_results.append(node)
 
     if all_results:
-        svc.db.commit()
+        from app.services.outline_linter.gate import finalize_volume_chapter_commit
+
+        committed = finalize_volume_chapter_commit(
+            svc, project, vol1, all_results, ctx=ctx,
+        )
+        if not committed:
+            logger.error("第一卷章纲落库被 linter 阻断")
+            return []
 
     ctx["vol1_chapter_count"] = len(all_results)
     # 全书配额计数器累加（供后续卷展开时读取，防止漂移）

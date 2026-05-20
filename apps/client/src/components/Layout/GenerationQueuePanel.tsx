@@ -524,6 +524,8 @@ async function runSingleOutlineRepairRound(
       theme_statement: params.theme_statement,
       scope: params.scope ?? 'all',
       volume_node_id: params.volume_node_id,
+      use_linter_seed: params.use_linter_seed ?? true,
+      linter_must_fix_chapter_numbers: params.linter_must_fix_chapter_numbers,
     })
     const runId = res.data.run_id
     if (!runId) throw new Error('后端未返回 workflow run_id')

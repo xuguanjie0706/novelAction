@@ -557,6 +557,7 @@ async def _build_outline_repair_plan(ctx: dict[str, Any]) -> dict[str, Any]:
     publish: OutlineProgressPublisher = ctx.get("publish") or _noop_outline_progress
 
     quality_report = ctx.get("book_report") or ctx.get("result") or {}
+    linter_context = ""
     if req.scope == "volume":
         reports = ctx.get("volume_reports", [])
         quality_report = reports[0]["report"] if reports else ctx.get("result", {})
@@ -570,6 +571,38 @@ async def _build_outline_repair_plan(ctx: dict[str, Any]) -> dict[str, Any]:
                 if not quality_report:
                     volume_extra = volume.extra if isinstance(volume.extra, dict) else {}
                     quality_report = volume_extra.get("outline_quality") or {}
+                if req.use_linter_seed:
+                    from app.services.outline_linter.linter_quality import (
+                        _report_from_dict,
+                        build_linter_repair_context_block,
+                        merge_linter_into_quality_report,
+                    )
+
+                    vol_extra = volume.extra if isinstance(volume.extra, dict) else {}
+                    if vol_extra.get("linter_issues"):
+                        linter_report = _report_from_dict({
+                            "linter_version": vol_extra.get("linter_version", "1.2.0"),
+                            "status": vol_extra.get("linter_status", "warn"),
+                            "issues": vol_extra.get("linter_issues", []),
+                        })
+                        quality_report = merge_linter_into_quality_report(
+                            quality_report,
+                            linter_report,
+                        )
+                        linter_context = build_linter_repair_context_block(
+                            vol_extra,
+                            quality_report.get("repair_seed"),
+                        )
+                    if req.linter_must_fix_chapter_numbers:
+                        must = sorted({
+                            *(
+                                n
+                                for n in (quality_report.get("must_fix_chapter_numbers") or [])
+                                if isinstance(n, int)
+                            ),
+                            *req.linter_must_fix_chapter_numbers,
+                        })
+                        quality_report["must_fix_chapter_numbers"] = must
     elif req.scope == "book":
         if not quality_report:
             project_core = project.story_core if isinstance(project.story_core, dict) else {}
@@ -609,6 +642,7 @@ async def _build_outline_repair_plan(ctx: dict[str, Any]) -> dict[str, Any]:
         realm_whitelist=realm_whitelist,
         character_life_state_ledger=life_ledger,
         positioning_context=ctx.get("positioning_context", ""),
+        linter_context=linter_context,
     )
     det_patches = build_death_continuity_patches(
         repair_chapters,

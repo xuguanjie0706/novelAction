@@ -329,6 +329,7 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 - [x] **反派独立行动线 Step 9.8（2026-05-19）**：新增 `steps/villain_arc.py`，为主要反派生成卷级行动计划（欲望/障碍/选择/代价/胜败/盲区布局），写 `Project.extra['villain_arc']`
 - [x] **全书跨卷伏笔预分配 Step 11.5（2026-05-19）**：新增 `steps/core_mysteries.py`，预定义 5-8 条核心谜题（identity/prophecy/prop/reversal/hook），每条锚定埋/加热/揭晓章节，写 `Foreshadow` 表 + `Project.extra['core_mysteries']`
 - [x] **Bootstrap 拓扑更新（2026-05-19）**：graph.py 新增三节点，执行链：`volumes → gate_vol → emotion_arc → villain_arc → memory → relations → core_mysteries → opening_contract → vol1_chapters → ch1_scenes → consistency`
+- [x] **章纲 linter v1.2（2026-05-19）**：`services/outline_linter/`（CH/SEQ/VL/OC/RP/CM）；`vol1/vol_chapter_plans` 落库后 linter + GEN-02 阻断；`POST .../outline/volumes/{id}/lint`；`repair-seed` + 修复工作流 `linter_context`；vol_expand / Bootstrap `vol1_chapters` SSE 回传 `linter_blocked`；创作端 `VolumeLinterPanel`
 
 ## 待完成功能
 - [ ] ReaderPromise 深度闭环（写章注入 open 承诺 + auto-debrief AI 识别新增/兑现 + 队列自动复盘同步提交）：基础模型+router 已完成，完整闭环链路待实现
@@ -465,12 +466,32 @@ routers/outline/
 
 | 当前文件 | 行数 | 目标结构 |
 |---|---:|---|
-| `apps/client/src/components/Writing/ChapterEditor.tsx` | 2960 | `Writing/ChapterEditor/` 包：`index.tsx` 主壳 + `TopToolBar.tsx` + `DebriefPanel.tsx` + `PlanCard.tsx` + `CharacterMiniCard.tsx` + `hooks/{useChapterAutosave,usePreWriteWarning,useDebriefRun}.ts` + `utils.ts` |
+| `apps/client/src/components/Writing/ChapterEditor.tsx` | 2960 | ✅ 已完成：`Writing/ChapterEditor/` 包（`index.tsx` + `types/utils/constants` + `PlanCard/CharacterMiniCard/DebriefPanel` + `hooks/useChapterAutosave/usePreWriteWarning/useDebriefRun`）；index.tsx 仍 2146 行，待继续拆 TopToolBar/WarnPanel/ContextSidePanel JSX |
 | `apps/client/src/pages/OutlinePage.tsx` | 2099 | `pages/Outline/` 包：树视图 / AI 扩展面板 / 质检面板 / Diff 视图分文件 |
 | `apps/client/src/components/Layout/GenerationQueuePanel.tsx` | 1789 | 拆 `QueueList` / `QueueItemDetail` / `useGenerationQueue` |
 | `apps/frontend/src/pages/ReadingReviewPage.tsx` | 1538 | 拆 `ReviewList` / `SnapshotDiff` / `useReviewSubmit` |
+| `apps/client/src/pages/WorldBuildingPage.tsx` | 1547 | `pages/WorldBuilding/` 包：见下方详细蓝图 |
 
-**约束**：上述四个文件**冻结新增功能**；新需求必须先开拆分 PR。
+**约束**：上述文件**冻结新增功能**；新需求必须先开拆分 PR。
+
+#### WorldBuildingPage 拆分蓝图
+
+```
+pages/WorldBuilding/
+├── index.tsx                     # Tab 切换壳（≤ 80 行）；import lazy 各 Tab
+├── shared/
+│   └── components.tsx            # Field / TextInput / TextArea / Select / SaveBtn
+│                                 # ChipSelect / Section / EditorHeader（当前 161 行）
+└── tabs/
+    ├── StoryLinesTab.tsx         # 故事线 CRUD（约 147 行）
+    ├── PowerSystemTab.tsx        # 境界体系 CRUD + levels 编辑（约 275 行）
+    ├── SkillsTab.tsx             # 功法技能 CRUD（约 240 行）
+    ├── ItemsTab.tsx              # 道具法宝 CRUD（约 245 行）
+    ├── FactionsTab.tsx           # 势力组织 CRUD（约 298 行）
+    └── LocationsTab.tsx          # 地点 CRUD（约 108 行）
+```
+
+切割原则：每个 Tab 对应独立的 CRUD 资源 + API 调用范围；`shared/components.tsx` 仅含无状态展示组件，不含 API 调用。
 
 ---
 
@@ -479,18 +500,23 @@ routers/outline/
 | 文件 | 当前行数 | 状态 |
 |---|---:|---|
 | `apps/backend/app/routers/outline/helpers_core.py` | 2166 | 🚫 冻结新增 endpoint；新路由进 `routers/outline/routes_*.py`，helpers_core 仅作为待继续瘦身的过渡集合 |
-| `apps/client/src/components/Writing/ChapterEditor.tsx` | 2960 | 🚫 冻结新增 props/`useState`，新功能走 hooks + 子组件 |
+| `apps/client/src/components/Writing/ChapterEditor/index.tsx` | 2146 | 🚫 冻结新增 props/`useState`；禁止新增逻辑，新功能走 `hooks/` 子 hook；JSX 待进一步拆 TopToolBar/WarnPanel/ContextSidePanel |
+| `apps/client/src/components/Writing/ChapterEditor/DebriefPanel.tsx` | 707 | ⚠️ 超硬上限，待拆 HistorySection / CharUpdateSection / StorylineSection |
 | `apps/client/src/pages/OutlinePage.tsx` | 2099 | 🚫 冻结新增功能 |
 | `apps/client/src/components/Layout/GenerationQueuePanel.tsx` | 1789 | ⚠️ 警告区，下一次重大改动同步拆分 |
 | `apps/frontend/src/pages/ReadingReviewPage.tsx` | 1538 | ⚠️ 警告区 |
+| `apps/client/src/pages/WorldBuildingPage.tsx` | ~1547 | ⚠️ 警告区，见下方拆分蓝图 |
 
-### 已退役（2026-05-12 拆分完成）
+### 已退役（2026-05-12 / 2026-05-20 拆分完成）
 
 | 旧上帝文件 | 拆分去向 | 当前残留 |
 |---|---|---:|
 | `apps/backend/app/routers/outline.py` | `apps/backend/app/routers/outline/`（`routes_tree` / `routes_ai_expand` / `routes_quality` / `routes_full_generate` / `routes_workflow_ws` / `helpers_core` / `qa_internal` / `schemas`） | 已删除 |
 | `apps/backend/app/services/generation_service.py` | `apps/backend/app/services/bootstrap/`（`steps/*` + `context` / `retry` / `save_all` / `completion`） | 500 行（瘦身后的编排壳，允许继续存在） |
 | `apps/backend/app/services/ai_service.py` | `apps/backend/app/services/ai/`（`chat` / `quality` / `debrief` / `draft_stream` / `outline_ai` / `memory_ai` / `coherence` / `guardrails` / `sampling` / `writing_tools` / `client` / `service`） | 10 行（仅作兼容 re-export） |
+| `apps/backend/app/routers/ai/gated_draft_routes.py` | `gated_draft_helpers.py`（461 行）+ `gated_draft_quality.py`（367 行）+ 编排壳（358 行） | — |
+| `apps/backend/app/routers/ai/reader_simulation_routes.py` | `reader_simulation_schemas.py`（136 行）+ `reader_simulation_helpers.py`（324 行）+ 编排壳（534 行） | — |
+| `apps/client/src/components/Writing/ChapterEditor.tsx`（3168 行） | `Writing/ChapterEditor/` 包：`index.tsx` + `types.ts` + `utils.ts` + `constants.tsx` + `PlanCard.tsx` + `CharacterMiniCard.tsx` + `DebriefPanel.tsx` + `hooks/usePreWriteWarning.ts` + `hooks/useChapterAutosave.ts` + `hooks/useDebriefRun.ts` | 4 行壳（re-export） |
 
 > 任何一次让上表文件**增加 ≥ 50 行**的 PR 都必须同时包含等量或更多的「治旧」删除量；否则视为破坏红线。
 

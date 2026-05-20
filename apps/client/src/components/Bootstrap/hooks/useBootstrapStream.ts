@@ -250,19 +250,31 @@ export function useBootstrapStream() {
           : s
       ))
     } else if (event === 'step_done' && key) {
-      const detail = [count != null ? `${count} 条` : '', preview ?? ''].filter(Boolean).join(' · ')
+      const linterBlocked = Boolean(evt.linter_blocked)
+      const linterMsg =
+        typeof evt.linter_message === 'string' ? evt.linter_message.trim() : ''
+      let detail = [count != null ? `${count} 条` : '', preview ?? ''].filter(Boolean).join(' · ')
+      if (linterBlocked) {
+        detail = preview ?? linterMsg ?? '章纲未落库（linter 阻断）'
+      }
       setSteps(prev => prev.map(s => {
         if (s.key !== key) return s
         const next = Math.max(0, s.inflight - 1)
+        const doneStatus = linterBlocked
+          ? 'error'
+          : (next === 0 ? 'done' : 'running')
         return {
           ...s, inflight: next,
-          status: next === 0 ? 'done' : 'running',
+          status: doneStatus,
           detail: detail || s.detail,
           completedAt: now,
           count: count ?? s.count,
           preview: preview ?? s.preview,
         }
       }))
+      if (linterBlocked && (linterMsg || preview)) {
+        setErrorMsg(linterMsg || String(preview))
+      }
       if (key === 'signal_audit' && currentModeRef.current === 'fanqie') {
         void tryFinalizeFanqieRun()
       }

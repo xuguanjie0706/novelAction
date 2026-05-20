@@ -328,12 +328,31 @@ async def expand_volume_chapters(
                 editorial_prompt_block=editorial_prompt_block,
             )
 
+            db.refresh(volume_node)
+            vol_extra = volume_node.extra or {}
+            linter_summary = vol_extra.get("linter_summary") or {}
+
+            blocked = bool(vol_extra.get("linter_blocked"))
             yield _sse(
                 "step_done",
                 step="expand_chapters",
                 volume_title=volume_node.title,
                 chapter_count=len(nodes),
+                linter_status=vol_extra.get("linter_status", "ok"),
+                linter_issue_count=linter_summary.get("issue_count", 0),
+                linter_critical_count=linter_summary.get("critical_count", 0),
+                linter_high_count=linter_summary.get("high_count", 0),
+                linter_blocked=blocked,
             )
+            if blocked:
+                yield _sse(
+                    "error",
+                    step="expand_chapters",
+                    message=(
+                        "章纲已生成但存在 critical linter 问题，落库已阻断；"
+                        "请在大纲页「章纲检测」查看并修复后重新展开。"
+                    ),
+                )
 
         except Exception as exc:  # noqa: BLE001
             yield _sse("error", step="expand_chapters", message=str(exc))

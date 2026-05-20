@@ -1,0 +1,189 @@
+"""outline_linter 单测。"""
+
+from app.services.outline_linter.helpers import (
+    ChapterSnapshot,
+    is_placeholder,
+    text_overlap,
+)
+from app.services.outline_linter.repair_hints import build_repair_seed
+from app.services.outline_linter.rules_chapter import lint_chapters
+from app.services.outline_linter.rules_sequence import lint_sequence
+from app.services.outline_linter.rules_volume import lint_volume
+from app.services.outline_linter.schemas import LinterIssue, LinterReport
+
+
+def _ch(
+    num: int,
+    *,
+    want: str = "主角要夺回宗门信物",
+    cost: str = "暴露身份，被通缉",
+    hook: str = "通缉令贴满城门，主角不得不藏身",
+    end_hook: str = "他在废墟里发现信物上的血指印",
+    summary: str = "因潜入禁地，主角被执法队追杀",
+    villain: str = "长老暗中调动执法队封锁出口",
+    foreshadow: str = "",
+    has_slap: bool = False,
+    has_beat: bool = False,
+    pacing: str = "normal",
+    storyline_ids: list | None = None,
+) -> ChapterSnapshot:
+    return ChapterSnapshot(
+        id=f"id-{num}",
+        sort_order=num - 1,
+        title=f"第{num}章",
+        summary=summary,
+        hook=hook,
+        highlight=end_hook,
+        conflict="认知变化",
+        pacing=pacing,
+        phase="rising",
+        expected_words=2300,
+        storyline_ids=storyline_ids or ["sl-1"],
+        involved_character_ids=["c-1"],
+        power_milestone=None,
+        extra={
+            "protagonist_want": want,
+            "protagonist_obstacle": "执法队封锁山门",
+            "protagonist_choice": "冒险从暗渠突围",
+            "choice_cost": cost,
+            "villain_action": villain,
+            "end_hook": end_hook,
+            "foreshadow": foreshadow,
+            "has_face_slap": has_slap,
+            "has_emotional_beat": has_beat,
+        },
+    )
+
+
+def test_is_placeholder():
+    assert is_placeholder("（无）")
+    assert not is_placeholder("主角失去左臂")
+
+
+def test_text_overlap():
+    assert text_overlap("被通缉", "通缉令贴满城门")
+    assert not text_overlap("abc", "xyz")
+
+
+def test_ch04_critical_on_empty_cost():
+    ch = _ch(1, cost="")
+    issues = lint_chapters([ch])
+    assert any(i.rule_id == "CH-04" and i.severity == "critical" for i in issues)
+
+
+def test_seq01_cost_not_carried():
+    a = _ch(1, cost="师父为救他战死，宗门令牌碎裂")
+    b = _ch(2, hook="全新地图开启，主角参观坊市", summary="主角在坊市购买丹药")
+    issues = lint_sequence([a, b], volume_phase="rising", planned_chapters=30)
+    assert any(i.rule_id == "SEQ-01" for i in issues)
+
+
+def test_vl01_count_mismatch():
+    chapters = [_ch(i) for i in range(1, 6)]
+    issues = lint_volume(
+        chapters,
+        planned_chapters=30,
+        volume_phase="opening",
+        pace_type="medium",
+        is_first_volume=True,
+    )
+    assert any(i.rule_id == "VL-01" for i in issues)
+
+
+def test_vl04_face_slap_window():
+    chapters = [_ch(i, has_slap=False) for i in range(1, 9)]
+    issues = lint_volume(
+        chapters,
+        planned_chapters=8,
+        volume_phase="rising",
+        pace_type="medium",
+    )
+    assert any(i.rule_id in ("VL-03", "VL-04") for i in issues)
+
+
+def test_report_finalize_status():
+    r = LinterReport()
+    r.issues.extend(lint_chapters([_ch(1, cost="")]))
+    r.finalize_status()
+    assert r.status == "failed"
+
+
+def test_seq05_semantic_duplicate():
+    a = _ch(1, summary="主角潜入禁地夺取信物，被执法队追杀至悬崖", end_hook="崖边发现师兄留下的血书")
+    b = _ch(2, summary="主角潜入禁地夺取信物，被执法队追杀至悬崖", end_hook="崖边发现师兄留下的血书")
+    from app.services.outline_linter.rules_sequence import lint_semantic_duplicates
+
+    issues = lint_semantic_duplicates([a, b])
+    assert any(i.rule_id == "SEQ-05" for i in issues)
+
+
+def test_report_blocks_commit():
+    from app.services.outline_linter.gate import report_blocks_commit
+    from app.services.outline_linter.schemas import LinterIssue, LinterReport
+
+    r = LinterReport(issues=[
+        LinterIssue(
+            rule_id="CH-04", severity="critical", scope="chapter",
+            message="x", chapter_number_in_volume=1,
+        ),
+    ])
+    assert report_blocks_commit(r)
+
+
+def test_vol1_sse_payload_blocked():
+    from app.services.outline_linter.sse_payload import build_vol1_chapters_sse_payload
+
+    payload = build_vol1_chapters_sse_payload(
+        [],
+        {
+            "linter_blocked": True,
+            "linter_last_report": {
+                "status": "failed",
+                "issue_count": 5,
+                "critical_count": 2,
+                "high_count": 1,
+            },
+        },
+    )
+    assert payload["count"] == 0
+    assert payload["linter_blocked"] is True
+    assert "未落库" in payload["preview"]
+    assert payload["linter_critical_count"] == 2
+
+
+def test_promise_fulfilled_in_window():
+    from app.services.outline_linter.rules_promises import promise_fulfilled_in_window
+
+    text = "戒指内沉睡三年的陆九渊首次回应叶焚的怒火"
+    fulfilled = {2: "陆九渊在戒指中回应，叶焚得知修为消失另有隐情"}
+    assert promise_fulfilled_in_window(fulfilled, text, 1, 2)
+    assert not promise_fulfilled_in_window({}, text, 1, 2)
+
+
+def test_rp01_not_blocked_when_fulfilled_in_window():
+    """整卷一次规划越过 deadline 时，窗口内已有兑现则不应 RP-01。"""
+    from app.services.outline_linter.rules_promises import promise_fulfilled_in_window
+
+    text = "大比前坊市发现神火残图"
+    fulfilled = {11: "坊市残图被截杀，叶焚立下复仇之约"}
+    # max_global=60 > deadline=11，但第11章已兑现
+    assert promise_fulfilled_in_window(fulfilled, text, 10, 1)
+
+
+def test_build_repair_seed():
+    report = LinterReport(
+        issues=[
+            LinterIssue(
+                rule_id="CH-04",
+                severity="critical",
+                scope="chapter",
+                message="empty cost",
+                field="extra.choice_cost",
+                chapter_number_in_volume=3,
+            ),
+        ],
+    )
+    report.finalize_status()
+    seed = build_repair_seed(report)
+    assert seed["must_fix_chapter_numbers"] == [3]
+    assert "3" in seed["issues_by_chapter"]

@@ -331,12 +331,24 @@ class GenerationService:
             except Exception as e:
                 yield _sse("error", step="vol1_chapters", message=f"章级大纲生成失败：{e}")
                 vol1_plans = []
-            yield _sse(
-                "step_done",
-                step="vol1_chapters",
-                count=len(vol1_plans),
-                preview=f"第一卷共{len(vol1_plans)}章蓝图" if vol1_plans else "（跳过）",
+            from app.services.outline_linter.sse_payload import build_vol1_chapters_sse_payload
+
+            vol1_node = nodes[0] if nodes else None
+            if vol1_node:
+                self.db.refresh(vol1_node)
+            sse_vol1 = build_vol1_chapters_sse_payload(
+                vol1_plans,
+                ctx,
+                volume_extra=(
+                    vol1_node.extra
+                    if vol1_node and isinstance(vol1_node.extra, dict)
+                    else None
+                ),
             )
+            linter_msg = sse_vol1.pop("linter_message", None)
+            if sse_vol1.get("linter_blocked") and linter_msg:
+                yield _sse("error", step="vol1_chapters", message=linter_msg)
+            yield _sse("step_done", step="vol1_chapters", **sse_vol1)
 
             yield _sse("step_start", step="ch1_scenes", label="生成第1章场景蓝图...")
             try:

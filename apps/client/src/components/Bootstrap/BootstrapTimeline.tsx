@@ -7,6 +7,7 @@ import React from 'react'
 import clsx from 'clsx'
 import { Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
 import type { StepState, StepKey, Phase, StepPhase } from './hooks/useBootstrapStream'
+import BootstrapStepIcon from './BootstrapStepIcon'
 
 interface PhaseConfig {
   key: StepPhase
@@ -84,7 +85,7 @@ function StepNode({ step, isSelected, generationStartMs, onClick }: StepNodeProp
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <span className="flex-shrink-0 text-sm leading-none">{step.icon}</span>
+          <BootstrapStepIcon iconKey={step.key} size={15} title={step.label} />
           <span
             className={clsx(
               'truncate text-[13px] font-medium',

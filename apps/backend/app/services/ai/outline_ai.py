@@ -483,6 +483,7 @@ class OutlineMixin:
         realm_whitelist: list[str] | None = None,
         character_life_state_ledger: str = "",
         positioning_context: str = "",  # 立项定位 + 开局承诺；修复 patch 须符合商业定位要求
+        linter_context: str = "",  # 章纲 linter 欠债块（volume.extra.linter_issues）
     ) -> dict:
         """生成大纲修复补丁计划。
 
@@ -561,6 +562,12 @@ class OutlineMixin:
             if positioning_context else ""
         )
 
+        linter_block = ""
+        if linter_context.strip():
+            linter_block = (
+                f"\n{self._clip_context(linter_context, 2000, None, field_name='linter_context')}\n"
+            )
+
         # 根据质检问题类型生成差异化修复指引
         issue_hints_block = self._build_issue_type_hints(quality_report)
 
@@ -587,7 +594,7 @@ class OutlineMixin:
 
 【篇幅与字数约束】
 {self._clip_context(word_budget_context, 600, None, field_name="word_budget") or '（未提供）'}
-{positioning_block}{realm_block}{life_block}{issue_hints_block}
+{positioning_block}{linter_block}{realm_block}{life_block}{issue_hints_block}
 【质检问题】
 {self._clip_context(json.dumps(quality_report, ensure_ascii=False), 6000, None, field_name="quality_report")}
 

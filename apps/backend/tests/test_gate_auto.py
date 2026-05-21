@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from app.services.bootstrap.gate_auto import (
     build_auto_resume_payload,
     is_auto_mode,
+    merge_gate_data_snapshot,
     merge_gate_data_with_auto_mode,
 )
 
@@ -18,6 +19,28 @@ def test_is_auto_mode():
 def test_merge_gate_data():
     assert merge_gate_data_with_auto_mode({"kind": "x"}, True)["auto_mode"] is True
     assert "auto_mode" not in merge_gate_data_with_auto_mode({"auto_mode": True}, False)
+
+
+def test_merge_gate_data_with_llm_provider():
+    merged = merge_gate_data_with_auto_mode(
+        None, True, llm_provider_id="550e8400-e29b-41d4-a716-446655440000",
+    )
+    assert merged["auto_mode"] is True
+    assert "llm_provider_id" in merged
+
+
+def test_merge_gate_data_snapshot_preserves_auto_mode():
+    """回归：立项 gate 落库不得抹掉创建 run 时的 auto_mode。"""
+    merged = merge_gate_data_snapshot(
+        {"auto_mode": True},
+        {
+            "kind": "positioning",
+            "positioning": {"selling_point": "逆袭"},
+            "logline": "测试",
+        },
+    )
+    assert merged["auto_mode"] is True
+    assert merged["kind"] == "positioning"
 
 
 def test_build_auto_resume_positioning():

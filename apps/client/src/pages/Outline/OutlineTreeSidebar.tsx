@@ -9,6 +9,7 @@ import toast from 'react-hot-toast'
 import { outlineApi } from '../../api/client'
 import type { OutlineNode } from '../../types'
 import VolumeExpandButton from '../../components/Outline/VolumeExpandButton'
+import type { ProgressLine, ExpandEndResult } from '../../components/Outline/VolumeExpandButton'
 import { outlineTypeColor, outlineTypeLabel } from './outlineTreeHelpers'
 
 export interface OutlineTreeSidebarProps {
@@ -25,6 +26,12 @@ export interface OutlineTreeSidebarProps {
   onReload: () => void
   onClearSelection: () => void
   onShowFullGenModal: () => void
+  /** 展开开始，父层可自动选中卷节点并显示进度面板 */
+  onVolExpandStart?: (volumeNode: OutlineNode) => void
+  /** SSE 每步进度更新 */
+  onVolExpandProgress?: (lines: ProgressLine[]) => void
+  /** SSE 流结束 */
+  onVolExpandEnd?: (volumeNode: OutlineNode, result: ExpandEndResult) => void
 }
 
 export default function OutlineTreeSidebar({
@@ -41,6 +48,9 @@ export default function OutlineTreeSidebar({
   onReload,
   onClearSelection,
   onShowFullGenModal,
+  onVolExpandStart,
+  onVolExpandProgress,
+  onVolExpandEnd,
 }: OutlineTreeSidebarProps) {
   const renderNode = (node: OutlineNode, depth = 0) => {
     const isOpen = expanded.has(node.id)
@@ -76,6 +86,9 @@ export default function OutlineTreeSidebar({
               projectId={projectId}
               aiBackendRoute={aiBackendRoute}
               onExpanded={onReload}
+              onExpandStart={onVolExpandStart}
+              onExpandProgress={onVolExpandProgress}
+              onExpandEnd={onVolExpandEnd}
             />
           )}
           <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">

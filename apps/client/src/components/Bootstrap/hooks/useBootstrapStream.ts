@@ -14,6 +14,7 @@ import {
   clearActiveBootstrapRun,
   saveActiveBootstrapRun,
 } from '../../../utils/bootstrapActiveRun'
+import { readBootstrapAutoMode } from '../../../utils/bootstrapAutoMode'
 
 // ── 类型导出 ──────────────────────────────────────────────────
 
@@ -213,10 +214,26 @@ export function useBootstrapStream() {
   /** 当前运行模式；供 cancel / reconnect 等回调读取，避免闭包陈旧 */
   const currentModeRef    = useRef<StartParams['mode']>('sequential')
   const autoModeRef       = useRef(false)
+  /** 防止自动 resume 与后端 gate_auto 并发重复提交 */
+  const autoResumeInFlightRef = useRef(false)
+  /** 每个 run+闸门 仅触发一次前端兜底 resume */
+  const autoGateDoneRef = useRef(new Set<string>())
+  /** GenerateWizard 注入，供 gate_pending 时自动 resume */
+  const autoResumeParamsRef = useRef<Pick<StartParams, 'modelProfile' | 'llmProviderId'> | null>(null)
 
   useEffect(() => {
     runIdRef.current = runId
   }, [runId])
+
+  function gateStepFromGateData(gd: Record<string, unknown> | null | undefined): GatePendingStep | null {
+    if (!gd) return null
+    const kind = String(gd.kind || '')
+    if (kind === 'positioning') return 'positioning'
+    if (kind === 'power_systems') return 'power_systems'
+    if (kind === 'characters') return 'characters'
+    if (kind === 'volumes') return 'volumes'
+    return null
+  }
 
   const patchGateFromSnapshot = useCallback((gateData: Record<string, any> | null | undefined) => {
     if (!gateData || typeof gateData !== 'object') return
@@ -364,6 +381,22 @@ export function useBootstrapStream() {
       if (positioning && typeof positioning === 'object') setPositioning(positioning)
       if (autoModeRef.current) {
         setPhase('generating')
+        const params = autoResumeParamsRef.current
+        if (params && runIdRef.current) {
+          const dedupeKey = `${runIdRef.current}:${gst}`
+          if (!autoGateDoneRef.current.has(dedupeKey)) {
+            autoGateDoneRef.current.add(dedupeKey)
+            window.setTimeout(() => {
+              void tryAutoGateResume(
+                params,
+                gst,
+                positioning && typeof positioning === 'object'
+                  ? (positioning as Record<string, unknown>)
+                  : undefined,
+              )
+            }, 700)
+          }
+        }
         return
       }
       setPhase('gate')
@@ -416,6 +449,7 @@ export function useBootstrapStream() {
     streamCompleteRef.current = false
     currentModeRef.current = params.mode
     autoModeRef.current = Boolean(params.autoMode)
+    autoGateDoneRef.current.clear()
     const startMs = Date.now()
     setErrorMsg('')
     setGenStartMs(startMs)
@@ -555,11 +589,33 @@ export function useBootstrapStream() {
 
       const gateData = run.gate_data ?? undefined
       autoModeRef.current = Boolean(
-        gateData && typeof gateData === 'object' && (gateData as { auto_mode?: boolean }).auto_mode,
+        (gateData && typeof gateData === 'object' && (gateData as { auto_mode?: boolean }).auto_mode)
+        || readBootstrapAutoMode(),
       )
       const hasGatePending = evs.some(e => e.event === 'gate_pending')
       if (run.status === 'awaiting_gate' && !hasGatePending && !autoModeRef.current) {
         patchGateFromSnapshot(gateData)
+      }
+
+      if (run.status === 'awaiting_gate' && autoModeRef.current) {
+        const lastGateEv = [...evs].reverse().find(e => e.event === 'gate_pending')
+        const gst = isGatePendingStep(lastGateEv?.step)
+          ? lastGateEv.step
+          : gateStepFromGateData(gateData as Record<string, unknown> | undefined)
+        if (gst) {
+          const dedupeKey = `${rid}:${gst}`
+          if (!autoGateDoneRef.current.has(dedupeKey)) {
+            autoGateDoneRef.current.add(dedupeKey)
+            const posFromEv = lastGateEv?.positioning
+            await tryAutoGateResume(
+              params,
+              gst,
+              posFromEv && typeof posFromEv === 'object'
+                ? (posFromEv as Record<string, unknown>)
+                : (gateData as { positioning?: Record<string, unknown> } | undefined)?.positioning,
+            )
+          }
+        }
       }
 
       if (run.status === 'awaiting_retry') {
@@ -643,6 +699,32 @@ export function useBootstrapStream() {
     }
   }
 
+  /**
+   * 自动模式：后端 gate_auto 为主；重连时若 DB 已丢 auto_mode 则用 localStorage 兜底 resume。
+   */
+  async function tryAutoGateResume(
+    params: Pick<StartParams, 'modelProfile' | 'llmProviderId'>,
+    step: GatePendingStep,
+    positioningOverride?: Record<string, unknown> | null,
+  ) {
+    if (!autoModeRef.current || autoResumeInFlightRef.current) return
+    const rid = runIdRef.current
+    if (!rid) return
+    autoResumeInFlightRef.current = true
+    try {
+      await handleResume({
+        action: 'approve',
+        positioning: step === 'positioning'
+          ? (positioningOverride ?? positioningData ?? undefined)
+          : undefined,
+      }, params)
+    } catch {
+      /* handleResume 已写入 errorMsg */
+    } finally {
+      autoResumeInFlightRef.current = false
+    }
+  }
+
   async function handleResume(
     payload: { action: 'approve' | 'regenerate', positioning?: Record<string, unknown> | null },
     params: Pick<StartParams, 'modelProfile' | 'llmProviderId'>,
@@ -661,6 +743,17 @@ export function useBootstrapStream() {
         body: JSON.stringify(body),
       })
       if (!res.ok) {
+        if (res.status === 409) {
+          const snapRes = await authFetch(`/api/v1/bootstrap/runs/${rid}`, { method: 'GET' })
+          if (snapRes.ok) {
+            const snap = await snapRes.json() as { status?: string }
+            if (snap.status === 'running') {
+              setErrorMsg('')
+              setPhase('generating')
+              return
+            }
+          }
+        }
         const text = await res.text().catch(() => '')
         let detail = text || `resume 失败 (${res.status})`
         try {
@@ -733,6 +826,13 @@ export function useBootstrapStream() {
     return true
   }
 
+  const bindAutoResumeParams = useCallback(
+    (params: Pick<StartParams, 'modelProfile' | 'llmProviderId'>) => {
+      autoResumeParamsRef.current = params
+    },
+    [],
+  )
+
   return {
     phase, steps, errorMsg, projectId, positioningData, runId, generationStartMs,
     gateStep, gateMessage, gatePreview, activeLogline,
@@ -740,5 +840,6 @@ export function useBootstrapStream() {
     /** SSE 事件处理器；供 useBootstrapStepRegen 共用，使单步重跑事件也能 patch steps 状态 */
     handleEvent,
     startGenerate, reconnectToRun, handleResume, retryFailedStep, abortSse, cancelRun,
+    bindAutoResumeParams,
   }
 }

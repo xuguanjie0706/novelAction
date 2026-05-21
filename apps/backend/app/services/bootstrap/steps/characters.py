@@ -164,6 +164,11 @@ arc_stages 要求：每人至少 2 个成长阶段（主角/核心反派 3-4 个
     ctx["char_realms"] = {
         c.name: (c.current_realm or "未知") for c in results
     }
+    ctx["character_faction_lines"] = [
+        f"{c.name}：{c.faction or '无'}" for c in results if c.name
+    ]
+    protag_row = next((c for c in results if c.role == "protagonist"), None)
+    ctx["protagonist_faction"] = (protag_row.faction or "").strip() if protag_row else ""
     ctx["char_name_to_id"] = {c.name: str(c.id) for c in results}
     ctx["char_id_list"] = [{"id": str(c.id), "name": c.name} for c in results]
     ctx["core_char_names"] = [

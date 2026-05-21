@@ -331,15 +331,9 @@ async def run_bootstrap_fanqie(
         if not run or run.status not in ("awaiting_gate", "awaiting_retry"):
             _push(run_id, {"event": "__stream_end__"})
         else:
-            from app.services.bootstrap.gate_auto import schedule_auto_resume_if_needed
-            schedule_auto_resume_if_needed(
-                run_id,
-                mode="fanqie",
-                model_profile=model_profile,
-                llm_provider_id=llm_provider_id,
-                user_id=user_id,
-                resume_fn=resume_bootstrap_fanqie,
-            )
+            from app.services.bootstrap.gate_auto import schedule_auto_resume_for_run
+
+            schedule_auto_resume_for_run(run_id)
     except asyncio.CancelledError:
         emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")
         _push(run_id, {"event": "__stream_end__"})
@@ -357,6 +351,21 @@ async def resume_bootstrap_fanqie(
     model_profile: str, llm_provider_id, user_id,
 ) -> None:
     """从 checkpoint 继续番茄图执行。"""
+    from app.services.bootstrap.gate_auto import resume_lock
+
+    async with resume_lock(run_id):
+        await _resume_bootstrap_fanqie_impl(
+            run_id, resume_payload,
+            model_profile=model_profile,
+            llm_provider_id=llm_provider_id,
+            user_id=user_id,
+        )
+
+
+async def _resume_bootstrap_fanqie_impl(
+    run_id: str, resume_payload: dict, *,
+    model_profile: str, llm_provider_id, user_id,
+) -> None:
     db = SessionLocal()
     try:
         run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
@@ -390,15 +399,9 @@ async def resume_bootstrap_fanqie(
             if run and run.status in ("done", "failed", "cancelled"):
                 _push(run_id, {"event": "__stream_end__"})
             elif run and run.status in ("awaiting_gate", "awaiting_retry"):
-                from app.services.bootstrap.gate_auto import schedule_auto_resume_if_needed
-                schedule_auto_resume_if_needed(
-                    run_id,
-                    mode="fanqie",
-                    model_profile=model_profile,
-                    llm_provider_id=llm_provider_id,
-                    user_id=user_id,
-                    resume_fn=resume_bootstrap_fanqie,
-                )
+                from app.services.bootstrap.gate_auto import schedule_auto_resume_for_run
+
+                schedule_auto_resume_for_run(run_id)
         except Exception:
             pass
         db.close()

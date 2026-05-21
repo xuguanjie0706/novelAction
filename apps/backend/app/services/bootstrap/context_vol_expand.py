@@ -116,7 +116,7 @@ def _build_world_settings_block(db: Session, project_id: str) -> str:
     settings = (
         db.query(WorldSetting)
         .filter(WorldSetting.project_id == project_id)
-        .order_by(WorldSetting.sort_order)
+        .order_by(WorldSetting.created_at)
         .all()
     )
     if not settings:

@@ -79,8 +79,18 @@ def _persist(db, run_id: str, payload: dict, *, status: str | None = None, **ext
         if status:
             run.status = status
         for k, v in extra.items():
+            if k == "gate_data" and isinstance(v, dict):
+                from app.services.bootstrap.gate_auto import merge_gate_data_snapshot
+
+                v = merge_gate_data_snapshot(run.gate_data, v)
             setattr(run, k, v)
         db.commit()
+        if run.status in ("awaiting_gate", "awaiting_retry") and "gate_data" in extra:
+            gd = run.gate_data if isinstance(run.gate_data, dict) else {}
+            if gd.get("auto_mode"):
+                from app.services.bootstrap.gate_auto import schedule_auto_resume_for_run
+
+                schedule_auto_resume_for_run(run_id)
     except Exception:
         logger.exception("Failed to persist event for run %s", run_id)
         db.rollback()
@@ -524,15 +534,9 @@ async def run_bootstrap(
         if not run or run.status not in ("awaiting_gate", "awaiting_retry"):
             _push(run_id, {"event": "__stream_end__"})
         else:
-            from app.services.bootstrap.gate_auto import schedule_auto_resume_if_needed
-            schedule_auto_resume_if_needed(
-                run_id,
-                mode="sequential",
-                model_profile=model_profile,
-                llm_provider_id=llm_provider_id,
-                user_id=user_id,
-                resume_fn=resume_bootstrap,
-            )
+            from app.services.bootstrap.gate_auto import schedule_auto_resume_for_run
+
+            schedule_auto_resume_for_run(run_id)
     except asyncio.CancelledError:
         emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")
         _push(run_id, {"event": "__stream_end__"})
@@ -554,6 +558,25 @@ async def resume_bootstrap(
     user_id,
 ) -> None:
     """从 MemorySaver checkpoint 继续，以 Command(resume=...) 传入用户决策（含多闸门）。"""
+    from app.services.bootstrap.gate_auto import resume_lock
+
+    async with resume_lock(run_id):
+        await _resume_bootstrap_impl(
+            run_id, resume_payload,
+            model_profile=model_profile,
+            llm_provider_id=llm_provider_id,
+            user_id=user_id,
+        )
+
+
+async def _resume_bootstrap_impl(
+    run_id: str,
+    resume_payload: dict,
+    *,
+    model_profile: str,
+    llm_provider_id,
+    user_id,
+) -> None:
     db = SessionLocal()
     try:
         run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
@@ -588,15 +611,9 @@ async def resume_bootstrap(
             if run and run.status in ("done", "failed", "cancelled"):
                 _push(run_id, {"event": "__stream_end__"})
             elif run and run.status in ("awaiting_gate", "awaiting_retry"):
-                from app.services.bootstrap.gate_auto import schedule_auto_resume_if_needed
-                schedule_auto_resume_if_needed(
-                    run_id,
-                    mode="sequential",
-                    model_profile=model_profile,
-                    llm_provider_id=llm_provider_id,
-                    user_id=user_id,
-                    resume_fn=resume_bootstrap,
-                )
+                from app.services.bootstrap.gate_auto import schedule_auto_resume_for_run
+
+                schedule_auto_resume_for_run(run_id)
         except Exception:
             pass
         db.close()

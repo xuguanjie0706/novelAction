@@ -66,6 +66,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
     haltedStep, retryLoading,
     handleEvent,
     startGenerate: hookStart, reconnectToRun, handleResume, retryFailedStep, abortSse, cancelRun,
+    bindAutoResumeParams,
   } = useBootstrapStream()
 
   // ── 单步独立重跑（Bootstrap 完成后「重新生成本步」按钮） ─────────
@@ -133,6 +134,10 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
     }),
     [aiBackendRoute],
   )
+
+  useEffect(() => {
+    bindAutoResumeParams(resumeParams)
+  }, [bindAutoResumeParams, resumeParams])
 
   /** 从 URL 或 session 恢复 run 后，把时间轴上的「一句话」与后端 logline 对齐 */
   useEffect(() => {

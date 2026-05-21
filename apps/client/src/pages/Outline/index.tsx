@@ -21,6 +21,8 @@ import OutlineTreeSidebar from './OutlineTreeSidebar'
 import BookQualityTab from './tabs/BookQualityTab'
 import VolumeQualityTab from './tabs/VolumeQualityTab'
 import RevisionsTab from './tabs/RevisionsTab'
+import VolExpandProgressPanel from '../../components/Outline/VolExpandProgressPanel'
+import { useVolExpandBridge } from './useVolExpandBridge'
 
 
 export default function OutlinePage() {
@@ -37,6 +39,14 @@ export default function OutlinePage() {
   const [showFullGenModal, setShowFullGenModal] = useState(false)
   const [showBatchModal, setShowBatchModal] = useState(false)
   const [contentTab, setContentTab] = useState<'node' | 'bookQuality' | 'volumeQuality' | 'revisions'>('node')
+
+  /**
+   * 展开章纲进度桥接：将 VolumeExpandButton 的 SSE 进度提升到中间区域展示。
+   * 生成完成后自动切到「章纲检测」Tab。
+   */
+  const {
+    volExpandState, linterTabVolumeId, dismissExpand, viewLinter, sidebarCallbacks,
+  } = useVolExpandBridge({ setSelected, setContentTab, setActiveNodeTab: () => {} })
   const [outlineRevisions, setOutlineRevisions] = useState<any[]>([])
   const [compareBaseRevisionId, setCompareBaseRevisionId] = useState<string | null>(null)
   const [compareTargetRevisionId, setCompareTargetRevisionId] = useState<string | null>(null)
@@ -386,6 +396,7 @@ export default function OutlinePage() {
         onReload={reload}
         onClearSelection={() => setSelected(null)}
         onShowFullGenModal={() => setShowFullGenModal(true)}
+        {...sidebarCallbacks}
       />
 
       {/* 右侧详情 + AI 面板 */}
@@ -479,25 +490,36 @@ export default function OutlinePage() {
             />
           ) : null
         ) : selected ? (
-          <NodeDetailPanel
-            key={selected.id}
-            node={selected}
-            projectId={projectId!}
-            onOpenChapter={() => openChapterFromNode(selected)}
-            onSaved={updated => { setSelected(updated); reload() }}
-            onAICommitDone={() => {
-              reload()
-              setExpanded(prev => new Set([...prev, selected.id]))
-            }}
-            onJumpToChapterPlan={jumpToChapterPlan}
-            onQualityCheck={() => handleDispatchOutlineQuality('volume', selected)}
-            onRelintDone={reload}
-            onRequestRepairFromLinter={(chapters) => {
-              setRepairUseLinterSeed(true)
-              setRepairLinterMustFix(chapters)
-              handleDispatchOutlineRepair('volume', selected)
-            }}
-          />
+          <div className="flex flex-col">
+            {/* 展开章纲进度面板：生成期间及完成后短暂展示在中间区域顶部 */}
+            {volExpandState && volExpandState.volumeTitle && (
+              <VolExpandProgressPanel
+                state={volExpandState}
+                onDismiss={dismissExpand}
+                onViewLinter={viewLinter}
+              />
+            )}
+            <NodeDetailPanel
+              key={`${selected.id}-${linterTabVolumeId === selected.id ? 'linter' : 'default'}`}
+              node={selected}
+              projectId={projectId!}
+              onOpenChapter={() => openChapterFromNode(selected)}
+              onSaved={updated => { setSelected(updated); reload() }}
+              onAICommitDone={() => {
+                reload()
+                setExpanded(prev => new Set([...prev, selected.id]))
+              }}
+              onJumpToChapterPlan={jumpToChapterPlan}
+              onQualityCheck={() => handleDispatchOutlineQuality('volume', selected)}
+              onRelintDone={reload}
+              onRequestRepairFromLinter={(chapters) => {
+                setRepairUseLinterSeed(true)
+                setRepairLinterMustFix(chapters)
+                handleDispatchOutlineRepair('volume', selected)
+              }}
+              initialTab={linterTabVolumeId === selected.id ? 'linter' : undefined}
+            />
+          </div>
         ) : (
           <div className="flex flex-col items-center justify-center flex-1 text-gray-400 gap-2 min-h-[200px]">
             <span className="text-3xl">📖</span>

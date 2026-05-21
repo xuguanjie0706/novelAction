@@ -18,7 +18,7 @@ import { Field } from './shared/Field'
 
 export default function NodeDetailPanel({
   node, projectId, onOpenChapter, onSaved, onAICommitDone, onJumpToChapterPlan, onQualityCheck,
-  onRelintDone, onRequestRepairFromLinter,
+  onRelintDone, onRequestRepairFromLinter, initialTab,
 }: {
   node: OutlineNode
   projectId: string
@@ -29,6 +29,11 @@ export default function NodeDetailPanel({
   onQualityCheck: () => void
   onRelintDone?: () => void
   onRequestRepairFromLinter?: (mustFixChapters: number[]) => void
+  /**
+   * 节点切换后自动激活的初始 Tab（默认 'overview'）。
+   * 展开章纲完成后父层传 'linter' 可直接跳到检测结果。
+   */
+  initialTab?: 'overview' | 'linter' | 'chapter' | 'scene' | 'quality' | 'ai'
 }) {
   const { characters, storyLines } = useAppStore()
   const [editing, setEditing] = useState(false)
@@ -51,7 +56,7 @@ export default function NodeDetailPanel({
   })
 
   useEffect(() => {
-    setActiveTab('overview')
+    setActiveTab(initialTab ?? 'overview')
     // 重置表单（包含 P2 新字段）
     setForm({
       title: node.title ?? '',

@@ -174,6 +174,14 @@ def _structural_precheck(svc: Any, project, ctx: dict) -> list[dict]:
             })
             break  # 一条提示即可
 
+    # 5. 卷级实体：势力别名 / 反派境界曲线 / 终局 Boss 档位 ─────────────────
+    try:
+        from app.services.bootstrap.volume_entity_registry import lint_volume_entity_issues
+
+        issues.extend(lint_volume_entity_issues(db, pid, ctx))
+    except Exception:
+        logger.exception("consistency_scan 卷级实体预检跳过 project=%s", pid)
+
     return issues
 
 

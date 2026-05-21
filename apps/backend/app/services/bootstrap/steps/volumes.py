@@ -7,6 +7,10 @@ from typing import Any
 
 from app.models import OutlineNode, Project
 from app.services.bootstrap.context import get_genre_kit_block
+from app.services.bootstrap.volume_entity_registry import (
+    build_volume_entity_prompt_block,
+    lint_volume_entity_issues,
+)
 from app.services.bootstrap.parse import parse_json
 from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 from app.services.outline_planning import words_to_plan
@@ -48,6 +52,7 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
         if _pos_lines:
             positioning_block = "\n【立项定位（每卷必须贯彻）】\n" + "\n".join(_pos_lines) + "\n"
     kit_block = get_genre_kit_block(ctx)
+    entity_block = build_volume_entity_prompt_block(ctx)
 
     villain_timelines = ctx.get("villain_timelines", [])
     villain_block = ""
@@ -62,7 +67,7 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
     prompt = f"""小说：《{ctx['project_title']}》主角：{ctx.get('protagonist', '主角')}
 创意：{ctx['logline']}
 立意与类型：{ctx.get('premise', '')[:700] or '（未填写）'}
-设定摘要：{ctx['settings_summary']}{storyline_hint}{villain_block}{positioning_block}{kit_block}
+设定摘要：{ctx['settings_summary']}{storyline_hint}{villain_block}{positioning_block}{entity_block}{kit_block}
 
 主线核心角色（固定卡司，非全书全部人物）：{', '.join(ctx.get('char_names', []))}
 ⚠️ 以上只是主线人物。每卷 summary/conflict 允许并鼓励提及未命名配角（如"某城守将""地下情报商""宗门长老"等职能角色），章节细化时会按需正式创建他们。
@@ -168,6 +173,19 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
         results.append(node)
 
     svc.db.commit()
+
+    try:
+        vol_lint = lint_volume_entity_issues(svc.db, project.id, ctx)
+        if vol_lint:
+            ctx["volume_entity_lint"] = vol_lint
+            logger.warning(
+                "bootstrap.volumes 实体校验发现 %d 项 project=%s",
+                len(vol_lint),
+                project.id,
+            )
+    except Exception:
+        logger.exception("bootstrap.volumes 实体校验跳过 project=%s", project.id)
+
     logger.info(
         "bootstrap.volumes 完成 project=%s 写入卷数=%d phases=%s",
         project.id,

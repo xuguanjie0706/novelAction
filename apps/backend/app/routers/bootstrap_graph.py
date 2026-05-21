@@ -162,7 +162,9 @@ async def create_run(
         model_profile=req.model_profile,
         status="pending",
         events=[],
-        gate_data=merge_gate_data_with_auto_mode(None, req.auto_mode),
+        gate_data=merge_gate_data_with_auto_mode(
+            None, req.auto_mode, llm_provider_id=req.llm_provider_id,
+        ),
     )
     db.add(run)
     db.commit()

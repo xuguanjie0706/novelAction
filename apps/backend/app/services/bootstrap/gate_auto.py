@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Callable, Awaitable
+from uuid import UUID
 
 from app.database import SessionLocal
 from app.models.bootstrap_run import BootstrapRun
@@ -18,7 +20,15 @@ from app.schemas.bootstrap_positioning import try_validate_positioning
 logger = logging.getLogger(__name__)
 
 _AUTO_RESUME_TASKS: dict[str, asyncio.Task] = {}
-_MAX_AUTO_RESUME_ROUNDS = 16
+_RESUME_LOCKS: dict[str, asyncio.Lock] = {}
+_MAX_AUTO_RESUME_ROUNDS = 24
+
+
+def resume_lock(run_id: str) -> asyncio.Lock:
+    """同一 run 同时只允许一个 resume/ainvoke，避免自动链与 HTTP 并发打穿 checkpoint。"""
+    if run_id not in _RESUME_LOCKS:
+        _RESUME_LOCKS[run_id] = asyncio.Lock()
+    return _RESUME_LOCKS[run_id]
 
 
 def is_auto_mode(gate_data: Any) -> bool:
@@ -26,14 +36,40 @@ def is_auto_mode(gate_data: Any) -> bool:
     return bool(isinstance(gate_data, dict) and gate_data.get("auto_mode"))
 
 
-def merge_gate_data_with_auto_mode(gate_data: dict | None, auto_mode: bool) -> dict:
-    """创建 run 时写入 gate_data 根字段。"""
+def merge_gate_data_with_auto_mode(
+    gate_data: dict | None,
+    auto_mode: bool,
+    *,
+    llm_provider_id: Any = None,
+) -> dict:
+    """创建 run 时写入 gate_data 根字段（含后续链式 resume 所需的 provider）。"""
     base = dict(gate_data) if isinstance(gate_data, dict) else {}
     if auto_mode:
         base["auto_mode"] = True
     else:
         base.pop("auto_mode", None)
+    if llm_provider_id is not None:
+        base["llm_provider_id"] = str(llm_provider_id)
     return base
+
+
+def _llm_provider_from_gate_data(gd: dict) -> Any:
+    raw = gd.get("llm_provider_id")
+    if not raw:
+        return None
+    try:
+        return UUID(str(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def merge_gate_data_snapshot(existing: Any, update: dict) -> dict:
+    """合并闸门快照，保留 ``auto_mode``（各步 _persist 不得整表覆盖创建时的标志）。"""
+    base = dict(existing) if isinstance(existing, dict) else {}
+    merged = {**base, **update}
+    if base.get("auto_mode"):
+        merged["auto_mode"] = True
+    return merged
 
 
 def build_auto_resume_payload(run: BootstrapRun) -> dict | None:
@@ -63,6 +99,34 @@ def build_auto_resume_payload(run: BootstrapRun) -> dict | None:
         return {"action": "approve", "positioning": normalized}
 
     return {"action": "approve"}
+
+
+def schedule_auto_resume_for_run(run_id: str) -> None:
+    """从 DB 读取 run 并排队自动 resume（供 _persist / run 结束等统一入口）。"""
+    db = SessionLocal()
+    try:
+        run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
+        if not run:
+            return
+        gd = run.gate_data if isinstance(run.gate_data, dict) else {}
+        if run.mode == "fanqie":
+            from app.services.bootstrap.graph_fanqie import resume_bootstrap_fanqie as resume_fn
+
+            mode = "fanqie"
+        else:
+            from app.services.bootstrap.graph import resume_bootstrap as resume_fn
+
+            mode = run.mode or "sequential"
+        schedule_auto_resume_if_needed(
+            str(run.id),
+            mode=mode,
+            model_profile=run.model_profile or "gemini",
+            llm_provider_id=_llm_provider_from_gate_data(gd),
+            user_id=run.user_id,
+            resume_fn=resume_fn,
+        )
+    finally:
+        db.close()
 
 
 def schedule_auto_resume_if_needed(
@@ -133,6 +197,9 @@ async def _auto_resume_chain(
                 return
             payload = build_auto_resume_payload(run)
             if not payload:
+                if run.status == "running":
+                    await asyncio.sleep(0.35)
+                    continue
                 logger.info(
                     "auto_mode: run %s 停止自动 resume（status=%s round=%s）",
                     run_id,
@@ -141,6 +208,8 @@ async def _auto_resume_chain(
                 )
                 return
             mp = model_profile or run.model_profile or "gemini"
+            gd = run.gate_data if isinstance(run.gate_data, dict) else {}
+            lip = llm_provider_id if llm_provider_id is not None else _llm_provider_from_gate_data(gd)
         finally:
             db.close()
 
@@ -155,13 +224,49 @@ async def _auto_resume_chain(
                 run_id,
                 payload,
                 model_profile=mp,
-                llm_provider_id=llm_provider_id,
+                llm_provider_id=lip,
                 user_id=user_id,
             )
         except Exception:
             logger.exception("auto_mode: resume 失败 run=%s", run_id)
             return
 
-        await asyncio.sleep(0.18)
+        run = await _wait_run_after_resume(run_id)
+        if not run:
+            await asyncio.sleep(0.35)
+            continue
+        if not is_auto_mode(run.gate_data):
+            return
+        if run.status in ("done", "failed", "cancelled"):
+            return
+
+        await asyncio.sleep(0.12)
 
     logger.warning("auto_mode: run %s 达到最大自动 resume 轮次 %s", run_id, _MAX_AUTO_RESUME_ROUNDS)
+
+
+async def _wait_run_after_resume(
+    run_id: str,
+    *,
+    timeout_sec: float = 45.0,
+) -> BootstrapRun | None:
+    """resume 返回后等待 DB 落到 awaiting_gate / 终态（避免 status=running 时链式任务误退出）。"""
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        db = SessionLocal()
+        try:
+            run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
+            if not run:
+                return None
+            if run.status in (
+                "awaiting_gate",
+                "awaiting_retry",
+                "done",
+                "failed",
+                "cancelled",
+            ):
+                return run
+        finally:
+            db.close()
+        await asyncio.sleep(0.2)
+    return None

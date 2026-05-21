@@ -160,7 +160,7 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
             summary=vol.get("summary"),
             hook=vol.get("hook"),
             conflict=vol.get("conflict"),
-            sort_order=vol.get("sort_order", i),
+            sort_order=i,  # 始终用循环下标（0-based），忽略 AI 返回值（AI 常给 1-based）
             phase=phase_val,
             extra={"planned_chapters": planned, "phase": phase_val},
         )

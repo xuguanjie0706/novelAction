@@ -4,8 +4,10 @@ Bootstrap LangGraph StateGraph — 支持 human-in-the-loop 闸门。
 拓扑：START → positioning → gate(interrupt) → project → power_systems → gate_power(interrupt)
       → factions → storylines → characters → gate_chars(interrupt) → skills_items → settings
       → volumes → gate_vol(interrupt) → emotion_arc → villain_arc
-      → memory → relations → core_mysteries → opening_contract → vol1_chapters
-      → ch1_scenes → consistency → END
+      → memory → relations → core_mysteries → opening_contract → consistency → END
+
+注意：vol1_chapters（Step 12.5）与 ch1_scenes（Step 13）已从 Bootstrap 移除。
+两个步骤的节点实现保留在 graph_nodes.py，供写作阶段按需调用。
 
 多个 ``interrupt_before`` 与节点内 ``interrupt()`` 配合：每道闸门先落库/推送 ``gate_pending``，
 用户 ``POST /resume`` 后继续；Step0 支持 ``action=regenerate`` 重跑立项；Step2/5/9 支持删表重跑。
@@ -419,8 +421,9 @@ async def node_core_mysteries(s, c=None):   return await _run_step(s, c, "core_m
 def _build_graph() -> StateGraph:
     from app.services.bootstrap.graph_nodes import (
         node_characters, node_skills_items, node_volumes,
-        node_vol1_chapters, node_ch1_scenes, node_consistency,
-        node_emotion_villain, node_memory_relations,
+        node_consistency, node_emotion_villain, node_memory_relations,
+        # node_vol1_chapters / node_ch1_scenes 已移出 Bootstrap，
+        # 保留在 graph_nodes.py 供写作阶段按需调用。
     )
     from app.services.bootstrap.graph_gates import (
         node_gate_characters,
@@ -446,8 +449,6 @@ def _build_graph() -> StateGraph:
         ("memory_relations",     node_memory_relations),  # memory+relations 并行
         ("core_mysteries",       node_core_mysteries),
         ("opening_contract",     node_opening_contract),
-        ("vol1_chapters",        node_vol1_chapters),
-        ("ch1_scenes",           node_ch1_scenes),
         ("consistency",          node_consistency),
     ]:
         g.add_node(name, fn)
@@ -458,8 +459,7 @@ def _build_graph() -> StateGraph:
         "characters", "gate_characters", "skills_items", "settings",
         "volumes", "gate_volumes",
         "emotion_villain", "memory_relations", "core_mysteries",
-        "opening_contract", "vol1_chapters",
-        "ch1_scenes", "consistency", END,
+        "opening_contract", "consistency", END,
     ]
     for a, b in zip(chain, chain[1:]):
         g.add_edge(a, b)
@@ -523,6 +523,16 @@ async def run_bootstrap(
         run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
         if not run or run.status not in ("awaiting_gate", "awaiting_retry"):
             _push(run_id, {"event": "__stream_end__"})
+        else:
+            from app.services.bootstrap.gate_auto import schedule_auto_resume_if_needed
+            schedule_auto_resume_if_needed(
+                run_id,
+                mode="sequential",
+                model_profile=model_profile,
+                llm_provider_id=llm_provider_id,
+                user_id=user_id,
+                resume_fn=resume_bootstrap,
+            )
     except asyncio.CancelledError:
         emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")
         _push(run_id, {"event": "__stream_end__"})
@@ -577,8 +587,16 @@ async def resume_bootstrap(
             run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
             if run and run.status in ("done", "failed", "cancelled"):
                 _push(run_id, {"event": "__stream_end__"})
-            elif run and run.status == "awaiting_retry":
-                pass  # 保持 SSE，等待用户 retry_step
+            elif run and run.status in ("awaiting_gate", "awaiting_retry"):
+                from app.services.bootstrap.gate_auto import schedule_auto_resume_if_needed
+                schedule_auto_resume_if_needed(
+                    run_id,
+                    mode="sequential",
+                    model_profile=model_profile,
+                    llm_provider_id=llm_provider_id,
+                    user_id=user_id,
+                    resume_fn=resume_bootstrap,
+                )
         except Exception:
             pass
         db.close()

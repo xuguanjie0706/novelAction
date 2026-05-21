@@ -17,7 +17,11 @@ from app.models import OutlineNode, Project
 from app.services.bootstrap.context_vol_expand import _build_reader_promises_block
 from app.services.bootstrap.foreshadow_sync import sync_chapter_foreshadow
 from app.services.bootstrap.parse import parse_json
-from app.services.bootstrap.steps.phase_guidance import get_chapter_phase_guidance
+from app.services.bootstrap.steps.phase_guidance import (
+    chapter_number_for_batch_item,
+    get_chapter_phase_guidance,
+    wipe_volume_chapter_plans,
+)
 from app.services.llm_token_budgets import max_tokens_vol1_chapter_plans
 from app.services.outline_planning import (
     build_book_budget_block,
@@ -71,9 +75,13 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
         return []
 
     vol1 = next((v for v in volumes if v.sort_order == 0), volumes[0])
-    planned = (vol1.extra or {}).get("planned_chapters", 30)
-    if planned not in (30, 60):
+    planned = int((vol1.extra or {}).get("planned_chapters", 30))
+    # gen_volumes 已保证 planned 在 15-80 内；此处不再限制为 30/60，
+    # 否则与 volume.extra.planned_chapters 不符会触发 Linter VL-01 阻断。
+    if planned < 15:
         planned = 30
+    elif planned > 80:
+        planned = 60
 
     logger.info(
         "vol1_chapters 开始 project=%s volume=%s planned=%d phase=%s",
@@ -82,6 +90,16 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
         planned,
         vol1.phase or "opening",
     )
+
+    # 重试 / 重复执行时先清旧章纲，避免同 sort_order 叠多条（graph retry 不调 wipe_step）
+    wiped = wipe_volume_chapter_plans(svc.db, project.id, vol1.id)
+    if wiped:
+        logger.info(
+            "vol1_chapters 已清除旧章纲 project=%s volume=%s count=%d",
+            project.id,
+            vol1.id,
+            wiped,
+        )
 
     system = (
         "你是拥有30年经验的网络小说结构策划。"
@@ -322,8 +340,8 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
         char_name_to_id = ctx.get("char_name_to_id", {})
         storyline_ids_map = ctx.get("storyline_ids", {})
 
-        for item in batch_data:
-            ch_num = item.get("chapter_number", batch_start)
+        for batch_index, item in enumerate(batch_data):
+            ch_num = chapter_number_for_batch_item(batch_start, batch_index, item)
             involved_ids = [
                 char_name_to_id[n]
                 for n in item.get("involved_characters", [])

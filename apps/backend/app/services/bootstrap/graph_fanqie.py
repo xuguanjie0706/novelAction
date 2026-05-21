@@ -328,8 +328,18 @@ async def run_bootstrap_fanqie(
         }}
         await fanqie_graph.ainvoke(initial, config=config)
         run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
-        if not run or run.status != "awaiting_gate":
+        if not run or run.status not in ("awaiting_gate", "awaiting_retry"):
             _push(run_id, {"event": "__stream_end__"})
+        else:
+            from app.services.bootstrap.gate_auto import schedule_auto_resume_if_needed
+            schedule_auto_resume_if_needed(
+                run_id,
+                mode="fanqie",
+                model_profile=model_profile,
+                llm_provider_id=llm_provider_id,
+                user_id=user_id,
+                resume_fn=resume_bootstrap_fanqie,
+            )
     except asyncio.CancelledError:
         emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")
         _push(run_id, {"event": "__stream_end__"})
@@ -379,6 +389,16 @@ async def resume_bootstrap_fanqie(
             run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
             if run and run.status in ("done", "failed", "cancelled"):
                 _push(run_id, {"event": "__stream_end__"})
+            elif run and run.status in ("awaiting_gate", "awaiting_retry"):
+                from app.services.bootstrap.gate_auto import schedule_auto_resume_if_needed
+                schedule_auto_resume_if_needed(
+                    run_id,
+                    mode="fanqie",
+                    model_profile=model_profile,
+                    llm_provider_id=llm_provider_id,
+                    user_id=user_id,
+                    resume_fn=resume_bootstrap_fanqie,
+                )
         except Exception:
             pass
         db.close()

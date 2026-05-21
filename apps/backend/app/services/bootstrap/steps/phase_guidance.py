@@ -1,10 +1,16 @@
-"""章节节奏约束工具函数（共享模块）。
+"""章节节奏约束与章纲落库辅助（共享模块）。
 
 按卷阶段（phase）和章节编号返回注入 prompt 的细分节奏约束文字块。
-vol1_chapter_plans 和 vol_chapter_plans 共用此函数，避免重复维护。
+vol1_chapter_plans 和 vol_chapter_plans 共用；章号校正 / 清卷章纲亦在此集中维护。
 """
 
 from __future__ import annotations
+
+import logging
+from typing import Any
+from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 
 def get_chapter_phase_guidance(ch_num: int, total: int, phase: str) -> str:
@@ -103,3 +109,77 @@ def get_chapter_phase_guidance(ch_num: int, total: int, phase: str) -> str:
             "感情线/兄弟线在本阶段有里程碑性的定格（告白/决裂/和解都算）。"
         )
     return ""
+
+
+def chapter_number_for_batch_item(
+    batch_start: int,
+    batch_index: int,
+    item: dict,
+) -> int:
+    """批内章号以顺位为准，避免 AI 重复 chapter_number 造成同章多条大纲。
+
+    Args:
+        batch_start: 本批起始章号（1-based）。
+        batch_index: 本批数组下标（0-based）。
+        item: AI 返回的单章 JSON 对象。
+
+    Returns:
+        校正后的章号（batch_start + batch_index，除非 AI 值已与顺位一致）。
+    """
+    expected = batch_start + batch_index
+    raw = item.get("chapter_number")
+    try:
+        ch = int(raw)
+    except (TypeError, ValueError):
+        return expected
+    if ch == expected:
+        return ch
+    logger.warning(
+        "chapter_number 漂移：AI=%r 校正为 %d（batch_start=%d index=%d）",
+        raw,
+        expected,
+        batch_start,
+        batch_index,
+    )
+    return expected
+
+
+def wipe_volume_chapter_plans(db: Any, project_id: str | UUID, volume_id: str | UUID) -> int:
+    """删除某卷下全部 chapter_plan（重试 / 重跑前清场，防叠章）。
+
+    Args:
+        db: SQLAlchemy Session。
+        project_id: 项目 ID。
+        volume_id: 卷 OutlineNode ID。
+
+    Returns:
+        删除的章纲节点数。
+    """
+    from app.models import OutlineNode
+
+    pid = str(project_id)
+    vid = str(volume_id)
+    plan_ids = [
+        row[0]
+        for row in db.query(OutlineNode.id)
+        .filter(
+            OutlineNode.project_id == pid,
+            OutlineNode.parent_id == vid,
+            OutlineNode.node_type == "chapter_plan",
+        )
+        .all()
+    ]
+    if not plan_ids:
+        return 0
+    deleted = (
+        db.query(OutlineNode)
+        .filter(OutlineNode.id.in_(plan_ids))
+        .delete(synchronize_session=False)
+    )
+    logger.info(
+        "wipe_volume_chapter_plans: project=%s volume=%s deleted=%d",
+        pid,
+        vid,
+        deleted,
+    )
+    return deleted

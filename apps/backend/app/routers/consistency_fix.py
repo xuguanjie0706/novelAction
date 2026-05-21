@@ -35,8 +35,8 @@ from app.models.outline import OutlineNode
 from app.models.project import Project
 from app.services.ai_service import AIService
 from app.services.bootstrap.context import hydrate_ctx_from_project
-from app.services.bootstrap.parse import parse_json
 from app.services.bootstrap.steps.consistency_scan import gen_consistency_scan
+from app.services.consistency_fix_service import EntityCodebook, generate_fix_patches
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,20 @@ _ALLOWED_FIELDS: dict[str, set[str]] = {
     "skill":     {"mastered_by"},
 }
 
+# 仅支持手动处理的问题类型（不调用远程 LLM，避免无谓触发安全过滤）
+_MANUAL_ONLY_ISSUE_TYPES = frozenset({"volume_order_gap", "storyline_gap"})
+
+
+def _is_manual_only_issue(issue: dict) -> bool:
+    """判断该条是否超出当前自动修复字段能力（如改境界体系表）。"""
+    t = str(issue.get("type") or "")
+    if t in _MANUAL_ONLY_ISSUE_TYPES:
+        return True
+    desc = str(issue.get("description") or "")
+    if t == "realm_mismatch" and "境界体系" in desc:
+        return True
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Endpoint
@@ -160,90 +174,78 @@ async def fix_consistency_issues(
     factions:   list[Faction]   = db.query(Faction).filter(Faction.project_id == project_id).all()
     skills:     list[Skill]     = db.query(Skill).filter(Skill.project_id == project_id).all()
 
-    char_lines    = [f"- {c.name}：faction={c.faction or ''}, current_realm={c.current_realm or ''}" for c in characters]
-    faction_lines = [f"- {f.name}" for f in factions]
-    skill_lines   = [f"- {s.name}：mastered_by={getattr(s, 'mastered_by', '') or ''}" for s in skills]
+    auto_pairs = [(idx, iss) for idx, iss in selected_pairs if not _is_manual_only_issue(iss)]
+    manual_pairs = [(idx, iss) for idx, iss in selected_pairs if _is_manual_only_issue(iss)]
 
-    issues_block = "\n".join(
-        f"[seq={seq}] severity={iss.get('severity','')}, type={iss.get('type','')}\n"
-        f"    描述：{iss.get('description','')}\n"
-        f"    建议：{iss.get('suggestion','')}"
-        for seq, (_, iss) in enumerate(selected_pairs)
-    )
-    user_note = f"\n\n用户补充说明：{body.user_prompt.strip()}" if body.user_prompt.strip() else ""
-
-    system = (
-        "你是资深数据库编辑，负责修复小说系统数据不一致问题。"
-        "只返回 JSON 数组，不要任何解释文字。"
-    )
-    prompt = f"""小说项目数据修复任务：
-
-【待修复的一致性问题（seq 为序号，下方操作须引用此值）】
-{issues_block}{user_note}
-
-【当前人物列表（name：faction, current_realm）】
-{chr(10).join(char_lines) or '（无）'}
-
-【当前势力列表】
-{chr(10).join(faction_lines) or '（无）'}
-
-【当前技能列表（name：mastered_by）】
-{chr(10).join(skill_lines) or '（无）'}
-
-请生成修复操作 JSON 数组（每条对应一个可自动修复的操作）：
-[
-  {{
-    "issue_seq": 0,
-    "entity_type": "character|faction|skill",
-    "entity_name": "实体名称（必须与列表完全一致）",
-    "field": "字段名",
-    "new_value": "修改后的值",
-    "reason": "修复理由（15字内）"
-  }}
-]
-
-约束：
-- entity_name 必须与列表中已有名称一致，不可虚构
-- field 只能是：current_realm 或 faction（character）/ name 或 description（faction）/ mastered_by（skill）
-- 若某问题无法通过以上字段自动修复，跳过，不要输出该条
-- 只返回 JSON 数组，不加任何说明"""
-
-    # AI 调用
     profile = "gemini" if body.model_profile == "gemini" else "default"
     svc = AIService(profile, db=db, llm_provider_id=body.llm_provider_id)
-    try:
-        raw = await svc._call_ai(system, prompt, max_tokens=2048, task="quality.check")
-        patches: list = parse_json(raw)
-        if not isinstance(patches, list):
-            patches = []
-    except Exception as exc:
-        logger.exception("consistency_fix AI 调用失败: %s", exc)
-        raise HTTPException(status_code=500, detail=f"AI 调用失败：{exc}")
+    codebook = EntityCodebook(characters, factions, skills)
 
-    # 构建实体查找字典
+    patches: list = []
+    if auto_pairs:
+        try:
+            patches = await generate_fix_patches(
+                svc,
+                auto_pairs,
+                characters,
+                factions,
+                skills,
+                user_prompt=body.user_prompt,
+            )
+        except Exception as exc:
+            exc_str = str(exc)
+            logger.exception("consistency_fix AI 调用失败: %s", exc)
+            if "blocked" in exc_str.lower() or "safety" in exc_str.lower():
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "远程模型安全过滤拦截了本次请求（可能因角色/势力/技能名称触发）。"
+                        "建议：① 在「模型/线路」切换为本地模型后重试；"
+                        "② 或减少一次选中的问题数量，分批修复。"
+                    ),
+                )
+            raise HTTPException(status_code=500, detail=f"AI 调用失败：{exc}")
+
     char_map    = {c.name: c for c in characters}
     faction_map = {f.name: f for f in factions}
     skill_map   = {s.name: s for s in skills}
 
+    pair_by_idx = {idx: iss for idx, iss in selected_pairs}
+
     applied_list: list[AppliedPatch] = []
-    skipped_list: list[SkippedPatch] = []
+    skipped_list: list[SkippedPatch] = [
+        SkippedPatch(
+            issue_index=idx,
+            reason="该问题需在大纲/境界体系等页面手动调整，当前接口不支持自动写入",
+            suggestion=str(iss.get("suggestion") or ""),
+        )
+        for idx, iss in manual_pairs
+    ]
 
     for patch in patches:
         seq         = patch.get("issue_seq")
         entity_type = str(patch.get("entity_type") or "").lower()
-        entity_name = str(patch.get("entity_name") or "")
+        entity_name_raw = str(patch.get("entity_name") or "")
         field       = str(patch.get("field") or "")
         new_value   = patch.get("new_value")
         reason      = str(patch.get("reason") or "")
 
-        # issue_seq → 真实 all_issues index
-        real_idx = selected_pairs[seq][0] if isinstance(seq, int) and 0 <= seq < len(selected_pairs) else -1
+        real_idx = patch.get("_real_idx")
+        if real_idx is None:
+            real_idx = (
+                auto_pairs[seq][0]
+                if isinstance(seq, int) and 0 <= seq < len(auto_pairs)
+                else -1
+            )
+
+        entity_name = codebook.resolve_entity_name(entity_type, entity_name_raw) or entity_name_raw
 
         def _skip(msg: str) -> None:
+            iss = pair_by_idx.get(real_idx, {})
             skipped_list.append(SkippedPatch(
                 issue_index=real_idx,
                 reason=msg,
-                suggestion=selected_pairs[seq][1].get("suggestion", "") if isinstance(seq, int) and 0 <= seq < len(selected_pairs) else "",
+                suggestion=str(iss.get("suggestion") or ""),
             ))
 
         allowed = _ALLOWED_FIELDS.get(entity_type)

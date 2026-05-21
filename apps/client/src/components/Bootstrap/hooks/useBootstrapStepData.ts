@@ -21,7 +21,6 @@ import {
   itemsApi,
   settingsApi,
   outlineApi,
-  scenesApi,
 } from '../../../api/client'
 
 export type StepDataMap = Partial<Record<StepKey, unknown>>
@@ -109,20 +108,6 @@ async function fetchStepData(key: StepKey, pid: string): Promise<unknown> {
           : tree
       }
 
-      case 'vol1_chapters': {
-        const tree = (await outlineApi.getTree(pid)).data as any[]
-        // 取第一卷下的 chapter_plan 节点
-        const vol1 = Array.isArray(tree) ? tree[0] : null
-        return vol1?.children ?? []
-      }
-
-      case 'ch1_scenes': {
-        const tree = (await outlineApi.getTree(pid)).data as any[]
-        const ch1Node = findFirstChapterPlan(tree)
-        if (!ch1Node?.id) return null
-        return (await scenesApi.list(pid, { outline_node_id: ch1Node.id })).data
-      }
-
       // 以下步骤已有专属展示渠道（positioningData / insights）或无需额外拉取
       case 'positioning':
       case 'opening_contract':
@@ -139,14 +124,3 @@ async function fetchStepData(key: StepKey, pid: string): Promise<unknown> {
   }
 }
 
-/** 从大纲树中递归找第一个 chapter_plan 节点 */
-function findFirstChapterPlan(nodes: any[]): any | null {
-  for (const node of nodes) {
-    if (node.node_type === 'chapter_plan') return node
-    if (Array.isArray(node.children) && node.children.length > 0) {
-      const found = findFirstChapterPlan(node.children)
-      if (found) return found
-    }
-  }
-  return null
-}

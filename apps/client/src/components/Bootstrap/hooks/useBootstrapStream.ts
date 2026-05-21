@@ -37,7 +37,7 @@ export type StepKey =
   | 'power_systems' | 'factions' | 'storylines' | 'characters'
   | 'skills' | 'items' | 'settings'
   | 'volumes' | 'memory' | 'relations'
-  | 'opening_contract' | 'vol1_chapters' | 'ch1_scenes' | 'consistency'
+  | 'opening_contract' | 'consistency'
   // 番茄专属步骤
   | 'contrast_design' | 'golden_finger' | 'face_slap_map'
   | 'power_ladder' | 'opening_5chapters' | 'rhythm_map' | 'signal_audit'
@@ -68,7 +68,7 @@ export interface StepState {
   completedAt?: number
   count?: number
   preview?: string
-  /** vol1_chapters 等步骤 linter 阻断时的 Top 问题列表 */
+  /** linter 阻断时的 Top 问题列表 */
   linterIssues?: LinterIssuePreview[]
   linterBlockingRules?: string[]
 }
@@ -79,6 +79,8 @@ export interface StartParams {
   targetWords: number
   modelProfile: string
   llmProviderId?: string | null
+  /** 为 true 时跳过闸门人工确认，由后端链式自动 resume */
+  autoMode?: boolean
 }
 
 export const STEP_META: Record<StepKey, {
@@ -97,9 +99,7 @@ export const STEP_META: Record<StepKey, {
   memory:           { icon: '🧠', stepColor: '#ec4899', phase: 'narrative',  stepNum: 'STEP 10',   desc: '注入长篇记忆系统的初始知识种子，供后续章节检索' },
   relations:        { icon: '🕸️', stepColor: '#22c55e', phase: 'characters', stepNum: 'STEP 11',   desc: '建立人物关系网络，明确情感张力与社会结构' },
   opening_contract: { icon: '🤝', stepColor: '#22c55e', phase: 'narrative',  stepNum: 'STEP 12',   desc: '明确前10章对读者的追读承诺，防止开局流失' },
-  vol1_chapters:    { icon: '📋', stepColor: '#f97316', phase: 'blueprint',  stepNum: 'STEP 12.5', desc: '将第一卷骨架拆解为可执行的章节级写作计划' },
-  ch1_scenes:       { icon: '🎬', stepColor: '#f97316', phase: 'blueprint',  stepNum: 'STEP 13',   desc: '将第1章章纲拆解为可直接执行的逐场写作蓝图' },
-  consistency:      { icon: '🔍', stepColor: '#ef4444', phase: 'qa',         stepNum: 'STEP 14',   desc: '交叉核验所有生成物，标出矛盾与需要确认的问题' },
+  consistency:      { icon: '🔍', stepColor: '#ef4444', phase: 'qa',         stepNum: 'STEP 13',   desc: '交叉核验所有生成物，标出矛盾与需要确认的问题' },
   all:              { icon: '✨', stepColor: '#f59e0b', phase: 'foundation', stepNum: 'SINGLE',    desc: 'AI 单次全量生成世界蓝图（大上下文模式）' },
   saving:           { icon: '💾', stepColor: '#06b6d4', phase: 'foundation', stepNum: 'SAVE',      desc: '将生成结果批量写入数据库' },
   // 番茄专属步骤
@@ -117,7 +117,7 @@ const SEQ_STEP_KEYS: StepKey[] = [
   'power_systems', 'factions', 'storylines', 'characters',
   'skills', 'items', 'settings',
   'volumes', 'memory', 'relations',
-  'opening_contract', 'vol1_chapters', 'ch1_scenes', 'consistency',
+  'opening_contract', 'consistency',
 ]
 
 /** 番茄专属 Bootstrap 步骤列表（9阶段）*/
@@ -212,6 +212,7 @@ export function useBootstrapStream() {
   const runIdRef          = useRef<string | null>(null)
   /** 当前运行模式；供 cancel / reconnect 等回调读取，避免闭包陈旧 */
   const currentModeRef    = useRef<StartParams['mode']>('sequential')
+  const autoModeRef       = useRef(false)
 
   useEffect(() => {
     runIdRef.current = runId
@@ -361,6 +362,10 @@ export function useBootstrapStream() {
           : null,
       )
       if (positioning && typeof positioning === 'object') setPositioning(positioning)
+      if (autoModeRef.current) {
+        setPhase('generating')
+        return
+      }
       setPhase('gate')
     } else if (event === 'gate_passed') {
       setPhase('generating')
@@ -410,6 +415,7 @@ export function useBootstrapStream() {
     isSubmittingRef.current = true
     streamCompleteRef.current = false
     currentModeRef.current = params.mode
+    autoModeRef.current = Boolean(params.autoMode)
     const startMs = Date.now()
     setErrorMsg('')
     setGenStartMs(startMs)
@@ -447,7 +453,11 @@ export function useBootstrapStream() {
         const runRes = await authFetch('/api/v1/bootstrap/runs', {
           method: 'POST', signal: abort.signal,
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...body, mode: apiMode }),
+          body: JSON.stringify({
+            ...body,
+            mode: apiMode,
+            auto_mode: Boolean(params.autoMode),
+          }),
         })
         if (!runRes.ok) throw new Error(await runRes.text().catch(() => `创建失败 (${runRes.status})`))
         const { run_id } = await runRes.json()
@@ -543,9 +553,13 @@ export function useBootstrapStream() {
         handleEvent(evToApply as Record<string, any>)
       }
 
+      const gateData = run.gate_data ?? undefined
+      autoModeRef.current = Boolean(
+        gateData && typeof gateData === 'object' && (gateData as { auto_mode?: boolean }).auto_mode,
+      )
       const hasGatePending = evs.some(e => e.event === 'gate_pending')
-      if (run.status === 'awaiting_gate' && !hasGatePending) {
-        patchGateFromSnapshot(run.gate_data ?? undefined)
+      if (run.status === 'awaiting_gate' && !hasGatePending && !autoModeRef.current) {
+        patchGateFromSnapshot(gateData)
       }
 
       if (run.status === 'awaiting_retry') {
@@ -723,6 +737,8 @@ export function useBootstrapStream() {
     phase, steps, errorMsg, projectId, positioningData, runId, generationStartMs,
     gateStep, gateMessage, gatePreview, activeLogline,
     haltedStep, retryLoading,
+    /** SSE 事件处理器；供 useBootstrapStepRegen 共用，使单步重跑事件也能 patch steps 状态 */
+    handleEvent,
     startGenerate, reconnectToRun, handleResume, retryFailedStep, abortSse, cancelRun,
   }
 }

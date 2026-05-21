@@ -449,73 +449,6 @@ function RelationsContent({ data }: { data: any[] }) {
 
 // ── Step 12.5：第一卷章纲 ─────────────────────────────────────────────────────
 
-function Vol1ChaptersContent({ data }: { data: any[] }) {
-  const chapters = data.filter((n: any) => n.node_type === 'chapter_plan' || n.chapter_number != null)
-  const SHOW = 5
-  return (
-    <Card title={`第一卷章纲 · 共 ${chapters.length} 章`}>
-      {chapters.slice(0, SHOW).map((ch: any, i: number) => (
-        <div key={i} className="border-b border-gray-50 py-2.5 last:border-0">
-          <div className="flex items-baseline gap-2">
-            <span className="flex-shrink-0 text-[11px] font-bold text-gray-400">
-              第{ch.chapter_number_in_volume ?? ch.order ?? i + 1}章
-            </span>
-            <span className="text-sm font-semibold text-gray-900">{ch.title}</span>
-          </div>
-          {(ch.hook ?? ch.chapter_hook ?? ch.summary) && (
-            <p className="mt-1 line-clamp-2 text-xs italic leading-relaxed text-gray-500">
-              「{ch.hook ?? ch.chapter_hook ?? ch.summary}」
-            </p>
-          )}
-        </div>
-      ))}
-      <MoreHint remaining={chapters.length - SHOW} noun="章" />
-    </Card>
-  )
-}
-
-// ── Step 13：第1章分场 ────────────────────────────────────────────────────────
-
-const SCENE_BORDER_COLORS = ['#f59e0b', '#22c55e', '#8b5cf6', '#ef4444', '#06b6d4']
-
-function Ch1ScenesContent({ data }: { data: any[] }) {
-  if (!Array.isArray(data) || data.length === 0) {
-    return (
-      <Card>
-        <p className="text-sm text-gray-500">场景数据已写入，前往大纲页面查看完整分场蓝图。</p>
-      </Card>
-    )
-  }
-  return (
-    <Card title={`第1章分场 · 共 ${data.length} 场`}>
-      {data.map((sc: any, i: number) => {
-        const borderColor = SCENE_BORDER_COLORS[i % SCENE_BORDER_COLORS.length]
-        return (
-          <div
-            key={i}
-            className="mb-2 rounded-lg border-l-[3px] bg-gray-50 px-3 py-2 last:mb-0"
-            style={{ borderLeftColor: borderColor }}
-          >
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-bold" style={{ color: borderColor }}>
-                场景 {sc.order ?? i + 1}
-              </span>
-              {sc.word_budget && (
-                <span className="rounded-full border border-gray-200 bg-white px-1.5 py-px text-[10px] text-gray-500">
-                  {sc.word_budget}字
-                </span>
-              )}
-            </div>
-            {sc.goal && <p className="mt-1 text-xs font-medium text-gray-800">{sc.goal}</p>}
-            {sc.pov_character_name && (
-              <p className="mt-0.5 text-[11px] text-gray-400">POV · {sc.pov_character_name}</p>
-            )}
-          </div>
-        )
-      })}
-    </Card>
-  )
-}
 
 // ── 主入口 ────────────────────────────────────────────────────────────────────
 
@@ -563,12 +496,6 @@ export default function StepDataContent({ stepKey, data }: Props) {
 
     case 'relations':
       return arr && arr.length > 0 ? <RelationsContent data={arr} /> : null
-
-    case 'vol1_chapters':
-      return arr && arr.length > 0 ? <Vol1ChaptersContent data={arr} /> : null
-
-    case 'ch1_scenes':
-      return <Ch1ScenesContent data={(data as any[]) ?? []} />
 
     default:
       return null

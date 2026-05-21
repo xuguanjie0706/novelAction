@@ -57,6 +57,7 @@ from app.routers import auth as auth_router
 from app.routers import admin_auth as admin_auth_router
 from app.routers import dashboard as dashboard_router
 from app.routers import bootstrap_graph as bootstrap_graph_router
+from app.routers import bootstrap_step_regen as bootstrap_step_regen_router
 from app.routers import credits as credits_router
 from app.routers import admin_credits as admin_credits_router
 from app.routers import admin_redeem_codes as admin_redeem_codes_router
@@ -227,6 +228,7 @@ app.include_router(projects.router, prefix="/api/v1")
 # bootstrap：SSE 直连（旧）+ LangGraph 队列（新）。
 app.include_router(generate.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(bootstrap_graph_router.router, prefix="/api/v1")
+app.include_router(bootstrap_step_regen_router.router, prefix="/api/v1")
 
 # 生成任务队列。
 app.include_router(jobs_router.router, prefix="/api/v1")

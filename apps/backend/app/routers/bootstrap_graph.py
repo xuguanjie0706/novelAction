@@ -90,6 +90,7 @@ class StartRequest(BaseModel):
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
     mode: Literal["sequential", "fanqie", "single_shot"] = "sequential"
+    auto_mode: bool = False
 
 
 class ResumeRequest(BaseModel):
@@ -152,6 +153,8 @@ async def create_run(
 
     @returns {"run_id": "uuid"}；前端用此 id 订阅 /events 并提交 /resume
     """
+    from app.services.bootstrap.gate_auto import merge_gate_data_with_auto_mode
+
     run = BootstrapRun(
         user_id=current_user.id,
         logline=req.logline,
@@ -159,6 +162,7 @@ async def create_run(
         model_profile=req.model_profile,
         status="pending",
         events=[],
+        gate_data=merge_gate_data_with_auto_mode(None, req.auto_mode),
     )
     db.add(run)
     db.commit()

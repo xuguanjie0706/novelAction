@@ -5,7 +5,7 @@
  */
 import React from 'react'
 import clsx from 'clsx'
-import { Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
+import { Loader2, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react'
 import type { StepState, StepKey, Phase, StepPhase } from './hooks/useBootstrapStream'
 import BootstrapStepIcon from './BootstrapStepIcon'
 
@@ -46,9 +46,13 @@ interface StepNodeProps {
   isSelected: boolean
   generationStartMs: number | null
   onClick: () => void
+  /** phase=done 时传入，以便显示「↻」按钮 */
+  onRegen?: (key: StepKey) => void
+  /** 当前正在重跑的步骤 key */
+  regenStep?: StepKey | null
 }
 
-function StepNode({ step, isSelected, generationStartMs, onClick }: StepNodeProps) {
+function StepNode({ step, isSelected, generationStartMs, onClick, onRegen, regenStep }: StepNodeProps) {
   const offsetMsRaw =
     step.startedAt != null && generationStartMs != null ? step.startedAt - generationStartMs : null
   const offsetMs = offsetMsRaw != null ? Math.max(0, offsetMsRaw) : null
@@ -98,7 +102,40 @@ function StepNode({ step, isSelected, generationStartMs, onClick }: StepNodeProp
             {step.status === 'running' && (
               <Loader2 size={12} style={{ color }} className="animate-spin" />
             )}
-            {step.status === 'done' && <CheckCircle2 size={12} style={{ color }} />}
+            {step.status === 'done' && !onRegen && <CheckCircle2 size={12} style={{ color }} />}
+            {step.status === 'done' && onRegen && (
+              <span className="flex items-center gap-0.5">
+                <CheckCircle2 size={12} style={{ color }} />
+                {/* 外层 StepNode 已是 button，内层不可用 button（嵌套 button 会触发 DOM/React 报错） */}
+                <span
+                  role="button"
+                  tabIndex={regenStep ? -1 : 0}
+                  title="重新生成本步"
+                  aria-disabled={!!regenStep}
+                  onClick={e => {
+                    e.stopPropagation()
+                    if (!regenStep) onRegen(step.key)
+                  }}
+                  onKeyDown={e => {
+                    if (regenStep) return
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      onRegen(step.key)
+                    }
+                  }}
+                  className={clsx(
+                    'ml-0.5 rounded p-0.5 transition-colors',
+                    regenStep === step.key
+                      ? 'text-amber-500'
+                      : 'text-gray-300 hover:text-amber-500',
+                    regenStep && 'opacity-40 pointer-events-none',
+                  )}
+                >
+                  <RefreshCw size={10} className={regenStep === step.key ? 'animate-spin' : ''} />
+                </span>
+              </span>
+            )}
             {step.status === 'error' && <AlertCircle size={12} className="text-red-500" />}
             {step.status === 'blocked' && (
               <span className="text-[10px] text-gray-400">—</span>
@@ -144,6 +181,10 @@ interface Props {
   logline: string
   elapsedSec: number
   generationStartMs: number | null
+  /** 传入后，done 步骤显示「↻」按钮；仅 phase=done 时由父组件传入 */
+  onRegen?: (step: StepKey) => void
+  /** 当前正在重跑的步骤 key */
+  regenStep?: StepKey | null
 }
 
 export default function BootstrapTimeline({
@@ -154,6 +195,8 @@ export default function BootstrapTimeline({
   logline,
   elapsedSec,
   generationStartMs,
+  onRegen,
+  regenStep,
 }: Props) {
   const doneCount = steps.filter(s => s.status === 'done').length
   const totalCount = steps.length
@@ -237,6 +280,8 @@ export default function BootstrapTimeline({
                   isSelected={selectedKey === step.key}
                   generationStartMs={generationStartMs}
                   onClick={() => onSelect(step.key)}
+                  onRegen={onRegen}
+                  regenStep={regenStep}
                 />
               ))}
             </div>

@@ -24,8 +24,10 @@ import type { LlmOverview } from '../../types'
 import { llmProviderIdFromRoute, modelProfileFromRoute, useAppStore } from '../../store'
 import { TargetWordsInput } from '../TargetWordsInput'
 import { useBootstrapStream } from './hooks/useBootstrapStream'
+import { readBootstrapAutoMode, saveBootstrapAutoMode } from '../../utils/bootstrapAutoMode'
 import type { StepKey } from './hooks/useBootstrapStream'
 import { useBootstrapStepData } from './hooks/useBootstrapStepData'
+import { useBootstrapStepRegen } from './hooks/useBootstrapStepRegen'
 import BootstrapGateTimelineDetail from './BootstrapGateTimelineDetail'
 import BootstrapTimeline from './BootstrapTimeline'
 import BootstrapTimelineDetail from './BootstrapTimelineDetail'
@@ -62,8 +64,13 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
     phase, steps, errorMsg, projectId, positioningData, generationStartMs, runId,
     gateStep, gateMessage, gatePreview, activeLogline,
     haltedStep, retryLoading,
+    handleEvent,
     startGenerate: hookStart, reconnectToRun, handleResume, retryFailedStep, abortSse, cancelRun,
   } = useBootstrapStream()
+
+  // ── 单步独立重跑（Bootstrap 完成后「重新生成本步」按钮） ─────────
+  // handleEvent 与主流程 SSE 共用，regen 的 step_start/step_done/error 事件直接 patch steps 状态
+  const { regenStep, triggerRegen } = useBootstrapStepRegen(handleEvent)
 
   /** 时间轴当前选中的步骤 key */
   const [selectedStepKey, setSelectedStepKey] = useState<StepKey | null>(null)
@@ -86,6 +93,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
   } | null>(null)
   const [llmOverview, setLlmOverview]   = useState<LlmOverview | null>(null)
   const [llmLoading, setLlmLoading]     = useState(false)
+  const [autoMode, setAutoMode]         = useState(() => readBootstrapAutoMode())
   const [waitSec, setWaitSec]           = useState(0)
   /** resume 请求进行中（gate 面板按钮禁用态） */
   const [resumeLoading, setResumeLoading] = useState(false)
@@ -197,12 +205,14 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
   // ── 开始生成 ─────────────────────────────────────────────────
   function handleStart() {
     if (!logline.trim()) return
+    saveBootstrapAutoMode(autoMode)
     hookStart({
       logline: logline.trim(),
       mode,
       targetWords,
       modelProfile: modelProfileFromRoute(aiBackendRoute),
       llmProviderId: llmProviderIdFromRoute(aiBackendRoute),
+      autoMode: mode !== 'single_shot' && autoMode,
     })
   }
 
@@ -357,6 +367,11 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                 生成中…
               </span>
             )}
+            {isTimelinePhase && phase === 'generating' && autoMode && mode !== 'single_shot' && (
+              <span className="ml-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700">
+                自动模式
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {(showWorkbenchSplit || isGatePhase) && (
@@ -401,6 +416,23 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
               立意、主题和设定将由 AI 根据一句话创意自动生成，你无需额外填写设定项。
             </p>
+
+            {mode !== 'single_shot' && (
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3">
+                <input
+                  type="checkbox"
+                  checked={autoMode}
+                  onChange={e => setAutoMode(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-amber-500 focus:ring-amber-400"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="text-sm font-medium text-gray-800">自动模式</span>
+                  <span className="mt-0.5 block text-xs leading-relaxed text-gray-500">
+                    跳过立项 / 境界 / 人物 / 卷骨架等闸门确认；步骤失败时自动重试并继续，无需手动点「继续生成」。
+                  </span>
+                </span>
+              </label>
+            )}
 
             {/* 模型线路 */}
             <div>
@@ -547,6 +579,10 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
               logline={logline}
               elapsedSec={waitSec}
               generationStartMs={generationStartMs}
+              onRegen={phase === 'done' && projectId
+                ? (step) => void triggerRegen(step, projectId, resumeParams)
+                : undefined}
+              regenStep={regenStep}
             />
             {isGatePhase && gateStep ? (
               gateStep === 'positioning' && !positioningData ? (
@@ -597,6 +633,10 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                     ...updated,
                   }))
                 }
+                onRegen={phase === 'done' && projectId
+                  ? (step) => void triggerRegen(step, projectId, resumeParams)
+                  : undefined}
+                regenStep={regenStep}
               />
             )}
           </div>

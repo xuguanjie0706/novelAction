@@ -259,6 +259,13 @@ interface Props {
    * 用于在右侧详情面板展示富内容；拉取中或失败时为 undefined，降级到"X 条"摘要。
    */
   stepData?: StepDataMap
+  /**
+   * 单步重新生成回调（phase=done 时传入）；触发后端 regenerate 端点并通过 SSE 更新步骤状态。
+   * 传入时，detail 底栏会出现「重新生成本步」按钮。
+   */
+  onRegen?: (step: import('./hooks/useBootstrapStream').StepKey) => void
+  /** 当前正在重跑的步骤 key；重跑时禁用按钮并显示旋转图标 */
+  regenStep?: import('./hooks/useBootstrapStream').StepKey | null
 }
 
 export default function BootstrapTimelineDetail({
@@ -279,6 +286,8 @@ export default function BootstrapTimelineDetail({
   modelProfile = 'gemini',
   llmProviderId = null,
   onInsightsUpdate,
+  onRegen,
+  regenStep = null,
 }: Props) {
   const scrollClass =
     'flex-1 min-h-0 overflow-y-auto bg-[#f8fafc] [scrollbar-width:thin] [scrollbar-color:#e5e7eb_transparent]'
@@ -529,6 +538,23 @@ export default function BootstrapTimelineDetail({
                 : selectedConsistencyIndices.size > 0
                   ? `修复选中 (${selectedConsistencyIndices.size})`
                   : '一键修复全部'}
+            </button>
+          )}
+          {/* 单步重新生成：仅在选中步骤已完成且 onRegen 已传入时显示 */}
+          {onRegen && step && step.status === 'done' && (
+            <button
+              type="button"
+              disabled={!!regenStep}
+              onClick={() => onRegen(step.key)}
+              title={`重新生成「${step.label}」步骤`}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white py-3 text-sm font-semibold text-gray-700 shadow-sm transition-colors hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700 disabled:opacity-40 sm:w-auto sm:px-5"
+            >
+              {regenStep === step.key ? (
+                <Loader2 size={15} className="animate-spin text-amber-500" />
+              ) : (
+                <span className="text-[15px] leading-none">↻</span>
+              )}
+              {regenStep === step.key ? '重新生成中…' : '重新生成本步'}
             </button>
           )}
           <button

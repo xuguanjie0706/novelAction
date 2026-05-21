@@ -24,7 +24,10 @@ from typing import Any
 from app.models import OutlineNode, Project
 from app.services.bootstrap.foreshadow_sync import sync_chapter_foreshadow
 from app.services.bootstrap.parse import parse_json
-from app.services.bootstrap.steps.phase_guidance import get_chapter_phase_guidance
+from app.services.bootstrap.steps.phase_guidance import (
+    chapter_number_for_batch_item,
+    get_chapter_phase_guidance,
+)
 from app.services.llm_token_budgets import max_tokens_vol_expand_chapters
 from app.services.outline_planning import (
     build_book_budget_block,
@@ -383,8 +386,8 @@ async def gen_vol_chapter_plans(
         char_name_to_id = ctx.get("char_name_to_id", {})
         storyline_ids_map = ctx.get("storyline_ids", {})
 
-        for item in batch_data:
-            ch_num = item.get("chapter_number", batch_start)
+        for batch_index, item in enumerate(batch_data):
+            ch_num = chapter_number_for_batch_item(batch_start, batch_index, item)
             involved_ids = [
                 char_name_to_id[n]
                 for n in item.get("involved_characters", [])

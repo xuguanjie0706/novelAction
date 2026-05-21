@@ -304,3 +304,125 @@ async def node_consistency(state: BootstrapState, config: dict | None = None) ->
         if user_wants_step_retry(user):
             continue
         return {"ctx": ctx, "errors": [{"step": "consistency", "reason": msg}]}
+
+
+async def node_emotion_villain(state: BootstrapState, config: dict | None = None) -> dict:
+    """Step 9.5 + 9.8 并行：情绪节律图 + 反派行动线。
+
+    两步均只依赖卷骨架（Step 9 产物），互不依赖，合并为单节点并行执行节省一次 AI 调用时间。
+    asyncio 事件循环保证 svc.db.commit() 在 await 之间不被抢占，并行写入 project.extra 安全。
+    任一步失败不中断另一步，错误收集后统一上报。
+    """
+    config = _resolve_config(config)
+    db = config["configurable"]["db"]
+    run_id = state["run_id"]
+    svc = _make_svc(config)
+    ctx = dict(state.get("ctx") or {})
+    from app.models import Project
+    project = db.query(Project).filter(Project.id == state.get("project_id")).first()
+
+    while True:
+        emit(run_id, "step_start", db, step="emotion_arc", label="规划全书情绪节律...")
+        emit(run_id, "step_start", db, step="villain_arc", label="生成反派独立行动线...")
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    svc._gen_emotion_arc(project, ctx),
+                    svc._gen_villain_arc(project, ctx),
+                    return_exceptions=True,
+                ),
+                timeout=240.0,
+            )
+        except asyncio.TimeoutError:
+            msg = "情绪节律/反派行动线并行生成超时，请重试"
+            user = await pause_for_step_retry(state, config, step="emotion_arc", message=msg, ctx=ctx)
+            if user_wants_step_retry(user):
+                continue
+            return {"ctx": ctx, "errors": [{"step": "emotion_villain", "reason": "timeout"}]}
+
+        failed: list[tuple[str, BaseException]] = []
+        for step_name, res in (("emotion_arc", results[0]), ("villain_arc", results[1])):
+            if isinstance(res, BaseException):
+                emit(run_id, "error", db, step=step_name,
+                     message=f"生成失败：{format_llm_error_message(res)}")
+                failed.append((step_name, res))
+
+        if failed:
+            step_name, res = failed[0]
+            msg = format_llm_error_message(res)
+            user = await pause_for_step_retry(
+                state, config, step=step_name, message=msg, ctx=ctx, emit_error=False,
+            )
+            if user_wants_step_retry(user):
+                continue
+            return {"ctx": ctx, "errors": [{"step": step_name, "reason": msg}]}
+
+        emotion_arc = results[0] if not isinstance(results[0], BaseException) else []
+        villain_arc = results[1] if not isinstance(results[1], BaseException) else []
+        emit(run_id, "step_done", db, step="emotion_arc", count=len(emotion_arc))
+        emit(run_id, "step_done", db, step="villain_arc", count=len(villain_arc))
+        return {"ctx": ctx, "completed_steps": ["emotion_arc", "villain_arc"]}
+
+
+async def node_memory_relations(state: BootstrapState, config: dict | None = None) -> dict:
+    """Step 10 + 11 并行：记忆库种子 + 人物关系。
+
+    两步均只依赖人物库（Step 5 产物），互不依赖，写入不同表（MemoryChunk / CharacterRelationship），
+    合并为单节点并行执行节省一次 AI 调用时间。
+    """
+    config = _resolve_config(config)
+    db = config["configurable"]["db"]
+    run_id = state["run_id"]
+    svc = _make_svc(config)
+    ctx = dict(state.get("ctx") or {})
+    from app.models import Character, Project
+    project = db.query(Project).filter(Project.id == state.get("project_id")).first()
+    char_ids = ctx.pop("_char_ids", None) or []
+    if char_ids:
+        chars = db.query(Character).filter(Character.id.in_(char_ids)).all()
+    else:
+        chars = db.query(Character).filter(
+            Character.project_id == state.get("project_id")
+        ).all()
+
+    while True:
+        emit(run_id, "step_start", db, step="memory", label="生成记忆库种子...")
+        emit(run_id, "step_start", db, step="relations", label="建立人物关系...")
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    svc._gen_memory(project, ctx),
+                    svc._gen_relations(project, chars, ctx),
+                    return_exceptions=True,
+                ),
+                timeout=300.0,
+            )
+        except asyncio.TimeoutError:
+            msg = "记忆库/人物关系并行生成超时，请重试"
+            user = await pause_for_step_retry(state, config, step="memory", message=msg, ctx=ctx)
+            if user_wants_step_retry(user):
+                continue
+            return {"ctx": ctx, "errors": [{"step": "memory_relations", "reason": "timeout"}]}
+
+        failed: list[tuple[str, BaseException]] = []
+        for step_name, res in (("memory", results[0]), ("relations", results[1])):
+            if isinstance(res, BaseException):
+                emit(run_id, "error", db, step=step_name,
+                     message=f"生成失败：{format_llm_error_message(res)}")
+                failed.append((step_name, res))
+
+        if failed:
+            step_name, res = failed[0]
+            msg = format_llm_error_message(res)
+            user = await pause_for_step_retry(
+                state, config, step=step_name, message=msg, ctx=ctx, emit_error=False,
+            )
+            if user_wants_step_retry(user):
+                continue
+            return {"ctx": ctx, "errors": [{"step": step_name, "reason": msg}]}
+
+        memories = results[0] if not isinstance(results[0], BaseException) else []
+        rels = results[1] if not isinstance(results[1], BaseException) else []
+        emit(run_id, "step_done", db, step="memory", count=len(memories))
+        emit(run_id, "step_done", db, step="relations", count=len(rels))
+        return {"ctx": ctx, "completed_steps": ["memory", "relations"]}

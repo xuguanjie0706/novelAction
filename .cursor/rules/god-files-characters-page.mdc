@@ -1,0 +1,13 @@
+---
+description: 人物页 — 新 UI 进 CharacterList / CharacterEditor
+globs: apps/client/src/pages/Characters/**
+alwaysApply: false
+---
+
+# Characters 页治理
+
+改本目录前：**Read `CLAUDE.md`** →「CharactersPage 拆分蓝图」。
+
+- 列表/筛选 → `CharacterList` + `useCharactersPage`
+- 详情编辑 → `CharacterEditor`；变更记录 → `ChangelogTab`
+- 禁止堆回 `CharactersPage.tsx` 壳文件

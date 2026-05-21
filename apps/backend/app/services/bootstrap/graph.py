@@ -141,8 +141,10 @@ def restore_bootstrap_checkpoint_if_lost(
     config: dict,
     positioning_node: str = "positioning",
 ) -> bool:
-    """
-    MemorySaver 随进程重启清空；awaiting_gate 的 resume 需从 DB 还原到 gate 前。
+    """MemorySaver 随进程重启清空；awaiting_gate 的 resume 需从 DB 还原 checkpoint。
+
+    根据 gate_data.current_gate 判断暂停位置，从 DB 重建尽量完整的 ctx，
+    避免 resume 后后续步骤因 ctx 字段缺失而静默出错。
 
     Returns:
         True 表示已从 BootstrapRun 写入 checkpoint。
@@ -157,26 +159,55 @@ def restore_bootstrap_checkpoint_if_lost(
     logline = run.logline or gd.get("logline") or ""
     premise = gd.get("premise") or ""
     target_words = int(gd.get("target_words") or 1_000_000)
+    project_id = str(run.project_id) if run.project_id else None
+
+    # 当前暂停所在的 gate 节点名（由各 gate 写入 gate_data）
+    current_gate = gd.get("current_gate") or "positioning"
+
+    # 从 DB 重建完整 ctx（实现见 graph_recovery.py，保持本文件 < 600 行）
+    from app.services.bootstrap.graph_recovery import rebuild_ctx_from_db
+    db = config["configurable"]["db"]
+    ctx = rebuild_ctx_from_db(db, project_id or "", gd, logline, premise, target_words)
+
+    # completed_steps 根据 current_gate 推断
+    gate_to_completed: dict[str, list[str]] = {
+        "positioning":        ["positioning"],
+        "gate_power_systems": ["positioning", "project", "power_systems"],
+        "gate_characters":    ["positioning", "project", "power_systems", "factions",
+                               "storylines", "characters"],
+        "gate_volumes":       ["positioning", "project", "power_systems", "factions",
+                               "storylines", "characters", "skills", "items", "settings", "volumes"],
+    }
+    completed = gate_to_completed.get(current_gate, ["positioning"])
+
+    # as_node 决定 LangGraph 从哪个节点继续；gate 节点内部会 interrupt()，
+    # update_state 写入 gate 前一个普通节点可确保图能走到 interrupt 处。
+    gate_to_resume_node: dict[str, str] = {
+        "positioning":        positioning_node,
+        "gate_power_systems": "gate_power_systems",
+        "gate_characters":    "gate_characters",
+        "gate_volumes":       "gate_volumes",
+    }
+    resume_node = gate_to_resume_node.get(current_gate, positioning_node)
+
     recovery: BootstrapState = {
         "run_id": run_id,
         "logline": logline,
         "premise": premise,
         "target_words": target_words,
         "positioning": positioning,
-        "project_id": str(run.project_id) if run.project_id else None,
-        "ctx": {
-            "logline": logline,
-            "premise": premise,
-            "target_words": target_words,
-            "positioning": positioning,
-        },
-        "completed_steps": ["positioning"],
+        "project_id": project_id,
+        "ctx": ctx,
+        "completed_steps": completed,
         "errors": [],
     }
-    graph.update_state(config, recovery, as_node=positioning_node)
+    graph.update_state(config, recovery, as_node=resume_node)
     logger.warning(
-        "Restored bootstrap checkpoint for run %s from DB (in-memory checkpointer was empty)",
+        "Restored bootstrap checkpoint for run %s from DB "
+        "(in-memory checkpointer was empty; gate=%s resume_node=%s)",
         run_id,
+        current_gate,
+        resume_node,
     )
     return True
 
@@ -241,20 +272,35 @@ async def _run_step(state: BootstrapState, config: dict | None,
 # ──────────────────────────────────────────────────────
 
 async def node_positioning(state: BootstrapState, config: dict | None = None) -> dict:
-    """Step 0：立项会议。完成后置 status=awaiting_gate 并推送 gate_pending 给前端。"""
+    """Step 0：立项会议。完成后置 status=awaiting_gate 并推送 gate_pending 给前端。
+
+    失败时走 interrupt + pause_for_step_retry（与其他步骤一致），用户可选择重试；
+    不再 raise，避免整个 run 永久变成 failed 且无法恢复。
+    """
+    from app.services.bootstrap.step_failure import pause_for_step_retry, user_wants_step_retry
+
     config = _resolve_config(config)
     db = config["configurable"]["db"]
     run_id = _state_run_id(state, config)
     svc = _make_svc(config)
-    emit(run_id, "step_start", db, step="positioning", label="召开立项会议（题材定位）...")
     ctx = dict(state.get("ctx") or {})
     ctx.update({"logline": state["logline"], "premise": state["premise"],
                 "target_words": state["target_words"]})
-    positioning = await svc._gen_positioning(ctx)
-    if not positioning:
-        emit(run_id, "error", db, step="positioning",
-             message="立项定位生成未通过 schema 校验（已重试），请更换模型或精简创意后重试")
-        raise ValueError("positioning_invalid")
+
+    while True:
+        emit(run_id, "step_start", db, step="positioning", label="召开立项会议（题材定位）...")
+        positioning = await svc._gen_positioning(ctx)
+        if positioning:
+            break
+        msg = "立项定位生成未通过 schema 校验（已重试 3 次），请更换模型或精简创意后重试"
+        emit(run_id, "error", db, step="positioning", message=msg)
+        user = await pause_for_step_retry(
+            state, config, step="positioning", message=msg, ctx=ctx,
+        )
+        if user_wants_step_retry(user):
+            continue
+        return {"ctx": ctx, "errors": [{"step": "positioning", "reason": msg}]}
+
     ctx["positioning"] = positioning
     emit(run_id, "step_done", db, step="positioning", count=1,
          preview=(positioning.get("selling_point") or "")[:30])
@@ -360,11 +406,10 @@ async def node_power_systems(s, c=None): return await _run_step(s, c, "power_sys
 async def node_factions(s, c=None):      return await _run_step(s, c, "factions",      "生成势力体系...", "_gen_factions")       # noqa: E501
 async def node_storylines(s, c=None):    return await _run_step(s, c, "storylines",    "生成故事线...",   "_gen_storylines")     # noqa: E501
 async def node_settings(s, c=None):      return await _run_step(s, c, "settings",      "生成世界观设定卡...", "_gen_settings")   # noqa: E501
-async def node_memory(s, c=None):          return await _run_step(s, c, "memory",          "生成记忆库种子...",      "_gen_memory")           # noqa: E501
-async def node_opening_contract(s, c=None): return await _run_step(s, c, "opening_contract", "规划开局追读承诺...",  "_gen_opening_contract")  # noqa: E501
-async def node_emotion_arc(s, c=None):     return await _run_step(s, c, "emotion_arc",     "规划全书情绪节律...",    "_gen_emotion_arc")       # noqa: E501
-async def node_villain_arc(s, c=None):     return await _run_step(s, c, "villain_arc",     "生成反派独立行动线...", "_gen_villain_arc")       # noqa: E501
-async def node_core_mysteries(s, c=None):  return await _run_step(s, c, "core_mysteries",  "预分配全书核心谜题...", "_gen_core_mysteries")    # noqa: E501
+async def node_opening_contract(s, c=None): return await _run_step(s, c, "opening_contract", "规划开局追读承诺...", "_gen_opening_contract")   # noqa: E501
+async def node_core_mysteries(s, c=None):   return await _run_step(s, c, "core_mysteries",   "预分配全书核心谜题...", "_gen_core_mysteries")    # noqa: E501
+# node_emotion_arc / node_villain_arc / node_memory / node_relations 已合并为
+# node_emotion_villain / node_memory_relations（见 graph_nodes.py）
 
 
 # ──────────────────────────────────────────────────────
@@ -374,7 +419,8 @@ async def node_core_mysteries(s, c=None):  return await _run_step(s, c, "core_my
 def _build_graph() -> StateGraph:
     from app.services.bootstrap.graph_nodes import (
         node_characters, node_skills_items, node_volumes,
-        node_relations, node_vol1_chapters, node_ch1_scenes, node_consistency,
+        node_vol1_chapters, node_ch1_scenes, node_consistency,
+        node_emotion_villain, node_memory_relations,
     )
     from app.services.bootstrap.graph_gates import (
         node_gate_characters,
@@ -396,10 +442,8 @@ def _build_graph() -> StateGraph:
         ("settings",             node_settings),
         ("volumes",              node_volumes),
         ("gate_volumes",         node_gate_volumes),
-        ("emotion_arc",          node_emotion_arc),
-        ("villain_arc",          node_villain_arc),
-        ("memory",               node_memory),
-        ("relations",            node_relations),
+        ("emotion_villain",      node_emotion_villain),   # emotion_arc+villain_arc 并行
+        ("memory_relations",     node_memory_relations),  # memory+relations 并行
         ("core_mysteries",       node_core_mysteries),
         ("opening_contract",     node_opening_contract),
         ("vol1_chapters",        node_vol1_chapters),
@@ -412,8 +456,8 @@ def _build_graph() -> StateGraph:
         START, "positioning", "gate", "project",
         "power_systems", "gate_power_systems", "factions", "storylines",
         "characters", "gate_characters", "skills_items", "settings",
-        "volumes", "gate_volumes", "emotion_arc", "villain_arc",
-        "memory", "relations", "core_mysteries",
+        "volumes", "gate_volumes",
+        "emotion_villain", "memory_relations", "core_mysteries",
         "opening_contract", "vol1_chapters",
         "ch1_scenes", "consistency", END,
     ]
@@ -440,7 +484,22 @@ async def run_bootstrap(
     run_id: str, *, logline: str, premise: str, target_words: int,
     model_profile: str, llm_provider_id, user_id,
 ) -> None:
-    """后台任务：执行图至 gate interrupt 暂停；resume 由 resume_bootstrap() 继续。"""
+    """后台任务：执行图至 gate interrupt 暂停；resume 由 resume_bootstrap() 继续。
+
+    注意：当前使用进程内 MemorySaver 作为 checkpointer，重启进程后 checkpoint 清空。
+    多 worker 部署（gunicorn -w N / uvicorn --workers N）时，resume 请求可能落到
+    不同进程，导致 checkpoint miss，需切换为 PostgresSaver。
+    """
+    import os
+    _worker_count = int(os.environ.get("WEB_CONCURRENCY", 1))
+    if _worker_count > 1:
+        logger.warning(
+            "Bootstrap run %s: 检测到 WEB_CONCURRENCY=%d（多 worker），"
+            "当前 MemorySaver 为进程内单例，resume 在跨 worker 时会 checkpoint miss；"
+            "生产部署请切换 PostgresSaver（见 graph.py _checkpointer）",
+            run_id,
+            _worker_count,
+        )
     db = SessionLocal()
     try:
         run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()

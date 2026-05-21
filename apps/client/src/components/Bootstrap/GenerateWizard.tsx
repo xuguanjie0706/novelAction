@@ -25,6 +25,7 @@ import { llmProviderIdFromRoute, modelProfileFromRoute, useAppStore } from '../.
 import { TargetWordsInput } from '../TargetWordsInput'
 import { useBootstrapStream } from './hooks/useBootstrapStream'
 import type { StepKey } from './hooks/useBootstrapStream'
+import { useBootstrapStepData } from './hooks/useBootstrapStepData'
 import BootstrapGateTimelineDetail from './BootstrapGateTimelineDetail'
 import BootstrapTimeline from './BootstrapTimeline'
 import BootstrapTimelineDetail from './BootstrapTimelineDetail'
@@ -66,6 +67,9 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
 
   /** 时间轴当前选中的步骤 key */
   const [selectedStepKey, setSelectedStepKey] = useState<StepKey | null>(null)
+
+  /** 各步骤完成后从 API 拉取的真实数据，供右侧详情面板富内容展示 */
+  const stepData = useBootstrapStepData(steps, projectId)
 
   useEffect(() => {
     if (haltedStep) setSelectedStepKey(haltedStep)
@@ -572,6 +576,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                 step={selectedStep}
                 positioningData={positioningData}
                 insights={insights}
+                stepData={stepData}
                 generationStartMs={generationStartMs}
                 phase={phase}
                 projectId={projectId}
@@ -586,7 +591,11 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                   if (step) void retryFailedStep(step, resumeParams)
                 }}
                 onInsightsUpdate={(updated) =>
-                  setInsights(prev => prev ? { ...prev, ...updated } : (updated as typeof prev))
+                  setInsights(prev => ({
+                    opening_contract: {},
+                    ...(prev ?? {}),
+                    ...updated,
+                  }))
                 }
               />
             )}

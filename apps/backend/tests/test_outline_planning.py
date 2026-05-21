@@ -605,6 +605,7 @@ def test_outline_node_to_chapter_context_preserves_existing_plan_fields():
         "core_event": "萧炎推开祠堂石门，发现黑雾祭坛。",
         "opening_hook": "石门上的血字突然亮起。",
         "character_change": "萧炎从追查旧案变成直面家族秘密。",
+        "power_milestone": "",
         "foreshadow": "埋[黑雾祭坛主人] 收[祠堂石门]",
         "end_hook": "祭坛深处传来萧家先祖的声音。",
         "pacing": "medium",

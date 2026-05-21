@@ -1,0 +1,19 @@
+---
+description: 超限 Page/Panel — 冻结功能，先拆分
+globs: apps/client/src/pages/*Page.tsx,apps/client/src/components/Layout/GenerationQueuePanel.tsx,apps/frontend/src/pages/ReadingReviewPage.tsx
+alwaysApply: false
+---
+
+# 前端上帝 Page/Panel 治理
+
+改匹配文件前：**Read `CLAUDE.md`** →「上帝文件登记册」「前端组件拆分蓝图」。
+
+| 文件 | 要求 |
+|------|------|
+| ~~`OutlinePage.tsx`~~ | ✅ 已迁 `pages/Outline/`（壳 2 行；`index.tsx` 编排 ≤600） |
+| ~~`WorldBuildingPage.tsx`~~ | ✅ 已迁 `pages/WorldBuilding/` |
+| ~~`CharactersPage.tsx`~~ | ✅ 已迁 `pages/Characters/` |
+| ~~`GenerationQueuePanel.tsx`~~ | ✅ 已迁 `Layout/GenerationQueue/` |
+| `ReadingReviewPage.tsx` | 拆 ReviewList / SnapshotDiff / hook |
+
+新需求默认**先开拆分 PR**，不在原文件继续膨胀。

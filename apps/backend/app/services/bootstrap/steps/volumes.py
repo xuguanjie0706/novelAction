@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import logging
 from typing import Any
 
 from app.models import OutlineNode, Project
@@ -10,6 +10,8 @@ from app.services.bootstrap.context import get_genre_kit_block
 from app.services.bootstrap.parse import parse_json
 from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 from app.services.outline_planning import words_to_plan
+
+logger = logging.getLogger(__name__)
 
 
 async def gen_volumes(svc: Any, project: Project, ctx: dict):
@@ -27,11 +29,24 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
     positioning = ctx.get("positioning") or {}
     positioning_block = ""
     if isinstance(positioning, dict) and positioning:
-        positioning_block = (
-            "\n【立项定位（每卷必须贯彻）】\n"
-            + json.dumps(positioning, ensure_ascii=False)
-            + "\n"
-        )
+        # 只注入对卷级结构生成有用的字段，排除 market_risk / hook_test 等分析性字段
+        _pos_lines = []
+        if positioning.get("target_audience"):
+            _pos_lines.append(f"  目标读者：{positioning['target_audience']}")
+        if positioning.get("tropes"):
+            _pos_lines.append(f"  核心爽点：{'、'.join(positioning['tropes'])}")
+        if positioning.get("face_slap_pattern"):
+            _pos_lines.append(f"  打脸节奏：{positioning['face_slap_pattern']}")
+        if positioning.get("emotional_arc"):
+            _pos_lines.append(f"  感情线占比：{positioning['emotional_arc']}")
+        if positioning.get("pace_type"):
+            _pos_lines.append(f"  节奏类型：{positioning['pace_type']}")
+        if positioning.get("taboo_lines"):
+            _pos_lines.append(f"  红线禁忌：{'；'.join(positioning['taboo_lines'])}")
+        if positioning.get("selling_point"):
+            _pos_lines.append(f"  核心卖点：{positioning['selling_point']}")
+        if _pos_lines:
+            positioning_block = "\n【立项定位（每卷必须贯彻）】\n" + "\n".join(_pos_lines) + "\n"
     kit_block = get_genre_kit_block(ctx)
 
     villain_timelines = ctx.get("villain_timelines", [])
@@ -54,7 +69,7 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
 
 根据故事规模规划卷级结构，返回JSON数组。
 【字数目标】全书目标：{tw:,}字，折合约{total_chapters_hint}章；**必须恰好 {n_volumes} 卷**（由目标字数推算，数组长度必须等于{n_volumes}；不得为多塞 phase 而加卷，卷少时合并阶段）。
-每卷 planned_chapters 只能填 30 或 60（过渡/尾卷可填30），不要其他数字。
+每卷 planned_chapters 填 15-80 内的整数（标准卷 30 或 60，过渡/收束卷可填 20-25，高潮卷可填 40-50）。
 所有卷的 planned_chapters 之和须尽量接近{total_chapters_hint}章。
 
 【phase 阶段标记（必填，单值）】每卷必须从下列阶段中选一个，全书必须按以下顺序大致单调推进：
@@ -79,21 +94,52 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
 ]
 只返回JSON数组，不要任何说明文字。"""
 
-    raw = await svc._call_with_retry(
-        system,
-        prompt,
-        max_tokens=max_tokens_bootstrap_completion(),
-        task="bootstrap.volumes",
+    logger.info(
+        "bootstrap.volumes 开始 project=%s 期望卷数=%d target_words=%d",
+        project.id,
+        n_volumes,
+        tw,
     )
-    data = parse_json(raw)
+    raw = ""
+    try:
+        raw = await svc._call_with_retry(
+            system,
+            prompt,
+            max_tokens=max_tokens_bootstrap_completion(),
+            task="bootstrap.volumes",
+        )
+        data = parse_json(raw)
+    except Exception as exc:
+        logger.error(
+            "bootstrap.volumes JSON 解析失败 project=%s: %s; raw_tail=%r",
+            project.id,
+            exc,
+            (raw or "")[-500:],
+        )
+        raise
     if not isinstance(data, list):
         data = data.get("outline", data.get("volumes", []))
+    if len(data) != n_volumes:
+        logger.warning(
+            "bootstrap.volumes 卷数漂移 project=%s 期望=%d 实际=%d",
+            project.id,
+            n_volumes,
+            len(data),
+        )
 
     valid_phases = {"opening", "rising", "turning", "dark_hour", "climax", "ending"}
     results = []
     for i, vol in enumerate(data):
-        planned = vol.get("planned_chapters", 60)
-        if planned not in (30, 60):
+        planned = vol.get("planned_chapters", 30)
+        # 允许合理区间内的任意值（15-80），不再强制只能是 30 或 60
+        if not isinstance(planned, int) or planned < 15:
+            planned = 30
+        elif planned > 80:
+            logger.warning(
+                "bootstrap.volumes planned_chapters=%d 超出合理区间（>80），修正为60 project=%s",
+                planned,
+                project.id,
+            )
             planned = 60
         phase_val = (vol.get("phase") or "").strip().lower() or None
         if phase_val and phase_val not in valid_phases:
@@ -122,6 +168,12 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
         results.append(node)
 
     svc.db.commit()
+    logger.info(
+        "bootstrap.volumes 完成 project=%s 写入卷数=%d phases=%s",
+        project.id,
+        len(results),
+        [n.phase for n in results],
+    )
     ctx["volumes_summary"] = " | ".join(
         f"{n.title}：{(n.summary or '')[:40]}" for n in results
     )

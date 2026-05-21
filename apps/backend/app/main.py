@@ -179,6 +179,10 @@ async def _on_startup() -> None:
     from app.services.draft_graph.worker import recover_stale_jobs
     asyncio.create_task(recover_stale_jobs(), name="draft-job-recovery")
 
+    from app.startup.logging_config import ensure_app_logging
+
+    ensure_app_logging()
+
     import logging
     from app.services.tencent_cos import normalized_cover_storage_backend
     log = logging.getLogger(__name__)

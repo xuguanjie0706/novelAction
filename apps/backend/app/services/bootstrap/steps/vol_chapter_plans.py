@@ -24,6 +24,7 @@ from typing import Any
 from app.models import OutlineNode, Project
 from app.services.bootstrap.foreshadow_sync import sync_chapter_foreshadow
 from app.services.bootstrap.parse import parse_json
+from app.services.bootstrap.steps.phase_guidance import get_chapter_phase_guidance
 from app.services.llm_token_budgets import max_tokens_vol_expand_chapters
 from app.services.outline_planning import (
     build_book_budget_block,
@@ -34,105 +35,8 @@ from app.utils.chapter_numbering import normalize_chapter_plan_title
 
 logger = logging.getLogger(__name__)
 
-
-# ── 节奏约束（与 vol1 保持一致）─────────────────────────────────────────────
-
-def _get_chapter_phase_guidance(ch_num: int, total: int, phase: str) -> str:
-    """按章节区间 + 卷阶段返回细分节奏约束。
-
-    Args:
-        ch_num: 当前章节编号（1-based，相对本卷）。
-        total:  本卷总章数（30 或 60）。
-        phase:  卷级 phase 标记（opening/rising/turning/dark_hour/climax/ending）。
-
-    Returns:
-        注入 prompt 的节奏约束文字块；未命中时返回空字符串。
-    """
-    if phase == "opening":
-        if ch_num <= 5:
-            return (
-                "【开局1-5章·生死钩子区】前500字必须建立主角核心压力/不公正处境；"
-                "主角必须在本章内主动采取行动（不是被动等待）；"
-                "每章结尾留下读者必须知道答案的具体问题，不能用「主角沉思」收尾。"
-            )
-        elif ch_num <= 15:
-            return (
-                "【开局6-15章·金手指起飞区】主角开始展现核心能力，每3章至少1次具体逆转或胜利；"
-                "引入第一条感情线/兄弟情，不能只推主线；"
-                "开始埋本卷第一条长线伏笔，制造读者期待。"
-            )
-        elif ch_num <= int(total * 0.75):
-            return (
-                "【开局中段·扩张铺垫区】势力扩张，主角圈子开始扩大；"
-                "引入更大威胁让读者感受到当前成功只是开始；"
-                "感情/兄弟线要有实质性推进，不能只是点缀。"
-            )
-        else:
-            return (
-                "【开局末段·卷末冲刺区】本卷主线冲突推向高潮，至少1章有爆发点；"
-                "留下一个跨卷悬念让读者必须看下一卷；"
-                "回收本卷至少1条长线伏笔。"
-            )
-    elif phase == "rising":
-        if ch_num <= int(total * 0.3):
-            return (
-                "【起飞前段·势力奠基区】主角快速积累资源/盟友，但必须有竞争对手压制节奏；"
-                "每3章要有1次主角圈子扩大或实力背书事件；"
-                "感情线/兄弟线接入，给读者除「爽」之外的情感出口。"
-            )
-        elif ch_num <= int(total * 0.7):
-            return (
-                "【起飞中段·扩张博弈区】主角势力与对立阵营正面接触，输赢都要有代价；"
-                "引入「天花板」——让读者感受到主角虽强但还有更高山；"
-                "至少1段感情/兄弟线有「差点失去」的险情制造情感张力。"
-            )
-        else:
-            return (
-                "【起飞末段·卷末冲刺区】主线矛盾推向本卷顶点，留种子给下卷；"
-                "回收本卷至少1条伏笔，兑现本卷开头的至少1个承诺；"
-                "最后3章节奏必须明显加速。"
-            )
-    elif phase == "turning":
-        if ch_num <= int(total * 0.4):
-            return (
-                "【转折前段·代价启动区】主角过去的选择开始反噬，让读者看到「赢是有代价的」；"
-                "至少1个之前的盟友/关系出现裂痕或转变；"
-                "引入让主角无法用实力直接解决的新困境。"
-            )
-        else:
-            return (
-                "【转折后段·两难深化区】矛盾激化到无法回头，主角必须做出无完美解的选择；"
-                "伏笔开始密集加热，铺垫至暗期；"
-                "每章结尾必须留下「这很可能变得更糟」的预感。"
-            )
-    elif phase == "dark_hour":
-        return (
-            "【至暗期·内心突破区】允许虐主，但每次外部失败必须对应主角内心的认知突破；"
-            "节奏放缓，强调情感深度而非事件密度——每章1个情感高点比3个情节事件更重要；"
-            "这是人物弧度最深刻的阶段：主角的「最大谎言」（错误信念）必须在本阶段被打破；"
-            "不要只写外部失败，写主角「看清了什么、接受了什么、放弃了什么」。"
-        )
-    elif phase == "climax":
-        if ch_num <= int(total * 0.4):
-            return (
-                "【高潮前段·伏笔点燃区】开始密集回收此前埋下的伏笔，让读者感受到「一切都是设计好的」；"
-                "主角的成长弧（内在转变）必须在战斗/决策中体现，不只是能力提升；"
-                "每章要有1个「啊原来如此」的反转或揭示。"
-            )
-        else:
-            return (
-                "【高潮后段·终战收束区】所有主线悬念必须在本段有明确答案（即使留余韵）；"
-                "主角的最终胜利必须来自内心成长，不只是境界/外力；"
-                "最后3章为下一部/下一阶段留下1颗精准的悬念种子。"
-            )
-    elif phase == "ending":
-        return (
-            "【收束期·情感落地区】主线冲突收尾，人物关系有明确落点（成长/改变/和解/死亡）；"
-            "节奏逐渐放缓，给读者情感上的「着陆感」，不要虎头蛇尾；"
-            "必须留下至少1颗让读者期待下一部的悬念种子；"
-            "感情线/兄弟线在本阶段有里程碑性的定格（告白/决裂/和解都算）。"
-        )
-    return ""
+# 节奏约束从共享模块引入
+_get_chapter_phase_guidance = get_chapter_phase_guidance
 
 
 # ── 已写上下文格式化（动态注入，区别于 editorial 静态块）───────────────────
@@ -413,6 +317,7 @@ async def gen_vol_chapter_plans(
         )
 
         batch_data: list = []
+        raw = ""
         for gen_attempt in range(2):
             try:
                 raw = await svc._call_with_retry(
@@ -422,7 +327,18 @@ async def gen_vol_chapter_plans(
                 batch_data = parse_json(raw)
                 if not isinstance(batch_data, list):
                     batch_data = batch_data.get("chapters", [])
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "vol_chapters JSON 解析/调用失败 project=%s volume=%s "
+                    "batch=%d-%d attempt=%d: %s; raw_tail=%r",
+                    project.id,
+                    volume_node.id,
+                    batch_start,
+                    batch_end,
+                    gen_attempt + 1,
+                    exc,
+                    (raw or "")[-500:],
+                )
                 batch_data = []
                 break
 
@@ -431,17 +347,37 @@ async def gen_vol_chapter_plans(
                 break
             if gen_attempt == 0:
                 logger.warning(
-                    "GEN-01 批次数漂移，重试：期望%d章，实际%d章（卷=%s，批次=%d-%d）",
-                    batch_count, actual_count, volume_node.id, batch_start, batch_end,
+                    "GEN-01 批次数漂移，重试：期望%d章，实际%d章（project=%s 卷=%s 批次=%d-%d）",
+                    batch_count,
+                    actual_count,
+                    project.id,
+                    volume_node.id,
+                    batch_start,
+                    batch_end,
                 )
                 continue
             logger.warning(
-                "GEN-01 批次数仍不符，截断：期望%d章，实际%d章",
-                batch_count, actual_count,
+                "GEN-01 批次数仍不符，截断：期望%d章，实际%d章（project=%s 卷=%s 批次=%d-%d）",
+                batch_count,
+                actual_count,
+                project.id,
+                volume_node.id,
+                batch_start,
+                batch_end,
             )
             batch_data = batch_data[:batch_count]
 
         if not batch_data:
+            logger.warning(
+                "vol_chapters 批次无有效章纲，已跳过 project=%s volume=%s "
+                "batch=%d-%d planned=%d accumulated=%d",
+                project.id,
+                volume_node.id,
+                batch_start,
+                batch_end,
+                planned,
+                len(all_results),
+            )
             continue
 
         char_name_to_id = ctx.get("char_name_to_id", {})
@@ -515,11 +451,39 @@ async def gen_vol_chapter_plans(
             svc, project, volume_node, all_results, ctx=ctx,
         )
         if ctx.get("linter_blocked"):
+            block_payload = ctx.get("linter_block_payload") or {}
             logger.error(
-                "章纲被 linter 阻断（卷=%s，已暂存 %d 章草稿）",
+                "GEN-02 章纲被 linter 阻断 project=%s volume=%s chapters=%d rules=%s",
+                project.id,
                 volume_node.id,
                 len(all_results),
+                block_payload.get("linter_blocking_rules"),
             )
+
+    if len(all_results) < planned:
+        logger.warning(
+            "vol_chapters 章纲不完整 project=%s volume=%s 期望=%d 实际=%d linter_blocked=%s",
+            project.id,
+            volume_node.id,
+            planned,
+            len(all_results),
+            bool(ctx.get("linter_blocked")),
+        )
+    elif not all_results:
+        logger.error(
+            "vol_chapters 未生成任何章纲 project=%s volume=%s planned=%d",
+            project.id,
+            volume_node.id,
+            planned,
+        )
+    else:
+        logger.info(
+            "vol_chapters 完成 project=%s volume=%s chapters=%d linter_blocked=%s",
+            project.id,
+            volume_node.id,
+            len(all_results),
+            bool(ctx.get("linter_blocked")),
+        )
 
     # 全书配额计数器累加（供后续卷展开时读取，防止漂移）
     ctx["chapter_quota_used"] = quota_used + len(all_results)

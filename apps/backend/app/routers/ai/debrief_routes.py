@@ -29,6 +29,11 @@ from app.routers.ai.debrief_assets import apply_asset_updates
 from app.routers.ai.foreshadow import sync_chapter_index_foreshadows
 from app.routers.ai.normalization import normalize_character_status, normalize_storyline_status
 from app.routers.ai.schemas import AutoDebriefRequest, ChapterDebriefRequest
+from app.services.ai.promise_debrief import (
+    apply_fulfilled_by_ids,
+    apply_plan_promise_fulfillment,
+    enrich_with_promise_ids,
+)
 from app.routers.ai.text_utils import chapter_debrief_content_hash, plain_text, truncate
 
 logger = logging.getLogger(__name__)
@@ -606,6 +611,26 @@ def chapter_debrief(
                     promises_fulfilled += 1
                     break
 
+    # ── 承诺兑现：精确 ID 匹配（优先级高于文本模糊匹配，避免误判）────────────
+    # fulfilled_promise_ids 由 auto_debrief 服务端解析后写入缓存，前端原样回传。
+    if req.fulfilled_promise_ids:
+        id_fulfilled = apply_fulfilled_by_ids(
+            db, project_id, req.chapter_id,
+            chapter.sort_order or 0, req.fulfilled_promise_ids,
+        )
+        promises_fulfilled += id_fulfilled
+
+    # ── 承诺兑现：规划层兜底（章纲 promise_fulfilled → ReaderPromise）──────────
+    # Bootstrap Step 12.5 在 OutlineNode.extra.promise_fulfilled 里写入「本章
+    # 计划兑现的承诺关键词」，但该字段此前仅供大纲 Linter 检查，未与 DB 联动。
+    # 此处在每次复盘提交时读取并落库，连通规划层与运行层的承诺闭环。
+    plan_fulfilled = apply_plan_promise_fulfillment(
+        db, project_id, req.chapter_id,
+        chapter.sort_order or 0,
+        outline_node_id=chapter.outline_node_id,
+    )
+    promises_fulfilled += plan_fulfilled
+
     db.query(ChapterDebriefCache).filter(
         ChapterDebriefCache.project_id == project_id,
         ChapterDebriefCache.chapter_id == chapter.id,
@@ -817,6 +842,10 @@ async def auto_debrief(
         open_promises=open_promises_data,
     )
     if isinstance(result, dict) and not result.get("error"):
+        # 服务端将 fulfilled_promise_texts 解析为精确 ID 并写入缓存，
+        # 前端提交 chapter_debrief 时带上 fulfilled_promise_ids 可跳过模糊匹配。
+        fpt = result.get("fulfilled_promise_texts") or []
+        result["fulfilled_promise_ids"] = enrich_with_promise_ids(fpt, open_promises_data)
         if not cached:
             cached = ChapterDebriefCache(
                 project_id=project_id,

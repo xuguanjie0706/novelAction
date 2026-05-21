@@ -31,7 +31,8 @@ async def gen_ch1_scenes(svc: Any, project: Project, vol1_plans: list, ctx: dict
     positioning = ctx.get("positioning") or {}
     pace_type = positioning.get("pace_type", "medium")
 
-    words_per_scene = 550
+    # 根据节奏类型动态调整场景字数：快节奏场景短而密，慢节奏场景深而长
+    words_per_scene = {"fast": 450, "slow": 650}.get(pace_type, 550)
 
     prompt = f"""小说：《{ctx.get('project_title', '')}》  主角：{protagonist}
 创意：{ctx.get('logline', '')}
@@ -72,7 +73,7 @@ async def gen_ch1_scenes(svc: Any, project: Project, vol1_plans: list, ctx: dict
 2. 至少有1场包含主角的主动行动（不能全是被动被安排）
 3. 最后一场的 hook 必须对应上方「章末必须埋下的钩子」要求
 4. pov_character 和 characters_on_stage 中只能用上方已知的人物名
-5. 各场字数预算之和约为 2000-2400 字（opening 期标准）
+5. 各场字数预算之和约为 {words_per_scene * 4}-{words_per_scene * 5} 字（{pace_type} 节奏标准）
 只返回JSON数组，不要解释。"""
 
     try:

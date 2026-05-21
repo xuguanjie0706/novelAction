@@ -8,8 +8,9 @@
 ## 使用说明（给 Agent）
 
 1. **动手前先读 [`CLAUDE.md`](./CLAUDE.md)** — 含 Bootstrap 步骤、数据模型、API 约定、代码结构红线、已完成功能与待办。
-2. 日常研发约束另见 [`.cursor/rules/novelaction-core-principles.mdc`](./.cursor/rules/novelaction-core-principles.mdc)（产品定位、monorepo 路径、AI 调用分层等）。
-3. **更新进度时只编辑 `CLAUDE.md`**；无需把相同条目再抄进本文件。
+2. Cursor 强制预检：[`.cursor/rules/claude-md-preflight.mdc`](./.cursor/rules/claude-md-preflight.mdc)（`alwaysApply`）；上帝文件路径另见 `god-files-*.mdc`。
+3. 日常研发约束另见 [`.cursor/rules/novelaction-core-principles.mdc`](./.cursor/rules/novelaction-core-principles.mdc)（产品定位、monorepo 路径、AI 调用分层等）。
+4. **更新进度时只编辑 `CLAUDE.md`**；无需把相同条目再抄进本文件。
 
 ---
 

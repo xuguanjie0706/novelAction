@@ -296,6 +296,9 @@ class ChapterDebriefRequest(BaseModel):
     #: 承诺兑现闭环：本章已兑现的承诺原文（由 auto_debrief 提取，经前端确认后提交）
     #: apply_debrief 将对 open ReaderPromise 做模糊匹配并标记 fulfilled。
     fulfilled_promise_texts: List[str] = []
+    #: auto_debrief 服务端将 fulfilled_promise_texts 解析为精确 ID 后写入缓存，
+    #: 前端提交时带上 ID 可跳过二次模糊匹配，直接按主键更新，优先级高于文本匹配。
+    fulfilled_promise_ids: List[str] = []
 
 
 class AutoDebriefRequest(BaseModel):

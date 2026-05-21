@@ -1,0 +1,13 @@
+---
+description: outline 路由上帝文件 — 新端点进 routes_*
+globs: apps/backend/app/routers/outline/**
+alwaysApply: false
+---
+
+# outline 路由治理
+
+改本目录前：**Read `CLAUDE.md`** →「上帝文件登记册」「反 God-Object 原则」。
+
+- **禁止**在 `helpers_core.py`、`qa_internal.py` 新增 endpoint 或大块业务逻辑。
+- 新路由/新逻辑 → `routers/outline/routes_*.py` 子模块。
+- `helpers_core.py` 仅作过渡集合，只减不增（除非同步拆分 PR）。

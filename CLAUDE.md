@@ -307,7 +307,12 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 ## 待完成功能
 
-- [ ] **ReaderPromise 深度闭环**：auto-debrief AI 识别新增/兑现 + 队列自动复盘同步提交（基础模型+router 已完成，完整闭环链路待实现）
+- [x] **ReaderPromise 深度闭环**（2026-05-21，三层兑现机制已落地）：
+  - `services/ai/promise_debrief.py`（新建）：`enrich_with_promise_ids` / `apply_fulfilled_by_ids` / `apply_plan_promise_fulfillment`
+  - `auto_debrief` 服务端将 `fulfilled_promise_texts` 解析为精确 ID 列表写入缓存（层①）
+  - `chapter_debrief` 按 `fulfilled_promise_ids` 直接按主键标记已兑现（层②）
+  - `chapter_debrief` 读取 `OutlineNode.extra.promise_fulfilled` 对 open 承诺做模糊匹配兜底（层③，连通 Bootstrap Step 12.5 规划信号）
+  - 剩余：队列自动复盘同步提交（`apply_source=queue_auto` 尚未完整触发 auto-debrief → chapter-debrief 链路）
 - [ ] **Location 模型**（当前 Scene.location_name 文本字段，location_id 已注释预留）
 - [ ] **人物关系图可视化**（ReactFlow）
 - [ ] **导出 TXT / EPUB**
@@ -357,18 +362,19 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 | 文件 | 实测行数 | 状态 |
 |---|---:|---|
 | `apps/client/src/components/Writing/ChapterEditor/index.tsx` | 2146 | 🚫 严重违规（≥3x 硬上限）；冻结新增 props/`useState`；新功能走 `hooks/` 子 hook；JSX 待拆 TopToolBar/WarnPanel/ContextSidePanel |
-| `apps/client/src/pages/OutlinePage.tsx` | 2137 | 🚫 严重违规；冻结新增功能；待拆分为 `pages/Outline/` 包 |
-| `apps/backend/app/routers/outline/helpers_core.py` | 2166 | 🚫 冻结新增 endpoint；新路由进 `routers/outline/routes_*.py`，helpers_core 仅作为过渡集合 |
-| `apps/client/src/components/Layout/GenerationQueuePanel.tsx` | 1890 | 🚫 严重违规；下一次改动必须同步拆 QueueList / QueueItemDetail / useGenerationQueue |
+| ~~`apps/client/src/pages/OutlinePage.tsx`~~ | — | ✅ 已迁 `pages/Outline/`（2 行 re-export；子模块均 <600） |
+| `apps/backend/app/routers/outline/helpers_core.py` | 180 | ✅ 已大幅瘦身；新路由仍进 `routers/outline/routes_*.py` |
+| ~~`apps/client/src/components/Layout/GenerationQueuePanel.tsx`~~ | ~~1890~~ | ✅ 已拆至 `Layout/GenerationQueue/`（壳 2 行；最大 runner 297 行） |
 | `apps/frontend/src/pages/ReadingReviewPage.tsx` | 1538 | ⚠️ 超硬上限；待拆 ReviewList / SnapshotDiff / useReviewSubmit |
-| `apps/client/src/pages/WorldBuildingPage.tsx` | 1547 | 🚫 超硬上限；待按拆分蓝图迁移到 `pages/WorldBuilding/tabs/` |
-| `apps/client/src/pages/CharactersPage.tsx` | 1280 | ⚠️ 超两倍上限；冻结新增功能，下一次改动必须先拆分 |
+| ~~`apps/client/src/pages/WorldBuildingPage.tsx`~~ | ~~1547~~ | ✅ 已拆至 `pages/WorldBuilding/`（壳 2 行；最大 Tab 321 行） |
+| ~~`apps/client/src/pages/CharactersPage.tsx`~~ | ~~1280~~ | ✅ 已拆至 `pages/Characters/`（壳 2 行；最大 CharacterEditor 551 行） |
 | `apps/backend/app/routers/outline/qa_internal.py` | 878 | 🚫 超硬上限（600）；新逻辑放 `routers/outline/routes_*.py`，禁止在此文件新增 |
 | `apps/backend/app/services/ai/context_builder.py` | 794 | 🚫 超硬上限；新功能禁止增入；待按职责拆分子模块 |
 | `apps/backend/app/services/ai/outline_ai.py` | 735 | 🚫 超硬上限；新功能禁止增入；待拆分 |
 | `apps/backend/app/services/ai/debrief.py` | 638 | 🚫 超硬上限；新功能禁止增入；待拆分 |
+| `apps/backend/app/routers/ai/debrief_routes.py` | 864 | 🚫 超硬上限；新功能禁止增入；待拆分为 chapter_debrief_route.py + auto_debrief_route.py |
 | `apps/backend/app/services/bootstrap/context_vol_expand.py` | 634 | 🚫 超硬上限；新功能禁止增入；待拆分 |
-| `apps/client/src/components/Writing/ChapterEditor/DebriefPanel.tsx` | 707 | ⚠️ 超硬上限，待拆 HistorySection / CharUpdateSection / StorylineSection |
+| ~~`apps/client/src/components/Writing/ChapterEditor/DebriefPanel.tsx`~~ | ~~707~~ | ✅ 已拆至 `DebriefPanel/`（壳 2 行；编排 index 282 行） |
 
 > 任何一次让上表文件**增加 ≥ 50 行**的 PR 都必须同时包含等量或更多的「治旧」删除量；否则视为破坏红线。
 
@@ -389,31 +395,76 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 
 | 当前文件 | 实测行数 | 目标结构 |
 |---|---:|---|
-| `apps/client/src/pages/OutlinePage.tsx` | 2137 | `pages/Outline/` 包：树视图 / AI 扩展面板 / 质检面板 / Diff 视图分文件 |
-| `apps/client/src/components/Layout/GenerationQueuePanel.tsx` | 1890 | 拆 `QueueList` / `QueueItemDetail` / `useGenerationQueue` |
-| `apps/client/src/pages/WorldBuildingPage.tsx` | 1547 | `pages/WorldBuilding/tabs/`：见下方详细蓝图 |
+| ~~`apps/client/src/pages/OutlinePage.tsx`~~ | — | ✅ `pages/Outline/`：`index` / `OutlineTreeSidebar` / `NodeDetailPanel` / `tabs/*` / `diffUtils` / modals |
+| ~~`apps/client/src/components/Layout/GenerationQueuePanel.tsx`~~ | — | ✅ 已落地 `Layout/GenerationQueue/` |
+| ~~`apps/client/src/pages/WorldBuildingPage.tsx`~~ | — | ✅ 已落地 `pages/WorldBuilding/`（见下方蓝图） |
 | `apps/frontend/src/pages/ReadingReviewPage.tsx` | 1538 | 拆 `ReviewList` / `SnapshotDiff` / `useReviewSubmit` |
-| `apps/client/src/pages/CharactersPage.tsx` | 1280 | 拆 `CharacterList` / `CharacterEditor` / `useCharacterForm` |
+| ~~`apps/client/src/pages/CharactersPage.tsx`~~ | — | ✅ 已落地 `pages/Characters/` |
 | `apps/client/src/components/Writing/ChapterEditor/index.tsx` | 2146 | 继续拆 `TopToolBar` / `WarnPanel` / `ContextSidePanel` JSX 块 |
 
 **约束**：上述文件**冻结新增功能**；新需求必须先开拆分 PR。
 
-### WorldBuildingPage 拆分蓝图
+### WorldBuildingPage 拆分蓝图（✅ 2026-05-21 已落地）
 
 ```
 pages/WorldBuilding/
-├── index.tsx                     # Tab 切换壳（≤ 80 行）；import lazy 各 Tab
-├── shared/
-│   └── components.tsx            # Field / TextInput / TextArea / Select / SaveBtn
-│                                 # ChipSelect / Section / EditorHeader（无状态展示组件，不含 API 调用）
+├── index.tsx                     # Tab 切换壳（53 行）
+├── config.ts                     # SUB_TABS 配置
+├── shared/components.tsx         # 共享表单组件（146 行）
 └── tabs/
-    ├── StoryLinesTab.tsx         # 故事线 CRUD（约 147 行）
-    ├── PowerSystemTab.tsx        # 境界体系 CRUD + levels 编辑（约 275 行）
-    ├── SkillsTab.tsx             # 功法技能 CRUD（约 240 行）
-    ├── ItemsTab.tsx              # 道具法宝 CRUD（约 245 行）
-    ├── FactionsTab.tsx           # 势力组织 CRUD（约 298 行）
-    └── LocationsTab.tsx          # 地点 CRUD（约 108 行）
+    ├── StoryLinesTab.tsx         # 164 行
+    ├── PowerSystemTab.tsx        # 271 行
+    ├── SkillsTab.tsx             # 241 行
+    ├── ItemsTab.tsx              # 255 行
+    ├── FactionsTab.tsx           # 321 行（含关系图 lazy）
+    └── LocationsTab.tsx          # 128 行
 ```
+
+`WorldBuildingPage.tsx` 保留 2 行 re-export，兼容 `ProjectCachedViews` 懒加载路径。
+
+### GenerationQueuePanel 拆分蓝图（✅ 2026-05-21 已落地）
+
+```
+Layout/GenerationQueue/
+├── index.tsx              # 悬浮壳 + 展开切换（69 行）
+├── QueueList.tsx          # 展开态列表（59 行）
+├── TaskCard.tsx           # 单任务卡片（175 行）
+├── useGenerationQueue.ts  # 调度 / executeTask / cancel（169 行）
+├── utils/sseHelpers.ts
+└── runners/               # 按任务类型拆分（最大 gatedRewrite 297 行）
+```
+
+`GenerationQueuePanel.tsx` 保留 2 行 re-export，`AppLayout` 懒加载路径不变。
+
+### CharactersPage 拆分蓝图（✅ 2026-05-21 已落地）
+
+```
+pages/Characters/
+├── index.tsx                 # 列表 + 详情 + 关系图切换（107 行）
+├── useCharactersPage.ts      # 筛选 / 分组 / CRUD（130 行）
+├── CharacterList.tsx         # 左侧列表栏（243 行）
+├── CharacterEditor.tsx       # 详情多 Tab 编辑（551 行）
+├── ChangelogTab.tsx          # 变更记录 Tab（228 行）
+└── shared/constants.ts + components.tsx
+```
+
+`CharactersPage.tsx` 保留 2 行 re-export。
+
+### DebriefPanel 拆分蓝图（✅ 2026-05-21 已落地）
+
+```
+ChapterEditor/DebriefPanel/
+├── index.tsx              # 编排壳（282 行）
+├── HistorySection.tsx     # 落库历史审计（87）
+├── CharUpdateSection.tsx  # 人物状态（132）
+├── StorylineSection.tsx   # 故事线推进（97）
+├── AssetUpdatesSection.tsx
+├── ReaderPromisesSection.tsx
+├── useDebriefAssets.ts
+└── constants.ts
+```
+
+`DebriefPanel.tsx` 保留 2 行 re-export。
 
 ---
 

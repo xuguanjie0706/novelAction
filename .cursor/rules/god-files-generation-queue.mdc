@@ -1,0 +1,12 @@
+---
+description: 生成队列 — 新逻辑进 runners/ 或 useGenerationQueue
+globs: apps/client/src/components/Layout/GenerationQueue/**
+alwaysApply: false
+---
+
+# GenerationQueue 治理
+
+改本目录前：**Read `CLAUDE.md`** →「GenerationQueuePanel 拆分蓝图」。
+
+- 新任务类型 → `runners/<task>.ts` + `runners/index.ts` 导出 + `useGenerationQueue` 分支。
+- UI：列表改 `QueueList` / `TaskCard`；调度改 `useGenerationQueue`；禁止堆回 `GenerationQueuePanel.tsx` 壳。

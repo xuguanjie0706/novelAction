@@ -13,7 +13,9 @@
 import React, { useState, useCallback } from 'react'
 import { ChevronRight, Loader2, MousePointerClick, Wrench } from 'lucide-react'
 import type { LinterIssuePreview, StepState, Phase } from './hooks/useBootstrapStream'
+import type { StepDataMap } from './hooks/useBootstrapStepData'
 import ConsistencyContent, { type FixState } from './ConsistencyContent'
+import StepDataContent from './StepDataContent'
 import { projectsApi } from '../../api/client'
 import BootstrapStepIcon from './BootstrapStepIcon'
 
@@ -252,12 +254,18 @@ interface Props {
    * @param updated - 覆盖写入后从后端返回的最新一致性问题列表
    */
   onInsightsUpdate?: (updated: { consistency_issues: any[] }) => void
+  /**
+   * 各步骤完成后从 API 拉取的真实数据 map（来自 useBootstrapStepData）。
+   * 用于在右侧详情面板展示富内容；拉取中或失败时为 undefined，降级到"X 条"摘要。
+   */
+  stepData?: StepDataMap
 }
 
 export default function BootstrapTimelineDetail({
   step,
   positioningData,
   insights,
+  stepData,
   generationStartMs,
   phase,
   projectId,
@@ -426,12 +434,16 @@ export default function BootstrapTimelineDetail({
           </div>
         )}
 
-        {(step.count != null || step.preview) && (
-          <Card title="输出摘要">
-            {step.count != null && <Row label="生成数量" value={`${step.count} 条`} />}
-            {step.preview && <Row label="内容预览" value={<span className="text-gray-600">{step.preview}</span>} />}
-          </Card>
-        )}
+        {/* 步骤完成且已拉取到真实数据时展示富内容；否则降级为 count/preview 摘要 */}
+        {step.status === 'done' && stepData?.[step.key] != null
+          ? <StepDataContent stepKey={step.key} data={stepData[step.key]} />
+          : (step.count != null || step.preview) && (
+              <Card title="输出摘要">
+                {step.count != null && <Row label="生成数量" value={`${step.count} 条`} />}
+                {step.preview && <Row label="内容预览" value={<span className="text-gray-600">{step.preview}</span>} />}
+              </Card>
+            )
+        }
 
         {step.key === 'positioning' && positioningData && Object.keys(positioningData).length > 0 && (
           <PositioningContent data={positioningData} />

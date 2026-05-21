@@ -118,7 +118,7 @@ async def node_gate_power_systems(state: BootstrapState, config: dict | None = N
             message="请确认境界体系后继续；若不满意可「重新生成」本步（会覆盖当前结果）。",
             gate_preview={"power_systems_count": cnt},
         )
-        _persist(db, run_id, {}, gate_data={"kind": "power_systems", "count": cnt})
+        _persist(db, run_id, {}, gate_data={"kind": "power_systems", "count": cnt, "current_gate": "gate_power_systems"})
         cmd = interrupt({"step": "power_systems", "kind": "power_systems_gate", "count": cnt})
         if not isinstance(cmd, dict):
             cmd = {}
@@ -164,7 +164,7 @@ async def node_gate_characters(state: BootstrapState, config: dict | None = None
             message="请确认核心人物卡后继续；「重新生成」将删除本步已写入的人物与关系后重跑。",
             gate_preview=preview,
         )
-        _persist(db, run_id, {}, gate_data={"kind": "characters", **preview})
+        _persist(db, run_id, {}, gate_data={"kind": "characters", "current_gate": "gate_characters", **preview})
         cmd = interrupt({"step": "characters", "kind": "characters_gate", "count": preview["characters_count"]})
         if not isinstance(cmd, dict):
             cmd = {}
@@ -211,7 +211,7 @@ async def node_gate_volumes(state: BootstrapState, config: dict | None = None) -
             message="请确认卷级骨架后继续；「重新生成」将删除已写入的卷节点后重跑。",
             gate_preview={"volumes_count": cnt},
         )
-        _persist(db, run_id, {}, gate_data={"kind": "volumes", "count": cnt})
+        _persist(db, run_id, {}, gate_data={"kind": "volumes", "count": cnt, "current_gate": "gate_volumes"})
         cmd = interrupt({"step": "volumes", "kind": "volumes_gate", "count": cnt})
         if not isinstance(cmd, dict):
             cmd = {}

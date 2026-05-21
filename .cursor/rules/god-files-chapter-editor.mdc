@@ -1,0 +1,13 @@
+---
+description: ChapterEditor 上帝文件 — 冻结堆叠，先读登记册
+globs: apps/client/src/components/Writing/ChapterEditor/**
+alwaysApply: false
+---
+
+# ChapterEditor 治理
+
+改本目录前：**Read `CLAUDE.md`** →「上帝文件登记册」「前端组件拆分蓝图」中与 ChapterEditor / DebriefPanel 相关行。
+
+- `index.tsx`：冻结新增 props / `useState`；新逻辑进 `hooks/` 或子组件（TopToolBar / WarnPanel / ContextSidePanel）。
+- ~~`DebriefPanel.tsx`~~：✅ 已迁 `DebriefPanel/` 子目录；新块进对应 Section 文件。
+- 禁止让登记册文件净增 ≥50 行而无等量「治旧」删除。

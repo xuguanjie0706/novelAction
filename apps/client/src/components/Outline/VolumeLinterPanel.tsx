@@ -15,6 +15,7 @@ import { AlertTriangle, CheckCircle, Loader2, RefreshCw, ShieldOff, Wrench } fro
 import clsx from 'clsx'
 import { outlineApi } from '../../api/client'
 import type { OutlineNode } from '../../types'
+import { linterIssueHeading } from './linterDisplay'
 
 // ── 类型 ─────────────────────────────────────────────────────────────────────
 
@@ -60,13 +61,6 @@ const STATUS_STYLE: Record<string, string> = {
   ok:     'text-emerald-700 bg-emerald-50 border-emerald-200',
   warn:   'text-amber-700 bg-amber-50 border-amber-200',
   failed: 'text-red-700 bg-red-50 border-red-200',
-}
-
-const SEVERITY_COLOR: Record<string, string> = {
-  critical: 'text-red-600',
-  high:     'text-amber-600',
-  medium:   'text-gray-500',
-  low:      'text-gray-400',
 }
 
 const SEVERITY_BADGE: Record<string, string> = {
@@ -170,12 +164,12 @@ const VolumeLinterPanel: React.FC<Props> = ({
             {displayStatus === 'ok'
               ? <CheckCircle size={12} />
               : <AlertTriangle size={12} />}
-            linter · {displayStatus}
+            章纲质检 · {displayStatus === 'ok' ? '通过' : displayStatus === 'warn' ? '有警告' : displayStatus === 'failed' ? '未通过' : displayStatus}
           </span>
           <span className="text-[11px] text-gray-500">
             共 {issueCount} 项
-            {criticalCount > 0 && <span className="ml-1 text-red-600 font-medium">· critical {criticalCount}</span>}
-            {highCount     > 0 && <span className="ml-1 text-amber-600 font-medium">· high {highCount}</span>}
+            {criticalCount > 0 && <span className="ml-1 text-red-600 font-medium">· 严重 {criticalCount}</span>}
+            {highCount     > 0 && <span className="ml-1 text-amber-600 font-medium">· 较高 {highCount}</span>}
             {draftHeld && <span className="ml-1 text-amber-700"> · 草稿已暂存</span>}
           </span>
         </div>
@@ -208,17 +202,12 @@ const VolumeLinterPanel: React.FC<Props> = ({
                 <ul className="divide-y divide-gray-100">
                   {chIssues.map((issue, idx) => (
                     <li key={`${issue.rule_id}-${idx}`} className="px-3 py-2 space-y-0.5">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className={clsx(
-                          'text-[10px] font-mono px-1.5 py-0.5 rounded border',
-                          SEVERITY_BADGE[issue.severity] ?? SEVERITY_BADGE.low,
-                        )}>
-                          {issue.rule_id}
-                        </span>
-                        <span className={clsx('text-[10px] font-medium uppercase', SEVERITY_COLOR[issue.severity] ?? 'text-gray-400')}>
-                          {issue.severity}
-                        </span>
-                      </div>
+                      <span className={clsx(
+                        'inline-block text-[10px] font-medium px-1.5 py-0.5 rounded border',
+                        SEVERITY_BADGE[issue.severity] ?? SEVERITY_BADGE.low,
+                      )}>
+                        {linterIssueHeading(issue)}
+                      </span>
                       <p className="text-[11px] text-gray-700 leading-snug">{issue.message}</p>
                       {issue.suggestion && (
                         <p className="text-[10px] text-indigo-600 leading-snug">↳ {issue.suggestion}</p>

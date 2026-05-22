@@ -340,6 +340,18 @@ async def _build_draft_context(
     if _narrative_arc:
         writing_brief_context = writing_brief_context + "\n\n" + _narrative_arc
 
+    # 境界快照：查本章出场人物（优先）或所有人物中有 current_realm 的，构建 {name: realm} dict
+    # 仅取 realm 已设定的角色；写章时作为硬约束注入 final_reminder，防境界倒退
+    _snap_chars = characters if characters else []
+    _snap_ids = set(str(cid) for cid in (outline_node.involved_character_ids or [])) if outline_node else set()
+    if _snap_ids:
+        _snap_chars = [c for c in _snap_chars if str(c.id) in _snap_ids] or _snap_chars
+    realm_snapshot_value: dict = {
+        c.name: c.current_realm
+        for c in _snap_chars[:8]
+        if c.name and (c.current_realm or "").strip()
+    }
+
     return dict(
         chapter_title=chapter.title or "",
         outline_hook=outline_node.hook or "" if outline_node else "",
@@ -372,6 +384,7 @@ async def _build_draft_context(
         scene_blueprint=scene_blueprint,
         reader_promise_context=reader_promise_context,
         prev_directives=prev_directives_str,
+        realm_snapshot=realm_snapshot_value,
         rag_retrieval_log_id=str(_rag_log.id),
         rag_retrieval_snapshot=rag_retrieval_snapshot,
     )
@@ -485,6 +498,7 @@ async def draft_assist_stream(
                 model_profile=req.model_profile or "local",
                 llm_provider_id=str(req.llm_provider_id) if req.llm_provider_id else None,
                 persist_record=True,
+                reuse_if_exists=bool(req.replace_existing),
             )
             for payload in pre_warn_events:
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"

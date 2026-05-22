@@ -99,6 +99,9 @@ class DraftStreamMixin:
         # 列出各主角当前位置 + Location.sensory_signature，注入为硬约束，防感官/位置跨章漂移。
         # 有内容时插入 prompt 中【本章大纲计划】之前，无内容时跳过（不产生空白行）。
         location_context: str = "",
+        # 境界快照：{人物名: 当前境界} 字典，由路由层从 Character 表取最新值注入。
+        # 独立于 character_summary，作为写章硬约束注入 final_reminder，防境界倒退。
+        realm_snapshot: Optional[dict] = None,
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
@@ -218,6 +221,22 @@ class DraftStreamMixin:
 
         # ── 写作硬约束：拼成 final_reminder 块，放在 user prompt 末尾紧贴生成指令 ──
         # 这些是「高频违反 / 必须看见」的规则，放 system 容易被中段稀释；移到末尾后召回率更高。
+        # ── 境界锁定块：从 realm_snapshot 生成硬约束，防倒退 ──────────────────────────
+        realm_lock_block = ""
+        if realm_snapshot and isinstance(realm_snapshot, dict):
+            _realm_lines = [
+                f"  {name}：当前境界={realm}（本章及后续章节不得出现任何低于此境界的描写或突破至此境界以下的情节）"
+                for name, realm in realm_snapshot.items()
+                if name and realm
+            ]
+            if _realm_lines:
+                realm_lock_block = (
+                    "\n\n▍境界状态锁定（⚠️ 最高级别约束，违反即视为严重连续性错误）\n"
+                    "以下为各关键人物截至本章的最新境界，写作中绝对禁止降级或写出低于此水准的技法：\n"
+                    + "\n".join(_realm_lines)
+                    + "\n  若本章大纲明确写有境界突破情节，突破后的境界须高于上方记录，不得逆转。"
+                )
+
         final_reminder = """【⚠️ 写作前最后重读（违反任意一条视为本章不合格）】
 
 ▍章末钩子（最后一段 ≤80 字，必须满足以下之一）
@@ -255,6 +274,9 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
             "\n\n▍配角配额：本章在场命名角色 ≤ 主1 + 核心配角3 + 反派2 + 师长2；"
             "多余角色合并或用无名路人（如「一名弟子」「路人」）处理。"
         )
+        # 境界锁定块追加到最后（紧贴生成指令，召回率最高）
+        if realm_lock_block:
+            final_reminder += realm_lock_block
 
         # 根据大纲 word_target 动态计算续写字数
         full_target = max(1500, int(word_target or 2300))

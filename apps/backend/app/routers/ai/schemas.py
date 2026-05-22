@@ -299,6 +299,9 @@ class ChapterDebriefRequest(BaseModel):
     #: auto_debrief 服务端将 fulfilled_promise_texts 解析为精确 ID 后写入缓存，
     #: 前端提交时带上 ID 可跳过二次模糊匹配，直接按主键更新，优先级高于文本匹配。
     fulfilled_promise_ids: List[str] = []
+    #: 与 auto-debrief / 门控写作同线路；用于后台 memory_conflict_detect（缺省读本章复盘缓存）
+    model_profile: Optional[Literal["local", "gemini"]] = None
+    llm_provider_id: Optional[UUID] = None
 
 
 class AutoDebriefRequest(BaseModel):

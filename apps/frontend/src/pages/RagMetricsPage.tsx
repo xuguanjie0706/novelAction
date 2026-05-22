@@ -15,7 +15,6 @@ import {
   Alert,
   Card,
   Col,
-  DatePicker,
   Empty,
   Row,
   Select,
@@ -28,8 +27,8 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { BarChartOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
-import dayjs from 'dayjs'
 import { http } from '../api/http'
+import type { ReviewProject } from '../types/review'
 
 const { Title, Text } = Typography
 
@@ -53,11 +52,6 @@ interface RagMetrics {
     queries: number
     semantic_hit_rate: number | null
   }>
-}
-
-interface Project {
-  id: string
-  title: string
 }
 
 // ── 辅助 ────────────────────────────────────────────────────────────────────
@@ -183,22 +177,30 @@ const DAYS_OPTIONS = [
  * 所有数据来自 rag_retrieval_logs 表，无需额外存储。
  */
 export default function RagMetricsPage() {
-  const [projects, setProjects]   = useState<Project[]>([])
+  const [projects, setProjects]   = useState<ReviewProject[]>([])
   const [projectId, setProjectId] = useState<string>()
   const [days, setDays]           = useState<number>(7)
   const [metrics, setMetrics]     = useState<RagMetrics | null>(null)
   const [loading, setLoading]     = useState(false)
   const [error, setError]         = useState<string | null>(null)
+  const [projectsError, setProjectsError] = useState<string | null>(null)
 
-  // 加载项目列表
+  // 加载项目列表（与其它管理页一致：GET /api/v1/projects/）
   useEffect(() => {
-    http.get<{ items: Project[] }>('/api/v1/admin/projects?limit=200')
+    http.get<ReviewProject[]>('/api/v1/projects/')
       .then(r => {
-        const list = Array.isArray(r.data) ? r.data : (r.data as { items?: Project[] }).items ?? []
+        const list = Array.isArray(r.data) ? r.data : []
         setProjects(list)
+        setProjectsError(null)
         if (list.length > 0 && !projectId) setProjectId(list[0].id)
       })
-      .catch(() => {})
+      .catch((e: unknown) => {
+        setProjects([])
+        const msg = (e as { response?: { data?: { detail?: string } }; message?: string })
+        setProjectsError(
+          msg?.response?.data?.detail ?? msg?.message ?? '加载项目列表失败，请确认已登录管理后台',
+        )
+      })
   }, [])
 
   const fetchMetrics = useCallback(async () => {
@@ -275,12 +277,17 @@ export default function RagMetricsPage() {
         </Space>
       </Card>
 
+      {projectsError && (
+        <Alert type="error" message={projectsError} style={{ marginBottom: 16 }} />
+      )}
       {error && (
         <Alert type="error" message={error} style={{ marginBottom: 16 }} />
       )}
 
       <Spin spinning={loading}>
-        {!metrics || metrics.total_queries === 0 ? (
+        {!projectId ? (
+          <Empty description={projects.length === 0 ? '暂无项目，请先在创作端创建小说' : '请选择项目'} />
+        ) : !metrics || metrics.total_queries === 0 ? (
           <Empty description="该项目在所选时间窗口内暂无 RAG 检索记录" />
         ) : (
           <>

@@ -19,6 +19,8 @@ import {
   Field, TInput, TArea, CharacterTag, InfoPanel, CharacterAvatar,
   type CharacterGrowthTimelinePayload,
 } from './shared/components'
+import { getDebriefRealmMilestones } from './shared/debriefMilestones'
+import { DebriefRealmTimeline, GrowthTimelineEmptyState } from './shared/DebriefRealmTimeline'
 
 export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTargets }: {
   char: Character
@@ -38,6 +40,16 @@ export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTarg
   useEffect(() => { setForm({ ...char }); setDetailTab('basic') }, [char.id])
 
   useEffect(() => {
+    setForm(prev => ({
+      ...prev,
+      current_realm: char.current_realm,
+      current_location: char.current_location,
+      current_status: char.current_status,
+      arc_stages: char.arc_stages,
+    }))
+  }, [char.id, char.current_realm, char.current_location, char.current_status, char.arc_stages])
+
+  useEffect(() => {
     if (detailTab !== 'changelog') return
     let cancelled = false
     setChangelogLoading(true)
@@ -46,7 +58,28 @@ export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTarg
       .catch(() => { if (!cancelled) setChangelog([]) })
       .finally(() => { if (!cancelled) setChangelogLoading(false) })
     return () => { cancelled = true }
-  }, [detailTab, char.id, projectId])
+  }, [detailTab, char.id, char.current_realm, projectId])
+
+  /** 进入实力/成长 Tab 时拉取最新人物（含复盘写入的 extra 与 arc_stages） */
+  useEffect(() => {
+    if (detailTab !== 'growth' && detailTab !== 'power') return
+    let cancelled = false
+    charactersApi.get(projectId, char.id)
+      .then((res: { data: Character }) => {
+        if (cancelled) return
+        onUpdate(res.data)
+        setForm((prev) => ({
+          ...prev,
+          current_realm: res.data.current_realm,
+          current_location: res.data.current_location,
+          current_status: res.data.current_status,
+          arc_stages: res.data.arc_stages,
+          extra: res.data.extra,
+        }))
+      })
+      .catch(() => { /* 静默：保留 store 快照 */ })
+    return () => { cancelled = true }
+  }, [detailTab, char.id, projectId, onUpdate])
 
   useEffect(() => {
     if (detailTab !== 'growth') return
@@ -63,7 +96,9 @@ export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTarg
         if (!cancelled) setRealmTimelineLoading(false)
       })
     return () => { cancelled = true }
-  }, [detailTab, char.id, projectId])
+  }, [detailTab, char.id, char.current_realm, projectId])
+
+  const debriefMilestones = getDebriefRealmMilestones(char)
 
   const meta = ROLE_META[char.role as keyof typeof ROLE_META] ?? ROLE_META.supporting
   const statusM = STATUS_META[form.current_status] ?? STATUS_META.alive
@@ -289,6 +324,12 @@ export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTarg
           {detailTab === 'power' && (
             <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm space-y-4">
               <div className="text-sm font-semibold text-gray-700">实力与体系</div>
+              {debriefMilestones.length > 0 && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-4 space-y-2">
+                  <div className="text-xs font-semibold text-emerald-900">复盘境界变更（{debriefMilestones.length} 条）</div>
+                  <DebriefRealmTimeline milestones={debriefMilestones} />
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <Field label="当前境界">
                   <TInput value={form.current_realm ?? ''} onChange={f('current_realm')} placeholder="如：斗者七星" />
@@ -384,15 +425,22 @@ export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTarg
                     && (realmTimeline.milestones?.length ?? 0) === 0
                     && realmTimeline.chapter_plans_scanned === 0
                     && (realmTimeline.debrief_snapshots ?? 0) === 0
-                    && (realmTimeline.changelog_entries ?? 0) === 0 && (
-                    <p className={clsx(
-                      'text-xs',
-                      realmTimeline.has_realm_whitelist ? 'text-slate-600' : 'text-amber-700',
-                    )}>
-                      {realmTimeline.has_realm_whitelist
-                        ? `尚无大纲章节计划，也未记录 ${char.name} 的境界变更；在大纲「人物变化/实力里程碑」中写明其突破，或写作复盘提交后会自动累积。`
-                        : '尚未配置力量体系 levels；配置体系、在大纲写明境界变化或提交复盘后可在此查看。'}
-                    </p>
+                    && (realmTimeline.changelog_entries ?? 0) === 0
+                    && debriefMilestones.length === 0 && (
+                    <GrowthTimelineEmptyState
+                      debriefCount={0}
+                      hasWhitelist={realmTimeline.has_realm_whitelist}
+                      charName={char.name}
+                    />
+                  )}
+                  {!realmTimelineLoading
+                    && (realmTimeline?.milestones?.length ?? 0) === 0
+                    && debriefMilestones.length > 0 && (
+                    <GrowthTimelineEmptyState
+                      debriefCount={debriefMilestones.length}
+                      hasWhitelist={realmTimeline?.has_realm_whitelist}
+                      charName={char.name}
+                    />
                   )}
                   {!realmTimelineLoading && realmTimeline && !realmTimeline.has_realm_whitelist
                     && (realmTimeline.milestones?.length ?? 0) > 0 && (
@@ -435,18 +483,49 @@ export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTarg
                     </ul>
                   )}
                 </div>
+              {debriefMilestones.length > 0 && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-4 space-y-2">
+                  <div className="text-xs font-semibold text-emerald-900">
+                    复盘突破记录（来自人物列表接口 extra.debrief_realm_milestones）
+                  </div>
+                  <DebriefRealmTimeline milestones={debriefMilestones} />
+                </div>
+              )}
               <Field label="人物弧线（整体描述）">
                 <TArea value={form.arc ?? ''} onChange={f('arc')} rows={3} placeholder="从开始到结局，这个人物会经历怎样的转变？" />
               </Field>
               <div>
                 <div className="text-xs font-medium text-gray-500 mb-3">结构化成长阶段</div>
                 <div className="space-y-2 mb-2">
-                  {(form.arc_stages ?? []).map((stage: any, idx: number) => (
-                    <div key={idx} className="flex gap-3 p-3 bg-amber-50 rounded-lg border border-amber-100">
-                      <div className="w-5 h-5 rounded-full bg-amber-500 text-white text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold">
+                  {(form.arc_stages ?? []).map((stage: any, idx: number) => {
+                    const isDebriefStage = stage.completed === true && stage.chapter_number != null
+                    return (
+                    <div key={idx} className={clsx(
+                      'flex gap-3 p-3 rounded-lg border',
+                      isDebriefStage ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100',
+                    )}>
+                      <div className={clsx(
+                        'w-5 h-5 rounded-full text-white text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold',
+                        isDebriefStage ? 'bg-emerald-500' : 'bg-amber-500',
+                      )}>
                         {idx + 1}
                       </div>
                       <div className="flex-1 grid grid-cols-2 gap-2 min-w-0">
+                        {isDebriefStage ? (
+                          <>
+                            <div className="col-span-2 text-sm font-medium text-gray-800">
+                              {stage.stage ?? stage.realm ?? '突破'}
+                              <span className="text-emerald-700 text-xs ml-2">
+                                第{stage.chapter_number}章{stage.chapter_title ? ` · ${stage.chapter_title}` : ''}
+                              </span>
+                            </div>
+                            {stage.realm && (
+                              <div className="text-xs text-amber-600 col-span-2">境界：{stage.realm}</div>
+                            )}
+                            {stage.state && <div className="text-xs text-gray-500 col-span-2">{stage.state}</div>}
+                          </>
+                        ) : (
+                        <>
                         <input value={stage.stage ?? ''} placeholder="阶段名" onChange={e => {
                           const stages = [...(form.arc_stages ?? [])]
                           stages[idx] = { ...stages[idx], stage: e.target.value }
@@ -467,11 +546,13 @@ export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTarg
                           stages[idx] = { ...stages[idx], state: e.target.value }
                           setForm(p => ({ ...p, arc_stages: stages }))
                         }} className="col-span-2 text-xs text-gray-500 bg-transparent border-0 focus:outline-none" />
+                        </>
+                        )}
                       </div>
                       <button onClick={() => setForm(p => ({ ...p, arc_stages: (p.arc_stages ?? []).filter((_: any, i: number) => i !== idx) }))}
                         className="text-gray-300 hover:text-red-400 shrink-0 self-start">✕</button>
                     </div>
-                  ))}
+                  )})}
                 </div>
                 <button onClick={() => setForm(p => ({ ...p, arc_stages: [...(p.arc_stages ?? []), { stage: '', realm: '', state: '', chapter_range: '' }] }))}
                   className="w-full py-2 border border-dashed border-amber-300 text-amber-500 text-xs rounded-lg hover:bg-amber-50 transition-colors">
@@ -539,9 +620,17 @@ export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTarg
                   chapter_id: chapterId,
                   character_updates: [charUpdate] as any,
                 })
-                // 刷新变更记录
-                const fresh = await charactersApi.getChangelog(projectId, char.id)
-                setChangelog(fresh.data)
+                const [refreshedList, freshLogs] = await Promise.all([
+                  charactersApi.list(projectId),
+                  charactersApi.getChangelog(projectId, char.id),
+                ])
+                const freshChar = refreshedList.data.find((c: Character) => c.id === char.id)
+                if (freshChar) onUpdate(freshChar)
+                setChangelog(freshLogs.data)
+                try {
+                  const tl = await charactersApi.growthTimeline(projectId, char.id)
+                  setRealmTimeline(tl.data as CharacterGrowthTimelinePayload)
+                } catch { /* 时间轴刷新失败不阻断变更记录 */ }
               }}
             />
           )}

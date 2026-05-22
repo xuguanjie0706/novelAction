@@ -197,6 +197,8 @@ interface AppState {
   /** 队列已自动提交复盘的章节 ID 集合，避免切换复盘 tab 时重复触发 AI 分析 */
   queueCommittedDebriefIds: Set<string>
   markChapterDebriefCommitted: (chapterId: string) => void
+  /** 同章重写前清除「已自动复盘」标记与 UI 快照，避免复盘 Tab 展示上一轮结果 */
+  resetChapterDebriefQueueState: (chapterId: string) => void
   /**
    * 队列 auto-debrief 落库前保存的原始 JSON（按章节）。
    * 服务端 chapter-debrief 会删除 ChapterDebriefCache，用此快照在复盘 Tab 恢复黄色 AI 标记。
@@ -390,6 +392,14 @@ export const useAppStore = create<AppState>((set) => ({
   queueCommittedDebriefIds: new Set<string>(),
   markChapterDebriefCommitted: (chapterId) =>
     set((state) => ({ queueCommittedDebriefIds: new Set([...state.queueCommittedDebriefIds, chapterId]) })),
+  resetChapterDebriefQueueState: (chapterId) =>
+    set((state) => {
+      const nextIds = new Set(state.queueCommittedDebriefIds)
+      nextIds.delete(chapterId)
+      const nextSnap = { ...state.queueDebriefUiSnapshotByChapterId }
+      delete nextSnap[chapterId]
+      return { queueCommittedDebriefIds: nextIds, queueDebriefUiSnapshotByChapterId: nextSnap }
+    }),
   queueDebriefUiSnapshotByChapterId: {},
   setQueueDebriefUiSnapshot: (chapterId, payload) =>
     set((state) => {

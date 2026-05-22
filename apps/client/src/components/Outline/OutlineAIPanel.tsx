@@ -245,70 +245,118 @@ function ChapterCardView({
 export default function OutlineAIPanel({ node, projectId, onCommitDone }: Props) {
   const [chapterCount, setChapterCount] = useState(60)
   const [status, setStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
+  // arc 节点预览结果（volume 节点直接入库，不走预览）
   const [result, setResult] = useState<ExpandResult | null>(null)
   const [committing, setCommitting] = useState(false)
   const [expandAll, setExpandAll] = useState(false)
+  // volume 节点展开后实际写入的章节数
+  const [volChapterCount, setVolChapterCount] = useState(0)
 
   const nodeLabel = node.node_type === 'volume' ? '卷' : '旧篇'
+  const isVolume = node.node_type === 'volume'
 
+  /**
+   * volume 节点：调 expand-chapters（与「重新生成章纲」同一接口）
+   * - 传全量已有大纲上下文（后端 gen_vol_chapter_plans 负责批间衔接）
+   * - 直接入库，无需二次确认
+   * arc 节点：调旧有 ai-expand 接口，保留预览/确认流程
+   */
   const handleGenerate = async () => {
     setStatus('loading')
     setResult(null)
+    const route = useAppStore.getState().aiBackendRoute
 
     try {
-      const url = `/api/v1/projects/${projectId}/outline/ai-expand`
-      const route = useAppStore.getState().aiBackendRoute
-      const res = await authFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          node_id: node.id,
-          chapter_count: chapterCount,
-          model_profile: toOutlineApiModelProfile(route),
-          ...routeLlmProviderPayload(route),
-        }),
-      })
+      if (isVolume) {
+        // ── volume：expand-chapters 统一接口 ──────────────────────────────
+        const url = `/api/v1/projects/${projectId}/outline/volumes/${node.id}/expand-chapters`
+        const res = await authFetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model_profile: toOutlineApiModelProfile(route),
+            force: true,   // 已有章纲时覆盖重生成
+            ...routeLlmProviderPayload(route),
+          }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const reader = res.body!.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
 
-      const reader = res.body!.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let received = false
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-        for (const line of lines) {
-          if (!line.startsWith('data:')) continue
-          const raw = line.slice(5).trim()
-          if (!raw) continue
-          let evt: { event?: string; data?: ExpandResult; message?: string }
-          try {
-            evt = JSON.parse(raw)
-          } catch {
-            continue
-          }
-          if (evt.event === 'result') {
-            const data = evt.data as ExpandResult
-            if (data.chapters?.length) {
-              setResult(data)
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue
+            const raw = line.slice(5).trim()
+            if (!raw) continue
+            let evt: Record<string, any>
+            try { evt = JSON.parse(raw) } catch { continue }
+            if (evt.event === 'step_done') {
+              if (evt.generation_failed) throw new Error(evt.generation_error || '章纲生成失败')
+              setVolChapterCount(evt.chapter_count ?? 0)
               setStatus('done')
-              received = true
-            } else {
-              throw new Error('AI 返回的章节列表为空')
+              toast.success(`✅ 已写入 ${evt.chapter_count ?? 0} 章大纲`)
+              onCommitDone?.()
+              return
             }
-          } else if (evt.event === 'error') {
-            throw new Error(evt.message || 'AI 生成失败')
+            if (evt.event === 'error') throw new Error(evt.message || '生成失败')
           }
         }
-      }
-
-      if (!received) {
         throw new Error('未收到完整生成结果，请检查网络与 API 配置后重试')
+
+      } else {
+        // ── arc 节点：保留原有 ai-expand 预览流程 ──────────────────────────
+        const url = `/api/v1/projects/${projectId}/outline/ai-expand`
+        const res = await authFetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            node_id: node.id,
+            chapter_count: chapterCount,
+            model_profile: toOutlineApiModelProfile(route),
+            ...routeLlmProviderPayload(route),
+          }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+        const reader = res.body!.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let received = false
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue
+            const raw = line.slice(5).trim()
+            if (!raw) continue
+            let evt: { event?: string; data?: ExpandResult; message?: string }
+            try { evt = JSON.parse(raw) } catch { continue }
+            if (evt.event === 'result') {
+              const data = evt.data as ExpandResult
+              if (data.chapters?.length) {
+                setResult(data)
+                setStatus('done')
+                received = true
+              } else {
+                throw new Error('AI 返回的章节列表为空')
+              }
+            } else if (evt.event === 'error') {
+              throw new Error(evt.message || 'AI 生成失败')
+            }
+          }
+        }
+        if (!received) throw new Error('未收到完整生成结果，请检查网络与 API 配置后重试')
       }
     } catch (err: any) {
       setStatus('error')
@@ -369,24 +417,26 @@ export default function OutlineAIPanel({ node, projectId, onCommitDone }: Props)
         </p>
       </div>
 
-      {/* 配置行 */}
+      {/* 配置行（章节数输入仅 arc 节点需要；volume 节点章节数由后端从大纲设定读取） */}
       <div className="flex items-center gap-3 mb-4">
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-gray-500 whitespace-nowrap">章节数</label>
-          <input
-            type="number"
-            min={1}
-            max={200}
-            value={chapterCount}
-            onChange={e => {
-              const v = parseInt(e.target.value, 10)
-              if (!isNaN(v) && v >= 1) setChapterCount(v)
-            }}
-            className="text-sm border border-gray-200 rounded-lg px-2 py-1 w-20 focus:outline-none focus:ring-2 focus:ring-amber-300"
-            disabled={status === 'loading'}
-          />
-          <span className="text-xs text-gray-400">章</span>
-        </div>
+        {!isVolume && (
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-gray-500 whitespace-nowrap">章节数</label>
+            <input
+              type="number"
+              min={1}
+              max={200}
+              value={chapterCount}
+              onChange={e => {
+                const v = parseInt(e.target.value, 10)
+                if (!isNaN(v) && v >= 1) setChapterCount(v)
+              }}
+              className="text-sm border border-gray-200 rounded-lg px-2 py-1 w-20 focus:outline-none focus:ring-2 focus:ring-amber-300"
+              disabled={status === 'loading'}
+            />
+            <span className="text-xs text-gray-400">章</span>
+          </div>
+        )}
         <button
           onClick={handleGenerate}
           disabled={status === 'loading'}
@@ -400,7 +450,7 @@ export default function OutlineAIPanel({ node, projectId, onCommitDone }: Props)
           {status === 'loading' ? (
             <><Loader2 size={14} className="animate-spin" />生成中…</>
           ) : (
-            <><Sparkles size={14} />生成五要素大纲</>
+            <><Sparkles size={14} />{isVolume ? 'AI 展开章纲' : '生成五要素大纲'}</>
           )}
         </button>
       </div>
@@ -409,8 +459,12 @@ export default function OutlineAIPanel({ node, projectId, onCommitDone }: Props)
       {status === 'loading' && (
         <div className="flex flex-col items-center justify-center py-16 gap-3">
           <Loader2 size={32} className="animate-spin text-amber-400" />
-          <p className="text-sm text-gray-500">AI 正在规划 {chapterCount} 章的情节弧线…</p>
-          <p className="text-xs text-gray-400">这需要 15–60 秒，请耐心等待</p>
+          <p className="text-sm text-gray-500">
+            {isVolume
+              ? 'AI 正在生成完整卷章纲并写入大纲树…'
+              : `AI 正在规划 ${chapterCount} 章的情节弧线…`}
+          </p>
+          <p className="text-xs text-gray-400">这需要 30–120 秒，请耐心等待</p>
         </div>
       )}
 
@@ -428,8 +482,24 @@ export default function OutlineAIPanel({ node, projectId, onCommitDone }: Props)
         </div>
       )}
 
-      {/* 结果：卷级分析 + 章节卡片 */}
-      {status === 'done' && result && (
+      {/* volume 节点完成态：已直接写库，无需预览/确认 */}
+      {status === 'done' && isVolume && (
+        <div className="flex items-center gap-2 p-4 rounded-xl bg-green-50 border border-green-200">
+          <CheckCircle2 size={16} className="text-green-500 shrink-0" />
+          <p className="text-sm text-green-700">
+            已生成 <span className="font-bold">{volChapterCount}</span> 章大纲并写入大纲树
+          </p>
+          <button
+            onClick={() => setStatus('idle')}
+            className="ml-auto text-xs text-green-500 hover:underline"
+          >
+            关闭
+          </button>
+        </div>
+      )}
+
+      {/* arc 节点结果：卷级分析 + 章节卡片预览 */}
+      {status === 'done' && !isVolume && result && (
         <div>
           {/* 卷级分析 */}
           {result.volume_analysis && (

@@ -33,6 +33,7 @@ from app.models.bootstrap_run import BootstrapRun
 from app.models.user_credit import UserCredit, CreditTransaction
 from app.models.redeem_code import RedeemCode
 from app.models.rag_retrieval_log import RagRetrievalLog
+from app.models.memory_conflict_detect_log import MemoryConflictDetectLog
 from app.models.generation_job import GenerationJob
 
 __all__ = [
@@ -71,5 +72,6 @@ __all__ = [
     "CreditTransaction",
     "RedeemCode",
     "RagRetrievalLog",
+    "MemoryConflictDetectLog",
     "GenerationJob",
 ]

@@ -117,6 +117,8 @@ export async function runRewriteChapter(
             chapter_id: chapterId,
             chapter_index,
             apply_source: 'queue_auto',
+            model_profile: modelProfile,
+            ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
           })
           indexPersistedFromDraft = true
           pushProgress({ step: 'index', label: `✓ 索引已从流式稿末解析入库（质检 ${score.toFixed(1)} ≥ ${minOverallScore}）`, done: true, error: false })
@@ -147,12 +149,13 @@ export async function runRewriteChapter(
 
     pushProgress({ step: 'debrief', label: '正在自动复盘人物、故事线、记忆和 ChapterIndex…', done: false, error: false })
     try {
+      useAppStore.getState().resetChapterDebriefQueueState(chapterId)
       const applied = await autoCommitGeneratedChapterDebrief(
         projectId,
         chapterId,
         modelProfile,
         llmProviderId,
-        { omitChapterIndex: indexPersistedFromDraft },
+        { omitChapterIndex: indexPersistedFromDraft, forceRefresh: true },
       )
       if (applied.debriefPreview && typeof applied.debriefPreview === 'object') {
         useAppStore.getState().setQueueDebriefUiSnapshot(chapterId, applied.debriefPreview as Record<string, unknown>)

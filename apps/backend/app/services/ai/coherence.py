@@ -30,6 +30,7 @@ from app.services.llm_token_budgets import (
     max_tokens_suggest_stream,
 )
 from app.services.llm_call_log import log_llm_call
+from app.services.llm_errors import format_llm_error_message
 from app.services.genre_kit import get_genre_guardrail, normalize_genre
 from app.services.xuanhuan_lexicon import (
     format_modern_blacklist_for_prompt,
@@ -118,13 +119,25 @@ class CoherenceMixin:
 - suggestions：**至少 8 条、至多 18 条**，逐条具体可执行；按章节顺序组织，覆盖标题兑现、承接、人物状态、时间线、伏笔、节奏与信息密度；禁止把多条合并成一句空话。
 - chapter_evaluations：须覆盖**每一章**一条，字段填完整。"""
 
-        response = await self._call_ai(
-            system,
-            prompt,
-            max_tokens=max_tokens_coherence_check(large_context),
-            context={"operation": "chapter_coherence_check"},
-            task="quality.coherence_check",
-        )
+        try:
+            response = await self._call_ai(
+                system,
+                prompt,
+                max_tokens=max_tokens_coherence_check(large_context),
+                context={"operation": "chapter_coherence_check"},
+                task="quality.coherence_check",
+            )
+        except Exception as exc:
+            return {
+                "title_match_score": 0,
+                "continuity_score": 0,
+                "overall_score": 0,
+                "chapter_evaluations": [],
+                "cross_chapter_issues": [],
+                "suggestions": [],
+                "summary": "连贯性评测服务暂时不可用，请稍后重试",
+                "error": format_llm_error_message(exc),
+            }
         try:
             import re
 
@@ -260,13 +273,16 @@ class CoherenceMixin:
 }}
 若某章需要修改：unchanged 为 false，revised_content 为该章**完整**修后正文；若无需修改：unchanged 为 true 且 revised_content 为空字符串。"""
 
-            response = await self._call_ai(
-                system,
-                prompt,
-                max_tokens=max_tokens_coherence_apply(True),
-                context={"operation": "chapter_coherence_apply"},
-                task="quality.coherence_apply",
-            )
+            try:
+                response = await self._call_ai(
+                    system,
+                    prompt,
+                    max_tokens=max_tokens_coherence_apply(True),
+                    context={"operation": "chapter_coherence_apply"},
+                    task="quality.coherence_apply",
+                )
+            except Exception as exc:
+                raise RuntimeError(format_llm_error_message(exc)) from exc
             try:
                 data = self._parse_coherence_apply_json(response)
             except Exception:
@@ -340,13 +356,16 @@ class CoherenceMixin:
 }}
 若需修改：unchanged=false，revised_content 填完整修后正文；否则 unchanged=true 且 revised_content 为空。"""
 
-            response = await self._call_ai(
-                system,
-                prompt,
-                max_tokens=max_tokens_coherence_apply(False),
-                context={"operation": "chapter_coherence_apply"},
-                task="quality.coherence_apply",
-            )
+            try:
+                response = await self._call_ai(
+                    system,
+                    prompt,
+                    max_tokens=max_tokens_coherence_apply(False),
+                    context={"operation": "chapter_coherence_apply"},
+                    task="quality.coherence_apply",
+                )
+            except Exception as exc:
+                raise RuntimeError(format_llm_error_message(exc)) from exc
             try:
                 row = self._parse_coherence_apply_json(response)
             except Exception:

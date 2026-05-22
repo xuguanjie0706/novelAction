@@ -273,7 +273,8 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
     {{
       "character_id": "人物id",
       "character_name": "人物名称（供显示）",
-      "current_realm": "新境界（如有变化）",
+      "current_realm": "新境界名称（如有变化，须与境界体系设定完全一致）",
+      "realm_rank": 5,
       "current_location": "新位置（如有变化）",
       "current_status": "新状态（仅允许 alive/dead/missing/sealed/transformed 之一）",
       "add_skill_name": "习得的技能名（如有）",
@@ -293,9 +294,11 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
       "memory_type": "event / character_state / foreshadow / setting / conflict 之一",
       "title": "短标题",
       "content": "可供后续生成使用的事实，必须写清信息来源、伏笔前因或状态变化",
-      "tags": ["人物名", "关键词"]
+      "tags": ["人物名", "关键词"],
+      "importance_score": 0.7
     }}
   ],
+  （importance_score 赋值参考：境界突破/重大死亡/主线转折=0.9；习得核心技能/关键伏笔埋下=0.7；普通事件=0.5；路人出场=0.3。该值影响 RAG 优先级，境界类记忆必须 ≥0.85。）
   "asset_updates": {{
     "new_items": [
       {{
@@ -502,6 +505,12 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
             char_updates = []
             for cu in data.get("character_updates", []):
                 cleaned = {k: v for k, v in cu.items() if v and k not in ("character_name",)}
+                # realm_rank 为 0 时 v=0 被过滤，需单独保留
+                if "realm_rank" in cu and cu["realm_rank"] is not None:
+                    try:
+                        cleaned["realm_rank"] = int(cu["realm_rank"])
+                    except (ValueError, TypeError):
+                        pass
                 if len(cleaned) > 1:  # 除 character_id 外还有其他字段
                     cleaned["character_name"] = cu.get("character_name", "")
                     char_updates.append(cleaned)
@@ -523,11 +532,18 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                 if not content:
                     continue
                 tags = mu.get("tags") if isinstance(mu.get("tags"), list) else []
+                # importance_score：AI 按情节权重赋值，境界突破须 ≥0.85
+                try:
+                    imp = float(mu.get("importance_score") or 0.5)
+                    imp = max(0.0, min(1.0, imp))
+                except (ValueError, TypeError):
+                    imp = 0.5
                 memory_updates.append({
                     "memory_type": memory_type,
                     "title": (mu.get("title") or memory_type).strip()[:120],
                     "content": content,
                     "tags": [str(t) for t in tags[:8] if str(t).strip()],
+                    "importance_score": imp,
                 })
             raw_assets = data.get("asset_updates") if isinstance(data.get("asset_updates"), dict) else {}
 

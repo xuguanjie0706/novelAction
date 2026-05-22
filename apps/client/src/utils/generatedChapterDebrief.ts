@@ -1,4 +1,5 @@
-import { aiApi } from '../api/client'
+import { aiApi, charactersApi } from '../api/client'
+import { useAppStore } from '../store'
 
 type ModelProfile = 'local' | 'gemini'
 type MemoryType = 'event' | 'character_state' | 'foreshadow' | 'setting' | 'conflict'
@@ -25,6 +26,7 @@ export interface AutoDebriefResult {
   character_updates?: Array<{
     character_id?: string
     current_realm?: string
+    realm_rank?: number
     current_location?: string
     current_status?: string
     add_skill_name?: string
@@ -64,6 +66,7 @@ export interface AutoDebriefResult {
     audience_aware?: number
   }>
   fulfilled_promise_texts?: string[]
+  fulfilled_promise_ids?: string[]
 }
 
 export interface GeneratedChapterDebriefStats {
@@ -85,13 +88,17 @@ export async function autoCommitGeneratedChapterDebrief(
   chapterId: string,
   modelProfile: ModelProfile,
   llmProviderId?: string,
-  /** 起草入库已从稿末解析并写入 chapter_index 时，避免 auto-debrief 的 chapter_index 覆盖 */
-  options?: { omitChapterIndex?: boolean },
+  /**
+   * @param options.omitChapterIndex - 起草已从稿末写入 chapter_index 时跳过 AI 索引覆盖
+   * @param options.forceRefresh - 重写等同章再复盘时强制跳过服务端缓存，避免旧正文分析结果
+   */
+  options?: { omitChapterIndex?: boolean; forceRefresh?: boolean },
 ): Promise<GeneratedChapterDebriefStats> {
   const debriefRes = await aiApi.autoDebrief(projectId, {
     chapter_id: chapterId,
     model_profile: modelProfile,
     ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
+    ...(options?.forceRefresh ? { force_refresh: true } : {}),
   })
   const data = debriefRes.data as AutoDebriefResult
 
@@ -101,6 +108,7 @@ export async function autoCommitGeneratedChapterDebrief(
     .map((update) => {
       const entry: Record<string, unknown> = { character_id: update.character_id }
       if (update.current_realm) entry.current_realm = update.current_realm
+      if (update.realm_rank != null) entry.realm_rank = update.realm_rank
       if (update.current_location) entry.current_location = update.current_location
       if (update.current_status) entry.current_status = update.current_status
       if (update.add_skill_name) {
@@ -152,13 +160,23 @@ export async function autoCommitGeneratedChapterDebrief(
     new_characters: newCharacters as any,
     new_reader_promises: (data.new_reader_promises || []).filter(p => p.promise_text?.trim()),
     fulfilled_promise_texts: (data.fulfilled_promise_texts || []).filter(t => t.trim()),
+    fulfilled_promise_ids: (data.fulfilled_promise_ids || []).filter(id => id.trim()),
     notes: data.summary ? `AI生成自动复盘：${data.summary}` : undefined,
     apply_source: 'queue_auto',
+    model_profile: modelProfile,
+    ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
   }
   if (!options?.omitChapterIndex && data.chapter_index) {
     commitPayload.chapter_index = data.chapter_index
   }
   const commitRes = await aiApi.chapterDebrief(projectId, commitPayload)
+
+  try {
+    const refreshed = await charactersApi.list(projectId)
+    refreshed.data.forEach((c) => useAppStore.getState().upsertCharacter(c))
+  } catch {
+    /* 人物库刷新失败不阻断队列续写 */
+  }
 
   const d = commitRes.data as Record<string, unknown> | undefined
   const assetStats = (d?.asset_updates as Record<string, unknown>) || {}

@@ -18,6 +18,7 @@ from app.models import (
     CharacterChangeLog,
     MemoryChunk,
     OutlineNode,
+    PowerSystem,
     ReaderPromise,
     StoryLine,
 )
@@ -28,6 +29,12 @@ from app.utils.chapter_numbering import display_chapter_number
 from app.routers.ai.debrief_assets import apply_asset_updates
 from app.routers.ai.foreshadow import sync_chapter_index_foreshadows
 from app.routers.ai.normalization import normalize_character_status, normalize_storyline_status
+from app.routers.ai.realm_tracker import (
+    apply_realm_progression_side_effects,
+    reconcile_character_realm_from_milestones,
+    sync_realm_to_arc_stages,
+)
+from app.routers.outline.helpers.realm_timeline import _build_realm_rank_map, _rank_for_realm_label
 from app.routers.ai.schemas import AutoDebriefRequest, ChapterDebriefRequest
 from app.services.ai.promise_debrief import (
     apply_fulfilled_by_ids,
@@ -39,23 +46,65 @@ from app.routers.ai.text_utils import chapter_debrief_content_hash, plain_text, 
 logger = logging.getLogger(__name__)
 
 
-async def _run_conflict_scan_async(project_id: str, model_profile: str) -> None:
+def _ai_profile_from_model_route(model_profile: Optional[str]) -> str:
+    """ChapterDebrief / auto-debrief 的 local|gemini → AIService profile。"""
+    return "gemini" if (model_profile or "gemini") == "gemini" else "default"
+
+
+def _resolve_conflict_scan_model(
+    req: ChapterDebriefRequest,
+    db: Session,
+    project_id: str,
+    chapter_id: UUID,
+) -> tuple[str, Optional[UUID]]:
+    """
+    记忆冲突检测所用模型：优先请求体，其次本章 ChapterDebriefCache（auto-debrief 写入），
+    最后默认 gemini（管理后台默认远程线路）。
+    """
+    if req.model_profile:
+        return req.model_profile, req.llm_provider_id
+    cached = db.query(ChapterDebriefCache).filter(
+        ChapterDebriefCache.project_id == project_id,
+        ChapterDebriefCache.chapter_id == chapter_id,
+    ).first()
+    if cached and (cached.model_profile or "").strip():
+        pid: Optional[UUID] = None
+        if cached.llm_provider_id:
+            try:
+                pid = UUID(str(cached.llm_provider_id))
+            except (ValueError, TypeError):
+                pid = None
+        return str(cached.model_profile).strip(), pid
+    return "gemini", None
+
+
+async def _run_conflict_scan_async(
+    project_id: str,
+    model_profile: str = "gemini",
+    llm_provider_id: Optional[UUID] = None,
+    *,
+    chapter_id: Optional[str] = None,
+) -> None:
     """
     复盘完成后后台异步触发记忆冲突检测（fire-and-forget）。
 
     使用独立 DB session 避免与主请求 session 竞争；
     失败只记录 warning，不影响已提交的复盘数据。
+
+    model_profile / llm_provider_id 应与本章 auto-debrief、门控写作所选线路一致。
     """
     try:
         from app.services.memory_conflict_detector import detect_memory_conflicts
-        svc = AIService(
-            "gemini" if model_profile == "gemini" else "default",
-            db=None,
-            llm_provider_id=None,
-        )
+        ai_profile = _ai_profile_from_model_route(model_profile)
         with SessionLocal() as db:
-            svc.db = db
-            await detect_memory_conflicts(db, project_id=project_id, ai_service=svc)
+            svc = AIService(ai_profile, db=db, llm_provider_id=llm_provider_id)
+            await detect_memory_conflicts(
+                db,
+                project_id=project_id,
+                ai_service=svc,
+                trigger="chapter_debrief",
+                chapter_id=chapter_id,
+            )
         logger.info("conflict_scan done for project %s", project_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning("conflict_scan failed for project %s: %s", project_id, exc)
@@ -78,6 +127,39 @@ def chapter_debrief(
     ).first()
     if not chapter:
         raise HTTPException(404, "Chapter not found")
+
+    conflict_model_profile, conflict_llm_provider_id = _resolve_conflict_scan_model(
+        req, db, project_id, chapter.id,
+    )
+
+    plain_for_hash = plain_text(chapter.content or "")
+    narrative_for_hash, _ = split_plain_manuscript_and_index_block(plain_for_hash)
+    if not narrative_for_hash.strip():
+        narrative_for_hash = plain_for_hash.strip()
+    content_hash_at_apply = chapter_debrief_content_hash(narrative_for_hash)
+    apply_src = req.apply_source or "manual_tab"
+    if apply_src not in ("queue_auto", "manual_tab"):
+        apply_src = "manual_tab"
+
+    # 同章正文变化后再次复盘：覆盖式清掉旧派生（记忆/情节档案/伏笔/承诺等），再落新复盘
+    prior_apply = (
+        db.query(ChapterDebriefApplyRecord)
+        .filter(
+            ChapterDebriefApplyRecord.project_id == project_id,
+            ChapterDebriefApplyRecord.chapter_id == req.chapter_id,
+        )
+        .order_by(ChapterDebriefApplyRecord.created_at.desc())
+        .first()
+    )
+    debrief_replacing_prior = bool(
+        prior_apply
+        and prior_apply.content_hash
+        and prior_apply.content_hash != content_hash_at_apply
+    )
+    if debrief_replacing_prior:
+        from app.routers.chapters import clear_chapter_rewrite_derivatives
+
+        clear_chapter_rewrite_derivatives(db, project_id, str(req.chapter_id))
 
     updated_chars: List[str] = []
     updated_storylines: List[str] = []
@@ -149,6 +231,10 @@ def chapter_debrief(
         )
         db.add(undo_row)
 
+    name_to_rank, _, _ = _build_realm_rank_map(
+        db.query(PowerSystem).filter(PowerSystem.project_id == project_id).all()
+    )
+
     for cu in req.character_updates:
         try:
             _ = UUID(str(cu.character_id))
@@ -163,6 +249,7 @@ def chapter_debrief(
             continue
 
         _before_realm = char.current_realm
+        _before_rank = char.realm_rank
         _before_status = char.current_status
         _before_location = char.current_location
 
@@ -188,12 +275,19 @@ def chapter_debrief(
             else:
                 char.realm_rank = cu.realm_rank
 
+        if char.realm_rank is None and name_to_rank and (char.current_realm or "").strip():
+            _resolved_rank = _rank_for_realm_label((char.current_realm or "").strip(), name_to_rank)
+            if _resolved_rank is not None:
+                char.realm_rank = _resolved_rank
+
         if cu.current_realm is not None or cu.realm_rank is not None:
             realm_label = (
                 (cu.current_realm.strip()[:100] if isinstance(cu.current_realm, str) else "")
                 or (char.current_realm or "").strip()[:100]
             )
             rank_snap = cu.realm_rank if cu.realm_rank is not None else char.realm_rank
+            if rank_snap is None and name_to_rank and realm_label:
+                rank_snap = _rank_for_realm_label(realm_label, name_to_rank)
             if realm_label or rank_snap is not None:
                 chapter_num = display_chapter_number(chapter.title, chapter.sort_order)
                 extra = dict(char.extra) if isinstance(char.extra, dict) else {}
@@ -212,6 +306,24 @@ def chapter_debrief(
                 hist.sort(key=lambda h: int(h.get("chapter_number") or 0))
                 extra["debrief_realm_milestones"] = hist
                 char.extra = extra
+                _chap_num_ms = display_chapter_number(chapter.title, chapter.sort_order)
+                _realm_mc_from_ms = apply_realm_progression_side_effects(
+                    char,
+                    realm_label=realm_label,
+                    rank_snap=rank_snap,
+                    chapter_number=_chap_num_ms,
+                    chapter_id=str(req.chapter_id),
+                    chapter_title=chapter.title or "",
+                    before_realm=_before_realm,
+                    before_rank=_before_rank,
+                    project_id=project_id,
+                    chapter_uuid=req.chapter_id,
+                    name_to_rank=name_to_rank,
+                )
+                if _realm_mc_from_ms is not None:
+                    db.add(_realm_mc_from_ms)
+                    _new_memory_chunks.append(_realm_mc_from_ms)
+                    added_memories.append(_realm_mc_from_ms.title)
         if cu.current_location is not None:
             char.current_location = cu.current_location.strip()[:200]
         if cu.current_status is not None:
@@ -259,6 +371,19 @@ def chapter_debrief(
                 i for i in (char.owned_items or [])
                 if not (isinstance(i, dict) and i.get("item_id") == cu.remove_item_id)
             ]
+
+        # 复盘未带境界字段时，用全书 milestone 快照抬升 current_realm（历史数据自愈）
+        if reconcile_character_realm_from_milestones(char, name_to_rank):
+            _chap_num_rec = display_chapter_number(chapter.title, chapter.sort_order)
+            sync_label = (char.current_realm or "").strip()
+            if sync_label:
+                sync_realm_to_arc_stages(
+                    char=char,
+                    realm_label=sync_label,
+                    chapter_number=_chap_num_rec,
+                    chapter_id=str(req.chapter_id),
+                    chapter_title=chapter.title or "",
+                )
 
         _audit_changes = []
         if cu.current_realm is not None and str(_before_realm or "") != str(char.current_realm or ""):
@@ -334,11 +459,17 @@ def chapter_debrief(
                 sl.status = normalized_storyline_status
         if su.append_beat:
             beats = list(sl.key_beats or [])
+            chapter_key = str(req.chapter_id)
+            # 同章再次复盘时替换该章 beat，避免重写后故事线节点重复堆叠
+            beats = [
+                b for b in beats
+                if not (isinstance(b, dict) and b.get("chapter_id") == chapter_key)
+            ]
             beats.append({
                 "chapter": display_chapter_number(chapter.title, chapter.sort_order),
                 "chapter_title": chapter.title,
                 "beat": su.append_beat,
-                "chapter_id": str(req.chapter_id),
+                "chapter_id": chapter_key,
             })
             sl.key_beats = beats
 
@@ -650,16 +781,6 @@ def chapter_debrief(
         f"{new_char_suffix}{promise_suffix}"
     )
 
-    plain_for_hash = plain_text(chapter.content or "")
-    narrative_for_hash, _ = split_plain_manuscript_and_index_block(plain_for_hash)
-    if not narrative_for_hash.strip():
-        narrative_for_hash = plain_for_hash.strip()
-    content_hash_at_apply = chapter_debrief_content_hash(narrative_for_hash)
-
-    apply_src = req.apply_source or "manual_tab"
-    if apply_src not in ("queue_auto", "manual_tab"):
-        apply_src = "manual_tab"
-
     try:
         payload_snapshot = req.model_dump(mode="json")
     except Exception:
@@ -688,7 +809,14 @@ def chapter_debrief(
 
     # 有新记忆写入时，后台触发记忆冲突检测（sync 路由经主 loop 跨线程提交）
     if _new_memory_chunks:
-        schedule_background_coro(_run_conflict_scan_async(project_id, "default"))
+        schedule_background_coro(
+            _run_conflict_scan_async(
+                project_id,
+                conflict_model_profile,
+                conflict_llm_provider_id,
+                chapter_id=str(req.chapter_id),
+            )
+        )
 
     return {
         "ok": True,
@@ -706,6 +834,7 @@ def chapter_debrief(
         "promises_fulfilled": promises_fulfilled,
         # 被境界序号单调性 guard 阻止的降级操作；非空时前端应弹出警告提示作者检查复盘
         "realm_rank_warnings": realm_rank_warnings,
+        "replaced_prior_debrief": debrief_replacing_prior,
         "message": result_message,
     }
 

@@ -9,6 +9,59 @@ from app.services.outline_linter.helpers import ChapterSnapshot, text_overlap
 from app.services.outline_linter.schemas import LinterIssue
 
 
+def _promise_window_label(source_chapter: int, window: int) -> str:
+    """读者承诺兑现窗口的人类可读描述（不截断）。"""
+    start = source_chapter + 1
+    end = source_chapter + window
+    if window <= 1:
+        return f"第 {start} 章"
+    return f"第 {start}～{end} 章"
+
+
+def _rp03_issues_for_chapters(
+    chapters: list[ChapterSnapshot],
+    open_promises: list[tuple[str, int]],
+) -> list[LinterIssue]:
+    """章纲「本章兑现承诺」与读者承诺台账对齐（每章至多 1 条 RP-03）。"""
+    texts = [
+        (t.strip(), priority)
+        for t, priority in open_promises
+        if t.strip() and priority >= 3
+    ]
+    if not texts:
+        return []
+
+    issues: list[LinterIssue] = []
+    for ch in chapters:
+        pf = ch.ex_str("promise_fulfilled")
+        if not pf:
+            continue
+        if any(text_overlap(pf, t, min_len=2) for t, _ in texts):
+            continue
+        samples = [t for t, _ in texts[:3]]
+        sample_hint = "；".join(f"「{s}」" for s in samples if s)
+        if len(texts) > 3:
+            sample_hint = f"{sample_hint} 等共 {len(texts)} 条" if sample_hint else f"共 {len(texts)} 条未兑现承诺"
+        issues.append(LinterIssue(
+            rule_id="RP-03",
+            severity="medium",
+            scope="chapter",
+            message=(
+                f"第{ch.chapter_number}章「本章兑现承诺」填了「{pf}」，"
+                f"与读者承诺台账中未兑现条目均无法对上关键词（需与原文有至少 2 字相同）"
+                + (f"。未兑现承诺原文：{sample_hint}" if sample_hint else "")
+            ),
+            field="extra.promise_fulfilled",
+            chapter_number_in_volume=ch.chapter_number,
+            node_id=ch.id,
+            suggestion=(
+                "把章纲里的兑现片段改成某条读者承诺原文里的关键词；"
+                "若本章不兑现任何承诺，请留空"
+            ),
+        ))
+    return issues
+
+
 def promise_fulfilled_in_window(
     fulfilled_by_global: dict[int, str],
     promise_text: str,
@@ -116,11 +169,14 @@ def lint_reader_promises(
                 severity="high",   # 原 critical，已降级
                 scope="volume",
                 message=(
-                    f"读者承诺超窗未兑现（priority={priority}）："
-                    f"应在第{deadline}章前兑现，当前已规划至第{max_global}章，"
-                    f"窗口内无 promise_fulfilled"
+                    f"高优先级读者承诺超窗未兑现：「{text}」"
+                    f"应在第 {deadline} 章前兑现，当前大纲已规划至第 {max_global} 章，"
+                    f"承诺窗口内各章「本章兑现承诺」均为空或未对上关键词"
                 ),
-                suggestion="写章时在对应章节填写 promise_fulfilled，或调整承诺窗口",
+                suggestion=(
+                    "在窗口内某一章的章纲「本章兑现承诺」填入该承诺原文关键词；"
+                    "或到「读者承诺」页延长窗口 / 调低优先级"
+                ),
             ))
 
         if priority >= 4 and src and window:
@@ -129,32 +185,26 @@ def lint_reader_promises(
                 src < g <= src + window for g in vol_globals
             )
             if not hit and window_touches_volume:
+                win = _promise_window_label(src, window)
                 issues.append(LinterIssue(
                     rule_id="RP-02",
                     severity="high",
                     scope="volume",
                     message=(
-                        f"承诺窗口（第{src+1}～{src+window}章）内无 promise_fulfilled："
-                        f"{text[:36]}…"
+                        f"读者承诺须在窗口内兑现：「{text}」"
+                        f"（窗口：{win}；当前窗口内各章「本章兑现承诺」均未填或未对上关键词）"
                     ),
-                    suggestion="在对应章 extra.promise_fulfilled 填写兑现片段",
+                    suggestion=(
+                        f"在{win}中选一章，"
+                        f"在章纲「本章兑现承诺」填入该条承诺原文里的关键词（至少 2 字重叠）"
+                    ),
                 ))
 
-        for ch in chapters:
-            pf = ch.ex_str("promise_fulfilled")
-            if not pf or priority < 3:
-                continue
-            if not text_overlap(pf, text, min_len=2):
-                issues.append(LinterIssue(
-                    rule_id="RP-03",
-                    severity="medium",
-                    scope="chapter",
-                    message=f"第{ch.chapter_number}章 promise_fulfilled 与承诺原文不匹配",
-                    field="extra.promise_fulfilled",
-                    chapter_number_in_volume=ch.chapter_number,
-                    node_id=ch.id,
-                    suggestion="对齐 ReaderPromise 原文关键词",
-                ))
+    open_for_rp03 = [
+        ((rp.promise_text or "").strip(), int(rp.priority or 3))
+        for rp in open_rows
+    ]
+    issues.extend(_rp03_issues_for_chapters(chapters, open_for_rp03))
 
     return issues
 
@@ -180,11 +230,14 @@ def lint_opening_contract_rp(
                 rule_id="OC-01",
                 severity="high",
                 scope="chapter",
-                message="第1章 opening_hook 未呼应 opening_contract.chapter1_hook",
+                message=(
+                    f"第 1 章开篇钩子与开局追读承诺不一致："
+                    f"章纲为「{opening}」，承诺要求「{str(hook1).strip()}」"
+                ),
                 field="hook",
                 chapter_number_in_volume=1,
                 node_id=ch1.id,
-                suggestion="对齐开局追读承诺中的第1章钩子",
+                suggestion="改写第 1 章开篇钩子，使其与开局追读承诺中的关键词呼应",
             ))
 
     return issues

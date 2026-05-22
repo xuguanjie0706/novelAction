@@ -22,10 +22,23 @@ def format_llm_error_message(exc: BaseException) -> str:
             f"大模型请求超时：{msg}。"
             "可稍后重试，或在 .env 调大 LLM_HTTP_READ_TIMEOUT。"
         )
+    if "blocked" in low or "permissiondenied" in type_low:
+        return (
+            "模型请求被服务商安全策略拦截（Your request was blocked）。"
+            "可尝试：① 减少选中章节数或缩短正文；② 换一条大模型线路；③ 检查正文是否含敏感表述。"
+            f" 原始信息：{msg}"
+        )
     if "401" in low or "unauthorized" in low or "invalid api key" in low:
         return f"API Key 无效或未授权：{msg}"
     if "404" in low and "model" in low:
         return f"模型 id 不存在或网关未提供该模型：{msg}"
     if any(code in low for code in ("502", "503", "504", "bad gateway")):
         return f"大模型网关暂时不可用，请稍后重试：{msg}"
+    if "peer closed" in low or "incomplete chunked" in low:
+        return (
+            "大模型在流式输出时断开了连接（常见于上下文过长或网关不稳定）。"
+            "建议：① 减少「参考章节」勾选数量（先试 2～3 章）；"
+            "② 稍后重试；③ 换一条大模型线路。"
+            f" 原始信息：{msg}"
+        )
     return msg

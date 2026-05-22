@@ -49,8 +49,8 @@ def lint_volume(
             rule_id="VL-02",
             severity="high",
             scope="volume",
-            message="sort_order 不连续",
-            suggestion="重排为 0..n-1",
+            message="章节排序序号不连续",
+            suggestion="将章节排序调整为从 0 起连续递增",
         ))
 
     slap_flags = [bool((ch.extra or {}).get("has_face_slap")) for ch in chapters]
@@ -60,8 +60,8 @@ def lint_volume(
             rule_id="VL-03",
             severity="high",
             scope="volume",
-            message="全卷无 has_face_slap=true 章节",
-            suggestion="按立项打脸节奏补爽点章",
+            message="全卷未标记任何「打脸/爽点」章节",
+            suggestion="按立项打脸节奏补若干爽点章",
         ))
 
     if chapters:
@@ -99,7 +99,7 @@ def lint_volume(
             severity="high",
             scope="volume",
             message=f"贯穿伏笔线仅 {len(lay_themes)} 条（需 ≥2）",
-            suggestion="用 埋[内容|主题:关联] 增加卷内长线",
+            suggestion="在伏笔字段使用「埋[内容|主题:关联]」格式增加卷内长线",
         ))
 
     resolve_count = sum(
@@ -135,8 +135,8 @@ def lint_volume(
                 rule_id="VL-09",
                 severity="high",
                 scope="volume",
-                message="第1章 opening_hook 未承接上卷末悬念",
-                suggestion="前500字须让读者感到上卷悬念仍在发酵",
+                message="第1章开篇未承接上一卷末悬念",
+                suggestion="开篇须让读者感到上卷悬念仍在发酵",
                 field="hook",
                 chapter_number_in_volume=1,
                 node_id=first.id,
@@ -146,7 +146,7 @@ def lint_volume(
                 rule_id="VL-10",
                 severity="medium",
                 scope="volume",
-                message="第1章 choice_cost 未体现上卷末后遗症",
+                message="第1章「选择代价」未体现上一卷末后遗症",
                 field="extra.choice_cost",
                 chapter_number_in_volume=1,
                 node_id=first.id,
@@ -177,8 +177,8 @@ def _lint_opening_contract(chapters: list[ChapterSnapshot]) -> list[LinterIssue]
                 rule_id="OC-02",
                 severity="high",
                 scope="volume",
-                message="前3章无打脸/爽点标记（has_face_slap）",
-                suggestion="对齐 chapter3_payoff",
+                message="前3章均未标记「打脸/爽点」",
+                suggestion="按开局规划在前3章内安排一次爽点兑现",
                 chapter_number_in_volume=3,
             ))
 
@@ -188,8 +188,8 @@ def _lint_opening_contract(chapters: list[ChapterSnapshot]) -> list[LinterIssue]
             rule_id="OC-03",
             severity="high",
             scope="volume",
-            message="第5章未埋长线伏笔（foreshadow 无 埋[）",
-            suggestion="对齐 chapter5_foreshadow",
+            message="第5章未埋设长线伏笔（伏笔字段须含「埋[…]」）",
+            suggestion="按开局规划在第5章埋下跨卷伏笔，使用 埋[内容|主题:关联] 格式",
             chapter_number_in_volume=5,
             node_id=ch5.id,
         ))

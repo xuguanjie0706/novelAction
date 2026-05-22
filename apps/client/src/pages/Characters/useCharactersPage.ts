@@ -36,6 +36,13 @@ export function useCharactersPage() {
     })
   }, [projectId, setCharacters])
 
+  /** 写作复盘等路径 upsert 到 store 后，保持侧栏/详情与库内数据一致 */
+  useEffect(() => {
+    if (!selected?.id) return
+    const fresh = characters.find(c => c.id === selected.id)
+    if (fresh) setSelected(fresh)
+  }, [characters, selected?.id])
+
   const filteredChars = useMemo(() => {
     const q = searchQ.trim().toLowerCase()
     return characters.filter(c => {

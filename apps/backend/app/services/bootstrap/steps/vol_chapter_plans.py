@@ -248,21 +248,31 @@ async def gen_vol_chapter_plans(
         if batch_start > 1:
             prev_vol_hook_block = ""
 
-        # 批次延续锚：用前批最后4章的「选择代价」驱动下一批开头
+        # 批次延续锚：传入前批完整大纲，确保第31章能真正承接第30章（而非仅看最后4章）
         prev_summary = ""
         if all_results:
-            anchor_lines: list[str] = []
-            for n in all_results[-4:]:
+            full_lines: list[str] = []
+            for n in all_results:
                 ex = n.extra or {}
                 cost = ex.get("choice_cost", "")
+                end_hook = ex.get("end_hook", "")
                 want = ex.get("protagonist_want", "")
-                anchor_lines.append(
-                    f"  第{n.sort_order + 1}章：{n.summary or ''}｜主角欲望：{want}｜遗留代价：{cost}"
+                ch_num = n.sort_order + 1
+                # 紧凑单行：章号+标题+情感基调+摘要+代价/钩子
+                tail = cost or end_hook
+                full_lines.append(
+                    f"  第{ch_num}章《{n.title or ''}》"
+                    f"{('[' + n.emotional_tone + ']') if n.emotional_tone else ''}"
+                    f"  {n.summary or ''}｜欲望：{want}｜代价/钩子：{tail}"
                 )
+            last = all_results[-1]
+            last_ex = last.extra or {}
+            last_cost = last_ex.get("choice_cost", "") or last_ex.get("end_hook", "") or last.summary or ""
             prev_summary = (
-                "\n【前批末尾4章遗留状态（本批第1章必须直接承接，不能无视这些代价）】\n"
-                + "\n".join(anchor_lines)
-                + "\n  ⚠️ 本批第1章的 opening_hook 必须让读者感受到上面最后1章的代价仍在发酵。"
+                f"\n【本卷前{len(all_results)}章完整大纲（续写须与之一脉相承）】\n"
+                + "\n".join(full_lines)
+                + f"\n  ⚠️ 本批第1章（第{batch_start}章）必须直接承接第{len(all_results)}章的结局："
+                f"「{last_cost[:120]}」，不得无视这个代价另起炉灶。"
             )
 
         # 按章节区间注入细分节奏约束

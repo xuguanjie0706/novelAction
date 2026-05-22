@@ -1,7 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const apiTarget = process.env.VITE_API_PROXY_TARGET || 'http://localhost:8000'
+/** 与 restart.sh 的 NOVEL_LOCAL_BACKEND_PORT 默认一致；勿指向 8000 上无关进程 */
+const apiTarget = process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:9000'
 
 /** 将 node_modules 拆成稳定 vendor chunk，便于缓存与并行加载 */
 function manualChunks(id: string): string | undefined {

@@ -578,14 +578,16 @@ export default function ChapterEditor({
         },
       })
       const toastMsg = (() => {
-        if (!useGated) return '已加入 AI 队列：开始重写本章'
         const hasWarn = writingConfig?.pre_write_warning_enabled === true
+        const warnReuseHint = hasWarn ? '（本章若已有预警记录将自动复用，跳过重复审稿）' : ''
+        if (!useGated) return `已加入 AI 队列：开始重写本章${warnReuseHint}`
         const hasGate = writingConfig?.auto_quality_gate === true
-        if (hasWarn && hasGate) return '已加入 AI 队列：写前预警 + 质量门控写作'
-        if (hasWarn) return '已加入 AI 队列：写前预警写作（质检仅参考，不循环重写）'
+        if (hasWarn && hasGate) return `已加入 AI 队列：写前预警 + 质量门控写作${warnReuseHint}`
+        if (hasWarn) return `已加入 AI 队列：写前预警写作（质检仅参考）${warnReuseHint}`
         return '已加入 AI 队列：质量门控写作（自动质检+重写）'
       })()
       toast.success(toastMsg)
+      setAiExtraPrompt('')
       return
     }
     void (async () => {
@@ -616,6 +618,7 @@ export default function ChapterEditor({
         },
       })
       toast.success('已加入 AI 队列：生成本章正文')
+      setAiExtraPrompt('')
     })()
   }
 
@@ -709,6 +712,7 @@ export default function ChapterEditor({
         },
       })
       toast.success('已加入 AI 队列：质量门控写作（自动质检+重写）')
+      setAiExtraPrompt('')
       return
     }
 
@@ -724,6 +728,7 @@ export default function ChapterEditor({
       },
     })
     toast.success(`已加入 AI 队列：连续续写 ${targetChapters.length} 章`)
+    setAiExtraPrompt('')
   }
 
   const applyAutoDebriefData = useCallback((
@@ -928,6 +933,9 @@ export default function ChapterEditor({
       .map(([character_id, upd]) => {
         const entry: Record<string, any> = { character_id }
         if (upd.current_realm) entry.current_realm = upd.current_realm
+        if ((upd as { realm_rank?: number }).realm_rank != null) {
+          entry.realm_rank = (upd as { realm_rank?: number }).realm_rank
+        }
         if (upd.current_location) entry.current_location = upd.current_location
         if (upd.current_status) entry.current_status = upd.current_status
         if (upd.add_skill_name) {
@@ -976,6 +984,7 @@ export default function ChapterEditor({
 
     setDebriefSubmitting(true)
     try {
+      const route = useAppStore.getState().aiBackendRoute
       const res = await aiApi.chapterDebrief(projectId, {
         chapter_id: chapter.id,
         character_updates: characterUpdates as any,
@@ -987,23 +996,22 @@ export default function ChapterEditor({
         fulfilled_promise_texts: aiFulfilledPromiseTexts.length > 0 ? aiFulfilledPromiseTexts : undefined,
         notes: debriefNotes || undefined,
         apply_source: 'manual_tab',
+        model_profile: modelProfileFromRoute(route),
+        ...routeLlmProviderPayload(route),
       })
       const pc = Number((res.data as { promises_created?: number })?.promises_created ?? 0)
       const pf = Number((res.data as { promises_fulfilled?: number })?.promises_fulfilled ?? 0)
       const promiseToast = (pc > 0 || pf > 0) ? `（承诺 +${pc} / 兑现 ${pf}）` : ''
       toast.success(`${res.data.message}${promiseToast}`)
       setDebriefHistoryTick((t) => t + 1)
-      const refreshRequests: Promise<any>[] = [
+      const [refreshedStorylines, refreshedMemories, refreshedCharsRes] = await Promise.all([
         storylinesApi.list(projectId),
         aiApi.listMemory(projectId),
-      ]
-      if (aiNewCharacters.length > 0) refreshRequests.push(charactersApi.list(projectId))
-      const [refreshedStorylines, refreshedMemories, refreshedCharsRes] = await Promise.all(refreshRequests)
+        charactersApi.list(projectId),
+      ])
       setStoryLines(refreshedStorylines.data)
       setMemories(refreshedMemories.data)
-      if (refreshedCharsRes) {
-        refreshedCharsRes.data.forEach((c: any) => useAppStore.getState().upsertCharacter(c))
-      }
+      refreshedCharsRes.data.forEach((c: any) => useAppStore.getState().upsertCharacter(c))
       setQueueDebriefUiSnapshot(chapter.id, null)
       setDebriefFromQueueSnapshot(false)
       queueSnapHydratedChapterRef.current = null

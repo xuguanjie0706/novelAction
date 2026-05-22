@@ -123,13 +123,16 @@ export async function runGatedRewriteChapter(
         const riskCount = typeof obj.risk_count === 'number' ? obj.risk_count : 0
         const errMsg = typeof obj.error === 'string' ? obj.error : null
         const ragLogId = typeof obj.rag_retrieval_log_id === 'string' ? obj.rag_retrieval_log_id : null
+        const reused = obj.reused === true
         pushProgress({
           step: 'pre_warn',
           label: errMsg
             ? `写前预警：${errMsg}`
-            : ok
-              ? `写前预警完成（发现 ${riskCount} 处风险，简报已注入 prompt${ragLogId ? `；RAG log ${ragLogId.slice(0, 8)}` : ''}）`
-              : `写前预警：发现 ${riskCount} 处风险需注意，简报已注入 prompt`,
+            : reused
+              ? `写前预警：复用本章已有记录（${riskCount} 处风险，已跳过主编审稿；简报已注入 prompt）`
+              : ok
+                ? `写前预警完成（发现 ${riskCount} 处风险，简报已注入 prompt${ragLogId ? `；RAG log ${ragLogId.slice(0, 8)}` : ''}）`
+                : `写前预警：发现 ${riskCount} 处风险需注意，简报已注入 prompt`,
           done: true,
           error: !!errMsg,
         })
@@ -241,11 +244,13 @@ export async function runGatedRewriteChapter(
     if (gateOutcome === 'passed') {
       pushProgress({ step: 'debrief', label: '正在自动复盘并写入线索页（情节档案/伏笔）…', done: false, error: false })
       try {
+        useAppStore.getState().resetChapterDebriefQueueState(chapterId)
         const applied = await autoCommitGeneratedChapterDebrief(
           projectId,
           chapterId,
           modelProfile,
           llmProviderId,
+          { forceRefresh: true },
         )
         if (applied.debriefPreview && typeof applied.debriefPreview === 'object') {
           useAppStore.getState().setQueueDebriefUiSnapshot(chapterId, applied.debriefPreview as Record<string, unknown>)

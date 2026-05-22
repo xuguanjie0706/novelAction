@@ -414,6 +414,68 @@ def test_merge_realm_timeline_combines_outline_and_debrief():
     assert merged[2]["source"] == "debrief"
 
 
+def test_merge_realm_milestones_keeps_same_rank_debrief_name_progression():
+    """同大阶内的细粒度突破（如灵徒→九星灵徒巅峰）应出现在时间轴。"""
+    ps = PowerSystem(
+        name="测试体系",
+        levels=[
+            {"rank": 1, "name": "灵徒"},
+            {"rank": 2, "name": "灵师"},
+        ],
+    )
+    name_to_rank, _, _ = _build_realm_rank_map([ps])
+    outline_ms = [
+        {
+            "chapter_number": 1,
+            "chapter_title": "第一章",
+            "realm_name": "灵徒",
+            "realm_rank": 1,
+            "character_change": "大纲里程碑",
+        },
+    ]
+    debrief = [
+        {
+            "chapter_number": 4,
+            "chapter_title": "第四章",
+            "realm_name": "九星灵徒巅峰",
+            "realm_rank": None,
+            "source": "chapter_debrief",
+        },
+    ]
+    merged = merge_outline_and_debrief_realm_milestones(outline_ms, debrief, name_to_rank)
+    assert [m["chapter_number"] for m in merged] == [1, 4]
+    assert merged[1]["realm_name"] == "九星灵徒巅峰"
+    assert merged[1]["source"] == "debrief"
+
+
+def test_extract_character_realm_rank_ignores_single_char_and_skill_names():
+    """功法名「吞灵天功」不得因单字「天」误计为 天境。"""
+    from app.routers.outline.helpers.realm_timeline import _extract_character_realm_rank
+
+    ps = PowerSystem(
+        name="九域",
+        levels=[
+            {"rank": 1, "name": "灵徒"},
+            {"rank": 2, "name": "灵师"},
+            {"rank": 3, "name": "地境"},
+            {"rank": 4, "name": "天境"},
+        ],
+    )
+    name_to_rank, _, _ = _build_realm_rank_map([ps])
+    assert "天" not in name_to_rank
+    chapter = {
+        "character_change": "苏辰确立绝对主导权",
+        "power_milestone": "习得地阶功法《吞灵天功》",
+    }
+    rank = _extract_character_realm_rank(
+        chapter,
+        name_to_rank,
+        character_names=["苏辰"],
+        role_label="protagonist",
+    )
+    assert rank is None
+
+
 def test_outline_quality_story_bible_collects_world_and_arc_constraints():
     project = Project(
         title="天门逆玺",

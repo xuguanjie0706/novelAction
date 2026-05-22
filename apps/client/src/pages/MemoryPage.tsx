@@ -11,7 +11,7 @@ import {
   Star,
 } from 'lucide-react'
 import { aiApi } from '../api/client'
-import { useAppStore } from '../store'
+import { useAppStore, llmProviderIdFromRoute, modelProfileFromRoute } from '../store'
 import type { MemoryChunk, MemoryConflictItem, MemoryConflictReport } from '../types'
 import clsx from 'clsx'
 import { memoryDisplayChapter } from '../utils/chapterNumber'
@@ -88,6 +88,7 @@ interface ConflictPanelProps {
  * 数据来源：先展示 cached（来自项目 extra），点击「重新扫描」后调 detect-conflicts API。
  */
 function ConflictPanel({ projectId, cached }: ConflictPanelProps) {
+  const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
   const [report, setReport] = useState<MemoryConflictReport | null>(cached ?? null)
   const [scanning, setScanning] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -95,7 +96,12 @@ function ConflictPanel({ projectId, cached }: ConflictPanelProps) {
   const scan = async () => {
     setScanning(true)
     try {
-      const res = await aiApi.detectConflicts(projectId)
+      const modelProfile = modelProfileFromRoute(aiBackendRoute)
+      const providerId = llmProviderIdFromRoute(aiBackendRoute)
+      const res = await aiApi.detectConflicts(projectId, {
+        model_profile: modelProfile === 'local' ? 'gemini' : modelProfile,
+        ...(providerId ? { llm_provider_id: providerId } : {}),
+      })
       setReport(res.data)
     } catch {
       // 静默失败，保持原报告

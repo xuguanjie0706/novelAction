@@ -65,6 +65,17 @@ def test_text_overlap():
     assert not text_overlap("abc", "xyz")
 
 
+def test_ch15_only_flags_under_budget_not_over():
+    """预期字数高于阶段预算（如高潮章写长）不应报 CH-15。"""
+    ch_short = _ch(1, cost="代价足够长以满足承接检测要求")
+    ch_short.expected_words = 1800
+    ch_long = _ch(60, cost="代价足够长以满足承接检测要求")
+    ch_long.expected_words = 3300
+    issues = lint_chapters([ch_short, ch_long])
+    assert any(i.rule_id == "CH-15" and i.chapter_number_in_volume == 1 for i in issues)
+    assert not any(i.rule_id == "CH-15" and i.chapter_number_in_volume == 60 for i in issues)
+
+
 def test_ch04_critical_on_empty_cost():
     ch = _ch(1, cost="")
     issues = lint_chapters([ch])
@@ -147,7 +158,7 @@ def test_vol1_sse_payload_blocked():
                         "rule_id": "CH-04",
                         "severity": "critical",
                         "scope": "chapter",
-                        "message": "第3章 choice_cost 为空",
+                        "message": "第3章「选择代价」为空或仅占位",
                         "suggestion": "补写代价",
                         "chapter_number_in_volume": 3,
                     },
@@ -163,10 +174,10 @@ def test_vol1_sse_payload_blocked():
     )
     assert payload["count"] == 0
     assert payload["linter_blocked"] is True
-    assert "CH-04" in payload["preview"]
+    assert "章纲·选择代价" in payload["preview"]
     assert payload["linter_critical_count"] == 2
-    assert "CH-04" in payload["linter_message"]
-    assert payload["linter_blocking_rules"] == ["CH-04", "VL-01"]
+    assert "选择代价" in payload["linter_message"]
+    assert payload["linter_blocking_rules"] == ["CH-04"]
     assert len(payload["linter_issues_top"]) >= 1
 
 
@@ -184,7 +195,7 @@ def test_build_linter_block_payload_with_draft():
                     "rule_id": "CH-08",
                     "severity": "critical",
                     "scope": "chapter",
-                    "message": "第1章 core_event 为空",
+                    "message": "第1章「核心事件」为空",
                     "chapter_number_in_volume": 1,
                 },
             ],
@@ -193,7 +204,8 @@ def test_build_linter_block_payload_with_draft():
     )
     assert "草稿" in out["linter_message"]
     assert out["linter_draft_saved"] is True
-    assert "CH-08" in out["preview"]
+    assert "核心事件" in out["preview"]
+    assert "严重" in out["linter_message"]
 
 
 def test_promise_fulfilled_in_window():
@@ -203,6 +215,38 @@ def test_promise_fulfilled_in_window():
     fulfilled = {2: "陆九渊在戒指中回应，叶焚得知修为消失另有隐情"}
     assert promise_fulfilled_in_window(fulfilled, text, 1, 2)
     assert not promise_fulfilled_in_window({}, text, 1, 2)
+
+
+def test_rp03_one_issue_per_chapter_when_no_overlap():
+    """多条未兑现承诺时，同章仅应报 1 条 RP-03。"""
+    from app.services.outline_linter.rules_promises import _rp03_issues_for_chapters
+
+    ch = _ch(28, foreshadow="")
+    ch.extra["promise_fulfilled"] = "主角在秘境悟得全新剑意"
+    promises = [
+        ("大比前坊市发现神火残图", 4),
+        ("戒指内陆九渊首次回应", 4),
+        ("叶焚立下三年复仇之约", 3),
+    ]
+    issues = _rp03_issues_for_chapters([ch], promises)
+    assert len(issues) == 1
+    assert issues[0].rule_id == "RP-03"
+    assert issues[0].chapter_number_in_volume == 28
+    assert "第28章" in issues[0].message
+    assert "本章兑现承诺" in issues[0].message
+    assert "全新剑意" in issues[0].message
+
+
+def test_rp03_no_issue_when_keyword_overlaps():
+    from app.services.outline_linter.rules_promises import _rp03_issues_for_chapters
+
+    ch = _ch(11, foreshadow="")
+    ch.extra["promise_fulfilled"] = "坊市残图被截杀，叶焚立下复仇之约"
+    issues = _rp03_issues_for_chapters(
+        [ch],
+        [("大比前坊市发现神火残图", 4)],
+    )
+    assert issues == []
 
 
 def test_rp01_not_blocked_when_fulfilled_in_window():

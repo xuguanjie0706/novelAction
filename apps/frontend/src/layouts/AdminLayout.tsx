@@ -11,6 +11,7 @@ import {
   PictureOutlined,
   ReadOutlined,
   SearchOutlined,
+  SafetyCertificateOutlined,
   UserOutlined,
   WalletOutlined,
 } from '@ant-design/icons'
@@ -43,6 +44,7 @@ export default function AdminLayout() {
     if (loc.pathname.startsWith('/llm-calls')) return ['/llm-calls']
     if (loc.pathname.startsWith('/rag-metrics')) return ['/rag-metrics']
     if (loc.pathname.startsWith('/rag-logs')) return ['/rag-logs']
+    if (loc.pathname.startsWith('/memory-conflict-logs')) return ['/memory-conflict-logs']
     if (loc.pathname.startsWith('/cover-image-calls')) return ['/cover-image-calls']
     if (loc.pathname.startsWith('/image-providers')) return ['/image-providers']
     if (loc.pathname.startsWith('/llm')) return ['/llm']
@@ -118,6 +120,12 @@ export default function AdminLayout() {
               icon: <BarChartOutlined />,
               label: 'RAG质量监控',
               onClick: () => navigate('/rag-metrics'),
+            },
+            {
+              key: '/memory-conflict-logs',
+              icon: <SafetyCertificateOutlined />,
+              label: '记忆冲突检测',
+              onClick: () => navigate('/memory-conflict-logs'),
             },
             {
               key: '/reading-review',

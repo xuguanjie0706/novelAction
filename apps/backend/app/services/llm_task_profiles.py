@@ -171,6 +171,8 @@ TASK_PROFILES: dict[str, dict] = {
     "debrief.auto": {"temperature": 0.3, "top_p": 0.85},
     "debrief.extract_memory": {"temperature": 0.3, "top_p": 0.85},
     "debrief.foreshadow": {"temperature": 0.3, "top_p": 0.85},
+    # ── 记忆库体检 ─────────────────────────────────────────────
+    "memory.conflict_detect": {"temperature": 0.2, "top_p": 0.8},
     # ── 默认兜底 ───────────────────────────────────────────────
     "default": {},  # 空 dict 表示走 LLM 默认采样，与历史行为一致
 }

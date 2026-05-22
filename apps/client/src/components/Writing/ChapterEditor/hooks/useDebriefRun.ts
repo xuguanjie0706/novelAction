@@ -41,6 +41,7 @@ interface UseDebriefRunOptions {
 
 type CharUpdates = Record<string, {
   current_realm?: string
+  realm_rank?: number
   current_location?: string
   current_status?: string
   add_skill_name?: string
@@ -343,6 +344,7 @@ export function useDebriefRun({
       .map(([character_id, upd]) => {
         const entry: Record<string, any> = { character_id }
         if (upd.current_realm) entry.current_realm = upd.current_realm
+        if (upd.realm_rank != null) entry.realm_rank = upd.realm_rank
         if (upd.current_location) entry.current_location = upd.current_location
         if (upd.current_status) entry.current_status = upd.current_status
         if (upd.add_skill_name) {
@@ -390,6 +392,7 @@ export function useDebriefRun({
 
     setDebriefSubmitting(true)
     try {
+      const route = useAppStore.getState().aiBackendRoute
       const res = await aiApi.chapterDebrief(projectId, {
         chapter_id: chapterId,
         character_updates: characterUpdates as any,
@@ -401,6 +404,8 @@ export function useDebriefRun({
         fulfilled_promise_texts: aiFulfilledPromiseTexts.length > 0 ? aiFulfilledPromiseTexts : undefined,
         notes: debriefNotes || undefined,
         apply_source: 'manual_tab',
+        model_profile: modelProfileFromRoute(route),
+        ...routeLlmProviderPayload(route),
       })
       const pc = Number((res.data as { promises_created?: number })?.promises_created ?? 0)
       const pf = Number((res.data as { promises_fulfilled?: number })?.promises_fulfilled ?? 0)
@@ -408,17 +413,14 @@ export function useDebriefRun({
       toast.success(`${res.data.message}${promiseToast}`)
       setDebriefHistoryTick(t => t + 1)
 
-      const refreshRequests: Promise<any>[] = [
+      const [refreshedStorylines, refreshedMemories, refreshedCharsRes] = await Promise.all([
         storylinesApi.list(projectId),
         aiApi.listMemory(projectId),
-      ]
-      if (aiNewCharacters.length > 0) refreshRequests.push(charactersApi.list(projectId))
-      const [refreshedStorylines, refreshedMemories, refreshedCharsRes] = await Promise.all(refreshRequests)
+        charactersApi.list(projectId),
+      ])
       setStoryLines(refreshedStorylines.data)
       setMemories(refreshedMemories.data)
-      if (refreshedCharsRes) {
-        refreshedCharsRes.data.forEach((c: any) => useAppStore.getState().upsertCharacter(c))
-      }
+      refreshedCharsRes.data.forEach((c: any) => useAppStore.getState().upsertCharacter(c))
 
       // 清空 AI 建议状态
       setDebriefFromQueueSnapshot(false)

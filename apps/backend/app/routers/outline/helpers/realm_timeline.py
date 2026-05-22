@@ -161,8 +161,10 @@ def _collect_power_system_whitelist(power_systems) -> set[str]:
             if not level_name:
                 continue
             whitelist.add(level_name)
-            if level_name.endswith("境") and len(level_name) > 1:
-                whitelist.add(level_name[:-1])
+            if level_name.endswith("境") and len(level_name) > 2:
+                bare = level_name[:-1]
+                if len(bare) >= 2:
+                    whitelist.add(bare)
     return whitelist
 
 
@@ -183,9 +185,9 @@ def _build_realm_rank_map(power_systems) -> tuple[dict[str, int], int | None, in
                     continue
                 if level_name not in name_to_rank or rank > name_to_rank[level_name]:
                     name_to_rank[level_name] = rank
-                if level_name.endswith("境") and len(level_name) > 1:
+                if level_name.endswith("境") and len(level_name) > 2:
                     bare = level_name[:-1]
-                    if bare not in name_to_rank or rank > name_to_rank[bare]:
+                    if len(bare) >= 2 and (bare not in name_to_rank or rank > name_to_rank[bare]):
                         name_to_rank[bare] = rank
                 if rank > max_rank:
                     max_rank = rank
@@ -355,7 +357,8 @@ def _extract_character_realm_rank(
     use_attribution = bool(character_names)
     found_rank: int | None = None
     for realm_name, rank in name_to_rank.items():
-        if not realm_name or realm_name not in text:
+        # 禁止单字简写（如 天境→「天」），避免「吞灵天功」等功法名误触发境界里程碑
+        if not realm_name or len(realm_name) < 2 or realm_name not in text:
             continue
         if use_attribution and not _character_realm_attributed(
             text,
@@ -407,7 +410,7 @@ def _rank_for_realm_label(label: str, name_to_rank: dict[str, int]) -> int | Non
     best: int | None = None
     best_len = 0
     for name, r in name_to_rank.items():
-        if not isinstance(name, str) or not name:
+        if not isinstance(name, str) or len(name) < 2:
             continue
         if name in s and len(name) >= best_len:
             if best is None or r >= best:
@@ -462,16 +465,18 @@ def merge_outline_and_debrief_realm_milestones(
             resolved = _rank_for_realm_label(raw_name, name_to_rank)
             if resolved is not None:
                 rr = resolved
+        # 复盘/变更记录保留 AI 写入的原文境界名（如「九星灵徒巅峰」），
+        # 勿用 rank→体系 canonical 名覆盖，否则同阶突破会在合并时被误判为未变化。
         disp = raw_name
-        if name_to_rank and rr > 0:
+        if not disp and name_to_rank and rr > 0:
             disp = _realm_display_name_for_rank(rr, name_to_rank)
         elif not disp and rr > 0:
-            disp = _realm_display_name_for_rank(rr, name_to_rank)
+            disp = f"rank{rr}"
         events.append(
             {
                 "chapter_number": ch,
                 "chapter_title": str(d.get("chapter_title") or "")[:400],
-                "realm_name": disp or raw_name or f"rank{rr}",
+                "realm_name": disp or f"rank{rr}",
                 "realm_rank": rr,
                 "character_change": "正文复盘 character_updates",
                 "source": "debrief",
@@ -503,14 +508,26 @@ def merge_outline_and_debrief_realm_milestones(
             per_chapter.append((ch, best, best_rank))
 
     running = 0
-    prev_debrief_name = ""
+    prev_merged_name = ""
     merged: list[dict[str, Any]] = []
     for ch, best, r in per_chapter:
         nm = str(best.get("realm_name") or "").strip()
+        src = str(best.get("source") or "outline")
         if name_to_rank:
-            if r <= running:
+            # 大 rank 突破仍走「创新高」；同 rank 内的复盘/变更（如灵徒→九星灵徒巅峰）也要保留
+            rank_increased = r > running
+            name_progression = (
+                src in ("debrief", "changelog")
+                and bool(nm)
+                and nm != prev_merged_name
+                and r >= running
+            )
+            if not (rank_increased or name_progression):
                 continue
-            running = r
+            if rank_increased:
+                running = r
+            if nm:
+                prev_merged_name = nm
             merged.append(
                 {
                     "chapter_number": ch,
@@ -518,7 +535,7 @@ def merge_outline_and_debrief_realm_milestones(
                     "realm_name": nm or _realm_display_name_for_rank(r, name_to_rank),
                     "realm_rank": r,
                     "character_change": str(best.get("character_change") or ""),
-                    "source": str(best.get("source") or "outline"),
+                    "source": src,
                 }
             )
         else:
@@ -534,8 +551,8 @@ def merge_outline_and_debrief_realm_milestones(
                         "source": str(best.get("source") or "outline"),
                     }
                 )
-            elif nm and nm != prev_debrief_name:
-                prev_debrief_name = nm
+            elif nm and nm != prev_merged_name:
+                prev_merged_name = nm
                 merged.append(
                     {
                         "chapter_number": ch,

@@ -87,8 +87,8 @@ def lint_core_mysteries(
                     rule_id="CM-01",
                     severity="high",
                     scope="volume",
-                    message=f"核心谜题「{name}」应在第{lay}章埋下，章纲 foreshadow 未体现",
-                    suggestion=f"第{lay}章 foreshadow 写 埋[{name}|主题:…]",
+                    message=f"核心谜题「{name}」应在第{lay}章埋下，章纲伏笔字段未体现",
+                    suggestion=f"第{lay}章伏笔写：埋[{name}|主题:…]",
                 ))
 
         for hc in heat_chapters:
@@ -102,8 +102,8 @@ def lint_core_mysteries(
                     rule_id="CM-02",
                     severity="high",
                     scope="volume",
-                    message=f"核心谜题「{name}」应在第{hc}章加热，foreshadow 未体现",
-                    suggestion=f"第{hc}章写 加热[{name}+手法]",
+                    message=f"核心谜题「{name}」应在第{hc}章加热，章纲伏笔字段未体现",
+                    suggestion=f"第{hc}章伏笔写：加热[{name}+手法]",
                 ))
 
         if lay and reveal and reveal < lay + 10:
@@ -112,7 +112,7 @@ def lint_core_mysteries(
                 severity="critical",
                 scope="volume",
                 message=f"谜题「{name}」揭晓章（{reveal}）距埋设章（{lay}）不足10章",
-                suggestion="推迟 reveal_chapter 或调整 lay_chapter",
+                suggestion="推迟揭晓章号或提前埋设章号，保证间隔至少10章",
             ))
 
         if reveal and max_global > reveal:
@@ -124,8 +124,8 @@ def lint_core_mysteries(
                     rule_id="CM-04",
                     severity="medium",
                     scope="volume",
-                    message=f"谜题「{name}」已过揭晓章（{reveal}），章纲未见 收[",
-                    suggestion=f"在第{reveal}章 foreshadow 写 收[{name}]",
+                    message=f"谜题「{name}」已过揭晓章（第{reveal}章），章纲未见「收[…]」回收",
+                    suggestion=f"在第{reveal}章伏笔写：收[{name}]",
                 ))
 
     if mysteries and not has_identity:
@@ -133,8 +133,8 @@ def lint_core_mysteries(
             rule_id="CM-05",
             severity="medium",
             scope="volume",
-            message="core_mysteries 缺少 identity 类型谜题",
-            suggestion="至少保留一条身份之谜",
+            message="核心谜题清单缺少「身份之谜」类型",
+            suggestion="至少保留一条身份类核心谜题",
         ))
 
     reveal_chapters.sort()

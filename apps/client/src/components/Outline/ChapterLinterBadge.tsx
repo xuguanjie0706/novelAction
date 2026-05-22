@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom'
 import { AlertTriangle } from 'lucide-react'
 import clsx from 'clsx'
 import type { LinterIssueRow } from './VolumeLinterPanel'
+import { linterIssueHeading } from './linterDisplay'
 
 const SEVERITY_BADGE: Record<string, string> = {
   critical: 'bg-red-50 text-red-700 border-red-200',
@@ -23,17 +24,14 @@ function IssuePreviewList({ issues }: { issues: LinterIssueRow[] }) {
     <ul className="space-y-1.5">
       {issues.map((issue, idx) => (
         <li key={`${issue.rule_id}-${idx}`} className="space-y-0.5">
-          <div className="flex items-center gap-1 flex-wrap">
-            <span
-              className={clsx(
-                'text-[10px] font-mono px-1 py-0 rounded border',
-                SEVERITY_BADGE[issue.severity] ?? SEVERITY_BADGE.low,
-              )}
-            >
-              {issue.rule_id}
-            </span>
-            <span className="text-[10px] text-gray-400 uppercase">{issue.severity}</span>
-          </div>
+          <span
+            className={clsx(
+              'inline-block text-[10px] font-medium px-1.5 py-0.5 rounded border',
+              SEVERITY_BADGE[issue.severity] ?? SEVERITY_BADGE.low,
+            )}
+          >
+            {linterIssueHeading(issue)}
+          </span>
           <p className="text-[11px] text-gray-700 leading-snug">{issue.message}</p>
           {issue.suggestion && (
             <p className="text-[10px] text-indigo-600 leading-snug">↳ {issue.suggestion}</p>
@@ -153,7 +151,7 @@ export function ChapterLinterIssuePanel({ issues }: { issues: LinterIssueRow[] }
     >
       <p className="text-[10px] font-medium text-gray-600 mb-1.5">
         章纲质检 · {issues.length} 项
-        {hasCritical && <span className="text-red-600 ml-1">（含 {critical} 项 critical）</span>}
+        {hasCritical && <span className="text-red-600 ml-1">（含 {critical} 项严重）</span>}
       </p>
       <IssuePreviewList issues={issues} />
     </div>

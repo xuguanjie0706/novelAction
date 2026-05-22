@@ -39,6 +39,7 @@ from app.routers import (
     admin_llm_calls,
     admin_cover_image_calls,
     admin_rag_logs,
+    admin_memory_conflict_logs,
     storylines,
     power_systems,
     skills,
@@ -237,6 +238,11 @@ app.include_router(admin_llm.router, prefix="/api/v1", dependencies=[Depends(get
 app.include_router(admin_llm_calls.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(admin_cover_image_calls.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(admin_rag_logs.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+app.include_router(
+    admin_memory_conflict_logs.router,
+    prefix="/api/v1",
+    dependencies=[Depends(get_current_user)],
+)
 app.include_router(llm_public.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(dashboard_router.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 

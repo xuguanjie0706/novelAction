@@ -14,6 +14,7 @@ from app.services.rag_retrieval_service import (
     retrieve_and_log_suggest_memory,
 )
 from app.services.ai_service import AIService
+from app.services.llm_errors import format_llm_error_message
 from app.routers.ai.chat_helpers import chat_context_label, query_chat_messages
 from app.routers.ai.context import (
     append_reference_chapters_to_writing_context,
@@ -166,7 +167,7 @@ async def chat_stream(
                 db.commit()
         except Exception as exc:
             db.rollback()
-            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            yield f"data: {json.dumps({'error': format_llm_error_message(exc)})}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

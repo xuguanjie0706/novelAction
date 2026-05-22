@@ -51,13 +51,16 @@ export function draftAssistSideEventHandler(
       const ok = obj.ok !== false
       const riskCount = typeof obj.risk_count === 'number' ? obj.risk_count : 0
       const errMsg = typeof obj.error === 'string' ? obj.error : null
+      const reused = obj.reused === true
       pushProgress({
         step: phaseStep('pre_warn'),
         label: errMsg
           ? `写前预警：${errMsg}`
-          : ok
-            ? `写前预警完成（${riskCount} 处风险；简报已注入正文生成）`
-            : `写前预警：${riskCount} 处风险；简报已注入正文生成`,
+          : reused
+            ? `写前预警：复用本章已有记录（${riskCount} 处风险；已跳过主编审稿）`
+            : ok
+              ? `写前预警完成（${riskCount} 处风险；简报已注入正文生成）`
+              : `写前预警：${riskCount} 处风险；简报已注入正文生成`,
         done: true,
         error: !!errMsg,
       })

@@ -10,10 +10,11 @@ from app.database import get_db, SessionLocal
 from app.models import Chapter, MemoryChunk
 from app.models.rag_retrieval_log import RagRetrievalLog
 from app.schemas import MemoryChunkOut
-from app.schemas.memory import MemoryConflictReport
+from app.schemas.memory import MemoryConflictDetectLogOut, MemoryConflictReport
 from app.schemas.rag import RagQueryRequest, RagQueryResponse, RagRetrievalLogOut
 from app.services.ai_service import AIService
 from app.services.embedding_service import embed_chunk_async, semantic_search
+from app.services.memory_conflict_detect_log import list_memory_conflict_detect_logs
 from app.services.memory_conflict_detector import detect_memory_conflicts
 from app.services.rag_retrieval_service import run_rag_query
 from app.utils.chapter_numbering import display_chapter_number
@@ -262,7 +263,7 @@ def list_memory(
 @router.post("/memory/detect-conflicts", response_model=MemoryConflictReport)
 async def detect_conflicts(
     project_id: str,
-    model_profile: Literal["local", "gemini"] = "local",
+    model_profile: Literal["local", "gemini"] = "gemini",
     llm_provider_id: Optional[UUID] = None,
     db: Session = Depends(get_db),
 ):
@@ -291,8 +292,25 @@ async def detect_conflicts(
         db,
         project_id=project_id,
         ai_service=svc,
+        trigger="manual",
     )
     return report
+
+
+@router.get("/memory/conflict-detect-logs", response_model=List[MemoryConflictDetectLogOut])
+def list_conflict_detect_logs(
+    project_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    trigger: Optional[str] = Query(None, description="manual | chapter_debrief"),
+    db: Session = Depends(get_db),
+):
+    """查询本项目记忆冲突检测运行历史（每次扫描一条）。"""
+    return list_memory_conflict_detect_logs(
+        db,
+        limit=limit,
+        project_id=UUID(project_id),
+        trigger=trigger,
+    )
 
 
 @router.get("/memory/rag-metrics")

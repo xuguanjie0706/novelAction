@@ -13,6 +13,7 @@ const ImageProvidersPage = lazy(() => import('./pages/ImageProvidersPage'))
 const CoverImageCallLogsPage = lazy(() => import('./pages/CoverImageCallLogsPage'))
 const RagRetrievalLogsPage = lazy(() => import('./pages/RagRetrievalLogsPage'))
 const RagMetricsPage = lazy(() => import('./pages/RagMetricsPage'))
+const MemoryConflictDetectLogsPage = lazy(() => import('./pages/MemoryConflictDetectLogsPage'))
 const DebriefListPage = lazy(() => import('./pages/DebriefListPage'))
 const NovelManagementPage = lazy(() => import('./pages/NovelManagementPage'))
 const ReadingReviewPage = lazy(() => import('./pages/ReadingReviewPage'))
@@ -50,6 +51,7 @@ export default function App() {
               <Route path="llm-calls" element={<LazyPage page={LlmCallLogsPage} />} />
               <Route path="rag-logs" element={<LazyPage page={RagRetrievalLogsPage} />} />
               <Route path="rag-metrics" element={<LazyPage page={RagMetricsPage} />} />
+              <Route path="memory-conflict-logs" element={<LazyPage page={MemoryConflictDetectLogsPage} />} />
               <Route path="reading-review" element={<LazyPage page={ReadingReviewPage} />} />
               <Route path="user-credits" element={<LazyPage page={UserCreditsPage} />} />
               <Route path="redeem-codes" element={<LazyPage page={RedeemCodesPage} />} />

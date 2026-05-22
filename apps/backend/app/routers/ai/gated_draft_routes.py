@@ -93,6 +93,13 @@ async def gated_draft_stream(
     if not project:
         raise HTTPException(404, "Project not found")
 
+    if req.replace_existing:
+        from app.routers.chapters import clear_chapter_rewrite_derivatives
+
+        clear_chapter_rewrite_derivatives(db, project_id, str(req.chapter_id))
+        db.commit()
+        db.refresh(chapter)
+
     cfg = merge_writing_config(project, req.override_config)
     large_context = req.model_profile == "gemini"
 
@@ -152,7 +159,7 @@ async def gated_draft_stream(
         # 而 gated 始终 replace_existing=True，draft_assist_stream 内部不读 existing_content。
         # 在路由层预先构建 draft_ctx，与写前硬门（一致性/境界）共用同一份上下文。
 
-        # ── 写前预警（仅首次，pre_write_warning_enabled=True 时执行）──────────
+        # ── 写前预警（pre_write_warning_enabled=True；整章重写时优先复用落库记录）──
         # 将预警结果格式化为「写前简报」块，通过 draft_assist_stream 的专属参数
         # pre_write_brief 注入（独立 2500 字预算），不拼入 user_prompt（上限 800 字）。
         # user_prompt_str 只保留用户/作者的补充指令，保持语义干净。
@@ -170,6 +177,7 @@ async def gated_draft_stream(
                 model_profile=req.model_profile or "local",
                 llm_provider_id=str(req.llm_provider_id) if req.llm_provider_id else None,
                 persist_record=True,
+                reuse_if_exists=bool(req.replace_existing),
             )
             for payload in pre_warn_events:
                 yield _sse(payload)

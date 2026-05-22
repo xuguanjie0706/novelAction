@@ -226,6 +226,7 @@ export const settingsApi = {
 // ── Characters ────────────────────────────────────────
 export const charactersApi = {
   list: (pid: string) => api.get(`/projects/${pid}/characters/`),
+  get: (pid: string, id: string) => api.get(`/projects/${pid}/characters/${id}`),
   create: (pid: string, data: any) => api.post(`/projects/${pid}/characters/`, data),
   update: (pid: string, id: string, data: any) => api.patch(`/projects/${pid}/characters/${id}`, data),
   delete: (pid: string, id: string) => api.delete(`/projects/${pid}/characters/${id}`),
@@ -671,11 +672,12 @@ export const aiApi = {
    * AI 驱动的记忆冲突检测。
    * 扫描项目记忆库，识别角色状态/时间线/属性/伏笔四类冲突，结果持久化写入 Project.extra。
    */
-  detectConflicts: (pid: string, params?: { model_profile?: 'local' | 'gemini' }) => {
+  detectConflicts: (pid: string, params?: { model_profile?: 'local' | 'gemini'; llm_provider_id?: string }) => {
     const q = new URLSearchParams()
-    if (params?.model_profile) q.set('model_profile', params.model_profile)
+    q.set('model_profile', params?.model_profile ?? 'gemini')
+    if (params?.llm_provider_id) q.set('llm_provider_id', params.llm_provider_id)
     return api.post<import('../types').MemoryConflictReport>(
-      `/projects/${pid}/ai/memory/detect-conflicts${q.toString() ? `?${q}` : ''}`,
+      `/projects/${pid}/ai/memory/detect-conflicts?${q.toString()}`,
     )
   },
   /** 结构化语义 RAG 查询（自然语言问记忆库） */
@@ -776,6 +778,11 @@ export const aiApi = {
     }>
     /** 本章已兑现的承诺原文，用于模糊匹配 open 台账并标 fulfilled */
     fulfilled_promise_texts?: string[]
+    /** auto-debrief 服务端解析的精确 ID，优先级高于文本模糊匹配 */
+    fulfilled_promise_ids?: string[]
+    /** 与 auto-debrief 同线路，供后台 memory_conflict_detect 使用 */
+    model_profile?: 'local' | 'gemini'
+    llm_provider_id?: string
   }) => api.post(`/projects/${pid}/ai/chapter-debrief`, data, { timeout: DEBRIEF_REQUEST_TIMEOUT_MS }),
 
   chapterCoherenceCheck: (

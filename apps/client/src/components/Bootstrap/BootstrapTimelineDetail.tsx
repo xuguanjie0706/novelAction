@@ -56,13 +56,12 @@ function LinterIssuesList({ issues }: { issues: LinterIssuePreview[] }) {
     <ul className="max-h-48 overflow-y-auto space-y-1 rounded-lg border border-red-100 bg-white/60 px-3 py-2 text-xs text-red-900">
       {issues.map((issue, idx) => (
         <li key={`${issue.rule_id}-${idx}`} className="leading-snug">
-          <span className="font-mono text-[10px] text-red-600">[{issue.rule_id}]</span>
           {issue.chapter_number_in_volume != null && (
-            <span className="text-red-500/80"> 第{issue.chapter_number_in_volume}章 ·</span>
-          )}{' '}
+            <span className="text-red-500/80 font-medium">第{issue.chapter_number_in_volume}章 · </span>
+          )}
           {issue.message}
           {issue.suggestion ? (
-            <span className="text-red-700/70"> — {issue.suggestion}</span>
+            <span className="text-red-700/70"> — 建议：{issue.suggestion}</span>
           ) : null}
         </li>
       ))}
@@ -422,8 +421,7 @@ export default function BootstrapTimelineDetail({
             </p>
             {(step.linterBlockingRules?.length ?? 0) > 0 && (
               <p className="text-xs text-red-700/90">
-                阻断规则：
-                <span className="font-mono ml-1">{step.linterBlockingRules!.join(', ')}</span>
+                须优先处理：{step.linterBlockingRules!.length} 类阻断项（见下方列表）
               </p>
             )}
             {(step.linterIssues?.length ?? 0) > 0 && (

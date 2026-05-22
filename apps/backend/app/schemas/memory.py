@@ -48,3 +48,22 @@ class MemoryConflictReport(BaseModel):
     total_chunks_scanned: int
     conflicts: List[MemoryConflictItem]
     detected_at: datetime
+
+
+class MemoryConflictDetectLogOut(BaseModel):
+    """单次记忆冲突检测运行日志。"""
+    id: uuid.UUID
+    project_id: uuid.UUID
+    chapter_id: Optional[uuid.UUID]
+    trigger: str
+    status: str
+    duration_ms: int
+    total_chunks_scanned: int
+    conflict_count: int
+    llm_call_log_id: Optional[uuid.UUID]
+    error: Optional[str]
+    output_payload: dict
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

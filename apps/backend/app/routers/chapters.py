@@ -95,7 +95,7 @@ def clear_chapter_rewrite_derivatives(db: Session, project_id: str, chapter_id: 
     1. 从 undo 快照回滚覆盖型字段（character realm/location/status/realm_rank、storyline status）
     2. 按 chapter_id 精确清除追加型数据（storyline beats、character known_skills/owned_items）
     3. 清除 realm_milestones 快照中本章记录
-    4. 清除记忆 / ChapterIndex / 复盘缓存 / 伏笔（不删质量债务行）
+    4. 清除记忆 / ChapterIndex / 复盘缓存 / 伏笔 / 读者承诺 / 复盘变更日志（不删质量债务行）
     5. 删除 undo 快照行
     """
     # ── 1. 回滚覆盖型字段 ─────────────────────────��────
@@ -198,6 +198,31 @@ def clear_chapter_rewrite_derivatives(db: Session, project_id: str, chapter_id: 
         row.resolved_chapter_number = None
         if row.status == "resolved":
             row.status = "open"
+
+    # ── 4b. 读者承诺：本章埋下的删除；本章兑现的回退为 open ─────────────
+    db.query(ReaderPromise).filter(
+        ReaderPromise.project_id == project_id,
+        ReaderPromise.source_chapter_id == chapter_id,
+    ).delete(synchronize_session=False)
+    for rp in (
+        db.query(ReaderPromise)
+        .filter(
+            ReaderPromise.project_id == project_id,
+            ReaderPromise.fulfilled_chapter_id == chapter_id,
+        )
+        .all()
+    ):
+        rp.fulfilled_chapter_id = None
+        rp.fulfilled_chapter_number = None
+        if rp.status == "fulfilled":
+            rp.status = "open"
+
+    # ── 4c. 本章复盘审计日志（避免重写后人物变更记录重复）────────────
+    db.query(CharacterChangeLog).filter(
+        CharacterChangeLog.project_id == project_id,
+        CharacterChangeLog.chapter_id == chapter_id,
+        CharacterChangeLog.source == "debrief",
+    ).delete(synchronize_session=False)
 
     # ── 5. 删除 undo 快照 ─────────────────────────────
     if undo:

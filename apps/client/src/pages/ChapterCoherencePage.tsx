@@ -158,6 +158,11 @@ export default function ChapterCoherencePage() {
         ...routeLlmProviderPayload(aiBackendRoute),
       })
       const result = res.data as CoherenceReport
+      if (result.error) {
+        setReport(null)
+        toast.error(`检测失败：${result.error}`)
+        return
+      }
       setReport(result)
       const saved = await persistReport(result, { silent: true })
       if (saved) {
@@ -165,8 +170,11 @@ export default function ChapterCoherencePage() {
       } else {
         toast('检测完成，但自动保存失败，可手动重试', { icon: '⚠️' })
       }
-    } catch {
+    } catch (err: unknown) {
       setReport(null)
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+      const msg = typeof detail === 'string' ? detail : '检测请求失败，请查看后端日志或更换大模型线路'
+      toast.error(msg)
     } finally {
       setChecking(false)
     }

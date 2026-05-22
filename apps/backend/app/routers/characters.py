@@ -13,7 +13,12 @@ from app.schemas.character import (
     RelationshipOut,
 )
 from app.routers.outline.helpers.expand_context import _outline_node_to_chapter_context
-from app.routers.outline.helpers.realm_timeline import build_character_growth_timeline
+from app.routers.ai.realm_tracker import reconcile_character_realm_from_milestones
+from app.routers.outline.helpers.realm_timeline import (
+    _build_realm_rank_map,
+    _rank_for_realm_label,
+    build_character_growth_timeline,
+)
 from app.schemas.character_change_log import CharacterChangeLogOut
 
 router = APIRouter(prefix="/projects/{project_id}/characters", tags=["characters"])
@@ -58,9 +63,19 @@ def _normalize_character_defaults(char: Character) -> bool:
 @router.get("/", response_model=List[CharacterOut])
 def list_characters(project_id: str, db: Session = Depends(get_db)):
     rows = db.query(Character).filter(Character.project_id == project_id).all()
+    name_to_rank, _, _ = _build_realm_rank_map(
+        db.query(PowerSystem).filter(PowerSystem.project_id == project_id).all()
+    )
     changed = False
     for row in rows:
         changed = _normalize_character_defaults(row) or changed
+        if name_to_rank and row.current_realm and row.realm_rank is None:
+            resolved = _rank_for_realm_label(row.current_realm.strip(), name_to_rank)
+            if resolved is not None:
+                row.realm_rank = resolved
+                changed = True
+        if reconcile_character_realm_from_milestones(row, name_to_rank):
+            changed = True
     if changed:
         db.commit()
     return rows
@@ -84,6 +99,12 @@ def get_character(project_id: str, character_id: str, db: Session = Depends(get_
     if not char:
         raise HTTPException(404, "Character not found")
     if _normalize_character_defaults(char):
+        db.commit()
+        db.refresh(char)
+    name_to_rank, _, _ = _build_realm_rank_map(
+        db.query(PowerSystem).filter(PowerSystem.project_id == project_id).all()
+    )
+    if name_to_rank and reconcile_character_realm_from_milestones(char, name_to_rank):
         db.commit()
         db.refresh(char)
     return char

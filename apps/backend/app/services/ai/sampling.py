@@ -94,6 +94,8 @@ class SamplingMixin:
                 "name or service not known",
                 "ssl",
                 "eof occurred",
+                "peer closed",
+                "incomplete chunked",
             )
         )
 
@@ -248,52 +250,65 @@ class SamplingMixin:
         self._preflight_credit_check()
         client = self._get_client()
         start = time.perf_counter()
-        output_chunks: List[str] = []
         sampling_kwargs = self._build_sampling_kwargs(task, sampling)
+        retry_delays = (0.8, 1.6)
+        last_error: Exception | None = None
+        output_chunks: List[str] = []
         try:
-            stream = await client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=max_tokens,
-                stream=True,
-                **sampling_kwargs,
-            )
-            async for chunk in stream:
-                ch_list = getattr(chunk, "choices", None) or []
-                if not ch_list:
-                    continue
-                delta_obj = getattr(ch_list[0], "delta", None)
-                delta = getattr(delta_obj, "content", None) if delta_obj is not None else None
-                if delta:
-                    output_chunks.append(delta)
-                    yield delta
-            log_llm_call(
-                mode=self.profile,
-                model=self.model,
-                llm_endpoint=f"{self.base_url.rstrip('/')}/chat/completions",
-                context=self._log_context_payload(context, task, sampling_kwargs),
-                duration_ms=int((time.perf_counter() - start) * 1000),
-                status="ok",
-                prompt_text=f"{system}\n{prompt}",
-                completion_text="".join(output_chunks),
-                input_payload={
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_tokens": max_tokens,
-                    "stream": True,
-                    **sampling_kwargs,
-                },
-                output_payload={"text": "".join(output_chunks)},
-                user_id=resolve_llm_billing_user_id(getattr(self, "_user_id", None)),
-                task=task,
-                tier_override=getattr(self, "_billing_tier", None),
-                db=self._db,
-            )
+            for attempt in range(len(retry_delays) + 1):
+                output_chunks = []
+                try:
+                    stream = await client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": prompt},
+                        ],
+                        max_tokens=max_tokens,
+                        stream=True,
+                        **sampling_kwargs,
+                    )
+                    async for chunk in stream:
+                        ch_list = getattr(chunk, "choices", None) or []
+                        if not ch_list:
+                            continue
+                        delta_obj = getattr(ch_list[0], "delta", None)
+                        delta = getattr(delta_obj, "content", None) if delta_obj is not None else None
+                        if delta:
+                            output_chunks.append(delta)
+                            yield delta
+                    log_llm_call(
+                        mode=self.profile,
+                        model=self.model,
+                        llm_endpoint=f"{self.base_url.rstrip('/')}/chat/completions",
+                        context=self._log_context_payload(context, task, sampling_kwargs),
+                        duration_ms=int((time.perf_counter() - start) * 1000),
+                        status="ok",
+                        prompt_text=f"{system}\n{prompt}",
+                        completion_text="".join(output_chunks),
+                        input_payload={
+                            "messages": [
+                                {"role": "system", "content": system},
+                                {"role": "user", "content": prompt},
+                            ],
+                            "max_tokens": max_tokens,
+                            "stream": True,
+                            **sampling_kwargs,
+                        },
+                        output_payload={"text": "".join(output_chunks)},
+                        user_id=resolve_llm_billing_user_id(getattr(self, "_user_id", None)),
+                        task=task,
+                        tier_override=getattr(self, "_billing_tier", None),
+                        db=self._db,
+                    )
+                    return
+                except Exception as e:
+                    last_error = e
+                    if attempt >= len(retry_delays) or not self._is_retryable_llm_error(e):
+                        raise
+                    await asyncio.sleep(retry_delays[attempt])
+            if last_error is not None:
+                raise last_error
         except Exception as e:
             log_llm_call(
                 mode=self.profile,

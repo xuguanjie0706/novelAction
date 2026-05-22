@@ -114,6 +114,7 @@ export default function LlmCallLogsPage() {
       plan_full_structure: '全量结构规划：规划卷级结构与篇幅节奏',
       draft_assist_stream: '写作辅助：起笔/续写/重写正文',
       auto_extract_debrief: '自动复盘：提取人物/故事线变化与章节索引',
+      memory_conflict_detect: '记忆冲突检测：扫描记忆库前后矛盾（角色/时间线/属性/伏笔）',
     }
     if (!op) return '未标注作用'
     if (m[op]) return m[op]

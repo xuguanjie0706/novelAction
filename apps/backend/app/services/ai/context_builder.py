@@ -767,6 +767,10 @@ def append_reference_chapters_to_writing_context(
             break
     if not ordered:
         return base_context
+    ref_count = len(ordered)
+    # 多章参考时按章均分总预算，降低网关/模型流式中途断连概率
+    ref_total_budget = 28000 if ref_count > 3 else 36000
+    per_chapter_cap = max(1800, min(12000, ref_total_budget // ref_count))
     rows = (
         db.query(Chapter)
         .filter(Chapter.project_id == project_id, Chapter.id.in_(ordered))
@@ -780,7 +784,7 @@ def append_reference_chapters_to_writing_context(
             continue
         pl = plain_text(ch.content)
         narr, _ = split_plain_manuscript_and_index_block(pl)
-        body = (narr.strip() if narr.strip() else pl)[:12000]
+        body = (narr.strip() if narr.strip() else pl)[:per_chapter_cap]
         num = display_chapter_number(ch.title, ch.sort_order)
         blocks.append(
             f"【参考章节《{ch.title}》（序号：{num}）】\n{body or '（该章暂无正文）'}"

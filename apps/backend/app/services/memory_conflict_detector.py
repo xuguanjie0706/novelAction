@@ -14,6 +14,7 @@
   3. 调用 AI 返回冲突 JSON 数组
   4. 解析结果，将短码映射回真实 UUID
   5. 写入 Project.extra.memory_conflicts（持久化）并返回报告
+  6. 写入 memory_conflict_detect_logs（每次运行一条，供管理端观测）
 
 限制：
   - 单次扫描最多 200 条 chunk（超出时按 importance_score 降序截取）
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -31,6 +33,7 @@ from sqlalchemy.orm import Session
 
 from app.models.memory import MemoryChunk
 from app.models.project import Project
+from app.services.memory_conflict_detect_log import persist_memory_conflict_detect_log
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +134,8 @@ async def detect_memory_conflicts(
     ai_service,
     *,
     max_chunks: int = _MAX_CHUNKS,
+    trigger: str = "manual",
+    chapter_id: str | UUID | None = None,
 ) -> Dict[str, Any]:
     """
     扫描项目记忆库并用 AI 检测冲突，结果持久化写入 Project.extra.memory_conflicts。
@@ -140,11 +145,34 @@ async def detect_memory_conflicts(
         project_id:  目标项目 ID
         ai_service:  已初始化的 AIService 实例（用于调用 LLM）
         max_chunks:  单次扫描上限（默认 200）
+        trigger:     触发来源（manual | chapter_debrief）
+        chapter_id:  复盘触发的章节 ID（可选）
 
     Returns:
         冲突报告字典（含 project_id / total_chunks_scanned / conflicts / detected_at）
     """
     pid = str(project_id)
+    started = time.perf_counter()
+
+    def _finish(
+        report: Dict[str, Any],
+        *,
+        status: str,
+        error: str | None = None,
+    ) -> Dict[str, Any]:
+        persist_memory_conflict_detect_log(
+            db,
+            project_id=pid,
+            chapter_id=chapter_id,
+            trigger=trigger,
+            status=status,
+            duration_ms=int((time.perf_counter() - started) * 1000),
+            total_chunks_scanned=int(report.get("total_chunks_scanned") or 0),
+            conflict_count=len(report.get("conflicts") or []),
+            error=error or (str(report["error"]) if report.get("error") else None),
+            report=report,
+        )
+        return report
 
     # 1. 拉取全量 chunk，按重要度降序截取
     chunks: List[MemoryChunk] = (
@@ -167,7 +195,7 @@ async def detect_memory_conflicts(
             "detected_at": datetime.now(timezone.utc).isoformat(),
         }
         _persist_report(db, project_id, report)
-        return report
+        return _finish(report, status="skipped")
 
     id_map = _build_id_map(chunks)
     summary_block = _build_chunk_summary_block(chunks)
@@ -211,7 +239,7 @@ severity 取值：high（明确矛盾）/ medium（疑似矛盾需人工确认�
             user_prompt,
             max_tokens=2048,
             context={"operation": "memory_conflict_detect", "project_id": pid},
-            task="quality.check",
+            task="memory.conflict_detect",
         )
     except Exception as exc:
         logger.warning("detect_memory_conflicts AI call failed: %s", exc)
@@ -223,7 +251,7 @@ severity 取值：high（明确矛盾）/ medium（疑似矛盾需人工确认�
             "error": str(exc),
         }
         _persist_report(db, project_id, report)
-        return report
+        return _finish(report, status="error", error=str(exc))
 
     # 4. 解析 + 映射短码
     raw_conflicts = _parse_conflict_json(response)
@@ -250,7 +278,7 @@ severity 取值：high（明确矛盾）/ medium（疑似矛盾需人工确认�
         "detect_memory_conflicts: project=%s scanned=%d conflicts=%d",
         pid, len(chunks), len(conflicts_out),
     )
-    return report
+    return _finish(report, status="ok")
 
 
 def _persist_report(db: Session, project_id: str | UUID, report: Dict[str, Any]) -> None:

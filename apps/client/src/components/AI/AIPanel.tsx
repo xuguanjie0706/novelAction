@@ -24,6 +24,8 @@ const DIMENSION_LABELS: Record<string, string> = {
   face_slap_payoff: '打脸兑现',
   emotional_resonance: '情感共鸣',
   subscribe_intent: '追读意愿',
+  storyline_progress: '故事线推进',
+  realm_check: '境界体系',
 }
 
 function chapterPlainTextLen(ch: Chapter): number {
@@ -269,9 +271,16 @@ export default function AIPanel({ projectId }: Props) {
       setChatMessages(refreshed.data)
     } catch (err) {
       const message = err instanceof Error ? err.message : '对话失败'
-      setChatMessages(prev => prev.map(m =>
-        m.id === assistantId ? { ...m, content: `对话失败：${message}` } : m
-      ))
+      setChatMessages(prev => prev.map(m => {
+        if (m.id !== assistantId) return m
+        const partial = m.content.trim()
+        return {
+          ...m,
+          content: partial
+            ? `${partial}\n\n⚠️ 回复未完整：${message}`
+            : `对话失败：${message}`,
+        }
+      }))
       toast.error(message)
     } finally {
       setChatLoading(false)

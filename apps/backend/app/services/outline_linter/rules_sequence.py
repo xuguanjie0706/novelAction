@@ -32,9 +32,13 @@ def lint_sequence(
                     severity="high",
                     scope="sequence",
                     message=(
-                        f"第{cur.chapter_number}章未承接第{prev.chapter_number}章 choice_cost"
+                        f"第{cur.chapter_number}章开篇/梗概未承接第{prev.chapter_number}章「选择代价」"
+                        f"（上章代价：「{prev_cost}」）"
                     ),
-                    suggestion="改 opening_hook 或上章 choice_cost，体现后遗症",
+                    suggestion=(
+                        "改写本章开篇钩子或核心事件，让上章代价的后果可见"
+                        "（与上章代价原文至少 2 字相同）"
+                    ),
                     field="hook",
                     chapter_number_in_volume=cur.chapter_number,
                     node_id=cur.id,
@@ -46,8 +50,14 @@ def lint_sequence(
                     rule_id="SEQ-07",
                     severity="critical",
                     scope="sequence",
-                    message="第31章（第二批首章）未承接第30章代价",
-                    suggestion="懒展开第二批首章必须硬承接前批末尾",
+                    message=(
+                        f"第31章为分批生成时的第二批首章，开篇未承接第30章「选择代价」"
+                        f"（第30章代价：「{prev_cost}」）"
+                    ),
+                    suggestion=(
+                        "第31章开篇须紧接第30章章末：写出代价的即时后果，"
+                        "避免像新卷重新起手"
+                    ),
                     field="hook",
                     chapter_number_in_volume=31,
                     node_id=cur.id,
@@ -93,8 +103,10 @@ def lint_sequence(
                         rule_id="SEQ-03",
                         severity="high",
                         scope="sequence",
-                        message=f"dark_hour 卷第{ch.chapter_number}章起连续{fast_run}章 pacing=fast",
-                        suggestion="至暗期不宜连续快节奏",
+                        message=(
+                            f"至暗期卷从第{ch.chapter_number}章起连续{fast_run}章标记为「快节奏」"
+                        ),
+                        suggestion="至暗期宜放缓节奏，避免连续多章快节奏推进",
                         field="pacing",
                         chapter_number_in_volume=ch.chapter_number,
                         node_id=ch.id,
@@ -112,10 +124,10 @@ def lint_sequence(
                 severity="high",
                 scope="sequence",
                 message=(
-                    f"dark_hour 卷情感章占比 {beat_count}/{len(chapters)} "
-                    f"低于 40%"
+                    f"至暗期卷情感向章节仅 {beat_count}/{len(chapters)} 章"
+                    f"（低于 40% 下限）"
                 ),
-                suggestion="增加 has_emotional_beat=true 的章节",
+                suggestion="增加标记为「情感节拍」的章节，强化情绪铺垫",
             ))
 
     return issues
@@ -177,8 +189,8 @@ def lint_semantic_duplicates(
                     severity=severity,
                     scope="sequence",
                     message=(
-                        f"第{a.chapter_number}章与第{b.chapter_number}章梗概高度相似"
-                        f"（Jaccard≈{sim:.2f}）"
+                        f"第{a.chapter_number}章与第{b.chapter_number}章梗概/钩子高度相似"
+                        f"（相似度约 {int(sim * 100)}%）"
                     ),
                     suggestion="改写其中一章的核心事件或章末钩子，拉开差异",
                     chapter_number_in_volume=b.chapter_number,

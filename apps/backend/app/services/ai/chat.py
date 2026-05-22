@@ -98,9 +98,10 @@ class ChatMixin:
             if content:
                 history_lines.append(f"{role}：{content[:1200]}")
 
-        context_limit = 50000 if self.profile == "gemini" else 8000
+        local_limit = 8000
+        large_limit = 50000
         prompt = f"""【当前对话上下文：{context_label}】
-{self._clip_context(context_text, 2000, context_limit) or '（未提供）'}
+{self._clip_context(context_text, local_limit, large_limit) or '（未提供）'}
 
 【最近对话】
 {chr(10).join(history_lines) or '（暂无）'}

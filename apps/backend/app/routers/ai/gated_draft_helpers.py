@@ -216,6 +216,17 @@ async def _run_pre_write_warning_inline(
     # 大纲五要素兜底（无 outline_node 时用章节标题）
     chapter_plan_summary = outline_context or f"第{chapter.sort_order or '?'}章《{chapter.title}》"
 
+    # 开篇衔接技法菜单：从角色位置记录 + 大纲里程碑推导，注入 pre_write_warning
+    # 让"30年主编"AI 按技法菜单给出可执行的 transition_directive
+    from app.services.ai.transition_advisor import build_transition_menu_block
+    _primary_char = characters[0] if characters else None
+    _db_location = (_primary_char.current_location or "").strip() if _primary_char else ""
+    _power_milestone = (outline_node.power_milestone or "").strip() if outline_node else ""
+    transition_menu = build_transition_menu_block(
+        db_location=_db_location,
+        outline_power_milestone=_power_milestone,
+    )
+
     result = await svc.pre_write_warning(
         project_title=project.title,
         genre=project.genre or "玄幻",
@@ -227,6 +238,7 @@ async def _run_pre_write_warning_inline(
         power_systems_summary=power_systems_summary,
         outline_context=outline_context,
         phase=phase,
+        transition_menu=transition_menu,
     )
     if _rag_log is not None:
         result = dict(result)
@@ -301,6 +313,25 @@ def _build_pre_warn_prompt_block(warn_result: dict) -> str:
             lines.append(f"  [{r.get('severity','?')}·{r.get('type','?')}] {r.get('description','')}")
             if r.get("suggested_fix"):
                 lines.append(f"    建议：{r['suggested_fix']}")
+
+    # ⑥ 开篇衔接策略（transition_directive）——空间衔接 + 破境衔接
+    td = warn_result.get("transition_directive") or {}
+    sb = td.get("spatial_bridge") or {}
+    rb = td.get("realm_bridge") or {}
+    has_spatial = isinstance(sb, dict) and sb.get("needed") and sb.get("instruction")
+    has_realm = isinstance(rb, dict) and rb.get("needed") and rb.get("instruction")
+    if has_spatial or has_realm:
+        lines.append("\n▍⚡ 开篇衔接策略（AI 必须按此执行，不得随意省略或替换）")
+        if has_spatial:
+            lines.append(
+                f"  【空间衔接·{sb.get('technique_name','?')}】\n"
+                f"  {sb['instruction']}"
+            )
+        if has_realm:
+            lines.append(
+                f"  【破境衔接·{rb.get('technique_name','?')}】\n"
+                f"  {rb['instruction']}"
+            )
 
     lines.append("===")
     return "\n".join(lines)

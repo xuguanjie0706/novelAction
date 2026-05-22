@@ -1,8 +1,12 @@
 /**
  * @file 世界观 — 地点 CRUD
+ *
+ * 地点来源说明：
+ *   - extra.source === "auto_debrief"：章节复盘后 AI 自动入库，显示「复盘自动」徽章
+ *   - 无 source 标记：作者手动录入
  */
 import { useCallback, useEffect, useState } from 'react'
-import { Plus, Trash2, MapPin, ChevronRight } from 'lucide-react'
+import { Plus, Trash2, MapPin, ChevronRight, Sparkles } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import { locationsApi } from '../../../api/client'
@@ -95,7 +99,7 @@ export default function LocationsTab({ projectId }: { projectId: string }) {
         {!loading && locations.length === 0 && (
           <div className="text-center text-gray-400 text-sm py-8">
             <MapPin size={32} className="mx-auto mb-2 opacity-40" />
-            暂无地点，Bootstrap 生成后自动填充或手动添加
+            暂无地点，章节复盘后自动生成或手动添加
           </div>
         )}
         {locations.map(loc => (
@@ -103,6 +107,11 @@ export default function LocationsTab({ projectId }: { projectId: string }) {
             <div className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50" onClick={() => setExpanded(e => e === loc.id ? null : loc.id)}>
               <MapPin size={14} className="text-sky-500 shrink-0" />
               <span className="font-medium text-sm flex-1">{loc.name}</span>
+              {(loc.extra as Record<string, unknown>)?.source === 'auto_debrief' && (
+                <span className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs bg-violet-100 text-violet-600">
+                  <Sparkles size={10} />复盘自动
+                </span>
+              )}
               {loc.danger_level && (
                 <span className={clsx('px-1.5 py-0.5 rounded text-xs', DANGER_COLORS[loc.danger_level] ?? 'bg-gray-100 text-gray-600')}>
                   {DANGER_LABELS[loc.danger_level] ?? loc.danger_level}

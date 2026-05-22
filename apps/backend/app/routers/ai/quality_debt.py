@@ -59,6 +59,17 @@ def extract_quality_debt_items(report: dict | None) -> list[dict]:
         })
 
     for suggestion in report.get("suggestions") or []:
+        if isinstance(suggestion, str):
+            text = suggestion.strip()
+            if not text:
+                continue
+            candidates.append({
+                "issue_type": "plot",
+                "severity": "medium",
+                "summary": text,
+                "suggested_fix": "",
+            })
+            continue
         if not isinstance(suggestion, dict):
             continue
         issue_type = str(suggestion.get("type") or "plot").strip().lower()

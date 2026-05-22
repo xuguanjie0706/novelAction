@@ -1,13 +1,19 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
-import { X, Zap, BookMarked, MessageSquare, SendHorizontal, Loader2 } from 'lucide-react'
+import { X, Zap, BookMarked, MessageSquare, SendHorizontal, Loader2, Wand2 } from 'lucide-react'
 import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload, llmProviderIdFromRoute } from '../../store'
 import { aiApi } from '../../api/client'
 import { authFetch } from '../../api/authFetch'
 import { memoryDisplayChapter } from '../../utils/chapterNumber'
 import type { AiChatMessage, Chapter, QualityReport } from '../../types'
+import {
+  normalizeQualityIssues,
+  normalizeQualitySuggestions,
+  qualityReportHasFixableHints,
+} from '../../utils/qualityReport'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
+import type { AxiosError } from 'axios'
 
 interface Props { projectId: string }
 
@@ -38,11 +44,24 @@ function isChapterReferenceSelectable(ch: Chapter): boolean {
   return chapterPlainTextLen(ch) >= 10
 }
 
+function microFixErrorMessage(err: unknown): string {
+  const ax = err as AxiosError<{ detail?: string | { message?: string; rationale?: string } }>
+  const detail = ax.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (detail && typeof detail === 'object' && detail.message) {
+    const why = (detail.rationale || '').trim()
+    return why.length > 0 ? `${detail.message}（${why.length > 80 ? `${why.slice(0, 80)}…` : why}）` : detail.message
+  }
+  return err instanceof Error ? err.message : '快速修复失败'
+}
+
 export default function AIPanel({ projectId }: Props) {
-  const { setAiPanelOpen, activeChapterId, memories, setMemories, chapters } = useAppStore()
+  const { setAiPanelOpen, activeChapterId, memories, setMemories, chapters, upsertChapter } = useAppStore()
   const location = useLocation()
   const [tab, setTab] = useState<Tab>('check')
   const [loading, setLoading] = useState(false)
+  const [microFixing, setMicroFixing] = useState(false)
+  const [microFixingIndex, setMicroFixingIndex] = useState<number | null>(null)
   const [report, setReport] = useState<QualityReport | null>(null)
   const [chatInput, setChatInput] = useState('')
   const [chatMessages, setChatMessages] = useState<AiChatMessage[]>([])
@@ -164,6 +183,24 @@ export default function AIPanel({ projectId }: Props) {
     if (tab === 'chat') messagesEndRef.current?.scrollIntoView({ block: 'end' })
   }, [chatMessages, chatLoading, tab])
 
+  const reportSuggestions = useMemo(
+    () => (report ? normalizeQualitySuggestions(report.suggestions) : []),
+    [report],
+  )
+
+  const reportIssues = useMemo(
+    () => (report ? normalizeQualityIssues(report.issues) : []),
+    [report],
+  )
+
+  const canQuickFix = Boolean(
+    activeChapterId
+    && activeChapter
+    && report
+    && qualityReportHasFixableHints(report)
+    && chapterPlainTextLen(activeChapter) >= 10,
+  )
+
   // ── 质检 ──────────────────────────────────────────────
   const runQualityCheck = async () => {
     if (!activeChapterId) return toast.error('请先选择一个章节')
@@ -184,6 +221,36 @@ export default function AIPanel({ projectId }: Props) {
       toast.error(e instanceof Error ? e.message : '质检请求失败')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const runQualityMicroFix = async (focusSuggestionIndex?: number) => {
+    if (!activeChapterId || !report) return toast.error('请先完成章节质检')
+    if (!canQuickFix) return toast.error('当前章节无正文或报告无可修复项')
+    const route = useAppStore.getState().aiBackendRoute
+    setMicroFixing(true)
+    setMicroFixingIndex(focusSuggestionIndex ?? null)
+    try {
+      const res = await aiApi.qualityCheckMicroFix(projectId, {
+        chapter_id: activeChapterId,
+        suggestions: reportSuggestions,
+        issues: reportIssues,
+        ...(focusSuggestionIndex != null ? { focus_suggestion_index: focusSuggestionIndex } : {}),
+        model_profile: modelProfileFromRoute(route),
+        ...routeLlmProviderPayload(route),
+      })
+      upsertChapter(res.data.chapter)
+      const why = (res.data.rationale || '').trim()
+      toast.success(
+        why.length > 0
+          ? `已应用局部修改：${why.length > 100 ? `${why.slice(0, 100)}…` : why}`
+          : '已根据优化建议更新正文（局部修改）',
+      )
+    } catch (e) {
+      toast.error(microFixErrorMessage(e))
+    } finally {
+      setMicroFixing(false)
+      setMicroFixingIndex(null)
     }
   }
 
@@ -366,11 +433,31 @@ export default function AIPanel({ projectId }: Props) {
           <div className="space-y-4">
             <button
               onClick={runQualityCheck}
-              disabled={loading}
+              disabled={loading || microFixing}
               className="w-full py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-sm rounded-lg"
             >
               {loading ? '检查中...' : report ? '重新质检当前章节' : '开始质检当前章节'}
             </button>
+            {report && canQuickFix && (
+              <button
+                type="button"
+                onClick={() => void runQualityMicroFix()}
+                disabled={loading || microFixing || !activeChapterId}
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 py-2 text-sm text-emerald-800 transition-colors hover:bg-emerald-100 disabled:opacity-50"
+              >
+                {microFixing && microFixingIndex === null ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Wand2 size={14} />
+                )}
+                {microFixing && microFixingIndex === null ? '正在快速修复…' : '快速修复（按建议改正文）'}
+              </button>
+            )}
+            {report && canQuickFix && (
+              <p className="text-[11px] leading-snug text-gray-500">
+                仅替换与建议相关的一小段正文，不会整章重写；修改前会自动备份版本。
+              </p>
+            )}
             {report && (
               <>
                 <div className="text-center">
@@ -393,25 +480,28 @@ export default function AIPanel({ projectId }: Props) {
                     </div>
                   ))}
                 </div>
-                {report.suggestions.length > 0 && (
+                {reportSuggestions.length > 0 && (
                   <div>
                     <div className="text-xs font-semibold text-gray-700 mb-2">优化建议</div>
-                    <ul className="space-y-1">
-                      {report.suggestions.map((raw, i) => {
-                        const s = raw as string | { comment?: string; description?: string }
-                        const text =
-                          typeof s === 'string'
-                            ? s
-                            : s && typeof s === 'object'
-                              ? s.comment || s.description || JSON.stringify(s)
-                              : String(s ?? '')
-                        return (
-                          <li key={i} className="text-xs text-gray-600 flex gap-1.5">
+                    <ul className="space-y-2">
+                      {reportSuggestions.map((text, i) => (
+                        <li key={i} className="text-xs text-gray-600">
+                          <div className="flex gap-1.5">
                             <span className="text-amber-500 shrink-0">•</span>
-                            {text}
-                          </li>
-                        )
-                      })}
+                            <span className="min-w-0 flex-1">{text}</span>
+                          </div>
+                          {canQuickFix && (
+                            <button
+                              type="button"
+                              onClick={() => void runQualityMicroFix(i)}
+                              disabled={loading || microFixing}
+                              className="mt-1 ml-4 text-[11px] text-emerald-700 hover:text-emerald-900 disabled:opacity-50"
+                            >
+                              {microFixing && microFixingIndex === i ? '修复中…' : '修这条'}
+                            </button>
+                          )}
+                        </li>
+                      ))}
                     </ul>
                   </div>
                 )}

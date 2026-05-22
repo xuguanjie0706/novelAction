@@ -19,6 +19,7 @@ from app.routers.ai import (  # noqa: E402
     draft_routes,
     gated_draft_routes,
     memory_routes,
+    quality_check_micro_fix_routes,
     quality_debt_fix_routes,
     quality_routes,
     reader_simulation_routes,
@@ -34,6 +35,7 @@ router.include_router(draft_routes.router)
 router.include_router(gated_draft_routes.router)
 router.include_router(debrief_routes.router)
 router.include_router(quality_debt_fix_routes.router)
+router.include_router(quality_check_micro_fix_routes.router)
 router.include_router(reader_simulation_routes.router)
 router.include_router(scene_routes.router)
 router.include_router(world_settings_generate_routes.router)

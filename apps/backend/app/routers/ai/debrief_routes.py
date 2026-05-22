@@ -165,6 +165,8 @@ def chapter_debrief(
     updated_storylines: List[str] = []
     added_memories: List[str] = []
     _new_memory_chunks: List[MemoryChunk] = []
+    # 收集本次复盘中角色位置变动涉及的地点，复盘提交后异步触发 Location 台账入库
+    _new_location_entries: list[dict] = []
     chapter_index_saved = False
     chapter_index_error: Optional[str] = None
     # 境界序号单调性 guard：收集被阻止的降级操作，回传给前端提示作者检查
@@ -326,6 +328,10 @@ def chapter_debrief(
                     added_memories.append(_realm_mc_from_ms.title)
         if cu.current_location is not None:
             char.current_location = cu.current_location.strip()[:200]
+            # 收集有效的地点名，供复盘后 Location 台账自动入库
+            _loc_name = char.current_location.strip()
+            if _loc_name:
+                _new_location_entries.append({"name": _loc_name, "char_name": char.name})
         if cu.current_status is not None:
             normalized_status = normalize_character_status(cu.current_status)
             if normalized_status:
@@ -818,6 +824,22 @@ def chapter_debrief(
             )
         )
 
+    # 有位置变动时，后台触发 Location 台账自动入库（新建地点或补全感官基准）
+    if _new_location_entries:
+        from app.services.ai.location_debrief import enrich_new_locations
+        _chapter_content_for_loc = (chapter.content or "").strip()
+        _chapter_title_for_loc = chapter.title or ""
+        schedule_background_coro(
+            enrich_new_locations(
+                project_id=project_id,
+                location_entries=_new_location_entries,
+                chapter_content=_chapter_content_for_loc,
+                chapter_title=_chapter_title_for_loc,
+                model_profile=conflict_model_profile,  # 复用同线路
+                llm_provider_id=conflict_llm_provider_id,
+            )
+        )
+
     return {
         "ok": True,
         "updated_characters": updated_chars,
@@ -835,6 +857,8 @@ def chapter_debrief(
         # 被境界序号单调性 guard 阻止的降级操作；非空时前端应弹出警告提示作者检查复盘
         "realm_rank_warnings": realm_rank_warnings,
         "replaced_prior_debrief": debrief_replacing_prior,
+        # 本次复盘触发的地点台账入库数（后台异步，仅反映触发数量）
+        "new_locations_detected": len(_new_location_entries),
         "message": result_message,
     }
 

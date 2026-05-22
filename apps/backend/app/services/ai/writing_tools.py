@@ -51,6 +51,7 @@ class WritingToolsMixin:
         power_systems_summary: str = "",     # 境界体系摘要（含各阶名称与规则）
         outline_context: str = "",           # 本章大纲五要素（hook/summary/conflict/highlight/milestone）
         phase: str = "",                     # 章节所在阶段（opening/rising/turning/dark_hour/climax/ending）
+        transition_menu: str = "",           # 开篇衔接技法菜单（由 transition_advisor 生成，注入衔接决策）
     ) -> dict:
         """
         写前预警：像一位有30年经验的网文主编，在落笔前把本章的「坑、约束、写法」全交代清楚。
@@ -112,9 +113,10 @@ class WritingToolsMixin:
 
 【历史记忆库（事件/状态/冲突）】
 {self._clip_context(mem_block, 2500, None, field_name="memory_chunks")}
+{self._clip_context(transition_menu, 1200, None, field_name="transition_menu") if transition_menu else ""}
 
 ══════════════════════════════════════
-请以「三十年主编」的视角完成以下四件事，**全部输出到 JSON**：
+请以「三十年主编」的视角完成以下五件事，**全部输出到 JSON**：
 
 ① 主角状态锁定（protagonist_fact_sheet）
    核对上述资料，锁定本章开笔时主角的精确状态，AI 写正文必须严格遵守这份清单：
@@ -146,6 +148,12 @@ class WritingToolsMixin:
    - ooc：人物OOC（行为与性格/价值观/创伤明显冲突）
    - pacing：节奏预警（与前章钩子期望落差）
 
+⑥ 开篇衔接策略（transition_directive）—— 仅当上方提供了「开篇衔接需求分析」时填写
+   根据提供的衔接技法菜单和本章实际情况，为写章 AI 给出可执行的转场/破境指令：
+   - spatial_bridge：空间衔接（若本章起点≠记录位置，或新章需要明确交代空间）
+   - realm_bridge：破境衔接（仅当本章有实力里程碑时填，否则 needed=false）
+   每个指令必须包含：needed(bool)、technique_id、technique_name、instruction（一到两句可执行指令）
+
 返回 JSON（所有字段必须存在，无内容填空数组/空字符串）：
 {{
   "ok": true,
@@ -158,7 +166,7 @@ class WritingToolsMixin:
     "forbidden": ["不能使用X（原因）", "不能出现Y（原因）"]
   }},
   "writing_brief": {{
-    "opening_strategy": "具体的开篇切入建议，一到两句话",
+    "opening_strategy": "具体的开篇切入建议（若有衔接需求，请直接引用所选技法名并说明起手方式）",
     "conflict_structure": "节拍1 → 节拍2 → 节拍3（每个节拍一句话描述）",
     "closing_hook": "章末钩子的具体设计，一到两句话",
     "word_rhythm": "哪段详写、哪段略写的建议"
@@ -181,9 +189,24 @@ class WritingToolsMixin:
   ],
   "reminders": [
     "一句话写作提醒（如：本章主角境界是X，不能使用Y技能）"
-  ]
+  ],
+  "transition_directive": {{
+    "spatial_bridge": {{
+      "needed": true,
+      "technique_id": "time_stamp",
+      "technique_name": "时间标注法",
+      "instruction": "本章开篇第一句：「三日后，绝命谷底——」，随后用感官细节锚定场景"
+    }},
+    "realm_bridge": {{
+      "needed": false,
+      "technique_id": "none",
+      "technique_name": "无需破境",
+      "instruction": ""
+    }}
+  }}
 }}
-若无风险则 risks 为空数组，ok=true；有 high/critical 风险则 ok=false。"""
+若无风险则 risks 为空数组，ok=true；有 high/critical 风险则 ok=false。
+若未提供衔接需求分析，transition_directive 两个 needed 均填 false，instruction 填空字符串。"""
 
         response = await self._call_ai(
             system,
@@ -230,6 +253,27 @@ class WritingToolsMixin:
                 "word_rhythm": _str(writing_brief_raw.get("word_rhythm")),
             }
 
+            # 提取 transition_directive（含安全回退）
+            _td_raw = data.get("transition_directive") or {}
+            if not isinstance(_td_raw, dict):
+                _td_raw = {}
+
+            def _bridge(key: str) -> dict:
+                b = _td_raw.get(key) or {}
+                if not isinstance(b, dict):
+                    b = {}
+                return {
+                    "needed": bool(b.get("needed", False)),
+                    "technique_id": _str(b.get("technique_id")),
+                    "technique_name": _str(b.get("technique_name")),
+                    "instruction": _str(b.get("instruction")),
+                }
+
+            transition_directive = {
+                "spatial_bridge": _bridge("spatial_bridge"),
+                "realm_bridge": _bridge("realm_bridge"),
+            }
+
             return {
                 "ok": not has_critical,
                 "risk_count": len(risks),
@@ -245,14 +289,17 @@ class WritingToolsMixin:
                 "hallucination_traps": _strlist(data.get("hallucination_traps")),
                 "risks": risks[:15],
                 "reminders": reminders[:10],
+                "transition_directive": transition_directive,
             }
         except Exception as e:
+            _empty_bridge = {"needed": False, "technique_id": "", "technique_name": "", "instruction": ""}
             return {
                 "ok": True, "risk_count": 0,
                 "protagonist_fact_sheet": {"realm": "", "location": "", "key_skills": [], "key_items": [], "forbidden": []},
                 "writing_brief": {"opening_strategy": "", "conflict_structure": "", "closing_hook": "", "word_rhythm": ""},
                 "must_events": [], "hallucination_traps": [],
                 "risks": [], "reminders": [],
+                "transition_directive": {"spatial_bridge": _empty_bridge, "realm_bridge": _empty_bridge},
                 "error": str(e), "raw": response[:300],
             }
 

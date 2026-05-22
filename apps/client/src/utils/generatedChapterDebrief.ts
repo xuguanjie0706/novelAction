@@ -1,5 +1,6 @@
 import { aiApi, charactersApi } from '../api/client'
 import { useAppStore } from '../store'
+import type { Character } from '../types'
 
 type ModelProfile = 'local' | 'gemini'
 type MemoryType = 'event' | 'character_state' | 'foreshadow' | 'setting' | 'conflict'
@@ -173,7 +174,7 @@ export async function autoCommitGeneratedChapterDebrief(
 
   try {
     const refreshed = await charactersApi.list(projectId)
-    refreshed.data.forEach((c) => useAppStore.getState().upsertCharacter(c))
+    refreshed.data.forEach((c: Character) => useAppStore.getState().upsertCharacter(c))
   } catch {
     /* 人物库刷新失败不阻断队列续写 */
   }

@@ -8,14 +8,13 @@ from sqlalchemy.orm import Session
 from uuid import UUID
 
 from app.database import get_db
-from app.models import Chapter, ChapterVersion, QualityDebt
-from app.routers.chapters import count_words
-from app.schemas.chapter import ChapterOut
+from app.models import QualityDebt
+from app.routers.ai.micro_patch_apply import apply_micro_patch_to_chapter
 from app.routers.ai.quality_debt import resolve_chapter_for_quality_debt
+from app.schemas.chapter import ChapterOut
 from app.services.ai_service import AIService
 from app.utils.chapter_manuscript import (
     html_to_plain_for_revision,
-    plain_text_blocks_to_html,
     split_plain_manuscript_and_index_block,
 )
 
@@ -63,7 +62,7 @@ async def quality_debt_micro_fix(
         raise HTTPException(404, "Chapter not found")
 
     plain = html_to_plain_for_revision(chapter.content)
-    body, index_block = split_plain_manuscript_and_index_block(plain)
+    body, _index_block = split_plain_manuscript_and_index_block(plain)
     if not (body or "").strip():
         raise HTTPException(400, "章节叙事正文为空，无法进行局部微调")
 
@@ -99,51 +98,35 @@ async def quality_debt_micro_fix(
             },
         )
 
-    count = body.count(orig)
-    if count == 0:
-        raise HTTPException(
-            422,
-            detail={
-                "message": "模型给出的原文摘录在正文中未找到（可能标点/空格不一致），请手动微调或改用整章重写",
-                "rationale": rationale,
-            },
-        )
-    if count > 1:
-        raise HTTPException(
-            422,
-            detail={
-                "message": f"摘录在正文中出现 {count} 次，无法安全自动替换；请缩短/加长摘录锚点或改用整章重写",
-                "rationale": rationale,
-            },
-        )
-
-    new_body = body.replace(orig, repl, 1)
-    new_plain = new_body + (f"\n\n{index_block}" if index_block else "")
-    new_html = plain_text_blocks_to_html(new_plain)
-
-    snap_tail = f"\n\n--- quality_debt_micro_patch ---\n{orig}\n=>\n{repl}\n"
-    prev_snap = (chapter.manuscript_raw_snapshot or "").strip()
-    manuscript_raw_snapshot = (prev_snap + snap_tail).strip() if prev_snap else snap_tail.strip()
-
     try:
-        if (chapter.content or "").strip():
-            snap_wc = count_words(chapter.content or "")
-            db.add(
-                ChapterVersion(
-                    chapter_id=chapter.id,
-                    content=chapter.content,
-                    word_count=snap_wc,
-                    note="质量债务局部微调前自动备份",
-                    is_auto=True,
-                )
-            )
-            db.flush()
-    except Exception:
-        pass
+        apply_micro_patch_to_chapter(
+            db,
+            chapter,
+            original_excerpt=orig,
+            replacement_excerpt=repl,
+            snapshot_tag="quality_debt_micro_patch",
+            version_note="质量债务局部微调前自动备份",
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        if "未找到" in msg:
+            raise HTTPException(
+                422,
+                detail={
+                    "message": "模型给出的原文摘录在正文中未找到（可能标点/空格不一致），请手动微调或改用整章重写",
+                    "rationale": rationale,
+                },
+            ) from exc
+        if "出现" in msg and "次" in msg:
+            raise HTTPException(
+                422,
+                detail={
+                    "message": msg + "；请缩短/加长摘录锚点或改用整章重写",
+                    "rationale": rationale,
+                },
+            ) from exc
+        raise HTTPException(400, detail=msg) from exc
 
-    chapter.content = new_html
-    chapter.word_count = count_words(new_html)
-    chapter.manuscript_raw_snapshot = manuscript_raw_snapshot[:200000]
     debt.status = "resolved"
     db.commit()
     db.refresh(chapter)

@@ -638,6 +638,27 @@ export const aiApi = {
     original_excerpt?: string
     replacement_excerpt?: string
   }>(`/projects/${pid}/ai/quality-debt-micro-fix`, data),
+  /**
+   * 章节质检：按优化建议局部改正文（摘录替换，非整章流式重写）。
+   * 默认使用章节 ``last_quality_report``；可传 ``focus_suggestion_index`` 只修一条建议。
+   */
+  qualityCheckMicroFix: (
+    pid: string,
+    data: {
+      chapter_id: string
+      suggestions?: string[]
+      issues?: string[]
+      focus_suggestion_index?: number
+      author_notes?: string
+      model_profile?: 'local' | 'gemini'
+      llm_provider_id?: string
+    },
+  ) => api.post<{
+    chapter: Chapter
+    rationale?: string
+    original_excerpt?: string
+    replacement_excerpt?: string
+  }>(`/projects/${pid}/ai/quality-check-micro-fix`, data),
   listChatMessages: (
     pid: string,
     params: { context_type: 'outline' | 'writing' | 'general'; chapter_id?: string },

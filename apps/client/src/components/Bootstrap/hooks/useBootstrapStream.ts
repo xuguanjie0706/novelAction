@@ -38,6 +38,8 @@ export type StepKey =
   | 'skills' | 'items' | 'settings'
   | 'volumes' | 'memory' | 'relations'
   | 'opening_contract' | 'consistency'
+  /** 时间轴汇总 / 落库中（仅 UI 图标，非 graph 步骤） */
+  | 'all' | 'saving'
   // 番茄专属步骤
   | 'contrast_design' | 'golden_finger' | 'face_slap_map'
   | 'power_ladder' | 'opening_5chapters' | 'rhythm_map' | 'signal_audit'
@@ -99,6 +101,8 @@ export const STEP_META: Record<StepKey, {
   relations:        { icon: '🕸️', stepColor: '#22c55e', phase: 'characters', stepNum: 'STEP 11',   desc: '建立人物关系网络，明确情感张力与社会结构' },
   opening_contract: { icon: '🤝', stepColor: '#22c55e', phase: 'narrative',  stepNum: 'STEP 12',   desc: '明确前10章对读者的追读承诺，防止开局流失' },
   consistency:      { icon: '🔍', stepColor: '#ef4444', phase: 'qa',         stepNum: 'STEP 13',   desc: '交叉核验所有生成物，标出矛盾与需要确认的问题' },
+  all:              { icon: '📋', stepColor: '#94a3b8', phase: 'qa',         stepNum: '—',         desc: '全部步骤汇总视图' },
+  saving:           { icon: '💾', stepColor: '#94a3b8', phase: 'qa',         stepNum: '—',         desc: '正在写入数据库' },
 
   // 番茄专属步骤
   contrast_design:   { icon: '📉', stepColor: '#f97316', phase: 'foundation', stepNum: 'FQ-1',  desc: '设计主角落差（初始状态→触发事件），触发点锁定800字内' },

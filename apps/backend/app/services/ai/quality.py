@@ -264,20 +264,22 @@ class QualityMixin:
             + body[-4000:]
         )
 
-    async def quality_debt_micro_patch(
+    async def quality_micro_patch(
         self,
         narrative_body: str,
         chapter_title: str,
-        debt_summary: str,
-        suggested_fix: str,
-        author_notes: str,
+        problem_summary: str,
+        fix_direction: str,
+        author_notes: str = "",
+        *,
+        operation: str = "quality_micro_patch",
     ) -> dict:
         """
-        针对单条质量债务，让模型给出「原文连续摘录 → 替换文」；
+        根据问题摘要与修正方向，让模型给出「原文连续摘录 → 替换文」；
         由路由在**完整叙事正文**上校验唯一匹配后做字符串级替换。
         """
         window = self._micro_patch_narrative_window(narrative_body)
-        sf = (suggested_fix or "").strip()
+        sf = (fix_direction or "").strip()
         an = (author_notes or "").strip()
         system = "你是网络小说正文编辑，只输出可机读的局部替换 JSON，不要任何多余文字。"
         prompt = f"""章节标题：{chapter_title}
@@ -286,8 +288,8 @@ class QualityMixin:
 【正文窗口】
 {window}
 
-【待消除的质量债务】
-{debt_summary}
+【待修正的问题】
+{problem_summary}
 
 【建议修正方向】
 {sf or "（未给出；请结合问题自行给出最小改写）"}
@@ -296,7 +298,7 @@ class QualityMixin:
 {an or "（无）"}
 
 规则：
-1. 找出与上述问题直接相关、且必须修改才能消除债务的**最小连续片段**（可含换行；从窗口中肉眼可抄录）。
+1. 找出与上述问题直接相关、且必须修改才能落实建议的**最小连续片段**（可含换行；从窗口中肉眼可抄录）。
 2. `original_excerpt` 必须从上面【正文窗口】里**原样复制**（勿改写标点），长度约 15～500 字为宜。
 3. 该片段在**整章完整叙事正文**（不仅是窗口）中应**恰好出现 1 次**。若你判断会出现多次、或需改多处、或窗口中无法定位，则将 original_excerpt、replacement_excerpt 都设为 ""，并在 rationale 写明原因（如 duplicate_span / need_multi_edit / need_tail）。
 4. `replacement_excerpt` 为替换后的文字，人称/时态/语体与上下文一致；禁止借机扩写无关新剧情。
@@ -313,7 +315,7 @@ class QualityMixin:
                 system,
                 prompt,
                 max_tokens=max_tokens_quality_micro_patch(large),
-                context={"operation": "quality_debt_micro_patch", "chapter_title": chapter_title},
+                context={"operation": operation, "chapter_title": chapter_title},
                 task="quality.micro_patch",
             )
         except Exception as e:
@@ -347,5 +349,41 @@ class QualityMixin:
                 "rationale": "parse_error",
                 "raw": response[:800] if isinstance(response, str) else "",
             }
+
+    async def quality_debt_micro_patch(
+        self,
+        narrative_body: str,
+        chapter_title: str,
+        debt_summary: str,
+        suggested_fix: str,
+        author_notes: str,
+    ) -> dict:
+        """质量债务台账条目对应的局部微调（兼容旧调用名）。"""
+        return await self.quality_micro_patch(
+            narrative_body,
+            chapter_title,
+            debt_summary,
+            suggested_fix,
+            author_notes,
+            operation="quality_debt_micro_patch",
+        )
+
+    async def quality_report_micro_patch(
+        self,
+        narrative_body: str,
+        chapter_title: str,
+        problem_summary: str,
+        fix_direction: str,
+        author_notes: str = "",
+    ) -> dict:
+        """章节质检报告优化建议对应的局部微调。"""
+        return await self.quality_micro_patch(
+            narrative_body,
+            chapter_title,
+            problem_summary,
+            fix_direction,
+            author_notes,
+            operation="quality_check_micro_patch",
+        )
 
     # ── 多章节连贯性检测 ────────────────────────────────

@@ -29,13 +29,18 @@ def lint_volume(
     planned = planned_chapters or 30
     count = len(chapters)
 
-    if count != planned:
+    # VL-01：章数不符降为 high（非阻断）。
+    # AI 截断是 token / 模型问题，不应阻断用户查看已生成内容；
+    # ±2 章容差（极小误差可接受），超出则警告。
+    _tolerance = 2
+    if abs(count - planned) > _tolerance:
+        severity_vl01 = "high"  # 原 critical 已从 BLOCKING_RULE_IDS 移除
         issues.append(LinterIssue(
             rule_id="VL-01",
-            severity="critical",
+            severity=severity_vl01,
             scope="volume",
-            message=f"章纲数量 {count} 与卷配额 {planned} 不符",
-            suggestion="补章或删章，禁止静默截断",
+            message=f"章纲数量 {count} 与卷配额 {planned} 不符（差 {planned - count:+d} 章）",
+            suggestion="重新生成或强制采用后在大纲页手动补章",
         ))
 
     orders = [ch.sort_order for ch in chapters]

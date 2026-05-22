@@ -45,7 +45,7 @@ export default function OutlinePage() {
    * 生成完成后自动切到「章纲检测」Tab。
    */
   const {
-    volExpandState, linterTabVolumeId, dismissExpand, viewLinter, sidebarCallbacks,
+    volExpandState, linterTabVolumeId, dismissExpand, viewLinter, forceAccept, sidebarCallbacks,
   } = useVolExpandBridge({ setSelected, setContentTab, setActiveNodeTab: () => {} })
   const [outlineRevisions, setOutlineRevisions] = useState<any[]>([])
   const [compareBaseRevisionId, setCompareBaseRevisionId] = useState<string | null>(null)
@@ -497,10 +497,15 @@ export default function OutlinePage() {
                 state={volExpandState}
                 onDismiss={dismissExpand}
                 onViewLinter={viewLinter}
+                onForceAccept={
+                  selected && volExpandState.linterBlocked
+                    ? () => forceAccept(selected, reload).catch(() => toast.error('强制采用失败，请重试'))
+                    : undefined
+                }
               />
             )}
             <NodeDetailPanel
-              key={`${selected.id}-${linterTabVolumeId === selected.id ? 'linter' : 'default'}`}
+              key={`${selected.id}-${linterTabVolumeId === selected.id ? 'quality' : 'default'}`}
               node={selected}
               projectId={projectId!}
               onOpenChapter={() => openChapterFromNode(selected)}
@@ -517,7 +522,12 @@ export default function OutlinePage() {
                 setRepairLinterMustFix(chapters)
                 handleDispatchOutlineRepair('volume', selected)
               }}
-              initialTab={linterTabVolumeId === selected.id ? 'linter' : undefined}
+              onForceAccept={
+                Boolean(selected?.extra?.linter_blocked)
+                  ? () => forceAccept(selected, reload).catch(() => toast.error('强制采用失败，请重试'))
+                  : undefined
+              }
+              initialTab={linterTabVolumeId === selected.id ? 'quality' : undefined}
             />
           </div>
         ) : (

@@ -1,17 +1,14 @@
 """
-Generation Service — 一句话创意 → 全量小说初始化
+Generation Service — 小说 AI 生成服务容器
 
-方案 A (sequential): 多步串行，每步独立 prompt；线路由 AIService(model_profile, llm_provider_id) 决定
-方案 B (single_shot): 单次全量生成，默认推荐；线路同上
+Bootstrap 串行步进流程的 SSE 编排已迁移到 services/bootstrap/graph.py（LangGraph）。
+本服务类作为步骤调用的容器（svc）持续使用：graph_nodes.py 通过 _make_svc() 构造实例，
+再调用 svc._gen_* 代理方法（每个代理指向 steps/ 子包对应函数）。
 
-SSE 事件格式:
-  {"event": "step_start", "step": "project",  "label": "生成项目基础信息..."}
-  {"event": "step_done",  "step": "project",  "count": 1, "preview": "《书名》玄幻"}
-  {"event": "complete",   "project_id": "uuid"}
-  {"event": "error",      "step": "characters", "message": "..."}
+向后兼容导出：旧代码通过 `generation_service._parse_json` 等模块属性访问的符号
+由 __getattr__ 和顶层 import 维持。
 """
-import asyncio
-from typing import AsyncGenerator, Literal, Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -20,13 +17,12 @@ from app.config import settings
 from app.services.ai_service import AIService
 from app.models import Project, WorldSetting
 
-# ── Bootstrap 子包：解析 / SSE / Prompt / 上下文 ────────────────────
+# ── Bootstrap 子包：解析 / Prompt / 上下文（向后兼容 re-export）──────
 from app.services.bootstrap.parse import (
     parse_json as _parse_json,
     coerce_power_system_rank as _coerce_power_system_rank,
     safe_int as _safe_int,
 )
-from app.services.bootstrap.sse import sse as _sse
 from app.services.bootstrap.prompts import (
     GEMINI_SETTING_BLUEPRINTS,
     SETTING_CARD_SCHEMA_BRIEF as _SETTING_CARD_SCHEMA_BRIEF,
@@ -40,7 +36,6 @@ from app.services.bootstrap.prompts import (
     setting_blueprints_for_prompt as _setting_blueprints_for_prompt,
     setting_extra_with_defaults as _setting_extra_with_defaults,
     book_length_constraints_for_prompt as _book_length_constraints_for_prompt,
-    single_shot_prompt as _single_shot_prompt,
 )
 from app.services.bootstrap.context import (
     get_genre_kit_block as _get_genre_kit_block,
@@ -124,313 +119,11 @@ class GenerationService:
         rows = await gen_settings_append(self, project, ctx, user_hint=hint, count=n)
         return {"mode": mode, "created_count": len(rows), "settings": rows}
 
-    async def bootstrap(
-        self,
-        logline: str,
-        premise: str = "",
-        mode: Literal["sequential", "single_shot"] = "sequential",
-        target_words: int = 1_200_000,
-    ) -> AsyncGenerator[str, None]:
-        if mode == "single_shot":
-            async for chunk in self._single_shot(logline, premise, target_words=target_words):
-                yield chunk
-        else:
-            async for chunk in self._sequential(logline, premise, target_words=target_words):
-                yield chunk
-
-    async def _sequential(self, logline: str, premise: str = "", target_words: int = 1_200_000) -> AsyncGenerator[str, None]:
-        ctx = {"logline": logline, "premise": premise, "target_words": target_words}
-        project = None
-
-        try:
-            yield _sse("step_start", step="positioning", label="召开立项会议（题材定位）...")
-            positioning = await self._gen_positioning(ctx)
-            ctx["positioning"] = positioning
-            yield _sse(
-                "step_done",
-                step="positioning",
-                count=1,
-                preview=positioning.get("selling_point", "")[:30] if positioning else "",
-            )
-
-            yield _sse("step_start", step="project", label="生成项目基础信息...")
-            project, ctx = await self._gen_project(ctx)
-            yield _sse("step_done", step="project", count=1,
-                       preview=f"《{project.title}》{project.genre}")
-
-            yield _sse("step_start", step="power_systems", label="生成境界体系...")
-            try:
-                power_systems = await asyncio.wait_for(
-                    self._gen_power_systems(project, ctx),
-                    timeout=180.0,
-                )
-            except asyncio.TimeoutError:
-                yield _sse("error", step="power_systems", message="境界体系生成超时（3分钟），已跳过")
-                power_systems = []
-            except Exception as e:
-                yield _sse("error", step="power_systems", message=f"境界体系生成失败：{e}")
-                power_systems = []
-            yield _sse("step_done", step="power_systems", count=len(power_systems),
-                       preview=power_systems[0].name if power_systems else "（跳过）")
-
-            yield _sse("step_start", step="factions", label="生成势力体系...")
-            try:
-                factions = await asyncio.wait_for(
-                    self._gen_factions(project, ctx),
-                    timeout=180.0,
-                )
-            except asyncio.TimeoutError:
-                yield _sse("error", step="factions", message="势力生成超时（3分钟），已跳过")
-                factions = []
-            except Exception as e:
-                yield _sse("error", step="factions", message=f"势力生成失败：{e}")
-                factions = []
-            yield _sse("step_done", step="factions", count=len(factions),
-                       preview="、".join(f.name for f in factions[:3]) if factions else "（跳过）")
-
-            yield _sse("step_start", step="storylines", label="生成故事线...")
-            try:
-                storylines = await asyncio.wait_for(
-                    self._gen_storylines(project, ctx),
-                    timeout=180.0,
-                )
-            except asyncio.TimeoutError:
-                yield _sse("error", step="storylines", message="故事线生成超时（3分钟），已跳过")
-                storylines = []
-            except Exception as e:
-                yield _sse("error", step="storylines", message=f"故事线生成失败：{e}")
-                storylines = []
-            yield _sse("step_done", step="storylines", count=len(storylines))
-
-            yield _sse("step_start", step="characters", label="生成人物库...")
-            try:
-                chars = await asyncio.wait_for(
-                    self._gen_characters(project, ctx),
-                    timeout=240.0,
-                )
-            except asyncio.TimeoutError:
-                yield _sse("error", step="characters", message="人物生成超时（4分钟），已跳过")
-                chars = []
-            except Exception as e:
-                yield _sse("error", step="characters", message=f"人物生成失败：{e}")
-                chars = []
-            ctx.setdefault("protagonist", "主角")
-            yield _sse("step_done", step="characters", count=len(chars),
-                       preview="、".join(c.name for c in chars[:3]) if chars else "（跳过）")
-
-            yield _sse("step_start", step="skills", label="生成核心功法技能...")
-            yield _sse("step_start", step="items", label="生成关键道具法宝...")
-            try:
-                si_results = await asyncio.wait_for(
-                    asyncio.gather(
-                        self._gen_key_skills(project, ctx),
-                        self._gen_key_items(project, ctx),
-                        return_exceptions=True,
-                    ),
-                    timeout=180.0,
-                )
-            except asyncio.TimeoutError:
-                for step_name in ("skills", "items"):
-                    yield _sse("error", step=step_name, message="并行生成超时（3分钟），已跳过")
-                si_results = [[], []]
-            skills = si_results[0] if not isinstance(si_results[0], BaseException) else []
-            items = si_results[1] if not isinstance(si_results[1], BaseException) else []
-            for step_name, result in zip(("skills", "items"), si_results):
-                if isinstance(result, BaseException):
-                    yield _sse("error", step=step_name, message=f"生成失败：{result}")
-            yield _sse("step_done", step="skills", count=len(skills))
-            yield _sse("step_done", step="items", count=len(items))
-
-            yield _sse("step_start", step="settings", label="生成世界观设定卡...")
-            try:
-                settings_rows = await asyncio.wait_for(
-                    self._gen_settings(project, ctx),
-                    timeout=270.0,
-                )
-            except asyncio.TimeoutError:
-                yield _sse("error", step="settings", message="世界观设定生成超时（4.5分钟），已跳过")
-                settings_rows = []
-            except Exception as e:
-                yield _sse("error", step="settings", message=f"世界观设定生成失败：{e}")
-                settings_rows = []
-            if not ctx.get("settings_summary"):
-                ctx["settings_summary"] = "（世界观设定生成失败）"
-            yield _sse("step_done", step="settings", count=len(settings_rows))
-
-            yield _sse("step_start", step="volumes", label="规划卷级结构...")
-            try:
-                nodes = await asyncio.wait_for(
-                    self._gen_volumes(project, ctx),
-                    timeout=240.0,
-                )
-            except asyncio.TimeoutError:
-                yield _sse("error", step="volumes", message="卷级结构生成超时（4分钟），已跳过")
-                nodes = []
-            except Exception as e:
-                from app.services.llm_errors import format_llm_error_message
-
-                yield _sse(
-                    "error",
-                    step="volumes",
-                    message=f"卷级结构生成失败：{format_llm_error_message(e)}",
-                )
-                nodes = []
-            yield _sse("step_done", step="volumes", count=len(nodes),
-                       preview=f"共{len(nodes)}卷" if nodes else "（跳过）")
-
-            yield _sse("step_start", step="memory", label="生成记忆库种子...")
-            try:
-                mems = await asyncio.wait_for(
-                    self._gen_memory(project, ctx),
-                    timeout=180.0,
-                )
-            except asyncio.TimeoutError:
-                yield _sse("error", step="memory", message="记忆库生成超时（3分钟），已跳过")
-                mems = []
-            except Exception as e:
-                yield _sse("error", step="memory", message=f"记忆库生成失败：{e}")
-                mems = []
-            yield _sse("step_done", step="memory", count=len(mems))
-
-            yield _sse("step_start", step="relations", label="建立人物关系...")
-            try:
-                rels = await asyncio.wait_for(
-                    self._gen_relations(project, chars, ctx),
-                    timeout=180.0,
-                )
-            except asyncio.TimeoutError:
-                yield _sse("error", step="relations", message="人物关系生成超时（3分钟），已跳过")
-                rels = []
-            except Exception as e:
-                yield _sse("error", step="relations", message=f"人物关系生成失败：{e}")
-                rels = []
-            yield _sse("step_done", step="relations", count=len(rels))
-
-            yield _sse("step_start", step="opening_contract", label="规划开局追读承诺...")
-            try:
-                opening_contract = await asyncio.wait_for(
-                    self._gen_opening_contract(project, ctx),
-                    timeout=180.0,
-                )
-            except asyncio.TimeoutError:
-                yield _sse("error", step="opening_contract", message="开局承诺生成超时（3分钟），已跳过")
-                opening_contract = {}
-            except Exception as e:
-                yield _sse("error", step="opening_contract", message=f"开局承诺生成失败：{e}")
-                opening_contract = {}
-            yield _sse(
-                "step_done",
-                step="opening_contract",
-                count=1 if opening_contract else 0,
-                preview=opening_contract.get("chapter1_hook", "")[:30] if opening_contract else "（跳过）",
-            )
-
-            yield _sse("step_start", step="vol1_chapters", label="生成第一卷章级大纲...")
-            try:
-                vol1_plans = await asyncio.wait_for(
-                    self._gen_vol1_chapter_plans(project, nodes, ctx),
-                    timeout=300.0,
-                )
-            except asyncio.TimeoutError:
-                yield _sse("error", step="vol1_chapters", message="章级大纲生成超时（5分钟），已跳过")
-                vol1_plans = []
-            except Exception as e:
-                yield _sse("error", step="vol1_chapters", message=f"章级大纲生成失败：{e}")
-                vol1_plans = []
-            from app.services.outline_linter.sse_payload import build_vol1_chapters_sse_payload
-
-            vol1_node = nodes[0] if nodes else None
-            if vol1_node:
-                self.db.refresh(vol1_node)
-            sse_vol1 = build_vol1_chapters_sse_payload(
-                vol1_plans,
-                ctx,
-                volume_extra=(
-                    vol1_node.extra
-                    if vol1_node and isinstance(vol1_node.extra, dict)
-                    else None
-                ),
-            )
-            linter_msg = sse_vol1.pop("linter_message", None)
-            if sse_vol1.get("linter_blocked") and linter_msg:
-                yield _sse("error", step="vol1_chapters", message=linter_msg)
-            yield _sse("step_done", step="vol1_chapters", **sse_vol1)
-
-            yield _sse("step_start", step="ch1_scenes", label="生成第1章场景蓝图...")
-            try:
-                ch1_scenes = await asyncio.wait_for(
-                    self._gen_ch1_scenes(project, vol1_plans, ctx),
-                    timeout=180.0,
-                )
-            except asyncio.TimeoutError:
-                yield _sse("error", step="ch1_scenes", message="场景蓝图生成超时（3分钟），已跳过")
-                ch1_scenes = []
-            except Exception as e:
-                yield _sse("error", step="ch1_scenes", message=f"场景蓝图生成失败：{e}")
-                ch1_scenes = []
-            yield _sse(
-                "step_done",
-                step="ch1_scenes",
-                count=len(ch1_scenes),
-                preview=f"第1章共{len(ch1_scenes)}场" if ch1_scenes else "（跳过）",
-            )
-
-            yield _sse("step_start", step="consistency", label="全局一致性扫描...")
-            try:
-                consistency_issues = await asyncio.wait_for(
-                    self._gen_consistency_scan(project, ctx),
-                    timeout=180.0,
-                )
-            except asyncio.TimeoutError:
-                yield _sse("error", step="consistency", message="一致性扫描超时（3分钟），已跳过")
-                consistency_issues = []
-            except Exception as e:
-                yield _sse("error", step="consistency", message=f"一致性扫描失败：{e}")
-                consistency_issues = []
-            yield _sse(
-                "step_done",
-                step="consistency",
-                count=len(consistency_issues),
-                preview=f"发现{len(consistency_issues)}处需确认项" if consistency_issues else "无明显矛盾",
-            )
-
-            yield _sse("complete", project_id=str(project.id))
-
-        except Exception as e:
-            if project is not None:
-                yield _sse("error", message=f"生成中断（{e}），已完成部分内容已保存", partial=True)
-                yield _sse("complete", project_id=str(project.id), partial=True)
-            else:
-                yield _sse("error", message=str(e))
-
-    async def _single_shot(self, logline: str, premise: str = "", target_words: int = 1_200_000) -> AsyncGenerator[str, None]:
-        yield _sse("step_start", step="all", label="AI 全量生成中（单次调用）...")
-
-        system = """你是专业的网络小说策划，根据一句话创意生成完整的小说初始化数据。
-严格返回 JSON，不要任何额外文字。"""
-        prompt = _single_shot_prompt(logline, premise, target_words=target_words)
-
-        try:
-            raw = await self.ai._call_ai(
-                system,
-                prompt,
-                max_tokens=settings.GEMINI_SINGLE_SHOT_MAX_TOKENS,
-                context={"operation": "bootstrap_single_shot"},
-                task="bootstrap.single_shot",
-            )
-            data = _parse_json(raw)
-            from app.services.bootstrap import completion
-            data = await completion.complete_single_shot_data(self.ai, data, logline, premise)
-            yield _sse("step_done", step="all", count=1)
-
-            yield _sse("step_start", step="saving", label="写入数据库...")
-            from app.services.bootstrap import save_all
-            project = await save_all.save_all(self, data, logline, premise, target_words=target_words)
-            yield _sse("step_done", step="saving", count=1)
-            yield _sse("complete", project_id=str(project.id))
-
-        except Exception as e:
-            yield _sse("error", step="all", message=str(e))
+    # ── Bootstrap SSE 编排已迁移到 services/bootstrap/graph.py ──────
+    # 入口：POST /api/v1/bootstrap/runs（bootstrap_graph.py 路由）。
+    # 本类保留作为 svc 容器：graph_nodes.py 通过 _make_svc() 构造后
+    # 调用下方 _gen_* 代理方法，各方法再委托 steps/ 子包对应函数。
+    # ────────────────────────────────────────────────────────────────
 
     async def _gen_positioning(self, ctx: dict):
         from app.services.bootstrap.steps.positioning import gen_positioning
@@ -527,9 +220,7 @@ class GenerationService:
 
 
 def __getattr__(name: str):
-    """兼容旧代码对 GEMINI_*_MAX_TOKENS 的模块级访问（值来自 Settings / 环境变量）。"""
-    if name == "GEMINI_SINGLE_SHOT_MAX_TOKENS":
-        return settings.GEMINI_SINGLE_SHOT_MAX_TOKENS
+    """兼容旧代码对 GEMINI_SETTING_COMPLETION_MAX_TOKENS 的模块级访问。"""
     if name == "GEMINI_SETTING_COMPLETION_MAX_TOKENS":
         return settings.GEMINI_SETTING_COMPLETION_MAX_TOKENS
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

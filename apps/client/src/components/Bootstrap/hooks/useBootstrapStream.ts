@@ -3,8 +3,7 @@
  *
  * 职责：
  * - 管理生成流程状态（phase / steps / gate / projectId）
- * - 新版串行：POST /runs → GET /events；支持刷新后 ``reconnectToRun`` 回放事件并重连 SSE（事件带 ``ts`` 时还原步耗时）
- * - single_shot：POST /stream
+ * - 串行 / 番茄专属：POST /runs → GET /events；支持刷新后 ``reconnectToRun`` 回放事件并重连 SSE（事件带 ``ts`` 时还原步耗时）
  * - 会话内 ``sessionStorage`` 记录 run_id（见 ``utils/bootstrapActiveRun``），便于书架/首页提示「继续生成」
  * - ``abortSse``：仅断开当前 fetch/SSE；``cancelRun``：调用 ``POST .../cancel`` 终止后端任务并清理本地状态
  */
@@ -42,7 +41,6 @@ export type StepKey =
   // 番茄专属步骤
   | 'contrast_design' | 'golden_finger' | 'face_slap_map'
   | 'power_ladder' | 'opening_5chapters' | 'rhythm_map' | 'signal_audit'
-  | 'all' | 'saving'
 
 /** SSE linter_issues_top 单项（章纲阻断时附带） */
 export interface LinterIssuePreview {
@@ -76,7 +74,7 @@ export interface StepState {
 
 export interface StartParams {
   logline: string
-  mode: 'sequential' | 'single_shot' | 'fanqie'
+  mode: 'sequential' | 'fanqie'
   targetWords: number
   modelProfile: string
   llmProviderId?: string | null
@@ -101,8 +99,7 @@ export const STEP_META: Record<StepKey, {
   relations:        { icon: '🕸️', stepColor: '#22c55e', phase: 'characters', stepNum: 'STEP 11',   desc: '建立人物关系网络，明确情感张力与社会结构' },
   opening_contract: { icon: '🤝', stepColor: '#22c55e', phase: 'narrative',  stepNum: 'STEP 12',   desc: '明确前10章对读者的追读承诺，防止开局流失' },
   consistency:      { icon: '🔍', stepColor: '#ef4444', phase: 'qa',         stepNum: 'STEP 13',   desc: '交叉核验所有生成物，标出矛盾与需要确认的问题' },
-  all:              { icon: '✨', stepColor: '#f59e0b', phase: 'foundation', stepNum: 'SINGLE',    desc: 'AI 单次全量生成世界蓝图（大上下文模式）' },
-  saving:           { icon: '💾', stepColor: '#06b6d4', phase: 'foundation', stepNum: 'SAVE',      desc: '将生成结果批量写入数据库' },
+
   // 番茄专属步骤
   contrast_design:   { icon: '📉', stepColor: '#f97316', phase: 'foundation', stepNum: 'FQ-1',  desc: '设计主角落差（初始状态→触发事件），触发点锁定800字内' },
   golden_finger:     { icon: '✋', stepColor: '#eab308', phase: 'foundation', stepNum: 'FQ-2',  desc: '设计金手指工程（类型/可视化/成长路线图），核心爽感引擎' },
@@ -456,14 +453,10 @@ export function useBootstrapStream() {
     setActiveLogline(params.logline)
     setPhase('generating')
 
-    if (params.mode === 'single_shot') {
-      setSteps([makeStep('all', 'AI 全量生成（单次调用）'), makeStep('saving', '写入数据库')])
-    } else {
-      setSteps(getStepKeys(params.mode).map(k => makeStep(k)))
-      setGateStep(null)
-      setGateMessage('')
-      setGatePreview(null)
-    }
+    setSteps(getStepKeys(params.mode).map(k => makeStep(k)))
+    setGateStep(null)
+    setGateMessage('')
+    setGatePreview(null)
 
     const abort = new AbortController()
     abortRef.current = abort
@@ -473,38 +466,28 @@ export function useBootstrapStream() {
     }
 
     try {
-      if (params.mode === 'single_shot') {
-        const res = await authFetch('/api/v1/bootstrap/stream', {
-          method: 'POST', signal: abort.signal,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...body, mode: 'single_shot' }),
-        })
-        if (!res.ok) throw new Error(await res.text().catch(() => `请求失败 (${res.status})`))
-        await readSse(res)
-      } else {
-        // sequential 和 fanqie 均走 /runs 新协议
-        const apiMode = params.mode === 'fanqie' ? 'fanqie' : 'sequential'
-        const runRes = await authFetch('/api/v1/bootstrap/runs', {
-          method: 'POST', signal: abort.signal,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...body,
-            mode: apiMode,
-            auto_mode: Boolean(params.autoMode),
-          }),
-        })
-        if (!runRes.ok) throw new Error(await runRes.text().catch(() => `创建失败 (${runRes.status})`))
-        const { run_id } = await runRes.json()
-        setRunId(run_id)
-        saveActiveBootstrapRun({
-          runId: run_id,
-          logline: params.logline,
-          projectId: null,
-        })
-        const evtRes = await authFetch(`/api/v1/bootstrap/runs/${run_id}/events`, { signal: abort.signal })
-        if (!evtRes.ok) throw new Error(`SSE 连接失败 (${evtRes.status})`)
-        await readSse(evtRes)
-      }
+      // sequential 和 fanqie 均走 /runs 协议
+      const apiMode = params.mode === 'fanqie' ? 'fanqie' : 'sequential'
+      const runRes = await authFetch('/api/v1/bootstrap/runs', {
+        method: 'POST', signal: abort.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...body,
+          mode: apiMode,
+          auto_mode: Boolean(params.autoMode),
+        }),
+      })
+      if (!runRes.ok) throw new Error(await runRes.text().catch(() => `创建失败 (${runRes.status})`))
+      const { run_id } = await runRes.json()
+      setRunId(run_id)
+      saveActiveBootstrapRun({
+        runId: run_id,
+        logline: params.logline,
+        projectId: null,
+      })
+      const evtRes = await authFetch(`/api/v1/bootstrap/runs/${run_id}/events`, { signal: abort.signal })
+      if (!evtRes.ok) throw new Error(`SSE 连接失败 (${evtRes.status})`)
+      await readSse(evtRes)
       if (!streamCompleteRef.current && !abort.signal.aborted) {
         setErrorMsg(prev => prev || '连接已结束但未完成生成，请查看后端日志后重试。')
       }
@@ -555,9 +538,7 @@ export function useBootstrapStream() {
 
       // 根据快照中的 mode 还原步骤列表与 ref
       const runMode: StartParams['mode'] =
-        run.mode === 'fanqie' ? 'fanqie'
-        : run.mode === 'single_shot' ? 'single_shot'
-        : 'sequential'
+        run.mode === 'fanqie' ? 'fanqie' : 'sequential'
       currentModeRef.current = runMode
       setSteps(getStepKeys(runMode).map(k => makeStep(k)))
       setActiveLogline((run.logline || opts?.loglineHint || '').trim())

@@ -44,6 +44,51 @@ _get_chapter_phase_guidance = get_chapter_phase_guidance
 
 # ── 已写上下文格式化（动态注入，区别于 editorial 静态块）───────────────────
 
+def _fmt_storyline_names_block(storyline_ids_map: dict[str, str]) -> str:
+    """生成「精确故事线名称」提示块，防止 AI 返回措辞不一致的名称导致挂线失败。
+
+    AI 看到此块后必须从列表中原词填写 storyline_refs，而不是自由发挥名称。
+    """
+    if not storyline_ids_map:
+        return ""
+    names_list = ", ".join(f'"{n}"' for n in storyline_ids_map)
+    return (
+        f"\n【故事线精确名称（storyline_refs 必须从以下名称中原词选择）】\n"
+        f"  可用值：{names_list}\n"
+        f"  ⚠️ 不得使用上方故事线块中显示的类型标签（如 main/romance），必须用此处的中文名称。\n"
+    )
+
+
+def _resolve_storyline_ids(
+    storyline_refs: list[str],
+    storyline_ids_map: dict[str, str],
+) -> list[str]:
+    """将 AI 返回的 storyline_refs 名称列表映射为 DB ID 列表。
+
+    匹配策略（按优先级）：
+    1. 精确匹配（大小写敏感）
+    2. 精确匹配（忽略首尾空格）
+    3. 包含匹配（AI 返回名称包含 DB 名称，或 DB 名称包含 AI 返回名称）
+    4. 不匹配则跳过（不产生空字符串）
+    """
+    resolved: list[str] = []
+    for ref in (storyline_refs or []):
+        ref_stripped = ref.strip()
+        # ① 精确
+        if ref_stripped in storyline_ids_map:
+            resolved.append(storyline_ids_map[ref_stripped])
+            continue
+        # ② 模糊：DB 名是 ref 的子串，或 ref 是 DB 名的子串
+        matched = None
+        for db_name, db_id in storyline_ids_map.items():
+            if db_name in ref_stripped or ref_stripped in db_name:
+                matched = db_id
+                break
+        if matched:
+            resolved.append(matched)
+    return resolved
+
+
 def _fmt_written_summaries(summaries: list[str], max_items: int = 20) -> str:
     """将已写章节摘要压缩为 prompt 块。"""
     if not summaries:
@@ -189,6 +234,9 @@ async def gen_vol_chapter_plans(
     written_block = _fmt_written_summaries(written_summaries)
 
     all_results: list[OutlineNode] = []
+    batch_errors: list[str] = ctx.setdefault("vol_chapter_batch_errors", [])
+    char_name_to_id = ctx.get("char_name_to_id", {})
+    storyline_ids_map = ctx.get("storyline_ids", {})
 
     batch_ranges = [(1, min(30, planned))]
     if planned > 30:
@@ -262,6 +310,7 @@ async def gen_vol_chapter_plans(
             + phase_block             # 节奏约束
             + prev_summary            # 批次延续锚
             + budget_block            # 全书字数预算（防漂移）
+            + _fmt_storyline_names_block(storyline_ids_map)  # 精确故事线名映射（供 AI 原词填写）
             + f"\n\n# 生成要求\n"
             f"请为本卷第{batch_start}～{batch_end}章生成{batch_count}个章节计划，返回JSON数组：\n"
             "[\n"
@@ -306,16 +355,21 @@ async def gen_vol_chapter_plans(
             "有打脸/情感高点+200。请按章节实际情况填写，不要全部填同一个数字。）\n\n"
             "# 编辑铁律（违反任何一条视为不合格输出）\n"
             "1. protagonist_want 必须是「主动欲望」而非「被动应付」——区别：主动=「他想要X」，被动=「他被迫处理Y」\n"
-            "2. choice_cost 不能为空——零代价的选择不是戏剧，必须为下一章留下明确债务\n"
-            "3. end_hook 必须具体到手法（「主角打开了一扇他以为已经关闭的门」比「结局悬念」合格）\n"
-            "4. villain_action 不能只写「（无）」——反派的独立行动是本书节奏的第二引擎\n"
-            "5. core_event 必须是 protagonist_choice 的直接后果，因果链不能断\n"
-            "6. storyline_refs 必须交叉出现，主线不能连续 3 章独占（除非 phase=climax 的最后 5 章）\n"
-            "7. 本卷内至少 2 条贯穿伏笔线：埋入章写「埋[xxx|主题:yyy]」，推进章写「加热[xxx+手法]」，回收章写「收[xxx]」\n"
-            "8. 有未兑现读者承诺（🔴🟠级）的，必须为每条指定具体兑现章节\n"
-            "9. has_face_slap 的频率必须符合立项定位的 face_slap_pattern（不能全是 false）\n"
-            "10. 若 phase=dark_hour，至少 40% 的章节 has_emotional_beat=true，且 pacing 不得连续 3 章是 fast\n"
-            "11. involved_characters 只能使用上方已知人物名，不要发明新名字\n"
+            "2. choice_cost 不能为空字符串——这是最高优先级约束。零代价的选择不是戏剧；"
+            "格式示例：「答应了陆青云的条件，但被迫交出了令牌，下章必须面对陆青云派来监视的人」\n"
+            "3. 章际因果链（SEQ 约束，必须做到）：第 N+1 章的 opening_hook 必须包含第 N 章 choice_cost "
+            "中的关键词或直接后果。示例：上章 choice_cost=「杀了守卫暴露了身份」→ 下章 opening_hook 必须"
+            "写「身份暴露后的追捕/盘问场景」，不能无视这个代价直接写新事件。\n"
+            "4. end_hook 必须具体到手法（「主角打开了一扇他以为已经关闭的门」比「结局悬念」合格）\n"
+            "5. villain_action 不能只写「（无）」——反派的独立行动是本书节奏的第二引擎\n"
+            "6. core_event（即 summary）必须是 protagonist_choice 的直接后果，不能为空\n"
+            "7. storyline_refs 必须交叉出现，主线不能连续 3 章独占（除非 phase=climax 的最后 5 章）\n"
+            "8. 本卷内至少 2 条贯穿伏笔线：埋入章写「埋[xxx|主题:yyy]」，推进章写「加热[xxx+手法]」，回收章写「收[xxx]」\n"
+            "9. promise_fulfilled：若本章是某条未兑现承诺的兑现章，必须填写承诺原文中的关键短语（2字以上）；"
+            "其余章节填空字符串即可，不要填占位文字如「无」「暂无」。\n"
+            "10. has_face_slap 的频率必须符合立项定位的 face_slap_pattern（不能全是 false）\n"
+            "11. 若 phase=dark_hour，至少 40% 的章节 has_emotional_beat=true，且 pacing 不得连续 3 章是 fast\n"
+            "12. involved_characters 只能使用上方已知人物名，不要发明新名字\n"
             "只返回 JSON 数组，不要任何解释文字。"
         )
 
@@ -331,6 +385,8 @@ async def gen_vol_chapter_plans(
                 if not isinstance(batch_data, list):
                     batch_data = batch_data.get("chapters", [])
             except Exception as exc:
+                err_msg = str(exc).strip() or type(exc).__name__
+                batch_errors.append(f"第{batch_start}-{batch_end}章：{err_msg}")
                 logger.warning(
                     "vol_chapters JSON 解析/调用失败 project=%s volume=%s "
                     "batch=%d-%d attempt=%d: %s; raw_tail=%r",
@@ -371,6 +427,9 @@ async def gen_vol_chapter_plans(
             batch_data = batch_data[:batch_count]
 
         if not batch_data:
+            batch_tag = f"第{batch_start}-{batch_end}章"
+            if not any(batch_tag in e for e in batch_errors):
+                batch_errors.append(f"{batch_tag}：模型未返回可解析的章纲 JSON")
             logger.warning(
                 "vol_chapters 批次无有效章纲，已跳过 project=%s volume=%s "
                 "batch=%d-%d planned=%d accumulated=%d",
@@ -383,9 +442,6 @@ async def gen_vol_chapter_plans(
             )
             continue
 
-        char_name_to_id = ctx.get("char_name_to_id", {})
-        storyline_ids_map = ctx.get("storyline_ids", {})
-
         for batch_index, item in enumerate(batch_data):
             ch_num = chapter_number_for_batch_item(batch_start, batch_index, item)
             involved_ids = [
@@ -393,11 +449,10 @@ async def gen_vol_chapter_plans(
                 for n in item.get("involved_characters", [])
                 if n in char_name_to_id
             ]
-            sl_ids = [
-                storyline_ids_map[n]
-                for n in item.get("storyline_refs", [])
-                if n in storyline_ids_map
-            ]
+            sl_ids = _resolve_storyline_ids(
+                item.get("storyline_refs", []),
+                storyline_ids_map,
+            )
             end_hook_val = (item.get("end_hook") or "").strip() or None
             pacing_val = item.get("pacing", "normal")
             has_slap = bool(item.get("has_face_slap", False))

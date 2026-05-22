@@ -120,12 +120,7 @@ TASK_PROFILES: dict[str, dict] = {
     },
     "bootstrap.memory": {"temperature": 0.6, "top_p": 0.9},
     "bootstrap.relations": {"temperature": 0.65, "top_p": 0.9},
-    "bootstrap.single_shot": {
-        # 单次全量：偏稳定避免某一段失控影响整体
-        "temperature": 0.55,
-        "top_p": 0.9,
-        "frequency_penalty": 0.1,
-    },
+
     # ── 大纲规划 ────────────────────────────────────────────────
     "outline.full_structure": {"temperature": 0.55, "top_p": 0.9},
     "outline.expand": {"temperature": 0.7, "top_p": 0.9},

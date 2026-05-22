@@ -49,7 +49,7 @@ interface Props {
   onRecoverConsumed?: () => void
 }
 
-type Mode = 'sequential' | 'single_shot' | 'fanqie'
+type Mode = 'sequential' | 'fanqie'
 
 /** 弹层（默认正常提交） vs 全屏工作台（默认恢复 run） */
 type BootstrapShell = 'modal' | 'workspace'
@@ -217,7 +217,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
       targetWords,
       modelProfile: modelProfileFromRoute(aiBackendRoute),
       llmProviderId: llmProviderIdFromRoute(aiBackendRoute),
-      autoMode: mode !== 'single_shot' && autoMode,
+      autoMode,
     })
   }
 
@@ -372,7 +372,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                 生成中…
               </span>
             )}
-            {isTimelinePhase && phase === 'generating' && autoMode && mode !== 'single_shot' && (
+            {isTimelinePhase && phase === 'generating' && autoMode && (
               <span className="ml-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700">
                 自动模式
               </span>
@@ -422,22 +422,20 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
               立意、主题和设定将由 AI 根据一句话创意自动生成，你无需额外填写设定项。
             </p>
 
-            {mode !== 'single_shot' && (
-              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3">
-                <input
-                  type="checkbox"
-                  checked={autoMode}
-                  onChange={e => setAutoMode(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-amber-500 focus:ring-amber-400"
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="text-sm font-medium text-gray-800">自动模式</span>
-                  <span className="mt-0.5 block text-xs leading-relaxed text-gray-500">
-                    跳过立项 / 境界 / 人物 / 卷骨架等闸门确认；步骤失败时自动重试并继续，无需手动点「继续生成」。
-                  </span>
+            <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3">
+              <input
+                type="checkbox"
+                checked={autoMode}
+                onChange={e => setAutoMode(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-amber-500 focus:ring-amber-400"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="text-sm font-medium text-gray-800">自动模式</span>
+                <span className="mt-0.5 block text-xs leading-relaxed text-gray-500">
+                  跳过立项 / 境界 / 人物 / 卷骨架等闸门确认；步骤失败时自动重试并继续，无需手动点「继续生成」。
                 </span>
-              </label>
-            )}
+              </span>
+            </label>
 
             {/* 模型线路 */}
             <div>
@@ -467,7 +465,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
             {/* 生成方案 */}
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-2">生成方案</label>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <button
                   onClick={() => setMode('sequential')}
                   className={clsx(
@@ -476,25 +474,13 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                   )}
                 >
                   <div className="text-sm font-semibold text-gray-800 mb-1">
-                    方案 A · 串行步进
+                    串行步进
                     {mode === 'sequential' && (
                       <span className="ml-2 text-xs bg-amber-500 text-white px-1.5 py-0.5 rounded-full">推荐</span>
                     )}
                   </div>
                   <div className="text-xs text-gray-500 leading-relaxed">
                     多步分别生成，含章级大纲 + 场景蓝图 + 一致性扫描。内容最完整，适合所有模型。
-                  </div>
-                </button>
-                <button
-                  onClick={() => setMode('single_shot')}
-                  className={clsx(
-                    'p-3 rounded-xl border-2 text-left transition-all',
-                    mode === 'single_shot' ? 'border-blue-400 bg-blue-50' : 'border-gray-100 hover:border-gray-200'
-                  )}
-                >
-                  <div className="text-sm font-semibold text-gray-800 mb-1">方案 B · 单次全量</div>
-                  <div className="text-xs text-gray-500 leading-relaxed">
-                    1 次生成世界蓝图，速度快。适合大上下文远程模型，章级大纲需手动展开。
                   </div>
                 </button>
                 <button
@@ -507,7 +493,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                   )}
                 >
                   <div className="text-sm font-semibold text-gray-800 mb-1">
-                    🍅 方案 C · 番茄专属
+                    🍅 番茄专属
                     {mode === 'fanqie' && (
                       <span className="ml-2 text-xs bg-orange-500 text-white px-1.5 py-0.5 rounded-full">已选</span>
                     )}

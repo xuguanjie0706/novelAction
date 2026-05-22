@@ -13,14 +13,19 @@ from app.services.outline_linter.schemas import LinterReport
 logger = logging.getLogger(__name__)
 
 # 命中任一条即阻断整卷章纲 commit（须修后重生成）
+#
+# 设计原则：只有「结构性硬错误」才阻断——即 AI 根本没按要求生成内容（空字段/批次完全失败）。
+# 不要把「内容质量问题」放入阻断列表，否则门控会对几乎所有生成都误杀：
+#
+#   VL-01（章数不符）：AI 截断是 token/模型问题，不是作者错；降为 high 警告，
+#              用户看到 "30/60 章" 后可选择重新生成或强制采用。
+#   RP-01（承诺超窗）：promise_fulfilled 字段设计在「写章」阶段填写，
+#              章纲规划阶段几乎永远为空 → 在规划门控里永远误杀，移除。
 BLOCKING_RULE_IDS = frozenset({
     "CH-04",   # choice_cost 空
-    "CH-08",   # core_event 空
-    "VL-01",   # 章数配额不符
-    "SEQ-07",  # 第二批首章未承接
-    "RP-01",   # 读者承诺超窗
+    "CH-08",   # core_event 空（summary 为空）
+    "SEQ-07",  # 第二批首章未承接第一批末章（跨批次结构断裂）
     "CM-03",   # 谜题过早揭晓
-    "GEN-01",  # 批次数漂移（截断后仍标）
 })
 
 

@@ -2,15 +2,11 @@
 
 把长 prompt 字面量（≥ 30 行）从 `generation_service.py` 抽出，按用途分文件：
 
-- `blueprints` — 世界设定卡蓝图常量与 prompt 片段、setting 默认 extra 补全。
+- `blueprints`  — 世界设定卡蓝图常量与 prompt 片段、setting 默认 extra 补全。
 - `word_budget` — 全书字数硬约束 prompt 片段。
-- `single_shot` — 方案 B 单次全量生成 prompt（最长，~90 行）。
+- `project`     — Step 1：书名海选 + 结构化 premise + 结构化 world_overview prompt。
 
-向后兼容：旧名（`GEMINI_SETTING_BLUEPRINTS` / `_SETTING_CARD_SCHEMA_BRIEF` /
-`CHARACTER_TARGET` / `FACTION_*` / `SKILL_*` / `ITEM_*` /
-`_setting_blueprints_for_prompt` / `_book_length_constraints_for_prompt` /
-`_setting_extra_with_defaults` / `_single_shot_prompt`）由
-`services/generation_service.py` 顶部 re-import 暴露。
+注：`single_shot.py` 已废弃（方案 B 已移除），保留空文件以避免 import 断裂。
 """
 
 from .blueprints import (
@@ -27,7 +23,6 @@ from .blueprints import (
     setting_extra_with_defaults,
 )
 from .word_budget import book_length_constraints_for_prompt
-from .single_shot import single_shot_prompt
 
 __all__ = [
     "GEMINI_SETTING_BLUEPRINTS",
@@ -42,5 +37,4 @@ __all__ = [
     "setting_blueprints_for_prompt",
     "setting_extra_with_defaults",
     "book_length_constraints_for_prompt",
-    "single_shot_prompt",
 ]

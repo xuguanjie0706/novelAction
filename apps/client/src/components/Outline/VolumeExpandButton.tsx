@@ -20,6 +20,7 @@ import { outlineApi } from '../../api/client'
 import { authFetch } from '../../api/authFetch'
 import { modelProfileFromRoute, llmProviderIdFromRoute } from '../../store'
 import type { OutlineNode } from '../../types'
+import ConfirmActionModal from './ConfirmActionModal'
 
 // ── 公共类型（由父层复用） ────────────────────────────────────────────────────
 
@@ -39,6 +40,8 @@ export interface ExpandEndResult {
   error: string | null
   /** 本次生成的章节数 */
   chapterCount: number
+  /** 生成成功但被质量门控阻断（区分于真正的生成失败） */
+  linterBlocked: boolean
 }
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -108,7 +111,9 @@ const VolumeExpandButton: React.FC<Props> = ({
 
   // ── 本地状态（仅按钮 UI 需要） ─────────────────────────────────────────────
   const [running, setRunning] = useState(false)
+  const [regenConfirmOpen, setRegenConfirmOpen] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+  const volumeTitle = volumeNode.title?.trim() || '本卷'
 
   // ── SSE 执行 ───────────────────────────────────────────────────────────────
 
@@ -155,7 +160,7 @@ const VolumeExpandButton: React.FC<Props> = ({
         let msg = `请求失败 ${resp.status}: ${text}`
         if (resp.status === 409) msg = `该卷已有章节计划（${chapterPlanCount} 章）。如需重新生成，请点击"重新生成"。`
         if (resp.status === 401) msg = '登录已过期，请重新登录后再试。'
-        onExpandEnd?.(volumeNode, { done: false, error: msg, chapterCount: 0 })
+        onExpandEnd?.(volumeNode, { done: false, error: msg, chapterCount: 0, linterBlocked: false })
         setRunning(false)
         return
       }
@@ -164,9 +169,10 @@ const VolumeExpandButton: React.FC<Props> = ({
       if (!reader) throw new Error('无法读取响应流')
       const decoder = new TextDecoder()
       let buf = ''
-      let chapterCount = 0
-      let finalDone    = false
+      let chapterCount     = 0
+      let finalDone        = false
       let finalError: string | null = null
+      let finalLinterBlocked = false
 
       while (true) {
         const { done: streamDone, value } = await reader.read()
@@ -186,29 +192,42 @@ const VolumeExpandButton: React.FC<Props> = ({
               const linterStatus: string = payload.linter_status ?? 'ok'
               const linterIssues: number = payload.linter_issue_count ?? 0
               const blocked: boolean     = Boolean(payload.linter_blocked)
+              const genFailed: boolean   = Boolean(payload.generation_failed)
+                || (chapterCount === 0 && !blocked)
               let suffix = blocked
                 ? `，生成 ${chapterCount} 章但被 linter 阻断`
-                : `，共生成 ${chapterCount} 章`
-              if (!blocked && linterStatus !== 'ok' && linterIssues > 0) {
+                : genFailed
+                  ? '，未生成任何章节'
+                  : `，共生成 ${chapterCount} 章`
+              if (!blocked && !genFailed && linterStatus !== 'ok' && linterIssues > 0) {
                 suffix += ` · linter ${linterStatus}（${linterIssues} 项）`
               }
-              appendLine(evt, suffix)
+              appendLine(genFailed ? 'error' : evt, suffix)
               if (blocked) {
+                finalLinterBlocked = true
                 finalError =
                   (typeof payload.linter_message === 'string' && payload.linter_message.trim())
                     || '存在 critical 章纲问题，请查看下方章纲检测结果并修复后重新展开。'
+              } else if (genFailed) {
+                finalError =
+                  (typeof payload.generation_error === 'string' && payload.generation_error.trim())
+                    || 'AI 未返回有效章纲，请检查模型线路与 API Key 后重试。'
               } else {
                 finalDone = true
+                onExpanded()
               }
-              onExpanded()
             } else if (evt === 'context_ready') {
               const w: number = payload.written_count ?? 0
               const p: number = payload.promise_count ?? 0
               const m: number = payload.memory_count ?? 0
               appendLine(evt, `（已写${w}章摘要 · ${p}条承诺 · ${m}条记忆）`)
             } else if (evt === 'error') {
-              finalError = payload.message ?? '未知错误'
-              appendLine('error', `: ${finalError}`)
+              const msg = payload.message ?? '未知错误'
+              if (!finalError) finalError = msg
+              if (!lines.some(l => l.event === 'error' && l.label.includes(msg.slice(0, 40)))) {
+                appendLine('error', `: ${msg}`)
+              }
+              finalDone = false
             } else if (evt !== 'end') {
               appendLine(evt)
             }
@@ -218,11 +237,11 @@ const VolumeExpandButton: React.FC<Props> = ({
         }
       }
 
-      onExpandEnd?.(volumeNode, { done: finalDone, error: finalError, chapterCount })
+      onExpandEnd?.(volumeNode, { done: finalDone, error: finalError, chapterCount, linterBlocked: finalLinterBlocked })
     } catch (err: unknown) {
       if ((err as Error).name !== 'AbortError') {
         const msg = err instanceof Error ? err.message : String(err)
-        onExpandEnd?.(volumeNode, { done: false, error: msg, chapterCount: 0 })
+        onExpandEnd?.(volumeNode, { done: false, error: msg, chapterCount: 0, linterBlocked: false })
       }
     } finally {
       setRunning(false)
@@ -232,6 +251,7 @@ const VolumeExpandButton: React.FC<Props> = ({
   // ── 渲染（仅按钮，无内联面板） ─────────────────────────────────────────────
 
   return (
+    <>
     <span
       className="inline-flex items-center gap-1 shrink-0"
       onClick={(e) => e.stopPropagation()}
@@ -250,9 +270,10 @@ const VolumeExpandButton: React.FC<Props> = ({
             </span>
           )}
           <button
-            title="重新生成章纲（会覆盖已有）"
+            type="button"
+            title="重新生成章纲（会覆盖已有章节计划）"
             disabled={running}
-            onClick={() => handleExpand(true)}
+            onClick={() => setRegenConfirmOpen(true)}
             className={clsx(
               'p-0.5 rounded text-gray-300 hover:text-amber-500 hover:bg-amber-50 transition-colors',
               running && 'opacity-50 cursor-not-allowed'
@@ -279,6 +300,20 @@ const VolumeExpandButton: React.FC<Props> = ({
         </button>
       )}
     </span>
+
+    <ConfirmActionModal
+      open={regenConfirmOpen}
+      onClose={() => setRegenConfirmOpen(false)}
+      onConfirm={() => void handleExpand(true)}
+      title="重新生成章纲"
+      subtitle={`将重新生成「${volumeTitle}」的全部 ${chapterPlanCount} 章章纲。`}
+      bullets={[
+        '现有章节计划会被 AI 覆盖',
+        '已写正文不会删除，但章纲绑定可能变化',
+      ]}
+      confirmLabel="确认重新生成"
+    />
+    </>
   )
 }
 

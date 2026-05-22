@@ -33,7 +33,7 @@ from app.routers import (
     chapters,
     chapter_indexes,
     ai,
-    generate,
+
     admin_llm,
     llm_public,
     admin_llm_calls,
@@ -225,8 +225,7 @@ app.include_router(consistency_fix_router.router, prefix="/api/v1")
 # projects：详情/子资源访问权由路由内部 _owned_or_404 校验。
 app.include_router(projects.router, prefix="/api/v1")
 
-# bootstrap：SSE 直连（旧）+ LangGraph 队列（新）。
-app.include_router(generate.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+# bootstrap：LangGraph 队列（串行步进 / 番茄专属）。
 app.include_router(bootstrap_graph_router.router, prefix="/api/v1")
 app.include_router(bootstrap_step_regen_router.router, prefix="/api/v1")
 

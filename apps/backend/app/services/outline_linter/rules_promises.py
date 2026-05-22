@@ -102,7 +102,9 @@ def lint_reader_promises(
             fulfilled_by_global, text, src, window,
         )
 
-        # 仅当全书已规划越过截止章，且窗口内仍无任何兑现记录时阻断（避免整卷一次生成误杀）
+        # RP-01：承诺超窗改为 high 警告（已从 BLOCKING_RULE_IDS 移除）。
+        # 设计说明：promise_fulfilled 字段在「写章/复盘」阶段才填写，
+        # 章纲规划时永远为空 → 在规划门控里始终误杀，故不再阻断。
         if (
             priority >= 4
             and deadline
@@ -111,14 +113,14 @@ def lint_reader_promises(
         ):
             issues.append(LinterIssue(
                 rule_id="RP-01",
-                severity="critical",
+                severity="high",   # 原 critical，已降级
                 scope="volume",
                 message=(
                     f"读者承诺超窗未兑现（priority={priority}）："
                     f"应在第{deadline}章前兑现，当前已规划至第{max_global}章，"
                     f"窗口内无 promise_fulfilled"
                 ),
-                suggestion="在章纲中填写 promise_fulfilled 或调整承诺窗口",
+                suggestion="写章时在对应章节填写 promise_fulfilled，或调整承诺窗口",
             ))
 
         if priority >= 4 and src and window:

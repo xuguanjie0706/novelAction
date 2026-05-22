@@ -67,7 +67,7 @@ class BootstrapRun(Base):
 
     # ── 输入参数（只写一次，供 replay / debug 查阅）────────────────────
     logline = Column(Text, nullable=False)
-    mode = Column(String(20), nullable=False, default="sequential", comment="sequential | single_shot")
+    mode = Column(String(20), nullable=False, default="sequential", comment="sequential | fanqie")
     model_profile = Column(String(20), nullable=False, default="gemini")
 
     # ── 闸门数据（Step 0 → gate 节点产出，等待用户确认）───────────────

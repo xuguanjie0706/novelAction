@@ -32,11 +32,50 @@ kill_port() {
   fi
 }
 
+# 结束本仓库 apps/backend 下全部 uvicorn 父进程与 --reload 子 worker（multiprocessing.spawn_main 等）。
+# 仅匹配命令行含「项目/apps/backend/.venv/bin/python」的进程，避免误杀其他项目 Python。
+# 背景：只杀 LISTEN 端口会留下僵尸 worker，各自持有 SQLAlchemy 连接池，导致 Postgres「too many clients」。
+kill_backend_process_tree() {
+  local pattern pid args killed=0
+  local -a patterns=(
+    "${ROOT}/apps/backend/.venv/bin/python"
+  )
+  if [[ -x "${ROOT}/backend/.venv/bin/python" ]]; then
+    patterns+=("${ROOT}/backend/.venv/bin/python")
+  fi
+
+  for pattern in "${patterns[@]}"; do
+    while read -r pid; do
+      [[ -n "${pid}" ]] || continue
+      args="$(ps -p "${pid}" -o args= 2>/dev/null || true)"
+      [[ -z "${args}" ]] && continue
+      echo "正在结束后端残留进程 ${pid}"
+      kill -9 "${pid}" 2>/dev/null || true
+      killed=1
+    done < <(pgrep -f "${pattern}" 2>/dev/null || true)
+  done
+
+  # 无 .venv 路径时（极少见）：仅杀 apps/backend 目录下的 uvicorn
+  while read -r pid; do
+    [[ -n "${pid}" ]] || continue
+    args="$(ps -p "${pid}" -o args= 2>/dev/null || true)"
+    [[ "${args}" == *"${ROOT}/apps/backend"* && "${args}" == *"uvicorn"* ]] || continue
+    echo "正在结束后端残留进程 ${pid}（uvicorn）"
+    kill -9 "${pid}" 2>/dev/null || true
+    killed=1
+  done < <(pgrep -f "${ROOT}/apps/backend" 2>/dev/null || true)
+
+  if [[ "${killed}" -eq 1 ]]; then
+    echo "已清理 apps/backend 全部 uvicorn / reload worker（释放 PostgreSQL 连接）"
+    sleep 0.5
+  fi
+}
+
 kill_port "${NOVEL_LOCAL_BACKEND_PORT}"
 kill_port "${NOVEL_LOCAL_CLIENT_PORT}"
 kill_port "${NOVEL_LOCAL_ADMIN_PORT}"
 
-# 清理上次 backend.pid（僵死 uvicorn 可能已不是 LISTEN，但仍占用 9000 / 导致 Address already in use）
+# 清理上次 backend.pid（僵死 uvicorn 可能已不是 LISTEN，但仍占用连接池）
 if [[ -f "${ROOT}/.local/logs/backend.pid" ]]; then
   old_backend_pid="$(cat "${ROOT}/.local/logs/backend.pid" 2>/dev/null || true)"
   if [[ -n "${old_backend_pid}" ]] && kill -0 "${old_backend_pid}" 2>/dev/null; then
@@ -44,7 +83,10 @@ if [[ -f "${ROOT}/.local/logs/backend.pid" ]]; then
     kill -9 "${old_backend_pid}" 2>/dev/null || true
   fi
 fi
-# 兜底：结束仍绑定后端端口的 python/uvicorn（仅限本机 127.0.0.1，避免误杀 Vite 出站连接）
+
+kill_backend_process_tree
+
+# 兜底：结束仍占用后端端口的 python（出站连接；避免误杀非 python）
 while read -r pid; do
   [[ -n "${pid}" ]] || continue
   cmd="$(ps -p "${pid}" -o comm= 2>/dev/null || true)"

@@ -4,7 +4,7 @@ bootstrap_graph.py — LangGraph Bootstrap 路由
 资源边界：
   本模块负责「创建运行 → SSE 事件流 → 用户确认闸门 → Resume」全链路的 HTTP/SSE 层。
   AI 生成逻辑和图执行全部委托给 services/bootstrap/graph.py。
-  旧的 /bootstrap/stream（SSE 直连）在 routers/generate.py 中继续保留，两套并存。
+  旧的 /bootstrap/stream 端点（generate.py）已废弃并清空，唯一入口为本文件。
 
 端点：
   POST   /bootstrap/runs                    创建运行并启动后台任务
@@ -82,14 +82,13 @@ class StartRequest(BaseModel):
     mode 说明：
     - ``sequential``：通用串行流程（默认），适合起点/晋江向或自定义题材
     - ``fanqie``：番茄专属流程，把平台算法逻辑硬编码进生成管道（金手指优先/打脸地图/开局五章工程）
-    - ``single_shot``：单次全量（大 context 模型专用）
     """
     logline: str
     premise: Optional[str] = ""
     target_words: int = 1_200_000
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
-    mode: Literal["sequential", "fanqie", "single_shot"] = "sequential"
+    mode: Literal["sequential", "fanqie"] = "sequential"
     auto_mode: bool = False
 
 

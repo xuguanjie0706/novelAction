@@ -208,6 +208,43 @@ def _sse(event: str, **kwargs) -> str:
     return f"data: {json.dumps({'event': event, **kwargs}, ensure_ascii=False)}\n\n"
 
 
+def _format_vol_expand_failure(errors: list[str]) -> str:
+    """将批次 AI 失败原因转为用户可读提示（优先识别鉴权/拦截类根因）。"""
+    if not errors:
+        return (
+            "AI 未返回有效章纲。请在大纲页顶部检查「模型线路」与 API Key 是否有效，"
+            "或到管理后台更新 LlmProvider 后重试。"
+        )
+    joined = " ".join(errors).lower()
+    if "invalid token" in joined or "401" in joined:
+        return (
+            "模型 API Key 无效或已过期（401）。请在管理后台更新对应线路的 api_key，"
+            "或在大纲页切换到其他模型线路后重试。"
+        )
+    if "blocked" in joined or "permissiondenied" in joined:
+        blocked_batches = [
+            e for e in errors if "blocked" in e.lower() or "permissiondenied" in e.lower()
+        ]
+        detail = blocked_batches[-1] if blocked_batches else errors[-1]
+        return (
+            "模型请求被服务商拦截（Your request was blocked）。"
+            "常见原因：当前线路触发了内容安全策略、账号额度或代理网关限制。"
+            "请在大纲页切换到其他线路（如 Kimi / 豆包），或在管理后台更换 api_key 后重试。"
+            f" 详情：{detail}"
+        )
+    if any("未返回可解析" in e for e in errors):
+        parse_errs = [e for e in errors if "未返回可解析" in e]
+        return (
+            "模型返回了内容但无法解析为章纲 JSON（可能输出被截断或格式不符）。"
+            "可尝试：换更大上下文的模型、在 .env 提高 VOL_EXPAND_CHAPTERS_MAX_TOKENS，或重新生成。"
+            f" 详情：{parse_errs[-1]}"
+        )
+    last = errors[-1]
+    if len(last) > 220:
+        return f"章纲生成失败：{last[:220]}…"
+    return f"章纲生成失败：{last}"
+
+
 # ── 主路由 ────────────────────────────────────────────────────────────────────
 
 @router.post("/volumes/{volume_node_id}/expand-chapters")
@@ -347,6 +384,12 @@ async def expand_volume_chapters(
                     },
                     chapter_count=len(nodes),
                 ).get("linter_message", "")
+            generation_failed = len(nodes) == 0 and not blocked
+            gen_error = (
+                _format_vol_expand_failure(ctx.get("vol_chapter_batch_errors") or [])
+                if generation_failed
+                else None
+            )
             yield _sse(
                 "step_done",
                 step="expand_chapters",
@@ -358,8 +401,12 @@ async def expand_volume_chapters(
                 linter_high_count=linter_summary.get("high_count", 0),
                 linter_blocked=blocked,
                 linter_message=block_msg or None,
+                generation_failed=generation_failed,
+                generation_error=gen_error,
             )
-            if blocked and block_msg:
+            if generation_failed and gen_error:
+                yield _sse("error", step="expand_chapters", message=gen_error)
+            elif blocked and block_msg:
                 yield _sse("error", step="expand_chapters", message=block_msg)
 
         except Exception as exc:  # noqa: BLE001

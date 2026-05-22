@@ -1,9 +1,10 @@
 /**
  * @file 大纲节点详情侧栏
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import {
   Pencil, Check, X, Users, TrendingUp, GitBranch, Target,
+  Zap, Clock,
 } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
@@ -13,12 +14,16 @@ import type { OutlineNode, OutlinePlanQualityReport } from '../../types'
 import OutlinePlanQualityView from '../../components/Outline/OutlinePlanQualityView'
 import OutlineAIPanel from '../../components/Outline/OutlineAIPanel'
 import ScenePanel from '../../components/Outline/ScenePanel'
-import VolumeLinterPanel from '../../components/Outline/VolumeLinterPanel'
+import VolumeLinterPanel, { type LinterIssueRow } from '../../components/Outline/VolumeLinterPanel'
+import {
+  ChapterLinterBadgeTrigger,
+  ChapterLinterIssuePanel,
+} from '../../components/Outline/ChapterLinterBadge'
 import { Field } from './shared/Field'
 
 export default function NodeDetailPanel({
   node, projectId, onOpenChapter, onSaved, onAICommitDone, onJumpToChapterPlan, onQualityCheck,
-  onRelintDone, onRequestRepairFromLinter, initialTab,
+  onRelintDone, onRequestRepairFromLinter, onForceAccept, initialTab,
 }: {
   node: OutlineNode
   projectId: string
@@ -30,15 +35,22 @@ export default function NodeDetailPanel({
   onRelintDone?: () => void
   onRequestRepairFromLinter?: (mustFixChapters: number[]) => void
   /**
-   * 节点切换后自动激活的初始 Tab（默认 'overview'）。
-   * 展开章纲完成后父层传 'linter' 可直接跳到检测结果。
+   * 绕过质量门控直接采用草稿。
+   * 由父层（OutlinePage）调用 API 清除 linter_blocked 并刷新。
    */
-  initialTab?: 'overview' | 'linter' | 'chapter' | 'scene' | 'quality' | 'ai'
+  onForceAccept?: () => void
+  /**
+   * 节点切换后自动激活的初始 Tab（默认 'overview'）。
+   * 展开章纲完成后父层传 'quality' 可直接跳到质检结果。
+   */
+  initialTab?: 'overview' | 'quality' | 'chapters' | 'chapter' | 'scene' | 'ai'
 }) {
   const { characters, storyLines } = useAppStore()
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState<'overview' | 'linter' | 'chapter' | 'scene' | 'quality' | 'ai'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'quality' | 'chapters' | 'chapter' | 'scene' | 'ai'>('overview')
+  /** 章节清单 Tab 中展开 linter 详情的章号（1-based） */
+  const [expandedLintChapter, setExpandedLintChapter] = useState<number | null>(null)
   const [form, setForm] = useState({
     title: node.title ?? '',
     summary: node.summary ?? '',
@@ -56,7 +68,9 @@ export default function NodeDetailPanel({
   })
 
   useEffect(() => {
-    setActiveTab(initialTab ?? 'overview')
+    // 兼容旧的 'linter' initialTab 值：统一映射到合并后的 'quality' tab
+    const resolved = (initialTab === ('linter' as string)) ? 'quality' : (initialTab ?? 'overview')
+    setActiveTab(resolved as 'overview' | 'quality' | 'chapters' | 'chapter' | 'scene' | 'ai')
     // 重置表单（包含 P2 新字段）
     setForm({
       title: node.title ?? '',
@@ -110,12 +124,41 @@ export default function NodeDetailPanel({
     ? (node.extra?.outline_quality as OutlinePlanQualityReport | undefined)
     : undefined
 
+  // 卷节点的直属章节计划子节点（已按 sort_order 排序）
+  const chapterChildren = useMemo(() =>
+    isExpandable
+      ? [...(node.children ?? [])].sort((a, b) => a.sort_order - b.sort_order)
+      : [],
+    [node.id, node.children, isExpandable],
+  )
+
+  // 按章节编号索引 linter issues（章节清单徽章悬停/展开）
+  const linterIssuesByChapter = useMemo(() => {
+    const issues = (node.extra?.linter_issues as LinterIssueRow[] | undefined) ?? []
+    const map = new Map<number, LinterIssueRow[]>()
+    for (const issue of issues) {
+      const ch = issue.chapter_number_in_volume
+      if (!ch) continue
+      const list = map.get(ch) ?? []
+      list.push(issue)
+      map.set(ch, list)
+    }
+    return map
+  }, [node.extra?.linter_issues])
+
+  useEffect(() => {
+    setExpandedLintChapter(null)
+  }, [node.id])
+
   const tabs = [
     { key: 'overview' as const, label: '基础' },
-    ...(node.node_type === 'volume' ? [{ key: 'linter' as const, label: '章纲检测' }] : []),
     ...(node.node_type === 'chapter_plan' ? [{ key: 'chapter' as const, label: '章节要素' }] : []),
     ...(node.node_type === 'chapter_plan' ? [{ key: 'scene' as const, label: '分场蓝图' }] : []),
-    ...(isExpandable ? [{ key: 'quality' as const, label: '单卷质检' }] : []),
+    // 卷节点：章节清单 + 合并质检
+    ...(isExpandable && chapterChildren.length > 0
+      ? [{ key: 'chapters' as const, label: `章节（${chapterChildren.length}）` }]
+      : []),
+    ...(isExpandable ? [{ key: 'quality' as const, label: '质检' }] : []),
     ...(isExpandable ? [{ key: 'ai' as const, label: 'AI 展开' }] : []),
   ]
 
@@ -154,10 +197,10 @@ export default function NodeDetailPanel({
           </h3>
         </div>
         <div className="flex items-center gap-2">
-          {!editing && isExpandable && (
-            <button onClick={onQualityCheck} className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg text-indigo-600 hover:bg-indigo-50 border border-indigo-100">
-              <Check size={12} />单卷质检
-            </button>
+          {!editing && isExpandable && Boolean(node.extra?.linter_blocked) && (
+            <span className="text-[10px] px-2 py-1 rounded border border-amber-200 bg-amber-50 text-amber-700">
+              草稿待确认
+            </span>
           )}
           {editing ? (
             <>
@@ -194,14 +237,99 @@ export default function NodeDetailPanel({
         ))}
       </div>
 
-      {activeTab === 'linter' && node.node_type === 'volume' && (
-        <VolumeLinterPanel
-          volumeNode={node}
-          projectId={projectId}
-          onRelintDone={onRelintDone}
-          onRequestRepair={onRequestRepairFromLinter}
-        />
+      {/* ── 章节清单 Tab ── */}
+      {activeTab === 'chapters' && isExpandable && (
+        <div className="space-y-1.5">
+          {chapterChildren.length === 0 ? (
+            <div className="border border-dashed border-gray-200 rounded-lg px-4 py-8 text-sm text-gray-400 text-center">
+              该卷还没有章节计划。点击「AI 展开」生成章节大纲。
+            </div>
+          ) : (
+            <div className="space-y-1 max-h-[calc(100vh-280px)] overflow-y-auto pr-0.5">
+              {chapterChildren.map((ch, idx) => {
+                const chNum = idx + 1
+                const chapterLintIssues = linterIssuesByChapter.get(chNum) ?? []
+                const extra = ch.extra ?? {}
+                const hasFaceSlap = Boolean(extra.has_face_slap)
+                const pacing = extra.pacing as string | undefined
+                const choiceCost = (extra.choice_cost as string | undefined) ?? ''
+                const lintExpanded = expandedLintChapter === chNum
+                return (
+                  <button
+                    key={ch.id}
+                    type="button"
+                    onClick={() => onJumpToChapterPlan(chNum)}
+                    className="w-full text-left rounded-lg border border-gray-100 bg-white hover:bg-amber-50/50 hover:border-amber-200 transition-colors px-3 py-2.5 group"
+                  >
+                    <div className="flex gap-2.5">
+                      <span className="flex h-5 w-7 shrink-0 items-center justify-center text-[10px] font-mono tabular-nums text-gray-400 leading-none">
+                        {String(chNum).padStart(2, '0')}
+                      </span>
+
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="flex-1 min-w-0 text-xs font-medium text-gray-800 group-hover:text-amber-800 truncate leading-5">
+                            {ch.title || `第${chNum}章`}
+                          </span>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            {pacing && pacing !== 'normal' && (
+                              <span className={clsx(
+                                'inline-flex h-[1.125rem] items-center text-[10px] px-1.5 rounded border whitespace-nowrap',
+                                pacing === 'climax' ? 'border-red-200 text-red-600 bg-red-50' :
+                                pacing === 'fast'   ? 'border-orange-200 text-orange-600 bg-orange-50' :
+                                pacing === 'slow'   ? 'border-blue-200 text-blue-600 bg-blue-50' :
+                                                      'border-gray-200 text-gray-500',
+                              )}>
+                                {pacing}
+                              </span>
+                            )}
+                            {hasFaceSlap && (
+                              <span className="inline-flex h-[1.125rem] items-center gap-0.5 text-[10px] px-1.5 rounded border border-amber-200 text-amber-600 bg-amber-50 whitespace-nowrap">
+                                <Zap size={8} />爽
+                              </span>
+                            )}
+                            {chapterLintIssues.length > 0 && (
+                              <ChapterLinterBadgeTrigger
+                                issues={chapterLintIssues}
+                                expanded={lintExpanded}
+                                onToggle={() => setExpandedLintChapter(
+                                  lintExpanded ? null : chNum,
+                                )}
+                              />
+                            )}
+                            {ch.expected_words != null && ch.expected_words > 0 && (
+                              <span className="inline-flex h-[1.125rem] items-center gap-0.5 text-[10px] text-gray-400 whitespace-nowrap tabular-nums">
+                                <Clock size={9} className="shrink-0" />
+                                {ch.expected_words}字
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {lintExpanded && chapterLintIssues.length > 0 && (
+                          <ChapterLinterIssuePanel issues={chapterLintIssues} />
+                        )}
+                        {ch.summary && (
+                          <p className="text-[11px] text-gray-500 leading-snug line-clamp-2">
+                            {ch.summary}
+                          </p>
+                        )}
+                        {choiceCost && (
+                          <p className="text-[10px] text-indigo-500 leading-snug truncate">
+                            ↳ 代价：{choiceCost}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
       )}
+
+      {/* 「质检」Tab：linter 规则检测（上） + AI 叙事质检（下），合并展示避免重复 */}
 
       {activeTab === 'overview' && (
       <div className="space-y-4">
@@ -470,20 +598,44 @@ export default function NodeDetailPanel({
       )}
 
       {activeTab === 'quality' && isExpandable && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h4 className="text-xs font-semibold text-indigo-900">本卷 / 本篇大纲质检</h4>
-            <button onClick={onQualityCheck} className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg text-indigo-600 hover:bg-indigo-50 border border-indigo-100">
-              <Check size={12} />重新质检
-            </button>
-          </div>
-          {volumeOutlineQuality && typeof volumeOutlineQuality === 'object' ? (
-            <OutlinePlanQualityView report={volumeOutlineQuality} onChapterClick={onJumpToChapterPlan} />
-          ) : (
-            <div className="border border-dashed border-indigo-200 bg-indigo-50/40 rounded-lg px-4 py-6 text-sm text-indigo-700">
-              当前节点还没有单卷质检报告。
+        <div className="space-y-5">
+          {/* ── 规则检测（linter）—— 快速、确定性 ── */}
+          <section>
+            <h4 className="text-xs font-semibold text-gray-700 mb-3 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
+              规则检测（Linter）
+            </h4>
+            <VolumeLinterPanel
+              volumeNode={node}
+              projectId={projectId}
+              onRelintDone={onRelintDone}
+              onRequestRepair={onRequestRepairFromLinter}
+              onForceAccept={onForceAccept}
+            />
+          </section>
+
+          {/* ── AI 叙事质检 —— 深度评分 ── */}
+          <section className="border-t border-gray-100 pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 inline-block" />
+                AI 叙事质检
+              </h4>
+              <button
+                onClick={onQualityCheck}
+                className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg text-indigo-600 hover:bg-indigo-50 border border-indigo-100"
+              >
+                <Check size={12} />运行质检
+              </button>
             </div>
-          )}
+            {volumeOutlineQuality && typeof volumeOutlineQuality === 'object' ? (
+              <OutlinePlanQualityView report={volumeOutlineQuality} onChapterClick={onJumpToChapterPlan} />
+            ) : (
+              <div className="border border-dashed border-indigo-200 bg-indigo-50/40 rounded-lg px-4 py-5 text-xs text-indigo-700">
+                尚无 AI 质检报告。点击「运行质检」生成深度叙事评分。
+              </div>
+            )}
+          </section>
         </div>
       )}
 

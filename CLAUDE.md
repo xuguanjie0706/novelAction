@@ -71,8 +71,7 @@ EMBEDDING_DIM=1024
 
 ### Gemini 迁移时的变化
 
-- Gemini 支持 100 万 token context，可切换到**方案 B（单次全量生成）**
-- `bootstrap/service.py` 里 `mode="single_shot"` 已预留，切换只需改前端请求参数
+- Gemini 支持 100 万 token context，长 context 优势已体现在各 step 可获得更完整的上下文摘要注入，而非切换为单次全量模式。
 
 ### 任务级采样配置（v3，2026-05）
 
@@ -186,13 +185,15 @@ JSON 杂物字段，当前已知键：
 | `/api/v1/projects/{pid}/factions/` | 势力组织 CRUD |
 | `/api/v1/projects/{pid}/scenes/` | 分场 CRUD |
 | `/api/v1/projects/{pid}/reader-promises/` | 读者承诺 CRUD |
-| `POST /api/v1/bootstrap/stream` | **一句话→全量生成（SSE）** |
+| `POST /api/v1/bootstrap/runs` | **一句话→全量生成（Bootstrap，LangGraph 串行）** |
 
 ---
 
-## 一句话生成（Bootstrap）双方案
+## 一句话生成（Bootstrap）
 
-### 方案 A：串行步进（Sequential）— 默认
+唯一流程：**串行步进（Sequential）**，LangGraph 编排，入口 `POST /api/v1/bootstrap/runs`。
+
+> 方案 B（单次全量 single_shot）已于 2026-05 移除：`save_all.py` / `completion.py` / `prompts/single_shot.py` 已清空为废弃存根，`routers/generate.py` 已清空，`generation_service.bootstrap()` / `_sequential()` / `_single_shot()` 已删除。
 
 实际执行拓扑（graph.py 定义，非简单串行）：
 
@@ -223,24 +224,10 @@ logline
 - 每步独立 prompt，上下文逐步累积（压缩摘要 + 立项定位传入）
 - 单步失败重试 1 次，不影响其他步骤
 - SSE 每步推送 `step_start` / `step_done` / `error` / `linter_blocked`
+- **Step 1 项目**：书名海选 15~20 个候选（6种策略，一次 LLM 调用内打分排序）；premise / world_overview 均为结构化对象，按字段精确存 `extra`，渲染为字符串写模型列（向后兼容）
 - **Step 0 立项会议**：从一句话推导目标读者画像、爽点类型、打脸频率、情感线占比、节奏类型，作为后续各步的全局约束。这是网文系统区别于"AI 自由发挥"的关键防线。
 - **Step 12.5 + Step 13**：设定落成可执行写作计划，先生成第一卷章节级 `chapter_plan`，再生成第1章场景级 `Scene` 蓝图。
 - **Step 14**：交叉核验所有生成物，矛盾列表写入 `Project.extra.consistency_issues`。
-
-### 方案 B：单次全量（Single-shot）— 适合大 context 模型
-
-```
-logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记忆）
-```
-
-- 速度快，前后一致性最佳；要求模型 context ≥ 32k，输出 token ≥ 4096
-
-### 切换方式
-
-```json
-{ "logline": "...", "mode": "sequential" }
-{ "logline": "...", "mode": "single_shot" }
-```
 
 ---
 
@@ -292,7 +279,7 @@ logline → 1次 AI 调用 → 完整 JSON（含项目+设定+人物+大纲+记�
 - [x] AI 质检（JSON 评分报告，含故事线进度 + 境界体系一致性检查）
 - [x] AI 流式建议（SSE）
 - [x] 记忆提取 + **pgvector 语义检索**（embedding_service.py 完整实现；BAAI/bge-m3 1024维；复盘后自动触发 embed_chunk_async；写章路径：语义 Top-K + 时效衰减 + 最近 6 条时序锚定）
-- [x] 一句话生成（方案A串行 + 方案B单次）
+- [x] 一句话生成（串行步进，LangGraph；方案B单次全量已移除）
 - [x] 故事线/境界体系/技能/道具/势力前端 UI（WorldBuildingPage 五标签页）
 - [x] Bootstrap 全量步骤（Step 0-14，含 9.5 情绪节律图 / 9.8 反派行动线 / 11.5 核心谜题）
 - [x] 伏笔台账双向关联（`foreshadow_sync.py`，幂等写入）

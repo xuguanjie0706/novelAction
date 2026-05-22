@@ -35,8 +35,8 @@ async def resolve_pre_write_brief_for_draft(
     if not enabled:
         return "", []
 
-    # 延迟导入，避免 gated_draft_routes ↔ draft_routes 循环依赖
-    from app.routers.ai.gated_draft_routes import (
+    # 延迟导入，避免 gated_draft_routes ↔ draft_routes 循环依赖（实现已迁至 helpers）
+    from app.routers.ai.gated_draft_helpers import (
         _build_pre_warn_prompt_block,
         _persist_pre_write_warning_record,
         _run_pre_write_warning_inline,

@@ -386,9 +386,26 @@ async def node_gate(state: BootstrapState, config: dict | None = None) -> dict:
                 },
             )
             continue
-        updated = user_input.get("positioning", positioning)
-        if not isinstance(updated, dict):
-            updated = positioning
+        # select_candidate：用户从多候选中选择某一方案（前端发送 {action, index}）
+        if action == "select_candidate":
+            idx = user_input.get("index", 0)
+            cands = positioning.get("candidates") or []
+            if isinstance(idx, int) and 0 <= idx < len(cands):
+                from app.schemas.bootstrap_positioning import try_validate_positioning
+                norm, _ = try_validate_positioning(cands[idx])
+                selected_flat = norm or dict(cands[idx])
+                # 保留 candidates 元数据，更新 selected_index
+                selected_flat["candidates"] = cands
+                selected_flat["auto_selected_index"] = positioning.get("auto_selected_index", 0)
+                selected_flat["auto_selection_reason"] = positioning.get("auto_selection_reason", "")
+                selected_flat["auto_selection_comparison"] = positioning.get("auto_selection_comparison", "")
+                updated = selected_flat
+            else:
+                updated = positioning
+        else:
+            updated = user_input.get("positioning", positioning)
+            if not isinstance(updated, dict):
+                updated = positioning
         ctx["positioning"] = updated
         emit(run_id, "gate_passed", db, persist_status="running",
              step="positioning", positioning=updated)

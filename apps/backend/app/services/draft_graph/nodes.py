@@ -527,6 +527,9 @@ async def debrief(state: ChapterDraftState) -> dict:
             for s in storylines[:10]
         ]
 
+        project = db.query(Project).filter(Project.id == state["project_id"]).first()
+        project_genre = project.genre if project else None
+
         svc = _make_ai_service(state, db=db)
         await svc.auto_extract_debrief(
             chapter_content=state.get("draft_content", ""),
@@ -534,6 +537,7 @@ async def debrief(state: ChapterDraftState) -> dict:
             chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
             character_states=character_states,
             storylines=storylines_data,
+            genre=project_genre,
         )
         db.commit()
     except Exception as exc:

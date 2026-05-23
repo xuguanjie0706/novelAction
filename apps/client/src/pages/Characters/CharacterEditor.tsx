@@ -20,7 +20,7 @@ import {
   type CharacterGrowthTimelinePayload,
 } from './shared/components'
 import { getDebriefRealmMilestones } from './shared/debriefMilestones'
-import { DebriefRealmTimeline, GrowthTimelineEmptyState } from './shared/DebriefRealmTimeline'
+import { GrowthTrackPanel } from './GrowthTrackPanel'
 
 export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTargets }: {
   char: Character
@@ -46,8 +46,19 @@ export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTarg
       current_location: char.current_location,
       current_status: char.current_status,
       arc_stages: char.arc_stages,
+      extra: char.extra,
+      realm_rank: char.realm_rank,
     }))
-  }, [char.id, char.current_realm, char.current_location, char.current_status, char.arc_stages])
+  }, [
+    char.id,
+    char.current_realm,
+    char.current_location,
+    char.current_status,
+    char.arc_stages,
+    char.extra,
+    char.realm_rank,
+    char.updated_at,
+  ])
 
   useEffect(() => {
     if (detailTab !== 'changelog') return
@@ -58,7 +69,7 @@ export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTarg
       .catch(() => { if (!cancelled) setChangelog([]) })
       .finally(() => { if (!cancelled) setChangelogLoading(false) })
     return () => { cancelled = true }
-  }, [detailTab, char.id, char.current_realm, projectId])
+  }, [detailTab, char.id, char.current_realm, char.updated_at, projectId])
 
   /** 进入实力/成长 Tab 时拉取最新人物（含复盘写入的 extra 与 arc_stages） */
   useEffect(() => {
@@ -79,7 +90,7 @@ export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTarg
       })
       .catch(() => { /* 静默：保留 store 快照 */ })
     return () => { cancelled = true }
-  }, [detailTab, char.id, projectId, onUpdate])
+  }, [detailTab, char.id, char.updated_at, projectId, onUpdate])
 
   useEffect(() => {
     if (detailTab !== 'growth') return
@@ -96,9 +107,9 @@ export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTarg
         if (!cancelled) setRealmTimelineLoading(false)
       })
     return () => { cancelled = true }
-  }, [detailTab, char.id, char.current_realm, projectId])
+  }, [detailTab, char.id, char.current_realm, char.updated_at, projectId])
 
-  const debriefMilestones = getDebriefRealmMilestones(char)
+  const debriefMilestones = getDebriefRealmMilestones(form)
 
   const meta = ROLE_META[char.role as keyof typeof ROLE_META] ?? ROLE_META.supporting
   const statusM = STATUS_META[form.current_status] ?? STATUS_META.alive
@@ -403,164 +414,16 @@ export function CharacterEditor({ char, projectId, onUpdate, onDelete, batchTarg
           )}
 
           {detailTab === 'growth' && (
-            <div className="bg-white rounded-xl p-5 border border-gray-100 shadow-sm space-y-4">
-              <div className="text-sm font-semibold text-gray-700">人物弧线与成长</div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-4 space-y-3">
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <div className="text-xs font-semibold text-slate-700">境界时间轴（只读）· {char.name}</div>
-                    <span className="text-[10px] text-slate-500 shrink-0 text-right">
-                      大纲人物变化/实力里程碑 + 复盘 + 变更记录
-                      {typeof realmTimeline?.debrief_snapshots === 'number' && realmTimeline.debrief_snapshots > 0
-                        ? ` · 复盘 ${realmTimeline.debrief_snapshots}`
-                        : ''}
-                      {typeof realmTimeline?.changelog_entries === 'number' && realmTimeline.changelog_entries > 0
-                        ? ` · 变更 ${realmTimeline.changelog_entries}`
-                        : ''}
-                    </span>
-                  </div>
-                  {realmTimelineLoading && (
-                    <p className="text-xs text-slate-500">加载中…</p>
-                  )}
-                  {!realmTimelineLoading && realmTimeline
-                    && (realmTimeline.milestones?.length ?? 0) === 0
-                    && realmTimeline.chapter_plans_scanned === 0
-                    && (realmTimeline.debrief_snapshots ?? 0) === 0
-                    && (realmTimeline.changelog_entries ?? 0) === 0
-                    && debriefMilestones.length === 0 && (
-                    <GrowthTimelineEmptyState
-                      debriefCount={0}
-                      hasWhitelist={realmTimeline.has_realm_whitelist}
-                      charName={char.name}
-                    />
-                  )}
-                  {!realmTimelineLoading
-                    && (realmTimeline?.milestones?.length ?? 0) === 0
-                    && debriefMilestones.length > 0 && (
-                    <GrowthTimelineEmptyState
-                      debriefCount={debriefMilestones.length}
-                      hasWhitelist={realmTimeline?.has_realm_whitelist}
-                      charName={char.name}
-                    />
-                  )}
-                  {!realmTimelineLoading && realmTimeline && !realmTimeline.has_realm_whitelist
-                    && (realmTimeline.milestones?.length ?? 0) > 0 && (
-                    <p className="text-xs text-slate-600">未配置 levels 时，rank 主要依赖复盘/变更记录或境界名子串匹配，建议补全力量体系以便与大纲对齐。</p>
-                  )}
-                  {!realmTimelineLoading && realmTimeline?.has_realm_whitelist && realmTimeline.chapter_plans_scanned > 0 && realmTimeline.milestones.length === 0 && (
-                    <p className="text-xs text-slate-600">
-                      已扫描 {realmTimeline.chapter_plans_scanned} 个章节计划，未解析到 {char.name} 的境界提升（请在「人物变化」或「实力里程碑」中写明突破/晋升等，且与该角色姓名共现）。
-                    </p>
-                  )}
-                  {!realmTimelineLoading && (realmTimeline?.milestones?.length ?? 0) > 0 && (
-                    <ul className="space-y-2 max-h-56 overflow-y-auto">
-                      {realmTimeline!.milestones.map((m, i) => (
-                        <li key={`${m.chapter_number}-${m.realm_rank}-${i}`} className="text-xs border border-slate-200 rounded-md bg-white p-2.5">
-                          <div className="font-medium text-slate-800 flex flex-wrap items-center gap-x-2 gap-y-1">
-                            <span>
-                              第{m.chapter_number}章
-                              {m.chapter_title ? `《${m.chapter_title}》` : ''}
-                              <span className="text-violet-700 ml-1">→ {m.realm_name}</span>
-                              <span className="text-slate-400 font-normal ml-1">(rank {m.realm_rank})</span>
-                            </span>
-                            {(m.source === 'debrief' || m.source === 'outline' || m.source === 'changelog') && (
-                              <span className={clsx(
-                                'text-[10px] px-1.5 py-0.5 rounded border font-medium',
-                                m.source === 'debrief'
-                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                  : m.source === 'changelog'
-                                    ? 'bg-amber-50 text-amber-800 border-amber-200'
-                                    : 'bg-slate-100 text-slate-600 border-slate-200',
-                              )}>
-                                {m.source === 'debrief' ? '复盘' : m.source === 'changelog' ? '变更' : '大纲'}
-                              </span>
-                            )}
-                          </div>
-                          {m.character_change ? (
-                            <p className="text-slate-500 mt-1 line-clamp-2">{m.character_change}</p>
-                          ) : null}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              {debriefMilestones.length > 0 && (
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-4 space-y-2">
-                  <div className="text-xs font-semibold text-emerald-900">
-                    复盘突破记录（来自人物列表接口 extra.debrief_realm_milestones）
-                  </div>
-                  <DebriefRealmTimeline milestones={debriefMilestones} />
-                </div>
-              )}
-              <Field label="人物弧线（整体描述）">
-                <TArea value={form.arc ?? ''} onChange={f('arc')} rows={3} placeholder="从开始到结局，这个人物会经历怎样的转变？" />
-              </Field>
-              <div>
-                <div className="text-xs font-medium text-gray-500 mb-3">结构化成长阶段</div>
-                <div className="space-y-2 mb-2">
-                  {(form.arc_stages ?? []).map((stage: any, idx: number) => {
-                    const isDebriefStage = stage.completed === true && stage.chapter_number != null
-                    return (
-                    <div key={idx} className={clsx(
-                      'flex gap-3 p-3 rounded-lg border',
-                      isDebriefStage ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100',
-                    )}>
-                      <div className={clsx(
-                        'w-5 h-5 rounded-full text-white text-xs flex items-center justify-center shrink-0 mt-0.5 font-bold',
-                        isDebriefStage ? 'bg-emerald-500' : 'bg-amber-500',
-                      )}>
-                        {idx + 1}
-                      </div>
-                      <div className="flex-1 grid grid-cols-2 gap-2 min-w-0">
-                        {isDebriefStage ? (
-                          <>
-                            <div className="col-span-2 text-sm font-medium text-gray-800">
-                              {stage.stage ?? stage.realm ?? '突破'}
-                              <span className="text-emerald-700 text-xs ml-2">
-                                第{stage.chapter_number}章{stage.chapter_title ? ` · ${stage.chapter_title}` : ''}
-                              </span>
-                            </div>
-                            {stage.realm && (
-                              <div className="text-xs text-amber-600 col-span-2">境界：{stage.realm}</div>
-                            )}
-                            {stage.state && <div className="text-xs text-gray-500 col-span-2">{stage.state}</div>}
-                          </>
-                        ) : (
-                        <>
-                        <input value={stage.stage ?? ''} placeholder="阶段名" onChange={e => {
-                          const stages = [...(form.arc_stages ?? [])]
-                          stages[idx] = { ...stages[idx], stage: e.target.value }
-                          setForm(p => ({ ...p, arc_stages: stages }))
-                        }} className="col-span-2 text-sm font-medium bg-transparent border-0 focus:outline-none text-gray-800 border-b border-amber-200 pb-1" />
-                        <input value={stage.realm ?? ''} placeholder="此阶段境界" onChange={e => {
-                          const stages = [...(form.arc_stages ?? [])]
-                          stages[idx] = { ...stages[idx], realm: e.target.value }
-                          setForm(p => ({ ...p, arc_stages: stages }))
-                        }} className="text-xs text-amber-600 bg-transparent border-0 focus:outline-none" />
-                        <input value={stage.chapter_range ?? ''} placeholder="章节范围 (如1-30)" onChange={e => {
-                          const stages = [...(form.arc_stages ?? [])]
-                          stages[idx] = { ...stages[idx], chapter_range: e.target.value }
-                          setForm(p => ({ ...p, arc_stages: stages }))
-                        }} className="text-xs text-gray-400 bg-transparent border-0 focus:outline-none" />
-                        <input value={stage.state ?? ''} placeholder="人物状态描述" onChange={e => {
-                          const stages = [...(form.arc_stages ?? [])]
-                          stages[idx] = { ...stages[idx], state: e.target.value }
-                          setForm(p => ({ ...p, arc_stages: stages }))
-                        }} className="col-span-2 text-xs text-gray-500 bg-transparent border-0 focus:outline-none" />
-                        </>
-                        )}
-                      </div>
-                      <button onClick={() => setForm(p => ({ ...p, arc_stages: (p.arc_stages ?? []).filter((_: any, i: number) => i !== idx) }))}
-                        className="text-gray-300 hover:text-red-400 shrink-0 self-start">✕</button>
-                    </div>
-                  )})}
-                </div>
-                <button onClick={() => setForm(p => ({ ...p, arc_stages: [...(p.arc_stages ?? []), { stage: '', realm: '', state: '', chapter_range: '' }] }))}
-                  className="w-full py-2 border border-dashed border-amber-300 text-amber-500 text-xs rounded-lg hover:bg-amber-50 transition-colors">
-                  + 添加成长阶段
-                </button>
-              </div>
-              <SaveBtn />
-            </div>
+            <GrowthTrackPanel
+              charName={char.name}
+              currentRealm={form.current_realm}
+              form={form}
+              setForm={setForm}
+              realmTimeline={realmTimeline}
+              realmTimelineLoading={realmTimelineLoading}
+              debriefMilestones={debriefMilestones}
+              saveBtn={<SaveBtn />}
+            />
           )}
 
           {detailTab === 'changelog' && (

@@ -7,6 +7,7 @@ from typing import Any
 from app.models import Character, Project
 from app.services.bootstrap.context import get_genre_kit_block
 from app.services.bootstrap.parse import parse_json, safe_int
+from app.services.bootstrap.prompts.character_naming import character_naming_constraints_for_prompt
 from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
 
@@ -17,6 +18,7 @@ async def gen_characters(svc: Any, project: Project, ctx: dict):
         if ctx.get('power_level_names') else ""
     )
     kit_block = get_genre_kit_block(ctx)
+    naming_block = character_naming_constraints_for_prompt(ctx.get("genre"))
     prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 创意：{ctx['logline']}
 立意与类型：{ctx.get('premise', '')[:800] or '（未填写）'}
@@ -27,13 +29,16 @@ async def gen_characters(svc: Any, project: Project, ctx: dict):
 - 说话风格必须符合 dialogue_tone 和 forbidden_examples（严禁出现本流派禁忌的开局/对白方式）
 - speech_kit 中的 signature_words / sample_dialogues 必须体现流派特有的咬字习惯和禁忌词
 
+{naming_block}
+
 ⚠️ 你正在生成"主线核心卡司（Core Cast）"——这8人是全书贯穿的主线角色，不是全书所有人物。
 后续章节写作时会按剧情需要动态补充配角，这里只需确定主线固定角色。
 
 生成8个人物（至少：1主角+3核心配角+2反派+2师长/势力角色），返回JSON数组：
 [
   {{
-    "name": "姓名", "role": "protagonist",
+    "name": "正名（姓+名，2~4字）", "alias": ["可选外号/乳名/道号"],
+    "role": "protagonist",
     "character_tier": "core",
     "gender": "男", "age": "17", "faction": "所属势力",
     "personality": "性格（2句话）",
@@ -79,7 +84,8 @@ arc_stages 要求：每人至少 2 个成长阶段（主角/核心反派 3-4 个
 
 每个配角只需填写精简字段：
 {{
-  "name": "姓名",
+  "name": "正名（姓+名，2~4字）",
+  "alias": ["可选外号，如乳名小柔应放此处而非 name"],
   "role": "supporting 或 antagonist",
   "character_tier": "plot",
   "gender": "性别",
@@ -130,9 +136,12 @@ arc_stages 要求：每人至少 2 个成长阶段（主角/核心反派 3-4 个
         faction_id_val = ctx.get("faction_name_to_id", {}).get(faction_name) or None
         raw_stages = item.get("arc_stages")
         arc_stages = raw_stages if isinstance(raw_stages, list) else []
+        raw_alias = item.get("alias")
+        alias_list = [a.strip() for a in raw_alias if isinstance(a, str) and a.strip()] if isinstance(raw_alias, list) else []
         c = Character(
             project_id=project.id,
             name=item.get("name", "未命名"),
+            alias=alias_list or None,
             role=item.get("role", "supporting"),
             character_tier=tier,
             gender=item.get("gender"),

@@ -129,6 +129,8 @@ class GatedDraftRequest(BaseModel):
 
 class CharacterUpdate(BaseModel):
     character_id: str
+    """复盘 AI 返回的显示名；character_id 非 UUID 时用于回退匹配。"""
+    character_name: Optional[str] = None
     current_realm: Optional[str] = None
     realm_rank: Optional[int] = None
     current_location: Optional[str] = None
@@ -260,6 +262,7 @@ class ChapterIndexPayload(BaseModel):
 class NewCharacterPayload(BaseModel):
     """auto_debrief 从正文识别出的新配角，由 chapter_debrief 写入 DB。"""
     name: str
+    alias: Optional[List[str]] = None
     role: str = "supporting"
     # 叙事层级：core=核心长线 / arc=弧线支柱 / plot=剧情推手 / background=背景填充
     character_tier: Optional[str] = None

@@ -5,23 +5,29 @@
  * - 从后端并行拉取项目所有生成数据（人物、势力、设定等）
  * - 渲染左侧分区导航（11 个区域，带条目数 badge）
  * - 右侧渲染 SectionContent 对应区域的富内容
- * - 提供「返回书架」和「进入工作台」快捷操作
+ * - 提供「返回书架」「进入工作台」与未结束 Bootstrap 的「继续生成」
  *
  * 路由：/bookshelf/:projectId/recap（从书架「小说详情」页的「结构化纪要」进入）
  *
  * 数据来源：所有字段均来自数据库 API，不依赖 SSE 临时内存。
  */
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft, BookOpen, Layers, Users, Zap, Sword, Package,
   Map, BookMarked, CheckSquare, GitBranch, Loader2, AlertCircle,
   Castle,
 } from 'lucide-react'
+import toast from 'react-hot-toast'
+import GenerateWizard from '../components/Bootstrap/GenerateWizard'
+import ActiveBootstrapResumeBar from '../components/Bootstrap/ActiveBootstrapResumeBar'
+import { useBootstrapResumeBanner } from '../hooks/useBootstrapResumeBanner'
 import {
   projectsApi, charactersApi, factionsApi, powerSystemsApi,
   skillsApi, itemsApi, storylinesApi, settingsApi, outlineApi,
+  bootstrapRunsApi,
 } from '../api/client'
+import { clearActiveBootstrapRun } from '../utils/bootstrapActiveRun'
 import type { OutlineNode } from '../types'
 import SectionContent, { type DetailData } from '../components/BookshelfDetail/SectionContent'
 
@@ -203,34 +209,40 @@ export default function BookshelfDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selectedSection, setSelectedSection] = useState('overview')
+  const [showWizard, setShowWizard] = useState(false)
+  const [wizardRecoverRunId, setWizardRecoverRunId] = useState<string | null>(null)
+  const [resumeBarHidden, setResumeBarHidden] = useState(false)
+  const [resumeCancelLoading, setResumeCancelLoading] = useState(false)
+  const { snapshot: bootstrapResumeSnapshot, refresh: refreshBootstrapResume } = useBootstrapResumeBanner(
+    projectId ?? null,
+  )
 
-  // ── 并行拉取所有区域数据 ────────────────────────────────────
-  useEffect(() => {
+  const loadRecapData = useCallback(async (opts?: { silent?: boolean }) => {
     if (!projectId) return
-    setLoading(true)
-    setError('')
-
-    Promise.all([
-      projectsApi.get(projectId),
-      projectsApi.getInsights(projectId).catch(() => ({ data: { consistency_issues: [], opening_contract: {}, positioning: {} } })),
-      charactersApi.list(projectId).catch(() => ({ data: [] })),
-      charactersApi.listRelationships(projectId).catch(() => ({ data: [] })),
-      factionsApi.list(projectId).catch(() => ({ data: [] })),
-      powerSystemsApi.list(projectId).catch(() => ({ data: [] })),
-      skillsApi.list(projectId).catch(() => ({ data: [] })),
-      itemsApi.list(projectId).catch(() => ({ data: [] })),
-      storylinesApi.list(projectId).catch(() => ({ data: [] })),
-      settingsApi.list(projectId).catch(() => ({ data: [] })),
-      outlineApi.getTree(projectId).catch(() => ({ data: [] })),
-    ]).then(([
-      projectRes, insightsRes, charsRes, relsRes,
-      factionsRes, psRes, skillsRes, itemsRes,
-      slRes, settingsRes, outlineRes,
-    ]) => {
-      // 从大纲树中筛选卷级节点
+    if (!opts?.silent) {
+      setLoading(true)
+      setError('')
+    }
+    try {
+      const [
+        projectRes, insightsRes, charsRes, relsRes,
+        factionsRes, psRes, skillsRes, itemsRes,
+        slRes, settingsRes, outlineRes,
+      ] = await Promise.all([
+        projectsApi.get(projectId),
+        projectsApi.getInsights(projectId).catch(() => ({ data: { consistency_issues: [], opening_contract: {}, positioning: {} } })),
+        charactersApi.list(projectId).catch(() => ({ data: [] })),
+        charactersApi.listRelationships(projectId).catch(() => ({ data: [] })),
+        factionsApi.list(projectId).catch(() => ({ data: [] })),
+        powerSystemsApi.list(projectId).catch(() => ({ data: [] })),
+        skillsApi.list(projectId).catch(() => ({ data: [] })),
+        itemsApi.list(projectId).catch(() => ({ data: [] })),
+        storylinesApi.list(projectId).catch(() => ({ data: [] })),
+        settingsApi.list(projectId).catch(() => ({ data: [] })),
+        outlineApi.getTree(projectId).catch(() => ({ data: [] })),
+      ])
       const allNodes: OutlineNode[] = Array.isArray(outlineRes.data) ? outlineRes.data : []
       const volumes = allNodes.filter(n => n.node_type === 'volume')
-
       setData({
         project: projectRes.data,
         insights: insightsRes.data ?? { consistency_issues: [], opening_contract: {}, positioning: {} },
@@ -244,12 +256,40 @@ export default function BookshelfDetailPage() {
         settings: Array.isArray(settingsRes.data) ? settingsRes.data : [],
         volumes,
       })
-    }).catch(err => {
-      setError(err?.message ?? '加载失败，请检查网络后重试')
-    }).finally(() => {
-      setLoading(false)
-    })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '加载失败，请检查网络后重试'
+      setError(msg)
+    } finally {
+      if (!opts?.silent) setLoading(false)
+    }
   }, [projectId])
+
+  useEffect(() => {
+    void loadRecapData()
+  }, [loadRecapData])
+
+  const handleCancelBootstrapRun = async () => {
+    const rid = bootstrapResumeSnapshot?.runId?.trim()
+    if (!rid) return
+    setResumeCancelLoading(true)
+    try {
+      await bootstrapRunsApi.cancel(rid)
+      clearActiveBootstrapRun()
+      toast.success('已终止生成')
+      await refreshBootstrapResume()
+    } catch {
+      toast.error('终止失败，请重试')
+    } finally {
+      setResumeCancelLoading(false)
+    }
+  }
+
+  const handleWizardClose = () => {
+    setShowWizard(false)
+    setWizardRecoverRunId(null)
+    void refreshBootstrapResume()
+    if (data) void loadRecapData({ silent: true })
+  }
 
   // ── 加载态 ──────────────────────────────────────────────────
   if (loading) {
@@ -298,6 +338,13 @@ export default function BookshelfDetailPage() {
       background: '#FAF8F4', display: 'flex', flexDirection: 'column',
       overflow: 'hidden', fontFamily: 'inherit',
     }}>
+      {showWizard && (
+        <GenerateWizard
+          onClose={handleWizardClose}
+          recoverRunId={wizardRecoverRunId}
+          onRecoverConsumed={() => setWizardRecoverRunId(null)}
+        />
+      )}
 
       {/* ── 顶部导航栏（白色，与 BookshelfPage 一致）─────────── */}
       <header style={{
@@ -382,6 +429,22 @@ export default function BookshelfDetailPage() {
           进入工作台
         </button>
       </header>
+
+      <div style={{ flexShrink: 0, padding: '12px 20px 0', background: '#FAF8F4' }}>
+        <ActiveBootstrapResumeBar
+          snapshot={bootstrapResumeSnapshot}
+          hidden={resumeBarHidden}
+          onContinue={() => {
+            if (!bootstrapResumeSnapshot?.runId) return
+            setWizardRecoverRunId(bootstrapResumeSnapshot.runId)
+            setShowWizard(true)
+            setResumeBarHidden(false)
+          }}
+          onHide={() => setResumeBarHidden(true)}
+          onCancelRun={handleCancelBootstrapRun}
+          cancelLoading={resumeCancelLoading}
+        />
+      </div>
 
       {/* ── 主体：左导航 + 右内容 ───────────────────────────── */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>

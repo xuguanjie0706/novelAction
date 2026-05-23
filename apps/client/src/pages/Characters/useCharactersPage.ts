@@ -17,7 +17,7 @@ import {
 import type { CharacterGroup } from './CharacterList'
 
 export function useCharactersPage() {
-  const { projectId } = useParams<{ projectId: string }>()
+  const { projectId, tab } = useParams<{ projectId: string; tab: string }>()
   const { characters, setCharacters, upsertCharacter, removeCharacter } = useAppStore()
   const [selected, setSelected] = useState<Character | null>(null)
   const [creating, setCreating] = useState(false)
@@ -28,13 +28,23 @@ export function useCharactersPage() {
   const [groupBy, setGroupBy] = useState<GroupBy>('role')
   const [pageView, setPageView] = useState<'list' | 'graph'>('list')
 
+  /** ProjectCachedViews 会缓存本页：切回「人物」Tab 时必须重新拉库，否则写作复盘后的境界/变更不会出现在详情区 */
   useEffect(() => {
-    if (!projectId) return
+    if (!projectId || tab !== 'characters') return
+    let cancelled = false
     charactersApi.list(projectId).then(res => {
+      if (cancelled) return
       setCharacters(res.data)
-      if (res.data.length > 0) setSelected(res.data[0])
-    })
-  }, [projectId, setCharacters])
+      setSelected(prev => {
+        if (prev?.id) {
+          const fresh = res.data.find(c => c.id === prev.id)
+          if (fresh) return fresh
+        }
+        return res.data.length > 0 ? res.data[0] : null
+      })
+    }).catch(() => { /* 保留 store 快照 */ })
+    return () => { cancelled = true }
+  }, [projectId, tab, setCharacters])
 
   /** 写作复盘等路径 upsert 到 store 后，保持侧栏/详情与库内数据一致 */
   useEffect(() => {

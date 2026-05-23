@@ -9,7 +9,7 @@ import time
 from typing import List, AsyncGenerator, Optional
 from uuid import UUID
 
-logger = logging.getLogger(__name__)
+from app.services.ai.character_resolve import resolve_character_updates_from_states
 
 _VALID_PROMISE_TYPES = frozenset({
     "chapter_ending",
@@ -84,6 +84,7 @@ from app.services.llm_token_budgets import (
 )
 from app.services.llm_call_log import log_llm_call
 from app.services.genre_kit import get_genre_guardrail, normalize_genre
+from app.services.bootstrap.prompts.character_naming import character_naming_constraints_for_prompt
 from app.services.xuanhuan_lexicon import (
     format_modern_blacklist_for_prompt,
     is_xuanhuan_like_genre,
@@ -173,6 +174,7 @@ class DebriefMixin:
         character_states: List[dict],    # [{"id":…,"name":…,"current_realm":…,"current_location":…,"current_status":…}]
         storylines: List[dict],          # [{"id":…,"name":…,"line_type":…,"status":…,"core_conflict":…}]
         open_promises: List[dict] = [],  # [{"id":…,"promise_text":…,"promise_type":…,"source_chapter_number":…,"priority":…}]
+        genre: str | None = None,
     ) -> dict:
         """
         AI 读取章节正文，对照人物当前状态和故事线，
@@ -231,6 +233,8 @@ class DebriefMixin:
             120000,
         )
 
+        naming_block = character_naming_constraints_for_prompt(genre)
+
         prompt = f"""章节{chapter_number}《{chapter_title}》
 
 【叙事正文】（业务库仅存叙事；须通读下列全文以提取人物、故事线、资产与记忆；稿末模板仅保留在模型调用记录中供对账）
@@ -255,9 +259,11 @@ class DebriefMixin:
 
 只提取文中明确发生的变化，不要推断或猜测。
 如果某字段没有变化，不要包含它。
+realm_rank 若填写必须与上方人物列表所属力量体系 levels 的 rank 一致；不确定请省略该字段（系统会按 current_realm 文本解析），禁止自创 11、99 等随意整数。
 资产表只记录 A/B 级耐久实体：会再次出现、影响人物能力/势力关系/主线伏笔/后续冲突的道具、技能、势力。
 C级临时资产（一次性丹药、普通符箓、无名小队、普通招式）不要放进 asset_updates，只可在正文或 memory_updates 中作为事件细节出现。
 记忆库记录“第几章发生了什么、信息来源是什么、为何获得/使用/暴露该资产”；资产表记录“这个实体现在是什么、谁持有/掌握、能力/限制/状态是什么”。两者不要互相替代。
+{naming_block}
 `character_updates.current_status` 只能填写以下枚举之一：
 - alive
 - dead
@@ -271,10 +277,10 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
 {{
   "character_updates": [
     {{
-      "character_id": "人物id",
-      "character_name": "人物名称（供显示）",
+      "character_id": "必须从上方「当前人物状态」列表原样复制 id（UUID 格式）；禁止 su_chen_id、protagonist_xxx 等自创 slug",
+      "character_name": "必填，与列表中姓名完全一致",
       "current_realm": "新境界名称（如有变化，须与境界体系设定完全一致）",
-      "realm_rank": 5,
+      "realm_rank": null,
       "current_location": "新位置（如有变化）",
       "current_status": "新状态（仅允许 alive/dead/missing/sealed/transformed 之一）",
       "add_skill_name": "习得的技能名（如有）",
@@ -388,7 +394,8 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
   }},
   "new_characters": [
     {{
-      "name": "姓名",
+      "name": "正名（姓+名，2~4字；禁止老铁/小X/称呼词作正名）",
+      "alias": ["可选外号/乳名/道号"],
       "role": "supporting",
       "character_tier": "arc",
       "gender": "男/女",
@@ -619,6 +626,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
             fulfilled_promise_texts = _clean_fulfilled_promise_texts(
                 data.get("fulfilled_promise_texts")
             )
+            char_updates = resolve_character_updates_from_states(char_updates, character_states)
 
             return {
                 "character_updates": char_updates,

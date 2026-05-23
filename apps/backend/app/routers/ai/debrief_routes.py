@@ -19,6 +19,7 @@ from app.models import (
     MemoryChunk,
     OutlineNode,
     PowerSystem,
+    Project,
     ReaderPromise,
     StoryLine,
 )
@@ -28,6 +29,7 @@ from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 from app.utils.chapter_numbering import display_chapter_number
 from app.routers.ai.debrief_assets import apply_asset_updates
 from app.routers.ai.foreshadow import sync_chapter_index_foreshadows
+from app.services.ai.character_resolve import resolve_character_for_update
 from app.routers.ai.normalization import normalize_character_status, normalize_storyline_status
 from app.routers.ai.realm_tracker import (
     apply_realm_progression_side_effects,
@@ -188,8 +190,16 @@ def chapter_debrief(
     existing_undo = db.query(ChapterDebriefUndo).filter(
         ChapterDebriefUndo.chapter_id == req.chapter_id
     ).first()
+    _project_chars = db.query(Character).filter(Character.project_id == project_id).all()
     if not existing_undo:
-        char_ids_to_snap = {str(cu.character_id) for cu in req.character_updates if cu.character_id}
+        char_ids_to_snap: set[str] = set()
+        for cu in req.character_updates:
+            resolved = resolve_character_for_update(
+                db, project_id, cu.character_id, getattr(cu, "character_name", None),
+                characters=_project_chars,
+            )
+            if resolved:
+                char_ids_to_snap.add(str(resolved.id))
         sl_ids_to_snap = {str(su.storyline_id) for su in req.storyline_updates if su.storyline_id}
 
         char_states_snap = []
@@ -238,15 +248,13 @@ def chapter_debrief(
     )
 
     for cu in req.character_updates:
-        try:
-            _ = UUID(str(cu.character_id))
-        except Exception:
-            continue
-
-        char = db.query(Character).filter(
-            Character.id == cu.character_id,
-            Character.project_id == project_id,
-        ).first()
+        char = resolve_character_for_update(
+            db,
+            project_id,
+            cu.character_id,
+            getattr(cu, "character_name", None),
+            characters=_project_chars,
+        )
         if not char:
             continue
 
@@ -257,11 +265,17 @@ def chapter_debrief(
 
         if cu.current_realm is not None:
             char.current_realm = cu.current_realm.strip()[:100]
-        if cu.realm_rank is not None:
+
+        _eff_label = (char.current_realm or "").strip()
+        _label_rank = (
+            _rank_for_realm_label(_eff_label, name_to_rank)
+            if _eff_label and name_to_rank
+            else None
+        )
+        if _label_rank is not None:
+            char.realm_rank = _label_rank
+        elif cu.realm_rank is not None:
             _prev_rank = char.realm_rank
-            # ── 境界序号单调性 guard ────────────────────────────────────────
-            # 防止 AI 复盘把主角/重要角色境界序号降低（如主角从 rank 5 写成 rank 2）。
-            # 豁免：角色当前状态为 depowered / suppressed / sealed（剧情性强制降级）。
             _blocked_statuses = {"depowered", "suppressed", "sealed"}
             if (
                 _prev_rank is not None
@@ -273,23 +287,17 @@ def chapter_debrief(
                     f"→ {cu.realm_rank} 为降级，已自动阻止；"
                     "若确为剧情性降级（封印/剥夺），请先将角色状态设为 'suppressed' 后重试。"
                 )
-                # 阻止写入：保留当前 realm_rank，仅更新 realm 名称
             else:
                 char.realm_rank = cu.realm_rank
-
-        if char.realm_rank is None and name_to_rank and (char.current_realm or "").strip():
-            _resolved_rank = _rank_for_realm_label((char.current_realm or "").strip(), name_to_rank)
-            if _resolved_rank is not None:
-                char.realm_rank = _resolved_rank
 
         if cu.current_realm is not None or cu.realm_rank is not None:
             realm_label = (
                 (cu.current_realm.strip()[:100] if isinstance(cu.current_realm, str) else "")
                 or (char.current_realm or "").strip()[:100]
             )
-            rank_snap = cu.realm_rank if cu.realm_rank is not None else char.realm_rank
-            if rank_snap is None and name_to_rank and realm_label:
-                rank_snap = _rank_for_realm_label(realm_label, name_to_rank)
+            rank_snap = _rank_for_realm_label(realm_label, name_to_rank) if realm_label and name_to_rank else None
+            if rank_snap is None:
+                rank_snap = cu.realm_rank if cu.realm_rank is not None else char.realm_rank
             if realm_label or rank_snap is not None:
                 chapter_num = display_chapter_number(chapter.title, chapter.sort_order)
                 extra = dict(char.extra) if isinstance(char.extra, dict) else {}
@@ -568,6 +576,7 @@ def chapter_debrief(
                 id=new_char_id,
                 project_id=project_id,
                 name=stored_name,
+                alias=[a.strip() for a in (nc.alias or []) if isinstance(a, str) and a.strip()] or None,
                 role=truncate(nc.role or "supporting", 20),
                 character_tier=tier,
                 gender=truncate(nc.gender, 20) if nc.gender else None,
@@ -986,6 +995,9 @@ async def auto_debrief(
         llm_provider_id=req.llm_provider_id,
     )
 
+    project = db.query(Project).filter(Project.id == project_id).first()
+    project_genre = project.genre if project else None
+
     result = await svc.auto_extract_debrief(
         chapter_content=narrative_plain,
         chapter_title=chapter.title,
@@ -993,6 +1005,7 @@ async def auto_debrief(
         character_states=character_states,
         storylines=storylines_data,
         open_promises=open_promises_data,
+        genre=project_genre,
     )
     if isinstance(result, dict) and not result.get("error"):
         # 服务端将 fulfilled_promise_texts 解析为精确 ID 并写入缓存，

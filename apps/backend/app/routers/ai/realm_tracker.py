@@ -107,48 +107,72 @@ def make_realm_memory_chunk(
     )
 
 
-def _best_realm_from_milestone_history(
+def normalize_debrief_milestone_ranks(
+    hist: list[dict[str, Any]],
+    name_to_rank: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    用力量体系白名单重算每条 milestone 的 realm_rank，覆盖 AI 乱填的序号（如 11）。
+
+    复盘里程碑的排序与 current_realm 回写均依赖规范化后的 rank。
+    """
+    from app.routers.outline.helpers.realm_timeline import _rank_for_realm_label
+
+    out: list[dict[str, Any]] = []
+    for row in hist:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        label = str(item.get("realm_name") or "").strip()
+        if not label:
+            continue
+        resolved = _rank_for_realm_label(label, name_to_rank) if name_to_rank else None
+        if resolved is not None:
+            item["realm_rank"] = resolved
+        else:
+            rr = item.get("realm_rank")
+            try:
+                item["realm_rank"] = int(rr) if rr is not None else None
+            except (TypeError, ValueError):
+                item["realm_rank"] = None
+        out.append(item)
+    out.sort(key=lambda h: int(h.get("chapter_number") or 0))
+    return out
+
+
+def _latest_realm_from_milestone_history(
     hist: list[dict[str, Any]],
     name_to_rank: dict[str, int] | None = None,
 ) -> tuple[str | None, int | None, int | None]:
     """
-    从 debrief_realm_milestones 取全书最高 rank 记录。
+    从 debrief_realm_milestones 取**最新章节**的境界（非最大 rank）。
+
+    AI 常把 realm_rank 填成与力量体系无关的整数；按章号取末条 + 白名单解析更贴近正文进度。
 
     Returns:
         (realm_name, realm_rank, chapter_number)
     """
-    best_name = ""
-    best_rank = 0
-    best_ch = 0
-    for row in hist:
-        if not isinstance(row, dict):
-            continue
-        label = str(row.get("realm_name") or "").strip()
-        rr = row.get("realm_rank")
-        if isinstance(rr, bool) or rr is None:
-            rr = None
-        else:
-            try:
-                rr = int(rr)
-            except (TypeError, ValueError):
-                rr = None
-        if (rr is None or rr <= 0) and name_to_rank and label:
-            from app.routers.outline.helpers.realm_timeline import _rank_for_realm_label
+    from app.routers.outline.helpers.realm_timeline import _rank_for_realm_label
 
-            rr = _rank_for_realm_label(label, name_to_rank)
-        if rr is None or rr <= 0:
-            continue
-        try:
-            ch = int(row.get("chapter_number") or 0)
-        except (TypeError, ValueError):
-            ch = 0
-        if rr > best_rank or (rr == best_rank and ch >= best_ch and label):
-            best_rank = rr
-            best_name = label
-            best_ch = ch
-    if best_rank <= 0:
+    normalized = normalize_debrief_milestone_ranks(hist, name_to_rank)
+    if not normalized:
         return None, None, None
-    return best_name or None, best_rank, best_ch or None
+    last = normalized[-1]
+    label = str(last.get("realm_name") or "").strip()
+    if not label:
+        return None, None, None
+    rank = last.get("realm_rank")
+    try:
+        rank = int(rank) if rank is not None else None
+    except (TypeError, ValueError):
+        rank = None
+    if (rank is None or rank <= 0) and name_to_rank:
+        rank = _rank_for_realm_label(label, name_to_rank)
+    try:
+        ch = int(last.get("chapter_number") or 0)
+    except (TypeError, ValueError):
+        ch = 0
+    return label, rank, ch or None
 
 
 def reconcile_character_realm_from_milestones(
@@ -156,24 +180,28 @@ def reconcile_character_realm_from_milestones(
     name_to_rank: dict[str, int] | None = None,
 ) -> bool:
     """
-    用 extra.debrief_realm_milestones 中全书最高境界回写 current_realm / realm_rank。
-    用于复盘只写了 milestone 未抬升主字段、或历史数据不一致时的自愈。
+    用 extra.debrief_realm_milestones 中**最新章节**快照回写 current_realm / realm_rank。
+
+    同时规范化里程碑内 rank，修复历史脏数据。
     """
     extra = dict(char.extra) if isinstance(char.extra, dict) else {}
-    hist = [h for h in (extra.get("debrief_realm_milestones") or []) if isinstance(h, dict)]
-    if not hist:
+    raw = [h for h in (extra.get("debrief_realm_milestones") or []) if isinstance(h, dict)]
+    if not raw:
         return False
-    label, rank, _ = _best_realm_from_milestone_history(hist, name_to_rank)
-    if not label or not rank:
+    normalized = normalize_debrief_milestone_ranks(raw, name_to_rank)
+    extra["debrief_realm_milestones"] = normalized
+    char.extra = extra
+
+    label, rank, _ = _latest_realm_from_milestone_history(normalized, name_to_rank)
+    if not label:
         return False
-    prev_rank = char.realm_rank or 0
     prev_name = (char.current_realm or "").strip()
-    if rank < prev_rank:
-        return False
-    if rank == prev_rank and label == prev_name:
-        return False
+    prev_rank = char.realm_rank
+    if label == prev_name and rank == prev_rank:
+        return normalized != raw
     char.current_realm = label[:100]
-    char.realm_rank = rank
+    if rank is not None and rank > 0:
+        char.realm_rank = rank
     return True
 
 

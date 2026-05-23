@@ -806,7 +806,6 @@ def test_writing_brief_context_activates_bound_assets_and_factions():
         project_id="00000000-0000-0000-0000-000000000001",
         chapter=chapter,
         outline_node=outline,
-        large_context=False,
     )
 
     assert "【本章写前 Brief / 激活资产】" in brief

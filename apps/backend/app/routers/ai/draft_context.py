@@ -405,21 +405,12 @@ def _build_character_summary(
     characters: list,
     outline_node,
     chapter,
-    large_context: bool,
 ) -> tuple[str, list[str]]:
     """
     构建章节人物摘要字符串与本章人物清单（manifest）。
 
-    从 characters 列表中筛选本章出场人物，按 large_context 模式组装详细或简短摘要。
+    从 characters 列表中筛选本章出场人物，组装详细摘要。
     同时构建 chapter_manifest_names 作为 AI 的出场限制约束。
-
-    @param db: SQLAlchemy Session
-    @param project_id: 项目 UUID 字符串
-    @param characters: 当前项目所有 Character 记录
-    @param outline_node: 章节大纲节点（可为 None）
-    @param chapter: 当前 Chapter ORM 对象
-    @param large_context: 是否使用大上下文模式
-    @returns (char_summary, chapter_manifest_names) 元组
     """
     involved_ids: set = set()
     if outline_node and outline_node.involved_character_ids:
@@ -428,10 +419,9 @@ def _build_character_summary(
     def _char_skill_names(known_skills) -> str:
         if not known_skills:
             return ""
-        skill_limit = 10 if large_context else 3
         names = [
             sk.get("skill_name", "") if isinstance(sk, dict) else str(sk)
-            for sk in known_skills[:skill_limit]
+            for sk in known_skills[:10]
         ]
         return "、".join(n for n in names if n)
 
@@ -441,9 +431,8 @@ def _build_character_summary(
         display_chars = priority
         chapter_manifest_names = [c.name for c in priority]
     else:
-        display_chars = characters if large_context else characters[:6]
+        display_chars = characters
 
-    # manifest 兜底：从核心角色 + 最近 5 章首次出场凑一份
     if not chapter_manifest_names:
         seen: set[str] = set()
         fallback_names: list[str] = []
@@ -482,11 +471,11 @@ def _build_character_summary(
     char_lines = []
     for c in display_chars:
         parts = [f"{c.name}（{c.role}"]
-        if large_context and c.alias:
+        if c.alias:
             parts.append(f"别名:{c.alias}")
         if c.current_realm:
             parts.append(f"境界:{c.current_realm}")
-        if large_context and c.realm_rank is not None:
+        if c.realm_rank is not None:
             parts.append(f"境界序号:{c.realm_rank}")
         if c.current_location:
             parts.append(f"位置:{c.current_location}")
@@ -497,20 +486,20 @@ def _build_character_summary(
             parts.append(f"技能:[{skills_str}]")
         parts.append(f"）性格:{(c.personality or '')[:40]}")
         if c.motivation:
-            parts.append(f"动机:{truncate(c.motivation, 180 if large_context else 30)}")
-        if large_context and c.values:
+            parts.append(f"动机:{truncate(c.motivation, 180)}")
+        if c.values:
             parts.append(f"价值观:{truncate(c.values, 180)}")
-        if large_context and c.fear:
+        if c.fear:
             parts.append(f"恐惧:{truncate(c.fear, 140)}")
-        if large_context and c.secrets:
+        if c.secrets:
             parts.append(f"秘密:{truncate(c.secrets, 180)}")
-        if large_context and c.known_skills:
+        if c.known_skills:
             parts.append(f"技能明细:{json.dumps(c.known_skills, ensure_ascii=False)[:1200]}")
-        if large_context and c.owned_items:
+        if c.owned_items:
             parts.append(f"持有物:{json.dumps(c.owned_items, ensure_ascii=False)[:1200]}")
 
         _speech_kit = (c.speech_kit or {}) if isinstance(c.speech_kit, dict) else {}
-        if large_context and _speech_kit:
+        if _speech_kit:
             _sig_words = [str(w) for w in (_speech_kit.get("signature_words") or []) if w][:5]
             if _sig_words:
                 parts.append(f"标志词:[{'、'.join(_sig_words)}]")
@@ -522,26 +511,22 @@ def _build_character_summary(
                 _latest_evo = str(_evo_notes[-1])[:80]
                 if _latest_evo:
                     parts.append(f"近期声音演变:{_latest_evo}")
-        elif not large_context and c.speech_style:
-            parts.append(f"口吻:{c.speech_style[:30]}")
 
-        if large_context:
-            _arc_stages = c.arc_stages if isinstance(c.arc_stages, list) else []
-            _cur_stage = next(
-                (s for s in _arc_stages if isinstance(s, dict) and not s.get("completed")),
-                _arc_stages[-1] if _arc_stages else None,
-            )
-            if _cur_stage and isinstance(_cur_stage, dict):
-                _stage_name = (_cur_stage.get("name") or _cur_stage.get("stage") or "").strip()
-                _stage_goal = (_cur_stage.get("goal") or _cur_stage.get("description") or "").strip()
-                if _stage_name:
-                    parts.append(
-                        f"成长弧:[{_stage_name}]{f'({_stage_goal[:50]})' if _stage_goal else ''}"
-                    )
+        _arc_stages = c.arc_stages if isinstance(c.arc_stages, list) else []
+        _cur_stage = next(
+            (s for s in _arc_stages if isinstance(s, dict) and not s.get("completed")),
+            _arc_stages[-1] if _arc_stages else None,
+        )
+        if _cur_stage and isinstance(_cur_stage, dict):
+            _stage_name = (_cur_stage.get("name") or _cur_stage.get("stage") or "").strip()
+            _stage_goal = (_cur_stage.get("goal") or _cur_stage.get("description") or "").strip()
+            if _stage_name:
+                parts.append(
+                    f"成长弧:[{_stage_name}]{f'({_stage_goal[:50]})' if _stage_goal else ''}"
+                )
         char_lines.append("".join(parts))
 
-    char_summary = "\n".join(char_lines) if large_context else " | ".join(char_lines)
-    return char_summary, chapter_manifest_names
+    return "\n".join(char_lines), chapter_manifest_names
 
 
 # ═══════════════════════════════════════════════════════════════

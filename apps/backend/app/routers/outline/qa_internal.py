@@ -278,7 +278,7 @@ async def _quality_check_outline_volumes(ctx: dict[str, Any]) -> dict[str, Any]:
         overdue_ledger = _build_overdue_foreshadow_ledger(
             ctx.get("foreshadows") or [],
             vol_max_ch,
-            max_chars=1800 if req.model_profile == "gemini" else 800,
+            max_chars=1800,
         )
         svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
         report = await svc.outline_quality_check(
@@ -292,7 +292,7 @@ async def _quality_check_outline_volumes(ctx: dict[str, Any]) -> dict[str, Any]:
             global_outline_context=ctx["global_outline_context"],
             previous_chapters_context=_format_previous_chapters_context(
                 previous_chapters,
-                max_items=24 if req.model_profile == "gemini" else 8,
+                max_items=24,
             ),
             continuity_state=_format_rolling_continuity_state(
                 [*previous_chapters[-8:], *volume_chapters],
@@ -388,7 +388,7 @@ async def _quality_check_outline_book(ctx: dict[str, Any]) -> dict[str, Any]:
     book_overdue_ledger = _build_overdue_foreshadow_ledger(
         ctx.get("foreshadows") or [],
         book_max_ch,
-        max_chars=2000 if req.model_profile == "gemini" else 1000,
+        max_chars=2000,
     )
     svc = AIService(profile=req.model_profile, db=db, llm_provider_id=req.llm_provider_id)
     report = await svc.outline_quality_check(

@@ -82,7 +82,7 @@ async def ai_expand_outline(
     char_summary = _build_char_summary(characters)
 
     # 加载前序已生成章节作为连续性上下文
-    context_limit = 24 if req.model_profile == "gemini" else 10
+    context_limit = 24
     prior_chapters = _load_existing_chapter_context(db, project_id, limit=context_limit)
 
     # 从前序章节提取主角已达最高境界

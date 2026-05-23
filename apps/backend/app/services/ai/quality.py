@@ -57,11 +57,11 @@ class QualityMixin:
         plot_dossier_context: str = "",
     ) -> dict:
         large_context = self._large_context_enabled()
-        memory_count = 120 if large_context else 20
-        setting_count = 80 if large_context else 8
-        character_count = 80 if large_context else 10
-        storyline_count = 40 if large_context else 5
-        power_count = 20 if large_context else 5
+        memory_count = 120
+        setting_count = 80
+        character_count = 80
+        storyline_count = 40
+        power_count = 20
 
         memory_text = (
             "\n".join(
@@ -117,7 +117,7 @@ class QualityMixin:
         if narr_qc.strip():
             chapter_plain = narr_qc.strip()
         chapter_body = self._clip_context(chapter_plain, 2000, 120000)
-        chapter_label = "完整正文" if large_context else "正文（前2000字）"
+        chapter_label = "完整正文"
 
         system = """你是专业的网络小说编辑，负责对章节内容进行质量检查。
 请严格按照 JSON 格式返回结果，不要有任何额外文字。
@@ -250,19 +250,8 @@ class QualityMixin:
             }
 
     def _micro_patch_narrative_window(self, body: str) -> str:
-        """长章截断供本地模型；长上下文线路尽量给足正文。"""
-        large = self._large_context_enabled()
-        if large:
-            return self._clip_context(body, 800, 120000)
-        max_total = 16000
-        if len(body) <= max_total:
-            return body
-        return (
-            body[:12000]
-            + "\n\n……（中略：中间已省略；若问题仅出现在后段且无法唯一定位，请将 original_excerpt、"
-            "replacement_excerpt 置空并在 rationale 写 need_tail）……\n\n"
-            + body[-4000:]
-        )
+        """长章正文窗口：尽量给足完整叙事供局部替换定位。"""
+        return self._clip_context(body, 800, 120000)
 
     async def quality_micro_patch(
         self,
@@ -309,12 +298,11 @@ class QualityMixin:
   "replacement_excerpt": "",
   "rationale": ""
 }}"""
-        large = self._large_context_enabled()
         try:
             response = await self._call_ai(
                 system,
                 prompt,
-                max_tokens=max_tokens_quality_micro_patch(large),
+                max_tokens=max_tokens_quality_micro_patch(),
                 context={"operation": operation, "chapter_title": chapter_title},
                 task="quality.micro_patch",
             )

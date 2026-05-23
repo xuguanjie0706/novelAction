@@ -13,6 +13,7 @@ from fastapi import APIRouter
 router = APIRouter(prefix="/projects/{project_id}/ai", tags=["ai"])
 
 from app.routers.ai import (  # noqa: E402
+    chapter_ingredients_routes,
     chat_routes,
     coherence_routes,
     debrief_routes,
@@ -27,6 +28,7 @@ from app.routers.ai import (  # noqa: E402
     world_settings_generate_routes,
 )
 
+router.include_router(chapter_ingredients_routes.router)
 router.include_router(quality_routes.router)
 router.include_router(coherence_routes.router)
 router.include_router(chat_routes.router)

@@ -21,7 +21,7 @@ def test_format_memory_summary_compact():
         memory_type="event",
         content="反派1号在第三章末苏醒。",
     )
-    s = format_memory_summary([chunk], large_context=False)
+    s = format_memory_summary([chunk])
     assert "反派苏醒" in s
     assert "苏醒" in s
 

@@ -101,7 +101,7 @@ async def ai_full_generate_outline(
 
         for batch_idx, batch_count in enumerate(batches):
             batch_offset = chapter_offset + len(all_chapters)
-            previous_context_limit = 24 if req.model_profile == "gemini" else 8
+            previous_context_limit = 24
             context_chapters = [*(prior_chapters or []), *all_chapters]
             previous_chapters_context = _format_previous_chapters_context(
                 context_chapters,
@@ -329,7 +329,7 @@ async def ai_full_generate_outline(
                 )
                 for node in (root_volumes or expandable)
             ])
-            existing_context_limit = 24 if req.model_profile == "gemini" else 8
+            existing_context_limit = 24
             book_chapters_so_far = _load_existing_chapter_context(
                 db,
                 project_id,
@@ -438,7 +438,7 @@ async def ai_full_generate_outline(
                 OutlineNode.project_id == project_id,
                 OutlineNode.node_type == "chapter_plan",
             ).count()
-            existing_context_limit = 24 if req.model_profile == "gemini" else 8
+            existing_context_limit = 24
             book_chapters_so_far = _load_existing_chapter_context(
                 db,
                 project_id,

@@ -40,28 +40,24 @@ from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 
 class ClientMixin:
     def _large_context_enabled(self) -> bool:
-        return self.profile == "gemini"
+        """统一走远程大上下文模型，不再区分本地短窗口。"""
+        return True
 
     def _clip_context(
         self,
         text: str | None,
-        local_limit: int,
+        _legacy_local_limit: int,
         large_limit: int | None,
         from_end: bool = False,
         field_name: str = "",
     ) -> str:
-        """裁剪上下文。large_limit=None 表示大上下文模型（Gemini）不截断。
-        真正发生截断时记录 warning，并在 self._truncation_warnings 追加提示。
-        """
+        """裁剪上下文。large_limit=None 表示不截断；否则按 large_limit 字符上限裁剪。"""
         clean = (text or "").strip()
         if not clean:
             return ""
-        if self._large_context_enabled():
-            if large_limit is None:
-                return clean  # Gemini：不截断
-            limit = large_limit
-        else:
-            limit = local_limit
+        if large_limit is None:
+            return clean
+        limit = large_limit
         if len(clean) <= limit:
             return clean
         label = f"[{field_name}] " if field_name else ""

@@ -43,6 +43,7 @@ class SceneDraftMixin:
         positioning: Optional[dict] = None,
         memory_snippets: Optional[List[str]] = None,
         location_context: str = "",
+        scene_constraint_block: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         为单个 Scene 流式生成正文。
@@ -76,9 +77,6 @@ class SceneDraftMixin:
         from app.services.genre_kit import get_genre_guardrail
         from app.services.llm_token_budgets import max_tokens_scene_draft
 
-        large = self._large_context_enabled()
-
-        # ── 上下文块拼接 ─────────────────────────────────────
         kit_block = get_genre_guardrail(genre) if genre else ""
 
         pos_block = ""
@@ -125,9 +123,13 @@ class SceneDraftMixin:
             f"\n{location_context}\n" if location_context else ""
         )
 
+        constraint_block = (
+            f"\n{scene_constraint_block}\n" if scene_constraint_block else ""
+        )
+
         prompt = f"""章节：《{chapter_title}》
 章节摘要：{chapter_summary[:300]}
-{pos_block}{prev_block}{mem_block}{loc_context_block}
+{pos_block}{prev_block}{constraint_block}{mem_block}{loc_context_block}
 ---
 【第 {scene_order} 场】{('  ' + scene_title) if scene_title else ''}
 时间：{time or '同日'}　　地点：{location_name or '未知'}
@@ -152,7 +154,7 @@ POV：{pov_character}（全场保持此 POV，禁止全知视角插入）
         async for chunk in self._stream_ai(
             system,
             prompt,
-            max_tokens=max_tokens_scene_draft(large),
+            max_tokens=max_tokens_scene_draft(),
             task="draft.chapter",
         ):
             yield chunk

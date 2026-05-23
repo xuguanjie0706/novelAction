@@ -204,12 +204,12 @@ def _build_overdue_foreshadow_ledger(
     return text
 
 
-def _ai_expand_prior_plot_budget(model_profile: str) -> int:
-    return 14000 if model_profile == "gemini" else 6500
+def _ai_expand_prior_plot_budget(_model_profile: str) -> int:
+    return 14000
 
 
-def _ai_expand_prior_foreshadow_budget(model_profile: str) -> int:
-    return 8000 if model_profile == "gemini" else 3200
+def _ai_expand_prior_foreshadow_budget(_model_profile: str) -> int:
+    return 8000
 
 
 def _load_existing_chapter_context(

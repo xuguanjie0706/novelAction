@@ -305,7 +305,7 @@ def build_writing_brief_context(
     project_id: str,
     chapter: Chapter,
     outline_node: Optional[OutlineNode],
-    large_context: bool = False,
+    large_context: bool = True,
 ) -> str:
     """Activate only the assets this chapter may consume: factions, items, and skills."""
     current_chapter_number = display_chapter_number(chapter.title, chapter.sort_order)
@@ -377,9 +377,9 @@ def build_writing_brief_context(
         if str(f.id) in faction_ids or f.name in faction_names
     ]
 
-    item_limit = 12 if large_context else 5
-    skill_limit = 12 if large_context else 5
-    faction_limit = 10 if large_context else 4
+    item_limit = 12
+    skill_limit = 12
+    faction_limit = 10
     sections = ["【本章写前 Brief / 激活资产】"]
 
     if activated_factions:
@@ -502,7 +502,7 @@ def build_chapter_index_context(db: Session, project_id: str, chapter: Chapter) 
     return "\n\n".join(sections)
 
 
-def build_plot_dossier_context(db: Session, project_id: str, chapter: Chapter, large_context: bool = False) -> str:
+def build_plot_dossier_context(db: Session, project_id: str, chapter: Chapter, large_context: bool = True) -> str:
     """情节档案：章节索引主线 + 伏笔状态 + 当前活跃故事线。"""
     index_rows = (
         db.query(ChapterIndex, Chapter)
@@ -515,13 +515,13 @@ def build_plot_dossier_context(db: Session, project_id: str, chapter: Chapter, l
         .order_by(Chapter.sort_order)
         .all()
     )
-    chapter_limit = 60 if large_context else 16
+    chapter_limit = 60
     index_lines = []
     for idx, ch in index_rows[-chapter_limit:]:
         num = display_chapter_number(ch.title, ch.sort_order)
-        events = "；".join(fmt_index_item(e) for e in (idx.core_events or [])[: (6 if large_context else 3)])
-        hook = truncate(idx.ending_hook, 220 if large_context else 120) if idx.ending_hook else ""
-        notes = "；".join(fmt_index_item(n) for n in (idx.continuity_notes or [])[: (5 if large_context else 2)])
+        events = "；".join(fmt_index_item(e) for e in (idx.core_events or [])[:6])
+        hook = truncate(idx.ending_hook, 220) if idx.ending_hook else ""
+        notes = "；".join(fmt_index_item(n) for n in (idx.continuity_notes or [])[:5])
         parts = [f"第{num}章《{ch.title}》"]
         if idx.story_day:
             parts.append(f"故事日={idx.story_day}")
@@ -539,7 +539,7 @@ def build_plot_dossier_context(db: Session, project_id: str, chapter: Chapter, l
         .order_by(Foreshadow.priority.desc(), Foreshadow.created_at.asc())
         .all()
     )
-    foreshadow_limit = 30 if large_context else 12
+    foreshadow_limit = 30
     foreshadow_lines = []
     for f in foreshadow_rows[:foreshadow_limit]:
         parts = [f.code or "F-?", f.title, f"状态={f.status}"]
@@ -548,7 +548,7 @@ def build_plot_dossier_context(db: Session, project_id: str, chapter: Chapter, l
         if f.resolved_chapter_number:
             parts.append(f"回收=第{f.resolved_chapter_number}章")
         if f.description:
-            parts.append(f"说明={truncate(f.description, 200 if large_context else 90)}")
+            parts.append(f"说明={truncate(f.description, 200)}")
         foreshadow_lines.append("；".join(parts))
 
     storyline_rows = (
@@ -560,7 +560,7 @@ def build_plot_dossier_context(db: Session, project_id: str, chapter: Chapter, l
         .order_by(StoryLine.sort_order)
         .all()
     )
-    storyline_limit = 24 if large_context else 8
+    storyline_limit = 24
     storyline_lines = []
     for s in storyline_rows[:storyline_limit]:
         beats = list(s.key_beats or [])
@@ -573,7 +573,7 @@ def build_plot_dossier_context(db: Session, project_id: str, chapter: Chapter, l
                 tail = str(last)
         storyline_lines.append(
             f"{s.name}（{s.line_type}/{s.status}）："
-            f"{truncate(tail or s.core_conflict or s.description, 260 if large_context else 120)}"
+            f"{truncate(tail or s.core_conflict or s.description, 260)}"
         )
 
     sections = []

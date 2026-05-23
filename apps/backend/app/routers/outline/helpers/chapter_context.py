@@ -6,8 +6,8 @@ from app.services.outline_planning import TARGET_WORDS_PER_CHAPTER
 
 from app.routers.outline.helpers.text_utils import _clean_outline_text
 
-def _outline_batch_size(model_profile: str) -> int:
-    return 30 if model_profile == "gemini" else 15
+def _outline_batch_size(_model_profile: str) -> int:
+    return 30
 
 
 def _format_previous_chapters_context(chapters: list[dict], max_items: int = 10) -> str:

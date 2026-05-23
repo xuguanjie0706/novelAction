@@ -196,23 +196,36 @@ async def node_gate_volumes(state: BootstrapState, config: dict | None = None) -
         emit(run_id, "error", db, step="volumes", message="项目不存在，闸门中止")
         return {"ctx": ctx, "errors": [{"step": "gate_volumes", "reason": "no_project"}]}
 
+    from app.services.bootstrap.volume_entity_registry import build_volumes_gate_preview
+
     while True:
-        cnt = (
-            db.query(OutlineNode)
-            .filter(OutlineNode.project_id == pid, OutlineNode.node_type == "volume")
-            .count()
-        )
+        preview = build_volumes_gate_preview(db, pid, ctx)
+        gate_msg = "请确认卷级骨架后继续；「重新生成」将删除已写入的卷节点后重跑。"
+        if preview.get("has_realm_warnings"):
+            gate_msg = (
+                "⚠️ 检测到卷级 BOSS 境界曲线异常（后期卷不高于前期卷），"
+                "建议点「重新生成此步」修正后再继续。"
+            )
         emit(
             run_id,
             "gate_pending",
             db,
             persist_status="awaiting_gate",
             step="volumes",
-            message="请确认卷级骨架后继续；「重新生成」将删除已写入的卷节点后重跑。",
-            gate_preview={"volumes_count": cnt},
+            message=gate_msg,
+            gate_preview=preview,
         )
-        _persist(db, run_id, {}, gate_data={"kind": "volumes", "count": cnt, "current_gate": "gate_volumes"})
-        cmd = interrupt({"step": "volumes", "kind": "volumes_gate", "count": cnt})
+        _persist(
+            db,
+            run_id,
+            {},
+            gate_data={"kind": "volumes", "current_gate": "gate_volumes", **preview},
+        )
+        cmd = interrupt({
+            "step": "volumes",
+            "kind": "volumes_gate",
+            "count": preview.get("volumes_count", 0),
+        })
         if not isinstance(cmd, dict):
             cmd = {}
         action = (cmd.get("action") or "approve").strip().lower()

@@ -318,6 +318,7 @@ class WritingToolsMixin:
         open_foreshadows: Optional[List[dict]] = None,
         open_reader_promises: Optional[List[dict]] = None,
         known_locations: Optional[List[dict]] = None,
+        constraints_block: Optional[str] = None,
     ) -> dict:
         """
         根据章纲生成结构化分场计划（4-8 场）。
@@ -430,7 +431,12 @@ class WritingToolsMixin:
                 + "\n".join(loc_lines) + "\n"
             )
 
-        prompt = f"""{kit_block}{positioning_block}{prev_block}{state_block}{foreshadow_block}{promise_block}{location_lib_block}
+        # ── 投料约束块（来自 ChapterIngredients，最高写作优先级）────
+        ingredients_block = ""
+        if constraints_block and constraints_block.strip():
+            ingredients_block = "\n" + constraints_block.strip() + "\n"
+
+        prompt = f"""{kit_block}{positioning_block}{prev_block}{ingredients_block}{state_block}{foreshadow_block}{promise_block}{location_lib_block}
 本章标题：《{chapter_title}》
 本章摘要：{chapter_summary[:800]}
 {char_block}

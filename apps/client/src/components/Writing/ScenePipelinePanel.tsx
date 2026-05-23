@@ -24,6 +24,8 @@ import type { Chapter, Location, OutlineNode } from '../../types'
 import { useScenePipeline, type SceneDraftState } from '../../hooks/useScenePipeline'
 import { useAppStore, modelProfileFromRoute, llmProviderIdFromRoute } from '../../store'
 import { locationsApi, scenesApi } from '../../api/client'
+import { DebtLedger } from './DebtLedger'
+import { SceneConstraintTags } from './SceneConstraintTags'
 
 // ── Props ──────────────────────────────────────────────────────
 
@@ -52,6 +54,8 @@ interface SceneCardProps {
   onDraft: () => void
   onLocationChange: (sceneId: string, locationId: string | null, locationName: string | null) => void
   disabled: boolean
+  // 约束字段
+  scene?: import('../../types').Scene
 }
 
 /**
@@ -63,6 +67,7 @@ interface SceneCardProps {
 function SceneCard({
   sceneId, order, title, goal, conflict, locationId, locationName,
   wordBudget, pacing, status, draftState, locations, onDraft, onLocationChange, disabled,
+  scene,
 }: SceneCardProps) {
   const isDone      = draftState?.status === 'done'  || status === 'written'
   const isStreaming = draftState?.status === 'streaming'
@@ -193,6 +198,19 @@ function SceneCard({
       {isError && draftState?.errorMsg && (
         <p className="text-[9px] text-red-500 mt-1 truncate">{draftState.errorMsg}</p>
       )}
+
+      {/* 约束标签（分场规划时写入，写后核验后更新）*/}
+      {scene && (
+        <SceneConstraintTags
+          storylineMoves={scene.storyline_moves}
+          debtFlags={scene.debt_flags}
+          foreshadowOps={scene.foreshadow_ops}
+          factionColor={scene.faction_color}
+          assetSpotlight={scene.asset_spotlight}
+          structuralWarnings={scene.structural_warnings}
+          checklistResult={scene.checklist_result}
+        />
+      )}
     </div>
   )
 }
@@ -302,6 +320,18 @@ export default function ScenePipelinePanel({ projectId, chapter, outlineNode, on
         </div>
       </div>
 
+      {/* ── 债务看板（分场前展示）── */}
+      {outlineNode && (
+        <div className="shrink-0 px-3 pt-2">
+          <DebtLedger
+            projectId={projectId}
+            outlineNodeId={outlineNode.id}
+            chapterId={chapter.id}
+            autoLoad={true}
+          />
+        </div>
+      )}
+
       {/* ── 场景列表 ── */}
       <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2 min-h-0">
         {totalCount === 0 ? (
@@ -329,6 +359,7 @@ export default function ScenePipelinePanel({ projectId, chapter, outlineNode, on
               onDraft={() => pipeline.draftScene(scene.id)}
               onLocationChange={handleLocationChange}
               disabled={pipeline.anyDrafting && pipeline.draftStates[scene.id]?.status !== 'streaming'}
+              scene={scene}
             />
           ))
         )}

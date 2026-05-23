@@ -57,6 +57,22 @@ class Scene(Base):
     status = Column(String(20), default="planned")    # planned / written / reviewed
     content = Column(Text)                            # 本场正文（写完后存）
 
+    # ── 投料约束区（由 chapter_ingredients 服务在分场规划时写入）────
+    # 本场需推进的故事线：[{storyline_id, name, line_type, from_state, to_state, must_advance}]
+    storyline_moves = Column(JSON, default=None)
+    # 势力/地盘着色：{faction_id, name, faction_type, alignment, atmosphere, npc_default_attitude}
+    faction_color = Column(JSON, default=None)
+    # 技能/法宝聚光灯：[{asset_type, asset_id, name, description, key_effect}]
+    asset_spotlight = Column(JSON, default=None)
+    # 伏笔操作指令：[{foreshadow_id, title, op, suggested_method, is_overdue}]
+    foreshadow_ops = Column(JSON, default=None)
+    # 债务标记：[{debt_type, description, severity, overdue_chapters}]
+    debt_flags = Column(JSON, default=None)
+    # 结构预警（规划时生成）：[{code, level, msg}]
+    structural_warnings = Column(JSON, default=None)
+    # 写后核验结果（stitch 后异步回填）：{storyline_ok, foreshadow_ok, debt_cleared, score, notes}
+    checklist_result = Column(JSON, default=None)
+
     extra = Column(JSON, default=dict)  # JSON 扩展字段
     created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间（UTC）
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())  # 更新时间（UTC）

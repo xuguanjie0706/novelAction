@@ -60,7 +60,7 @@ class CoherenceMixin:
             if narr_c.strip():
                 content = narr_c.strip()
             content_preview = self._clip_context(content, 1800, 60000) if content else "（正文为空）"
-            content_label = "完整正文" if large_context else "正文（截断）"
+            content_label = "完整正文"
             chapter_blocks.append(
                 f"[样本{idx}] 章节ID={chapter.get('id')} | 顺序={chapter.get('sort_order', idx - 1)}\n"
                 f"标题：{title}\n"
@@ -222,12 +222,10 @@ class CoherenceMixin:
     ) -> List[dict]:
         """
         根据连贯性评测结论，对所选章节正文做最小幅度修订（非整章重写）。
-        Gemini：一次批量；本地：逐章调用以控制上下文。
         """
         if not chapters:
             return []
 
-        large = self._large_context_enabled()
         slim = self._slim_coherence_for_apply(coherence or {})
         coherence_json = json.dumps(slim, ensure_ascii=False)
         coherence_json = self._clip_context(coherence_json, 10000, 56000)
@@ -238,18 +236,17 @@ class CoherenceMixin:
             "必须严格返回 JSON，不要输出任何 JSON 以外的文字。"
         )
 
-        if large:
-            blocks = []
-            for idx, ch in enumerate(chapters, start=1):
-                cid = str(ch.get("id", ""))
-                title = ch.get("title") or "未命名"
-                body = ch.get("content") or ""
-                body = self._clip_context(body, 16000, 48000)
-                blocks.append(
-                    f"### 第{idx}章\n章节ID={cid}\n标题：{title}\n正文：\n{body if body else '（空）'}"
-                )
-            joined = "\n\n".join(blocks)
-            prompt = f"""小说：{project_title}
+        blocks = []
+        for idx, ch in enumerate(chapters, start=1):
+            cid = str(ch.get("id", ""))
+            title = ch.get("title") or "未命名"
+            body = ch.get("content") or ""
+            body = self._clip_context(body, 16000, 48000)
+            blocks.append(
+                f"### 第{idx}章\n章节ID={cid}\n标题：{title}\n正文：\n{body if body else '（空）'}"
+            )
+        joined = "\n\n".join(blocks)
+        prompt = f"""小说：{project_title}
 
 【连贯性评测结果】（JSON）
 {coherence_json}
@@ -273,118 +270,51 @@ class CoherenceMixin:
 }}
 若某章需要修改：unchanged 为 false，revised_content 为该章**完整**修后正文；若无需修改：unchanged 为 true 且 revised_content 为空字符串。"""
 
-            try:
-                response = await self._call_ai(
-                    system,
-                    prompt,
-                    max_tokens=max_tokens_coherence_apply(True),
-                    context={"operation": "chapter_coherence_apply"},
-                    task="quality.coherence_apply",
-                )
-            except Exception as exc:
-                raise RuntimeError(format_llm_error_message(exc)) from exc
-            try:
-                data = self._parse_coherence_apply_json(response)
-            except Exception:
-                raise ValueError("模型返回的修订 JSON 无法解析") from None
-            rows = data.get("chapter_revisions") or data.get("revisions")
-            if not isinstance(rows, list):
-                raise ValueError("修订结果缺少 chapter_revisions 数组")
-            by_id = {str(r.get("chapter_id", "")): r for r in rows if isinstance(r, dict)}
-            merged: List[dict] = []
-            for ch in chapters:
-                cid = str(ch.get("id", ""))
-                row = by_id.get(cid) or {}
-                unchanged = bool(row.get("unchanged", True))
-                revised = (row.get("revised_content") or "").strip()
-                if not unchanged and not revised:
-                    unchanged = True
-                note = str(row.get("change_note") or "").strip()[:200]
-                orig = ch.get("content") or ""
-                if unchanged or not revised:
-                    merged.append(
-                        {
-                            "chapter_id": cid,
-                            "unchanged": True,
-                            "revised_content": "",
-                            "change_note": note or "未改动",
-                        }
-                    )
-                else:
-                    merged.append(
-                        {
-                            "chapter_id": cid,
-                            "unchanged": False,
-                            "revised_content": revised,
-                            "change_note": note or "已修订",
-                        }
-                    )
-            return merged
-
-        merged_seq: List[dict] = []
-        for i, ch in enumerate(chapters):
+        try:
+            response = await self._call_ai(
+                system,
+                prompt,
+                max_tokens=max_tokens_coherence_apply(),
+                context={"operation": "chapter_coherence_apply"},
+                task="quality.coherence_apply",
+            )
+        except Exception as exc:
+            raise RuntimeError(format_llm_error_message(exc)) from exc
+        try:
+            data = self._parse_coherence_apply_json(response)
+        except Exception:
+            raise ValueError("模型返回的修订 JSON 无法解析") from None
+        rows = data.get("chapter_revisions") or data.get("revisions")
+        if not isinstance(rows, list):
+            raise ValueError("修订结果缺少 chapter_revisions 数组")
+        by_id = {str(r.get("chapter_id", "")): r for r in rows if isinstance(r, dict)}
+        merged: List[dict] = []
+        for ch in chapters:
             cid = str(ch.get("id", ""))
-            title = ch.get("title") or "未命名"
-            body = ch.get("content") or ""
-            prev_plain = self._plain_text(chapters[i - 1].get("content")) if i > 0 else ""
-            next_plain = self._plain_text(chapters[i + 1].get("content")) if i + 1 < len(chapters) else ""
-            prev_tail = self._clip_context(prev_plain[-1200:], 1200, 1200, from_end=True) if prev_plain else ""
-            next_head = self._clip_context(next_plain[:800], 800, 800) if next_plain else ""
-
-            prompt = f"""小说：{project_title}
-
-【连贯性评测结果】（JSON）
-{coherence_json}
-{author_block}
-【相邻上下文（纯文本摘录，仅供衔接判断）】
-上一章结尾：{prev_tail or "（无）"}
-下一章开头：{next_head or "（无）"}
-
-【当前待修订章节】
-章节ID：{cid}
-标题：{title}
-正文（请保持原有 HTML/标签结构；若无标签则保持纯文本）：
-{self._clip_context(body, 10000, 22000)}
-
-任务：只根据评测结论修订**本章节**；禁止整章重写；未涉及处保持原文。
-返回 JSON：
-{{
-  "chapter_id": "{cid}",
-  "unchanged": true,
-  "revised_content": "",
-  "change_note": "未改动"
-}}
-若需修改：unchanged=false，revised_content 填完整修后正文；否则 unchanged=true 且 revised_content 为空。"""
-
-            try:
-                response = await self._call_ai(
-                    system,
-                    prompt,
-                    max_tokens=max_tokens_coherence_apply(False),
-                    context={"operation": "chapter_coherence_apply"},
-                    task="quality.coherence_apply",
-                )
-            except Exception as exc:
-                raise RuntimeError(format_llm_error_message(exc)) from exc
-            try:
-                row = self._parse_coherence_apply_json(response)
-            except Exception:
-                raise ValueError(f"第 {i + 1} 章修订 JSON 无法解析") from None
-            if str(row.get("chapter_id", "")) != cid:
-                row["chapter_id"] = cid
+            row = by_id.get(cid) or {}
             unchanged = bool(row.get("unchanged", True))
             revised = (row.get("revised_content") or "").strip()
             if not unchanged and not revised:
                 unchanged = True
             note = str(row.get("change_note") or "").strip()[:200]
-            merged_seq.append(
-                {
-                    "chapter_id": cid,
-                    "unchanged": unchanged or not revised,
-                    "revised_content": "" if unchanged or not revised else revised,
-                    "change_note": note or ("未改动" if unchanged else "已修订"),
-                }
-            )
-        return merged_seq
+            if unchanged or not revised:
+                merged.append(
+                    {
+                        "chapter_id": cid,
+                        "unchanged": True,
+                        "revised_content": "",
+                        "change_note": note or "未改动",
+                    }
+                )
+            else:
+                merged.append(
+                    {
+                        "chapter_id": cid,
+                        "unchanged": False,
+                        "revised_content": revised,
+                        "change_note": note or "已修订",
+                    }
+                )
+        return merged
 
     # ── 流式建议 ──────────────────────────────────────

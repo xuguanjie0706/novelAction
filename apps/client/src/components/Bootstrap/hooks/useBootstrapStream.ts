@@ -278,8 +278,17 @@ export function useBootstrapStream() {
     }
     if (kind === 'volumes') {
       setGateStep('volumes')
-      setGateMessage('请确认卷级骨架后继续')
-      setGatePreview({ volumes_count: (gateData as { count?: number }).count ?? 0 })
+      setGateMessage(
+        typeof gd.has_realm_warnings === 'boolean' && gd.has_realm_warnings
+          ? '⚠️ 检测到卷级 BOSS 境界曲线异常，建议重新生成此步后再继续'
+          : '请确认卷级骨架后继续',
+      )
+      setGatePreview({
+        volumes_count: (gateData as { count?: number }).count ?? (gd.volumes_count as number | undefined) ?? 0,
+        ...(Array.isArray(gd.volumes_preview) ? { volumes_preview: gd.volumes_preview } : {}),
+        ...(Array.isArray(gd.volume_realm_warnings) ? { volume_realm_warnings: gd.volume_realm_warnings } : {}),
+        ...(typeof gd.has_realm_warnings === 'boolean' ? { has_realm_warnings: gd.has_realm_warnings } : {}),
+      })
       setPhase('gate')
     }
   }, [])

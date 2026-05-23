@@ -1,100 +1,55 @@
 """
 各创作场景的 max_tokens（OpenAI 兼容 chat.completions）。
 
-Gemini 等长上下文模型：数值在 app.config.Settings 中可用环境变量覆盖。
-本地短上下文模型：保持保守默认，避免撑爆 8k context。
+统一使用远程大上下文模型（Gemini 等）；数值在 app.config.Settings 中可用环境变量覆盖。
 """
 from app.config import settings
 
 
-def _is_gemini(profile: str) -> bool:
-    return profile == "gemini"
+def max_tokens_expand_outline(_profile: str = "gemini") -> int:
+    return settings.GEMINI_EXPAND_OUTLINE_MAX_TOKENS
 
 
-def max_tokens_expand_outline(profile: str) -> int:
-    return (
-        settings.GEMINI_EXPAND_OUTLINE_MAX_TOKENS
-        if _is_gemini(profile)
-        else settings.LOCAL_EXPAND_OUTLINE_MAX_TOKENS
-    )
+def max_tokens_outline_quality_check(_profile: str = "gemini") -> int:
+    return settings.GEMINI_OUTLINE_QUALITY_MAX_TOKENS
 
 
-def max_tokens_outline_quality_check(profile: str) -> int:
-    return (
-        settings.GEMINI_OUTLINE_QUALITY_MAX_TOKENS
-        if _is_gemini(profile)
-        else settings.LOCAL_OUTLINE_QUALITY_MAX_TOKENS
-    )
+def max_tokens_chapter_quality_check(_large_context: bool = True) -> int:
+    return settings.GEMINI_CHAPTER_QUALITY_MAX_TOKENS
 
 
-def max_tokens_chapter_quality_check(large_context: bool) -> int:
-    return (
-        settings.GEMINI_CHAPTER_QUALITY_MAX_TOKENS
-        if large_context
-        else settings.LOCAL_CHAPTER_QUALITY_MAX_TOKENS
-    )
-
-
-def max_tokens_quality_micro_patch(large_context: bool) -> int:
+def max_tokens_quality_micro_patch(_large_context: bool = True) -> int:
     """质量债务局部替换：输出较短 JSON + 替换段。"""
-    return 4096 if large_context else 2200
+    return 4096
 
 
-def max_tokens_coherence_check(large_context: bool) -> int:
-    return (
-        settings.GEMINI_COHERENCE_CHECK_MAX_TOKENS
-        if large_context
-        else settings.LOCAL_COHERENCE_CHECK_MAX_TOKENS
-    )
+def max_tokens_coherence_check(_large_context: bool = True) -> int:
+    return settings.GEMINI_COHERENCE_CHECK_MAX_TOKENS
 
 
-def max_tokens_coherence_apply(large_context: bool) -> int:
-    return (
-        settings.GEMINI_COHERENCE_APPLY_MAX_TOKENS
-        if large_context
-        else settings.LOCAL_COHERENCE_APPLY_MAX_TOKENS
-    )
+def max_tokens_coherence_apply(_large_context: bool = True) -> int:
+    return settings.GEMINI_COHERENCE_APPLY_MAX_TOKENS
 
 
-def max_tokens_draft_stream(large_context: bool) -> int:
-    return (
-        settings.GEMINI_DRAFT_STREAM_MAX_TOKENS
-        if large_context
-        else settings.LOCAL_DRAFT_STREAM_MAX_TOKENS
-    )
+def max_tokens_draft_stream(_large_context: bool = True) -> int:
+    return settings.GEMINI_DRAFT_STREAM_MAX_TOKENS
 
 
-def max_tokens_auto_debrief(profile: str = "default") -> int:
-    """复盘 JSON 输出复杂，需按模型分档，不能统一用小值。"""
-    return (
-        settings.GEMINI_AUTO_DEBRIEF_MAX_TOKENS
-        if _is_gemini(profile)
-        else settings.LOCAL_AUTO_DEBRIEF_MAX_TOKENS
-    )
+def max_tokens_auto_debrief(_profile: str = "default") -> int:
+    """复盘 JSON 输出复杂，需足够 completion 预算。"""
+    return settings.GEMINI_AUTO_DEBRIEF_MAX_TOKENS
 
 
-def max_tokens_plan_full_structure(profile: str) -> int:
-    return (
-        settings.GEMINI_PLAN_STRUCTURE_MAX_TOKENS
-        if _is_gemini(profile)
-        else settings.LOCAL_PLAN_STRUCTURE_MAX_TOKENS
-    )
+def max_tokens_plan_full_structure(_profile: str = "gemini") -> int:
+    return settings.GEMINI_PLAN_STRUCTURE_MAX_TOKENS
 
 
-def max_tokens_suggest_stream(profile: str) -> int:
-    return (
-        settings.GEMINI_SUGGEST_STREAM_MAX_TOKENS
-        if _is_gemini(profile)
-        else settings.LOCAL_SUGGEST_STREAM_MAX_TOKENS
-    )
+def max_tokens_suggest_stream(_profile: str = "gemini") -> int:
+    return settings.GEMINI_SUGGEST_STREAM_MAX_TOKENS
 
 
-def max_tokens_extract_memory(profile: str) -> int:
-    return (
-        settings.GEMINI_EXTRACT_MEMORY_MAX_TOKENS
-        if _is_gemini(profile)
-        else settings.LOCAL_EXTRACT_MEMORY_MAX_TOKENS
-    )
+def max_tokens_extract_memory(_profile: str = "gemini") -> int:
+    return settings.GEMINI_EXTRACT_MEMORY_MAX_TOKENS
 
 
 def max_tokens_bootstrap_completion() -> int:
@@ -102,9 +57,9 @@ def max_tokens_bootstrap_completion() -> int:
     return int(settings.BOOTSTRAP_COMPLETION_MAX_TOKENS)
 
 
-def max_tokens_scene_draft(large_context: bool) -> int:
-    """逐场起草的 ``max_tokens``：单场字数约 300-800，本地给 1200，Gemini 给 3000。"""
-    return 3000 if large_context else 1200
+def max_tokens_scene_draft(_large_context: bool = True) -> int:
+    """逐场起草的 ``max_tokens``：单场字数约 300-800。"""
+    return 3000
 
 
 def max_tokens_vol_expand_chapters() -> int:

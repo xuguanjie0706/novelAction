@@ -65,7 +65,6 @@ async def chapter_coherence_check(
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "Project not found")
-    large_context = req.model_profile == "gemini"
 
     chapters = db.query(Chapter).filter(
         Chapter.project_id == project_id,
@@ -81,12 +80,12 @@ async def chapter_coherence_check(
 
     project_context_parts = []
     if project.premise:
-        project_context_parts.append(f"作品基本面：{truncate(project.premise, 4000 if large_context else 600)}")
+        project_context_parts.append(f"作品基本面：{truncate(project.premise, 4000)}")
 
     settings = db.query(WorldSetting).filter(WorldSetting.project_id == project_id).all()
     if settings:
-        setting_limit = 60 if large_context else 8
-        setting_len = 1200 if large_context else 160
+        setting_limit = 60
+        setting_len = 1200
         project_context_parts.append(
             "世界观设定：\n" + "\n".join(
                 f"- {format_world_setting_context(s, content_limit=setting_len)}"
@@ -96,11 +95,11 @@ async def chapter_coherence_check(
 
     characters = db.query(Character).filter(Character.project_id == project_id).all()
     if characters:
-        char_limit = 80 if large_context else 12
+        char_limit = 80
         project_context_parts.append(
             "人物状态：\n" + "\n".join(
                 f"- {c.name}: 境界={c.current_realm or '未知'}；位置={c.current_location or '未知'}；"
-                f"状态={c.current_status or 'alive'}；动机={truncate(c.motivation, 180 if large_context else 50)}"
+                f"状态={c.current_status or 'alive'}；动机={truncate(c.motivation, 180)}"
                 for c in characters[:char_limit]
             )
         )
@@ -110,11 +109,11 @@ async def chapter_coherence_check(
         StoryLine.status.in_(["planned", "active", "climax"]),
     ).order_by(StoryLine.sort_order).all()
     if storylines:
-        storyline_limit = 50 if large_context else 8
+        storyline_limit = 50
         project_context_parts.append(
             "故事线进度：\n" + "\n".join(
-                f"- {s.name}（{s.status}）：{truncate(s.core_conflict or s.description, 500 if large_context else 100)}；"
-                f"关键节拍={json.dumps(s.key_beats or [], ensure_ascii=False)[:1600 if large_context else 260]}"
+                f"- {s.name}（{s.status}）：{truncate(s.core_conflict or s.description, 500)}；"
+                f"关键节拍={json.dumps(s.key_beats or [], ensure_ascii=False)[:1600]}"
                 for s in storylines[:storyline_limit]
             )
         )
@@ -131,10 +130,7 @@ async def chapter_coherence_check(
         .all()
     )
     if index_rows:
-        index_window = [
-            (idx, ch) for idx, ch in index_rows
-            if large_context or ch.sort_order >= max(0, min_so - 5)
-        ]
+        index_window = list(index_rows)
         project_context_parts.append(
             "章节索引与伏笔：\n" + "\n".join(
                 f"- 第{display_chapter_number(ch.title, ch.sort_order)}章：核心事件={json.dumps(idx.core_events or [], ensure_ascii=False)[:700]}; "
@@ -154,13 +150,13 @@ async def chapter_coherence_check(
             Chapter.sort_order <= max_so,
         )
         .order_by(Chapter.sort_order.desc())
-        .limit(100 if large_context else 20)
+        .limit(100)
         .all()
     )
     if memory_rows:
         project_context_parts.append(
             "记忆库：\n" + "\n".join(
-                f"- 第{display_chapter_number(ch.title, ch.sort_order)}章 {m.title or m.memory_type}: {truncate(m.content, 700 if large_context else 120)}"
+                f"- 第{display_chapter_number(ch.title, ch.sort_order)}章 {m.title or m.memory_type}: {truncate(m.content, 700)}"
                 for m, ch in memory_rows
             )
         )

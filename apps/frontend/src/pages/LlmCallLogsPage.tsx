@@ -51,7 +51,7 @@ const contextIssueMeta: Record<
   truncated: {
     label: '上下文已裁剪',
     color: 'orange',
-    description: '部分 prompt 字段因本地/默认窗口限制被截断，模型未看到完整设定',
+    description: '部分 prompt 字段因窗口上限被业务侧裁剪，模型未看到完整设定',
   },
   limit_exceeded: {
     label: '上下文超限',
@@ -371,7 +371,7 @@ export default function LlmCallLogsPage() {
             <Space direction="vertical" size={0}>
               {contextIssueStats.truncated > 0 && (
                 <Text>
-                  {contextIssueStats.truncated} 条因窗口限制被业务侧裁剪（本地线路常见）；建议换大上下文远程模型或减少注入字段。
+                  {contextIssueStats.truncated} 条因窗口限制被业务侧裁剪；建议换更大上下文模型或减少注入字段。
                 </Text>
               )}
               {contextIssueStats.limitExceeded > 0 && (

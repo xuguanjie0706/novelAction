@@ -141,6 +141,68 @@ function CharactersGateReview({ preview }: { preview: Record<string, unknown> })
   )
 }
 
+/**
+ * 卷级骨架闸门：展示各卷 BOSS/境界与战力曲线告警。
+ */
+function VolumesGateReview({ preview }: { preview: Record<string, unknown> }) {
+  const rows = Array.isArray(preview.volumes_preview)
+    ? (preview.volumes_preview as Record<string, unknown>[])
+    : []
+  const warnings = Array.isArray(preview.volume_realm_warnings)
+    ? (preview.volume_realm_warnings as Record<string, unknown>[])
+    : []
+
+  if (rows.length === 0 && warnings.length === 0) return null
+
+  return (
+    <div className="mt-5 w-full space-y-4 text-left">
+      {warnings.length > 0 && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-[13px] leading-relaxed text-red-800">
+          <p className="font-semibold">战力曲线异常（后期卷 BOSS 境界不高于前期卷）</p>
+          <ul className="mt-1.5 list-disc space-y-1 pl-4">
+            {warnings.map((w, i) => (
+              <li key={i}>{String(w.description ?? '—')}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {rows.length > 0 && (
+        <div>
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">卷级 BOSS 一览</h3>
+          <div className="max-h-[min(22rem,50vh)] overflow-auto rounded-lg border border-gray-200">
+            <table className="w-full min-w-[300px] border-collapse text-left text-[13px]">
+              <thead className="sticky top-0 z-[1] bg-gray-50 text-[11px] font-semibold text-gray-600">
+                <tr>
+                  <th className="border-b border-gray-200 px-3 py-2">卷</th>
+                  <th className="border-b border-gray-200 px-2 py-2">阶段</th>
+                  <th className="border-b border-gray-200 px-2 py-2">核心 BOSS</th>
+                  <th className="border-b border-gray-200 px-2 py-2">境界</th>
+                </tr>
+              </thead>
+              <tbody className="text-gray-800">
+                {rows.map((row, i) => (
+                  <tr key={i} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/80">
+                    <td className="max-w-[140px] truncate px-3 py-2 font-medium" title={String(row.title ?? '')}>
+                      {String(row.title ?? `第${Number(row.sort_order ?? i) + 1}卷`)}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-2 text-gray-600">{String(row.phase ?? '—')}</td>
+                    <td className="max-w-[100px] truncate px-2 py-2 text-gray-700" title={String(row.volume_boss ?? '')}>
+                      {row.volume_boss ? String(row.volume_boss) : '—'}
+                    </td>
+                    <td className="max-w-[100px] truncate px-2 py-2 text-gray-700" title={String(row.volume_boss_realm ?? '')}>
+                      {row.volume_boss_realm ? String(row.volume_boss_realm) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function previewSummary(
   step: GatePendingStep,
   preview: Record<string, unknown> | null,
@@ -159,7 +221,11 @@ function previewSummary(
   }
   if (step === 'volumes') {
     const n = preview.volumes_count
-    return typeof n === 'number' ? `已规划 ${n} 卷骨架` : null
+    const warned = preview.has_realm_warnings === true
+    if (typeof n !== 'number') return null
+    return warned
+      ? `已规划 ${n} 卷骨架 · ⚠️ BOSS 境界曲线异常`
+      : `已规划 ${n} 卷骨架`
   }
   return null
 }
@@ -300,6 +366,9 @@ export default function BootstrapGateTimelineDetail({
               )}
               {gateStep === 'characters' && gatePreview ? (
                 <CharactersGateReview preview={gatePreview} />
+              ) : null}
+              {gateStep === 'volumes' && gatePreview ? (
+                <VolumesGateReview preview={gatePreview} />
               ) : null}
               <p className="mx-auto mt-5 max-w-sm text-xs leading-relaxed text-gray-500">
                 若结构大体满意请点底栏「确认并继续」；「重新生成」将按后端策略回滚本步产物后重跑。

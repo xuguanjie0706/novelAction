@@ -60,17 +60,14 @@ async def quality_check(
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "Project not found")
-    large_context = req.model_profile == "gemini"
-
-    # 质检：用章节正文前 300 字做语义检索，拉取与本章内容最相关的记忆；
-    # 有上下文限制时（local），top_k 缩小；max_chapter 防泄漏。
+    # 质检：用章节正文前 300 字做语义检索，拉取与本章内容最相关的记忆；max_chapter 防泄漏。
     _qc_plain = ""
     if chapter.content:
         import re as _re
         _qc_plain = _re.sub(r"<[^>]+>", "", chapter.content or "")[:300]
     memories = await _semantic_search(
         db, project_id, _qc_plain or chapter.title or "",
-        top_k=200 if large_context else 50,
+        top_k=200,
         max_chapter=chapter.sort_order,
     )
 
@@ -115,32 +112,20 @@ async def quality_check(
     ).all()
     power_systems_summary = []
     for ps in power_systems:
-        if large_context:
-            levels = []
-            for level in (ps.levels or []):
-                if isinstance(level, dict):
-                    rank = level.get("rank")
-                    name = level.get("name") or ""
-                    requirement = level.get("requirement") or level.get("description") or ""
-                    levels.append(f"{rank}.{name}({requirement})" if rank else f"{name}({requirement})")
-                else:
-                    levels.append(str(level))
-            rules = ps.special_rules or ps.breakthrough_condition or ps.description or ""
-            power_systems_summary.append(
-                f"{ps.name}：等级={' > '.join(levels) or '未知'}；"
-                f"主角当前={ps.protagonist_current_rank or '未知'}；规则={rules}"
-            )
-        else:
-            highest_level = "未知"
-            if ps.levels:
-                last_level = ps.levels[-1]
-                if isinstance(last_level, dict):
-                    highest_level = last_level.get("name", "") or "未知"
-                else:
-                    highest_level = str(last_level) or "未知"
-            power_systems_summary.append(
-                f"{ps.name}：最高境界={highest_level}，主角当前={ps.protagonist_current_rank or '未知'}"
-            )
+        levels = []
+        for level in (ps.levels or []):
+            if isinstance(level, dict):
+                rank = level.get("rank")
+                name = level.get("name") or ""
+                requirement = level.get("requirement") or level.get("description") or ""
+                levels.append(f"{rank}.{name}({requirement})" if rank else f"{name}({requirement})")
+            else:
+                levels.append(str(level))
+        rules = ps.special_rules or ps.breakthrough_condition or ps.description or ""
+        power_systems_summary.append(
+            f"{ps.name}：等级={' > '.join(levels) or '未知'}；"
+            f"主角当前={ps.protagonist_current_rank or '未知'}；规则={rules}"
+        )
 
     outline_context = ""
     node: Optional[OutlineNode] = None
@@ -152,11 +137,11 @@ async def quality_check(
             parts = []
             if node.summary:
                 parts.append(f"本章摘要：{node.summary}")
-            if large_context and node.hook:
+            if node.hook:
                 parts.append(f"开篇钩子：{node.hook}")
-            if large_context and node.conflict:
+            if node.conflict:
                 parts.append(f"核心冲突：{node.conflict}")
-            if large_context and node.highlight:
+            if node.highlight:
                 parts.append(f"章末方向：{node.highlight}")
             if node.power_milestone:
                 parts.append(f"实力里程碑：{node.power_milestone}")
@@ -185,7 +170,6 @@ async def quality_check(
         db=db,
         project_id=project_id,
         chapter=chapter,
-        large_context=large_context,
     )
 
     svc = AIService(
@@ -198,7 +182,7 @@ async def quality_check(
         chapter_title=chapter.title,
         memories=[m.content for m in memories],
         settings_summary=[
-            format_world_setting_context(s, content_limit=2400 if large_context else 260)
+            format_world_setting_context(s, content_limit=2400)
             for s in settings
         ],
         check_types=req.check_types,

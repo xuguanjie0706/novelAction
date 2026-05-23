@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     GEMINI_MODEL: Optional[str] = None
 
     # chat.completions max_tokens — 勿超过所用模型/网关的实际上限（见各云厂商文档）
-    # 本系统仅使用远程大上下文模型（Gemini / Claude / GPT-4o 等），LOCAL_* 为兼容保留。
+    # 本系统统一使用远程大上下文模型（Gemini / Claude / GPT-4o 等）。
     GEMINI_SINGLE_SHOT_MAX_TOKENS: int = 65536
     GEMINI_SETTING_COMPLETION_MAX_TOKENS: int = 32768
     # Bootstrap 串行各步大块 JSON max_tokens
@@ -44,20 +44,9 @@ class Settings(BaseSettings):
     # Bootstrap Step 12.5 首卷章纲：远程 Gemini 等建议 ≥40960，可一次生成 60 章避免 30+30 断档
     VOL1_CHAPTERS_MAX_TOKENS: int = 40960
 
-    LOCAL_EXPAND_OUTLINE_MAX_TOKENS: int = 4096
-    LOCAL_OUTLINE_QUALITY_MAX_TOKENS: int = 4096
-    LOCAL_CHAPTER_QUALITY_MAX_TOKENS: int = 2048
-    LOCAL_COHERENCE_CHECK_MAX_TOKENS: int = 2200
-    LOCAL_COHERENCE_APPLY_MAX_TOKENS: int = 16384
-    LOCAL_DRAFT_STREAM_MAX_TOKENS: int = 4096
-    LOCAL_PLAN_STRUCTURE_MAX_TOKENS: int = 2048
-    LOCAL_SUGGEST_STREAM_MAX_TOKENS: int = 2048
-    LOCAL_EXTRACT_MEMORY_MAX_TOKENS: int = 2048
-
     # 复盘（auto_debrief）max_tokens — JSON 输出包含六类资产子字段，必须足够大
     # 复盘 JSON 通常 <4k token；thinking 模型在过大 max_tokens 时极易拖至数分钟无响应
     GEMINI_AUTO_DEBRIEF_MAX_TOKENS: int = 8192
-    LOCAL_AUTO_DEBRIEF_MAX_TOKENS: int = 4096
 
     # ── 记忆时效衰减（RAG 重排序用）─────────────────────────────────────────
     # importance_score 随章节距离指数衰减的系数 α（越大衰减越快）。

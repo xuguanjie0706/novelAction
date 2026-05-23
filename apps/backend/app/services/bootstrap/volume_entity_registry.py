@@ -21,9 +21,19 @@ _ORG_BAD_PREFIX_RE = re.compile(
 # 卷末/终局 Boss 常见称谓片段
 _BOSS_HINT_RE = re.compile(r"(?:冥皇|魔尊|天帝|仙帝|至尊|主宰|大魔|终极|最终)")
 
+# 卷级核心对立面常见叙事词（领袖/幕后/终战对手等，不限 role=antagonist）
+_VOL_THREAT_HINT_RE = re.compile(
+    r"(?:领袖|首领|BOSS|boss|魔头|幕后|终战|对决|宿敌|大反派|反派|魔尊|殿主|宗主|掌门)"
+)
+
 _REALM_NEAR_NAME_RE = re.compile(
     r"[\(（]([^）\)]{2,8})[\)）]|"
     r"(?:为|达|至|已是|突破至|晋入)\s*([\u4e00-\u9fff]{2,8})"
+)
+
+# 结构化字段 / 叙述中「名+境界」模式
+_NAME_REALM_PAREN_RE = re.compile(
+    r"([\u4e00-\u9fff]{2,4})[\(（]([\u4e00-\u9fff]{2,8})[\)）]"
 )
 
 
@@ -63,15 +73,20 @@ def build_volume_entity_prompt_block(ctx: dict) -> str:
         ]
         if antagonists:
             lines.append(
-                "  ⚠️ 反派境界曲线：越靠后的卷，当卷核心反派 effective 境界 rank 须 ≥ 前期卷核心反派；"
-                "终局 Boss 须达到或逼近境界体系最高档（见下）。"
+                "  ⚠️ 反派境界曲线：越靠后的卷，当卷核心反派 effective 境界 rank 须严格高于前期卷；"
+                "禁止后期卷 BOSS 境界低于前期卷（如卷四领袖低于卷三 BOSS 是致命低级错误）。"
             )
 
     if level_names:
         top = level_names[-1]
-        lines.append(f"【境界阶梯（低→高）】{' → '.join(level_names)}")
+        second = level_names[-2] if len(level_names) >= 2 else top
+        lines.append(f"【境界阶梯（低→高，rank 0→{len(level_names) - 1}）】{' → '.join(level_names)}")
         lines.append(
-            f"  ⚠️ 全书终局对立面（冥皇/魔尊等）须处于最高档「{top}」或次高档，"
+            "  ⚠️ 每卷必填 volume_boss（当卷核心对立角色名）与 volume_boss_realm（必须从上方阶梯精确选名）；"
+            "volume_boss_realm 的 rank 须严格单调递增（后卷 rank > 前卷 rank）。"
+        )
+        lines.append(
+            f"  ⚠️ 全书终局对立面须处于「{second}」或最高档「{top}」，"
             f"禁止终局 Boss 仅停留在中阶境界。"
         )
 
@@ -113,6 +128,180 @@ def _protagonist_faction_from_ctx(ctx: dict) -> str:
 
 def _build_realm_rank_map(level_names: list[str]) -> dict[str, int]:
     return {name: i for i, name in enumerate(level_names) if name}
+
+
+def _resolve_realm_rank(
+    realm_name: str | None,
+    rank_map: dict[str, int],
+    level_names: list[str],
+) -> int:
+    """将境界名映射为 rank；支持子串模糊（如「初期灵台境」→「灵台境」）。"""
+    if not realm_name:
+        return -1
+    realm_name = realm_name.strip()
+    if realm_name in rank_map:
+        return rank_map[realm_name]
+    for ln in sorted(level_names, key=len, reverse=True):
+        if ln and (ln in realm_name or realm_name in ln):
+            return rank_map.get(ln, -1)
+    return -1
+
+
+def _char_effective_rank(
+    char: Any,
+    blob: str,
+    level_names: list[str],
+    rank_map: dict[str, int],
+) -> int:
+    """人物在卷叙述中的 effective 境界 rank（优先卷内明示，其次档案）。"""
+    if not char or not getattr(char, "name", None):
+        return -1
+    realm = _extract_realm_near_name(blob, char.name, level_names)
+    r = _resolve_realm_rank(realm, rank_map, level_names)
+    if r >= 0:
+        return r
+    if getattr(char, "realm_rank", None) is not None:
+        return int(char.realm_rank)
+    return _resolve_realm_rank(getattr(char, "current_realm", None), rank_map, level_names)
+
+
+def _volume_structured_boss(vol: Any, rank_map: dict[str, int], level_names: list[str]) -> tuple[str, int]:
+    """从 volume.extra 读取结构化 BOSS 字段。"""
+    extra = getattr(vol, "extra", None) or {}
+    if not isinstance(extra, dict):
+        return "", -1
+    boss = (extra.get("volume_boss") or extra.get("volume_antagonist") or "").strip()
+    realm = (extra.get("volume_boss_realm") or "").strip()
+    r = _resolve_realm_rank(realm, rank_map, level_names)
+    return boss, r
+
+
+def _volume_peak_threat(
+    vol: Any,
+    chars: list[Any],
+    protagonist: str,
+    level_names: list[str],
+    rank_map: dict[str, int],
+) -> tuple[str, int]:
+    """估算当卷核心威胁角色的最高 effective 境界 rank。"""
+    blob = " ".join(filter(None, [vol.title, vol.summary, vol.conflict, vol.hook]))
+    peak_name = ""
+    peak_rank = -1
+
+    boss, boss_rank = _volume_structured_boss(vol, rank_map, level_names)
+    if boss_rank >= 0:
+        peak_name, peak_rank = boss, boss_rank
+
+    for char in chars:
+        name = (getattr(char, "name", None) or "").strip()
+        if not name or name == protagonist or name not in blob:
+            continue
+        role = (getattr(char, "role", None) or "").strip()
+        tier = (getattr(char, "character_tier", None) or "").strip()
+        if role == "protagonist":
+            continue
+        # 主角以外：反派 / 弧线支柱 / 核心角色，或叙述中带威胁词
+        is_threat = role == "antagonist" or tier in ("core", "arc")
+        if not is_threat:
+            idx = blob.find(name)
+            window = blob[max(0, idx - 6): idx + len(name) + 24] if idx >= 0 else ""
+            is_threat = bool(_VOL_THREAT_HINT_RE.search(window))
+        if not is_threat:
+            continue
+        r = _char_effective_rank(char, blob, level_names, rank_map)
+        if r > peak_rank:
+            peak_rank, peak_name = r, name
+
+    # 「沈苍海（命轮境）」类叙述：卷内未建档角色也须纳入
+    for m in _NAME_REALM_PAREN_RE.finditer(blob):
+        nm, realm_raw = m.group(1), m.group(2)
+        if nm == protagonist:
+            continue
+        r = _resolve_realm_rank(realm_raw, rank_map, level_names)
+        if r > peak_rank:
+            peak_rank, peak_name = r, nm
+
+    return peak_name, peak_rank
+
+
+def format_volume_realm_fix_hint(issues: list[dict]) -> str:
+    """将卷级境界校验问题格式化为定向修正提示（供 gen_volumes 重试注入）。"""
+    realm_issues = [
+        i for i in issues
+        if i.get("type") in ("villain_alignment", "realm_mismatch")
+        and i.get("severity") == "high"
+    ]
+    if not realm_issues:
+        return ""
+    lines = ["\n【⚠️ 上次生成存在致命战力曲线错误，必须修正后重出】"]
+    for item in realm_issues:
+        lines.append(f"- {item.get('description', '')} → {item.get('suggestion', '')}")
+    lines.append(
+        "铁律：后卷 volume_boss_realm 的 rank 必须严格大于前卷；"
+        "当卷 BOSS 可以是新角色，但境界绝不能倒退。"
+        "请逐卷核对 volume_boss / volume_boss_realm 后再输出 JSON。"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def build_volumes_gate_preview(
+    db: Any,
+    project_id: Any,
+    ctx: dict,
+) -> dict:
+    """卷闸门审阅摘要：各卷 BOSS/境界 + 校验告警。"""
+    from app.models import Character, OutlineNode
+
+    volumes = (
+        db.query(OutlineNode)
+        .filter(
+            OutlineNode.project_id == project_id,
+            OutlineNode.node_type == "volume",
+        )
+        .order_by(OutlineNode.sort_order)
+        .all()
+    )
+    chars = db.query(Character).filter(Character.project_id == project_id).all()
+    protagonist = (ctx.get("protagonist") or "").strip()
+    level_names: list[str] = list(ctx.get("power_level_names") or [])
+    rank_map = _build_realm_rank_map(level_names)
+
+    preview_rows: list[dict] = []
+    for vol in volumes:
+        extra = vol.extra or {}
+        boss = (extra.get("volume_boss") or "").strip()
+        realm = (extra.get("volume_boss_realm") or "").strip()
+        if not boss or not realm:
+            inferred_name, inferred_rank = _volume_peak_threat(
+                vol, chars, protagonist, level_names, rank_map,
+            )
+            if not boss:
+                boss = inferred_name
+            if not realm and inferred_rank >= 0 and level_names:
+                realm = level_names[inferred_rank]
+        preview_rows.append({
+            "sort_order": vol.sort_order,
+            "title": vol.title or "",
+            "phase": vol.phase or "",
+            "volume_boss": boss or None,
+            "volume_boss_realm": realm or None,
+            "planned_chapters": (extra or {}).get("planned_chapters"),
+        })
+
+    lint_issues = lint_volume_entity_issues(db, project_id, ctx)
+    high_realm = [
+        i for i in lint_issues
+        if i.get("severity") == "high"
+        and i.get("type") in ("villain_alignment", "realm_mismatch")
+    ]
+
+    return {
+        "volumes_count": len(volumes),
+        "volumes_preview": preview_rows,
+        "volume_lint_issues": lint_issues,
+        "volume_realm_warnings": high_realm,
+        "has_realm_warnings": bool(high_realm),
+    }
 
 
 def _extract_orgs(text: str, faction_names: list[str] | None = None) -> set[str]:
@@ -267,54 +456,41 @@ def lint_volume_entity_issues(
                 "auto_detected": True,
             })
 
-    # ── 3. 卷内提及反派境界：后期卷 ≤ 前期卷 → 战力崩塌 ───────────────────
-    antagonists = (
+    # ── 3. 卷级 BOSS 境界曲线：后期卷 ≤ 前期卷 → 战力崩塌 ─────────────────
+    protagonist = (ctx.get("protagonist") or "").strip()
+    all_chars = (
         db.query(Character)
-        .filter(Character.project_id == project_id, Character.role == "antagonist")
+        .filter(Character.project_id == project_id)
         .all()
     )
-    antag_names = [c.name for c in antagonists if c.name]
-    if antag_names and rank_map:
-        peak_by_vol: list[tuple[int, str, int]] = []  # (vol_idx, name, rank)
+    if rank_map and level_names:
+        peak_by_vol: list[tuple[int, str, int, str]] = []  # (sort_order, name, rank, realm)
         for vol in volumes:
-            blob = " ".join(
-                filter(None, [vol.title, vol.summary, vol.conflict, vol.hook])
+            peak_name, peak_rank = _volume_peak_threat(
+                vol, all_chars, protagonist, level_names, rank_map,
             )
-            vol_peak = -1
-            vol_peak_name = ""
-            for nm in antag_names:
-                if nm not in blob:
-                    continue
-                realm = _extract_realm_near_name(blob, nm, level_names)
-                r = rank_map.get(realm or "", -1)
-                if r < 0 and antagonists:
-                    ch = next((c for c in antagonists if c.name == nm), None)
-                    if ch:
-                        r = (
-                            ch.realm_rank
-                            if ch.realm_rank is not None
-                            else rank_map.get(ch.current_realm or "", -1)
-                        )
-                if r > vol_peak:
-                    vol_peak, vol_peak_name = r, nm
-            if vol_peak >= 0:
-                peak_by_vol.append((vol.sort_order, vol_peak_name, vol_peak))
+            if peak_rank >= 0:
+                realm_label = level_names[peak_rank] if peak_rank < len(level_names) else ""
+                peak_by_vol.append((vol.sort_order, peak_name, peak_rank, realm_label))
 
         for i in range(1, len(peak_by_vol)):
-            prev_idx, prev_nm, prev_r = peak_by_vol[i - 1]
-            cur_idx, cur_nm, cur_r = peak_by_vol[i]
+            prev_idx, prev_nm, prev_r, prev_realm = peak_by_vol[i - 1]
+            cur_idx, cur_nm, cur_r, cur_realm = peak_by_vol[i]
             if cur_r <= prev_r:
+                prev_label = prev_realm or (level_names[prev_r] if prev_r < len(level_names) else "")
+                cur_label = cur_realm or (level_names[cur_r] if cur_r < len(level_names) else "")
                 issues.append({
                     "severity": "high",
                     "type": "villain_alignment",
                     "description": (
-                        f"第{cur_idx + 1}卷反派「{cur_nm}」境界(rank={cur_r})"
-                        f"不高于第{prev_idx + 1}卷「{prev_nm}」(rank={prev_r})"
+                        f"第{cur_idx + 1}卷核心对立面「{cur_nm}」（{cur_label}，rank={cur_r}）"
+                        f"境界不高于第{prev_idx + 1}卷「{prev_nm}」（{prev_label}，rank={prev_r}）"
                     ),
                     "suggestion": (
-                        f"将「{cur_nm}」境界提升至「{level_names[min(prev_r + 1, max_rank)]}」或以上"
+                        f"将第{cur_idx + 1}卷 volume_boss「{cur_nm}」的 volume_boss_realm "
+                        f"提升至「{level_names[min(prev_r + 1, max_rank)]}」或以上"
                         if level_names and max_rank >= 0
-                        else f"提升「{cur_nm}」境界至高于前期反派"
+                        else f"提升「{cur_nm}」境界至高于前期卷 BOSS"
                     ),
                     "auto_detected": True,
                 })

@@ -41,7 +41,6 @@ async def _run_quality_check_inline(
     chapter: Chapter,
     project: Project,
     project_id: str,
-    large_context: bool,
     svc: AIService,
 ) -> dict:
     """
@@ -53,7 +52,6 @@ async def _run_quality_check_inline(
     @param chapter: 已保存最新内容的 Chapter 对象
     @param project: Project 对象
     @param project_id: 项目 UUID 字符串
-    @param large_context: 是否大上下文模式（gemini）
     @param svc: 已初始化的 AIService 实例
     @returns quality_check 返回的 dict（含 overall_score / dimensions / suggestions / issues）
     @raises Exception: AI 调用失败时向上抛出
@@ -64,7 +62,7 @@ async def _run_quality_check_inline(
         .filter(MemoryChunk.project_id == project_id)
         .order_by(func.coalesce(Chapter.sort_order, MemoryChunk.chapter_number, 0).asc())
     )
-    memories = memory_query.limit(200 if large_context else 50).all()
+    memories = memory_query.limit(200).all()
 
     settings = db.query(WorldSetting).filter(
         WorldSetting.project_id == project_id
@@ -105,32 +103,20 @@ async def _run_quality_check_inline(
     ).all()
     power_systems_summary = []
     for ps in power_systems:
-        if large_context:
-            levels = []
-            for level in (ps.levels or []):
-                if isinstance(level, dict):
-                    rank = level.get("rank")
-                    name = level.get("name") or ""
-                    req_str = level.get("requirement") or level.get("description") or ""
-                    levels.append(f"{rank}.{name}({req_str})" if rank else f"{name}({req_str})")
-                else:
-                    levels.append(str(level))
-            rules = ps.special_rules or ps.breakthrough_condition or ps.description or ""
-            power_systems_summary.append(
-                f"{ps.name}：等级={' > '.join(levels) or '未知'}；"
-                f"主角当前={ps.protagonist_current_rank or '未知'}；规则={rules}"
-            )
-        else:
-            highest_level = "未知"
-            if ps.levels:
-                last_level = ps.levels[-1]
-                if isinstance(last_level, dict):
-                    highest_level = last_level.get("name", "") or "未知"
-                else:
-                    highest_level = str(last_level) or "未知"
-            power_systems_summary.append(
-                f"{ps.name}：最高境界={highest_level}，主角当前={ps.protagonist_current_rank or '未知'}"
-            )
+        levels = []
+        for level in (ps.levels or []):
+            if isinstance(level, dict):
+                rank = level.get("rank")
+                name = level.get("name") or ""
+                req_str = level.get("requirement") or level.get("description") or ""
+                levels.append(f"{rank}.{name}({req_str})" if rank else f"{name}({req_str})")
+            else:
+                levels.append(str(level))
+        rules = ps.special_rules or ps.breakthrough_condition or ps.description or ""
+        power_systems_summary.append(
+            f"{ps.name}：等级={' > '.join(levels) or '未知'}；"
+            f"主角当前={ps.protagonist_current_rank or '未知'}；规则={rules}"
+        )
 
     # 大纲上下文
     outline_context = ""
@@ -141,11 +127,11 @@ async def _run_quality_check_inline(
             parts = []
             if node.summary:
                 parts.append(f"本章摘要：{node.summary}")
-            if large_context and node.hook:
+            if node.hook:
                 parts.append(f"开篇钩子：{node.hook}")
-            if large_context and node.conflict:
+            if node.conflict:
                 parts.append(f"核心冲突：{node.conflict}")
-            if large_context and node.highlight:
+            if node.highlight:
                 parts.append(f"章末方向：{node.highlight}")
             if node.power_milestone:
                 parts.append(f"实力里程碑：{node.power_milestone}")
@@ -166,7 +152,7 @@ async def _run_quality_check_inline(
         db=db, project_id=project_id, chapter=chapter,
     )
     plot_dossier_ctx = build_plot_dossier_context(
-        db=db, project_id=project_id, chapter=chapter, large_context=large_context,
+        db=db, project_id=project_id, chapter=chapter,
     )
 
     check_types = [
@@ -180,7 +166,7 @@ async def _run_quality_check_inline(
         chapter_title=chapter.title,
         memories=[m.content for m in memories],
         settings_summary=[
-            format_world_setting_context(s, content_limit=2400 if large_context else 260)
+            format_world_setting_context(s, content_limit=2400)
             for s in settings
         ],
         check_types=check_types,

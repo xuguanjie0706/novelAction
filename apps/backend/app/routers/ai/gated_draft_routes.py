@@ -101,7 +101,6 @@ async def gated_draft_stream(
         db.refresh(chapter)
 
     cfg = merge_writing_config(project, req.override_config)
-    large_context = req.model_profile == "gemini"
 
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
@@ -110,7 +109,7 @@ async def gated_draft_stream(
     )
 
     try:
-        draft_ctx = await _build_draft_context(db, project_id, chapter, project, large_context)
+        draft_ctx = await _build_draft_context(db, project_id, chapter, project)
         rag_snapshot = draft_ctx.pop("rag_retrieval_snapshot", None)
         rag_log_id = draft_ctx.pop("rag_retrieval_log_id", None)
         db.commit()
@@ -270,7 +269,6 @@ async def gated_draft_stream(
                     chapter=chapter,
                     project=project,
                     project_id=project_id,
-                    large_context=large_context,
                     svc=svc,
                 )
                 last_qc = qc

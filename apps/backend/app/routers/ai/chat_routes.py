@@ -201,13 +201,11 @@ async def suggest_stream(
 
     chapter_content_snapshot = chapter.content or ""
     suggest_prompt = req.prompt
-    large_context = req.model_profile == "gemini"
-
     # ── RAG: 语义记忆检索 ─────────────────────────────────────────────────────
     # query = 作者问题 + 章节正文头部，充分利用问题语义定向召回
     _plain_head = truncate(chapter_content_snapshot, 120)
     _mem_query = f"{suggest_prompt} {_plain_head}".strip()
-    _mem_top_k = 12 if large_context else 5
+    _mem_top_k = 12
 
     # ── RAG: 未收束伏笔台账 ──────────────────────────────────────────────────
     _open_foreshadows = (

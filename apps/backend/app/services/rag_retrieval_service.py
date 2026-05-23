@@ -31,19 +31,15 @@ def _truncate(text: str | None, limit: int) -> str:
 def format_memory_summary(
     chunks: List[MemoryChunk],
     *,
-    large_context: bool = False,
+    large_context: bool = True,
 ) -> str:
     """将记忆片段格式化为写章 prompt 注入块。"""
     if not chunks:
         return ""
-    if large_context:
-        return "\n".join(
-            f"- 第{(m.chapter_number or '?')}章 "
-            f"{m.title or m.memory_type}: {_truncate(m.content, 600)}"
-            for m in chunks
-        )
-    return " | ".join(
-        f"{m.title or m.memory_type}: {(m.content or '')[:60]}" for m in chunks
+    return "\n".join(
+        f"- 第{(m.chapter_number or '?')}章 "
+        f"{m.title or m.memory_type}: {_truncate(m.content, 600)}"
+        for m in chunks
     )
 
 
@@ -201,7 +197,7 @@ async def retrieve_and_log_draft_context(
     top_k_semantic: int,
     max_chapter: Optional[int],
     recency_limit: int = 6,
-    large_context: bool = False,
+    large_context: bool = True,
     commit: bool = False,
 ) -> Tuple[List[MemoryChunk], str, RagRetrievalLog, Dict[str, Any]]:
     """
@@ -323,7 +319,7 @@ async def retrieve_and_log_suggest_memory(
         },
         output_payload={
             "hits": [h.model_dump(mode="json") for h in hits],
-            "memory_summary": format_memory_summary(merged[:top_k], large_context=False),
+            "memory_summary": format_memory_summary(merged[:top_k]),
             "hit_count": len(hits),
             "rag_context_preview": _preview(rag_context, 1200),
             **(extra_output or {}),

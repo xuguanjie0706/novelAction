@@ -290,7 +290,7 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
                 "正文不要包含章节标题行，直接从故事第一句话开始叙事。"
             )
         elif has_content:
-            existing_tail_limit = 4000 if large_context else 500
+            existing_tail_limit = 4000
             task_line = (
                 f"当前已写内容（最后{existing_tail_limit}字供衔接参考）：\n"
                 f"{self._clip_context(existing_content, 500, 4000, from_end=True)}\n\n"
@@ -300,7 +300,7 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
         else:
             task_line = f"请根据章节计划，写出本章完整初稿约{full_target}字（±200字），第一句话必须立刻抓住读者，并在章末留下追读钩子：正文不要包含章节标题行，直接从故事第一句话开始叙事。"
 
-        # 本地小模型仍保持短上下文；Gemini 使用长上下文，优先保证故事连续性。
+        # 长上下文：优先保证故事连续性，尽量注入完整设定与记忆。
         premise_part = (
             self._clip_context(premise, 1200, 12000)
             if premise
@@ -461,7 +461,7 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
 
 {final_reminder}"""
 
-        max_tok = max_tokens_draft_stream(large_context)
+        max_tok = max_tokens_draft_stream()
         stream_ctx: dict = {
             "operation": "draft_assist_stream",
             "chapter_title": chapter_title,

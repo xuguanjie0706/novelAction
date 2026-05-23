@@ -122,18 +122,11 @@ async def load_context(state: ChapterDraftState) -> dict:
 
         # 判断是否使用大 context（与 gated_draft_routes 逻辑一致）
         from app.services.ai.client import ClientMixin
-        large_ctx = ClientMixin._large_context_enabled(
-            llm_provider_id=state.get("llm_provider_id"),
-            model_profile=state.get("model_profile", "gemini"),
-            db=db,
-        ) if hasattr(ClientMixin, "_large_context_enabled") else True
-
         draft_ctx = await _build_draft_context(
             db=db,
             project_id=str(project.id),
             chapter=chapter,
             project=project,
-            large_context=large_ctx,
         )
     finally:
         db.close()

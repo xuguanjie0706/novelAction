@@ -25,6 +25,12 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Chapter, Character, Foreshadow, Location, OutlineNode, Project, ReaderPromise, Scene
 from app.routers.ai.gated_draft_helpers import _build_single_location_block
+from app.services.ai.chapter_ingredients import (
+    build_constraints_prompt_block,
+    compute_chapter_ingredients,
+)
+from app.services.ai.scene_checklist import verify_scenes_after_stitch
+from app.services.ai.scene_constraint_builder import build_scene_constraint_block
 from app.services.ai_service import AIService
 from app.services.embedding_service import semantic_search as _semantic_search
 
@@ -207,6 +213,18 @@ async def scene_plan_save(
         for r in rp_rows
     ]
 
+    # ── 计算本章投料清单（ChapterIngredients）────────────────────
+    # 主动从设定库拉取：故事线推进指令 / 势力着色 / 技能法宝 / 伏笔操作 / 债务标记
+    # 结果同时持久化到 node.extra.pre_write_constraints
+    chapter_number = node.sort_order or 0
+    ingredients = await compute_chapter_ingredients(
+        db=db,
+        project_id=project_id,
+        outline_node_id=str(req.outline_node_id),
+        chapter_number=chapter_number,
+    )
+    constraints_block = build_constraints_prompt_block(ingredients)
+
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
         db=db,
@@ -225,6 +243,7 @@ async def scene_plan_save(
         open_foreshadows=open_foreshadows or None,
         open_reader_promises=open_reader_promises or None,
         known_locations=known_locations_for_ai or None,
+        constraints_block=constraints_block or None,
     )
 
     # 替换旧场景
@@ -247,6 +266,53 @@ async def scene_plan_save(
         ai_loc_name: str | None = sc.get("location_name") or None
         resolved_loc_id = _resolve_location_id(ai_loc_name)
 
+        # 将投料约束分配到各场景（AI 输出中若有 constraints 字段则优先使用）
+        # 降级策略：AI 未输出 constraints 时，第一场承接所有债务标记
+        scene_storyline_moves = sc.get("storyline_moves") or None
+        scene_debt_flags = sc.get("debt_flags") or None
+        scene_foreshadow_ops = sc.get("foreshadow_ops") or None
+        scene_faction_color = sc.get("faction_color") or None
+        scene_asset_spotlight = sc.get("asset_spotlight") or None
+
+        # 降级：第一场承接所有 critical 债务和 MUST 故事线推进
+        if i == 0 and not scene_debt_flags and ingredients.debt_flags:
+            scene_debt_flags = [
+                {
+                    "debt_type": d.debt_type,
+                    "description": d.description,
+                    "severity": d.severity,
+                    "overdue_chapters": d.overdue_chapters,
+                }
+                for d in ingredients.debt_flags
+                if d.severity == "critical"
+            ] or None
+
+        if not scene_storyline_moves and ingredients.storyline_moves:
+            must_moves = [m for m in ingredients.storyline_moves if m.must_advance]
+            if must_moves and i == 0:
+                scene_storyline_moves = [
+                    {
+                        "storyline_id": m.storyline_id,
+                        "name": m.name,
+                        "line_type": m.line_type,
+                        "must_advance": True,
+                        "gap_chapters": m.gap_chapters,
+                        "suggested_beat": m.suggested_beat,
+                    }
+                    for m in must_moves
+                ]
+
+        # 结构预警：字数预算与角色数量之间的张力检测
+        structural_warnings = []
+        on_stage_count = len(on_stage_ids)
+        budget = int(sc.get("word_budget") or 400)
+        if on_stage_count >= 4 and budget <= 1500:
+            structural_warnings.append({
+                "code": "CROWD",
+                "level": "warn",
+                "msg": f"{on_stage_count}角色/{budget}字，建议聚焦2-3人或扩大预算",
+            })
+
         scene = Scene(
             project_id=project_id,
             outline_node_id=req.outline_node_id,
@@ -263,10 +329,17 @@ async def scene_plan_save(
             turn=sc.get("turn") or "",
             hook=sc.get("hook") or "",
             hook_strength=int(sc.get("hook_strength") or 3),
-            word_budget=int(sc.get("word_budget") or 400),
+            word_budget=budget,
             pacing=sc.get("pacing") or "mid",
             sensory_focus=sc.get("sensory_focus") or "mixed",
             status="planned",
+            # 约束字段
+            storyline_moves=scene_storyline_moves,
+            debt_flags=scene_debt_flags,
+            foreshadow_ops=scene_foreshadow_ops,
+            faction_color=scene_faction_color,
+            asset_spotlight=scene_asset_spotlight,
+            structural_warnings=structural_warnings or None,
         )
         db.add(scene)
         saved.append(scene)
@@ -294,11 +367,24 @@ async def scene_plan_save(
                 "pacing": s.pacing,
                 "sensory_focus": s.sensory_focus,
                 "status": s.status,
+                # 约束字段（前端用于展示约束标签）
+                "storyline_moves": s.storyline_moves,
+                "debt_flags": s.debt_flags,
+                "foreshadow_ops": s.foreshadow_ops,
+                "faction_color": s.faction_color,
+                "asset_spotlight": s.asset_spotlight,
+                "structural_warnings": s.structural_warnings,
             }
             for s in sorted(saved, key=lambda x: x.order)
         ],
         "total_word_budget": result.get("total_word_budget", req.word_target),
         "notes": result.get("notes", ""),
+        # 投料清单摘要（前端债务看板使用）
+        "ingredients_summary": {
+            "debt_count": len(ingredients.debt_flags),
+            "must_advance_count": sum(1 for m in ingredients.storyline_moves if m.must_advance),
+            "foreshadow_ops_count": len(ingredients.foreshadow_ops),
+        },
     }
 
 
@@ -397,6 +483,16 @@ async def scene_draft_stream(
         location_name=scene.location_name,
     )
 
+    # 场景级投料约束块（从 scene 新字段 + outline_node.extra 读取，无需额外查询）
+    node_extra: dict | None = None
+    if scene.outline_node_id:
+        _node = db.query(OutlineNode).filter(
+            OutlineNode.id == scene.outline_node_id
+        ).first()
+        if _node:
+            node_extra = _node.extra or {}
+    scene_constraint_block = build_scene_constraint_block(scene, node_extra)
+
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
         db=db,
@@ -427,6 +523,7 @@ async def scene_draft_stream(
                 positioning=(project.extra or {}).get("positioning"),
                 memory_snippets=memory_snippets,
                 location_context=location_context,
+                scene_constraint_block=scene_constraint_block,
             ):
                 full_text += chunk
                 yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
@@ -526,6 +623,24 @@ async def scene_stitch(
                 s.chapter_id = req.chapter_id
 
         db.commit()
+
+    # 异步触发场景核验（不阻塞 stitch 响应）
+    import asyncio
+    svc_for_check = AIService("default", db=db)
+
+    async def _run_checklist():
+        try:
+            await verify_scenes_after_stitch(
+                db=db,
+                project_id=project_id,
+                outline_node_id=str(req.outline_node_id),
+                svc=svc_for_check,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("verify_scenes_after_stitch failed: %s", exc)
+
+    asyncio.create_task(_run_checklist())
 
     return {
         "word_count": len(stitched),

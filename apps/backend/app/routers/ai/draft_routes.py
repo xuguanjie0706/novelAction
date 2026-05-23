@@ -75,13 +75,12 @@ async def _build_draft_context(
     project_id: str,
     chapter: Chapter,
     project: Project,
-    large_context: bool,
 ) -> dict:
     """
     组装起笔/续写所需的全部上下文字段，返回 dict。
 
     被 draft-assist/stream 与 gated-draft-stream 共享调用，避免重复代码。
-    调用方保证 chapter 和 project 均已从 DB 加载，large_context 已确定。
+    调用方保证 chapter 和 project 均已从 DB 加载。
 
     @returns 包含所有 draft_assist_stream kwargs 所需字段的字典。
     @see draft_context.py 中的各 _build_* helper 函数了解各字段的构建逻辑
@@ -95,42 +94,30 @@ async def _build_draft_context(
     settings = db.query(WorldSetting).filter(
         WorldSetting.project_id == project_id
     ).all()
-    if large_context:
-        world_summary = "\n".join(
-            f"- {format_world_setting_context(s, content_limit=2400)}"
-            for s in settings
-        )
-    else:
-        world_summary = " | ".join(
-            format_world_setting_context(s, content_limit=120).replace("\n", "；")
-            for s in settings[:8]
-        )
+    world_summary = "\n".join(
+        f"- {format_world_setting_context(s, content_limit=2400)}"
+        for s in settings
+    )
 
     characters = db.query(Character).filter(
         Character.project_id == project_id
     ).all()
 
     char_summary, chapter_manifest_names = _build_character_summary(
-        db, project_id, characters, outline_node, chapter, large_context
+        db, project_id, characters, outline_node, chapter
     )
 
-    active_statuses = ["planned", "active", "climax"] if large_context else ["active", "climax"]
+    active_statuses = ["planned", "active", "climax"]
     active_storylines_draft = db.query(StoryLine).filter(
         StoryLine.project_id == project_id,
         StoryLine.status.in_(active_statuses)
     ).order_by(StoryLine.sort_order).all()
-    if large_context:
-        storyline_summary = "\n".join(
-            f"- {s.name}（{s.line_type}/{s.status}）："
-            f"{truncate(s.core_conflict or s.description, 500)}；"
-            f"关键节拍={json.dumps(s.key_beats or [], ensure_ascii=False)[:1600]}"
-            for s in active_storylines_draft
-        )
-    else:
-        storyline_summary = "；".join(
-            f"{s.name}（{s.line_type}）：{(s.core_conflict or s.description or '')[:60]}"
-            for s in active_storylines_draft[:4]
-        )
+    storyline_summary = "\n".join(
+        f"- {s.name}（{s.line_type}/{s.status}）："
+        f"{truncate(s.core_conflict or s.description, 500)}；"
+        f"关键节拍={json.dumps(s.key_beats or [], ensure_ascii=False)[:1600]}"
+        for s in active_storylines_draft
+    )
 
     # 语义记忆检索（outline 五要素为 query）+ 时序锚定
     _mem_query = " ".join(filter(None, [
@@ -139,7 +126,7 @@ async def _build_draft_context(
         outline_node.highlight if outline_node else None,
     ])) or chapter.title or ""
 
-    _semantic_top_k = 74 if large_context else 10
+    _semantic_top_k = 74
     _merged, memory_summary, _rag_log, rag_retrieval_snapshot = await retrieve_and_log_draft_context(
         db,
         project_id=project_id,
@@ -148,7 +135,7 @@ async def _build_draft_context(
         top_k_semantic=_semantic_top_k,
         max_chapter=chapter.sort_order,
         recency_limit=6,
-        large_context=large_context,
+        large_context=True,
         commit=False,
     )
 
@@ -163,7 +150,7 @@ async def _build_draft_context(
         prev_body, _ = split_plain_manuscript_and_index_block(prev_plain)
         base_prev = prev_body.strip() if prev_body.strip() else prev_plain
         clean = strip_tail_meta_lines(base_prev)
-        prev_limit = 3000 if large_context else 400
+        prev_limit = 3000
         prev_tail = clean[-prev_limit:] if len(clean) > prev_limit else clean
 
     existing_content = plain_text(chapter.content)
@@ -193,7 +180,7 @@ async def _build_draft_context(
     )
     writing_brief_context = build_writing_brief_context(
         db=db, project_id=project_id, chapter=chapter,
-        outline_node=outline_node, large_context=large_context,
+        outline_node=outline_node,
     )
 
     # 卷内章节进度感（本卷第X/Y章）
@@ -227,12 +214,12 @@ async def _build_draft_context(
         quality_debt_context = ""
     else:
         plot_dossier_context = build_plot_dossier_context(
-            db, project_id, chapter, large_context=large_context
+            db, project_id, chapter
         )
         quality_debt_context = build_quality_debt_context(
             pending_quality_debts_for_chapter(
                 db=db, project_id=project_id, chapter=chapter,
-                limit=12 if large_context else 6,
+                limit=12,
             )
         )
 
@@ -420,9 +407,7 @@ async def draft_assist_stream(
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "Project not found")
-    large_context = req.model_profile == "gemini"
-
-    ctx = await _build_draft_context(db, project_id, chapter, project, large_context)
+    ctx = await _build_draft_context(db, project_id, chapter, project)
     rag_snapshot = ctx.pop("rag_retrieval_snapshot", None)
     rag_log_id = ctx.pop("rag_retrieval_log_id", None)
     db.commit()

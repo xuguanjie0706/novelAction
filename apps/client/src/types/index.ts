@@ -726,6 +726,66 @@ export type SceneStatus = 'planned' | 'written' | 'reviewed'
  * 对应后端 SceneRead schema；由 Bootstrap Step 13 或手动生成。
  * outline_node_id 指向所属 chapter_plan 大纲节点。
  */
+// ── 场景投料约束类型（chapter_ingredients 服务生成，分场规划时写入）────
+
+export interface SceneStorylineMove {
+  storyline_id: string
+  name: string
+  line_type: string
+  must_advance: boolean
+  gap_chapters: number
+  suggested_beat?: string
+}
+
+export interface SceneDebtFlag {
+  debt_type: 'payoff' | 'storyline_gap' | 'promise_due' | 'emotion_debt' | string
+  description: string
+  severity: 'critical' | 'warning' | 'info'
+  overdue_chapters: number
+  related_id?: string
+}
+
+export interface SceneForeshadowOp {
+  foreshadow_id: string
+  title: string
+  op: 'lay' | 'hint' | 'resolve'
+  priority: number
+  suggested_method: string
+  is_overdue: boolean
+}
+
+export interface SceneFactionColor {
+  faction_id: string
+  name: string
+  faction_type: string
+  alignment: string
+  atmosphere: string
+  npc_default_attitude: string
+}
+
+export interface SceneAssetCard {
+  asset_type: 'skill' | 'item'
+  asset_id: string
+  name: string
+  description: string
+  key_effect: string
+  cost_or_rarity?: string
+}
+
+export interface SceneStructuralWarning {
+  code: string
+  level: 'warn' | 'info'
+  msg: string
+}
+
+export interface SceneChecklistResult {
+  storyline_ok: boolean
+  foreshadow_ok: boolean
+  debt_cleared: boolean
+  score: number
+  notes: string
+}
+
 export interface Scene {
   id: string
   project_id: string
@@ -754,6 +814,15 @@ export interface Scene {
   status: SceneStatus
   content: string | null
   extra: Record<string, unknown>
+  // ── 投料约束字段（分场规划时由 chapter_ingredients 服务写入）────
+  storyline_moves: SceneStorylineMove[] | null
+  debt_flags: SceneDebtFlag[] | null
+  foreshadow_ops: SceneForeshadowOp[] | null
+  faction_color: SceneFactionColor | null
+  asset_spotlight: SceneAssetCard[] | null
+  structural_warnings: SceneStructuralWarning[] | null
+  /** 写后核验结果（stitch 后异步回填） */
+  checklist_result: SceneChecklistResult | null
 }
 
 export interface ChapterAnalysisStats {

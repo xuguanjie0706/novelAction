@@ -102,6 +102,8 @@ class DraftStreamMixin:
         # 境界快照：{人物名: 当前境界} 字典，由路由层从 Character 表取最新值注入。
         # 独立于 character_summary，作为写章硬约束注入 final_reminder，防境界倒退。
         realm_snapshot: Optional[dict] = None,
+        # 多轴力量体系块（primary/path/artifact/sect + 道心/天地法则），由 _build_draft_context 注入。
+        power_systems_context: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         根据大纲计划 + 完整故事上下文，流式生成本章起笔或续写建议。
@@ -307,6 +309,12 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
             else "（未填写；请从创意、人物和大纲中提炼作品基本面，但不得违背既有设定）"
         )
         world_part = self._clip_context(world_summary, 200, 12000) if world_summary else "（未设定）"
+        power_part = ""
+        if power_systems_context and power_systems_context.strip():
+            power_part = (
+                f"\n力量体系（多轴，写作须严格对齐，禁止自创未登记境界/道途/法宝阶）：\n"
+                f"{self._clip_context(power_systems_context.strip(), 400, 2400, field_name='power_systems')}\n"
+            )
         char_part = self._clip_context(character_summary, 300, 12000) if character_summary else "（未设定）"
         mem_part = (
             f"\n近期关键事件：{self._clip_context(memory_summary, 150, 12000)}"
@@ -438,7 +446,7 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
 {premise_part}
 
 【故事背景】
-世界观：{world_part}
+世界观：{world_part}{power_part}
 本章出场人物（含境界/位置/技能）：{char_part}{mem_part}{storyline_part}
 {writing_brief_part}
 

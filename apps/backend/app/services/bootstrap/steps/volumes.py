@@ -50,10 +50,16 @@ def _persist_volumes(svc: Any, project: Project, data: list, n_volumes: int) -> 
         vol_extra: dict = {"planned_chapters": planned, "phase": phase_val}
         boss = (vol.get("volume_boss") or vol.get("volume_antagonist") or "").strip()
         boss_realm = (vol.get("volume_boss_realm") or "").strip()
+        boss_path = (vol.get("volume_boss_path") or "").strip()
+        boss_path_rank = (vol.get("volume_boss_path_rank") or "").strip()
         if boss:
             vol_extra["volume_boss"] = boss
         if boss_realm:
             vol_extra["volume_boss_realm"] = boss_realm
+        if boss_path:
+            vol_extra["volume_boss_path"] = boss_path
+        if boss_path_rank:
+            vol_extra["volume_boss_path_rank"] = boss_path_rank
         node = OutlineNode(
             project_id=project.id,
             parent_id=None,
@@ -114,7 +120,7 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
         if _pos_lines:
             positioning_block = "\n【立项定位（每卷必须贯彻）】\n" + "\n".join(_pos_lines) + "\n"
     kit_block = get_genre_kit_block(ctx)
-    entity_block = build_volume_entity_prompt_block(ctx)
+    entity_block = build_volume_entity_prompt_block(ctx)  # 已内含 path/dao 块
 
     villain_timelines = ctx.get("villain_timelines", [])
     villain_block = ""
@@ -141,6 +147,7 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
 
 【卷级战力曲线铁律（30年网文编辑标准，违反即废稿）】
 - 每卷必须指定当卷核心对立角色 volume_boss 及其 volume_boss_realm（从境界阶梯精确选名）。
+- 若存在道途轴：填写 volume_boss_path（path_id 如 sword/pill）与 volume_boss_path_rank（道途阶位精确名）。
 - 后卷的 volume_boss_realm rank 必须严格大于前卷（禁止卷四 BOSS 低于卷三 BOSS 这类致命错误）。
 - 终局卷 BOSS 须逼近境界体系最高档；前期卷 BOSS 可以是中低境界，但绝不能越写越弱。
 - summary/conflict 中若写「某某（XX境）」，须与 volume_boss_realm 一致。
@@ -162,7 +169,9 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
     "hook": "本卷核心悬念：读者最想知道的问题",
     "conflict": "本卷主要矛盾冲突",
     "volume_boss": "当卷核心对立角色名（必填）",
-    "volume_boss_realm": "当卷 BOSS 境界（必填，从境界阶梯精确选名）",
+    "volume_boss_realm": "当卷 BOSS 主轴境界（必填，从境界阶梯精确选名）",
+    "volume_boss_path": "当卷 BOSS 道途 path_id 或道途体系名（有道途轴时建议填）",
+    "volume_boss_path_rank": "当卷 BOSS 道途阶位名（从道途轴精确选名，可选）",
     "planned_chapters": 60,
     "phase": "opening"
   }}
@@ -222,7 +231,7 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
         high_realm = [
             i for i in vol_lint
             if i.get("severity") == "high"
-            and i.get("type") in ("villain_alignment", "realm_mismatch")
+            and i.get("type") in ("villain_alignment", "realm_mismatch", "path_alignment")
         ]
         if high_realm and attempt < _MAX_VOLUME_REALM_RETRIES:
             fix_hint = format_volume_realm_fix_hint(high_realm)

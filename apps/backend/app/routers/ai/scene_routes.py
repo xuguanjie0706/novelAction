@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Chapter, Character, Foreshadow, Location, OutlineNode, Project, ReaderPromise, Scene
+from app.routers.ai.draft_context import build_power_systems_draft_block
 from app.routers.ai.gated_draft_helpers import _build_single_location_block
 from app.services.ai.chapter_ingredients import (
     build_constraints_prompt_block,
@@ -492,6 +493,7 @@ async def scene_draft_stream(
         if _node:
             node_extra = _node.extra or {}
     scene_constraint_block = build_scene_constraint_block(scene, node_extra)
+    power_systems_context = build_power_systems_draft_block(db, project_id)
 
     svc = AIService(
         "gemini" if req.model_profile == "gemini" else "default",
@@ -524,6 +526,7 @@ async def scene_draft_stream(
                 memory_snippets=memory_snippets,
                 location_context=location_context,
                 scene_constraint_block=scene_constraint_block,
+                power_systems_context=power_systems_context,
             ):
                 full_text += chunk
                 yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"

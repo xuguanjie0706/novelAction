@@ -40,7 +40,8 @@ def rebuild_ctx_from_db(
     Returns:
         尽量完整的 ctx 字典，缺失字段保持默认值，不会引发 KeyError。
     """
-    from app.models import Character, OutlineNode, PowerSystem
+    from app.models import Character, OutlineNode, PowerSystem, Project
+    from app.services.bootstrap.power_registry import merge_power_into_ctx
     from app.services.outline_planning import words_to_plan
 
     positioning = gd.get("positioning") or {}
@@ -62,17 +63,8 @@ def rebuild_ctx_from_db(
         .all()
     )
     if pss:
-        ps = pss[0]
-        levels = ps.levels or []
-        level_names = [
-            lv.get("name", "") for lv in levels
-            if isinstance(lv, dict) and lv.get("name")
-        ]
-        ctx["power_level_names"] = level_names
-        ctx["power_system_name"] = ps.name
-        ctx["power_summary"] = (
-            f"{ps.name}：" + " → ".join(level_names[:8]) if level_names else ps.name
-        )
+        proj = db.query(Project).filter(Project.id == project_id).first()
+        merge_power_into_ctx(ctx, pss, project=proj)
 
     # ── 人物库（Step 5 产物）──────────────────────────────────────────────────
     chars = (

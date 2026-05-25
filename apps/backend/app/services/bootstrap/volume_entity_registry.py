@@ -12,6 +12,11 @@ import re
 from difflib import SequenceMatcher
 from typing import Any
 
+from app.services.bootstrap.power_registry import (
+    format_dao_heart_block,
+    format_path_context_block,
+)
+
 _ORG_SUFFIX_CHARS = frozenset("宗殿堂府家门阁派盟宫国城谷岛会帮")
 # 组织名前缀不应以叙事动词/介词开头（避免「拜入云霄剑宗」整段被吞）
 _ORG_BAD_PREFIX_RE = re.compile(
@@ -89,6 +94,19 @@ def build_volume_entity_prompt_block(ctx: dict) -> str:
             f"  ⚠️ 全书终局对立面须处于「{second}」或最高档「{top}」，"
             f"禁止终局 Boss 仅停留在中阶境界。"
         )
+
+    path_block = format_path_context_block(ctx)
+    if path_block:
+        lines.append(path_block)
+        lines.append(
+            "  ⚠️ 每卷建议填写 volume_boss_path（道途 path_id 或道途名）与 volume_boss_path_rank（道途阶位精确名）；"
+            "后卷 BOSS 道途阶 rank 宜 ≥ 前卷（与境界曲线同向）。"
+        )
+
+    dao_block = format_dao_heart_block(ctx)
+    if dao_block:
+        lines.append(dao_block)
+        lines.append("  ⚠️ phase=dark_hour 的卷须在 summary 中体现心魔/红尘劫/道心考验。")
 
     protag_faction = _protagonist_faction_from_ctx(ctx)
     if protagonist and protag_faction and "家" in protag_faction:
@@ -224,11 +242,34 @@ def _volume_peak_threat(
     return peak_name, peak_rank
 
 
+def _volume_boss_path_rank(vol: Any, registry: dict[str, dict]) -> tuple[str, int]:
+    """从 volume.extra 读取 BOSS 道途阶 rank。"""
+    from app.services.bootstrap.power_registry import resolve_realm_in_registry
+
+    extra = getattr(vol, "extra", None) or {}
+    if not isinstance(extra, dict):
+        return "", -1
+    path_name = (extra.get("volume_boss_path_rank") or "").strip()
+    if not path_name or not registry:
+        return "", -1
+    key = resolve_realm_in_registry(path_name, registry) or path_name
+    meta = registry.get(key) or {}
+    if meta.get("axis") != "path":
+        return path_name, -1
+    rank = meta.get("rank")
+    if isinstance(rank, int):
+        return path_name, rank
+    try:
+        return path_name, int(rank)
+    except (TypeError, ValueError):
+        return path_name, -1
+
+
 def format_volume_realm_fix_hint(issues: list[dict]) -> str:
     """将卷级境界校验问题格式化为定向修正提示（供 gen_volumes 重试注入）。"""
     realm_issues = [
         i for i in issues
-        if i.get("type") in ("villain_alignment", "realm_mismatch")
+        if i.get("type") in ("villain_alignment", "realm_mismatch", "path_alignment")
         and i.get("severity") == "high"
     ]
     if not realm_issues:
@@ -238,6 +279,7 @@ def format_volume_realm_fix_hint(issues: list[dict]) -> str:
         lines.append(f"- {item.get('description', '')} → {item.get('suggestion', '')}")
     lines.append(
         "铁律：后卷 volume_boss_realm 的 rank 必须严格大于前卷；"
+        "后卷 volume_boss_path_rank（道途）宜同步递增；"
         "当卷 BOSS 可以是新角色，但境界绝不能倒退。"
         "请逐卷核对 volume_boss / volume_boss_realm 后再输出 JSON。"
     )
@@ -285,6 +327,8 @@ def build_volumes_gate_preview(
             "phase": vol.phase or "",
             "volume_boss": boss or None,
             "volume_boss_realm": realm or None,
+            "volume_boss_path": (extra.get("volume_boss_path") or "").strip() or None,
+            "volume_boss_path_rank": (extra.get("volume_boss_path_rank") or "").strip() or None,
             "planned_chapters": (extra or {}).get("planned_chapters"),
         })
 
@@ -494,6 +538,29 @@ def lint_volume_entity_issues(
                     ),
                     "auto_detected": True,
                 })
+
+    # ── 3b. 道途阶曲线：后期卷 BOSS path rank ≤ 前期卷 ─────────────────────
+    registry: dict = dict(ctx.get("power_level_registry") or {})
+    path_peak_by_vol: list[tuple[int, str, int, str]] = []
+    for vol in volumes:
+        path_nm, path_r = _volume_boss_path_rank(vol, registry)
+        if path_r >= 0:
+            path_peak_by_vol.append((vol.sort_order, path_nm, path_r, path_nm))
+
+    for i in range(1, len(path_peak_by_vol)):
+        prev_idx, prev_nm, prev_r, _ = path_peak_by_vol[i - 1]
+        cur_idx, cur_nm, cur_r, cur_label = path_peak_by_vol[i]
+        if cur_r <= prev_r:
+            issues.append({
+                "severity": "high",
+                "type": "path_alignment",
+                "description": (
+                    f"第{cur_idx + 1}卷 BOSS 道途「{cur_label}」（rank={cur_r}）"
+                    f"不高于第{prev_idx + 1}卷「{prev_nm}」（rank={prev_r}）"
+                ),
+                "suggestion": f"提升第{cur_idx + 1}卷 volume_boss_path_rank 至高于前期卷道途阶",
+                "auto_detected": True,
+            })
 
     # ── 4. 终局卷 Boss 境界低于体系顶档 ─────────────────────────────────────
     if max_rank >= 0 and level_names:

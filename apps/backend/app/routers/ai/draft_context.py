@@ -530,6 +530,17 @@ def _build_character_summary(
 
 
 # ═══════════════════════════════════════════════════════════════
+# 多轴力量体系（写章注入）
+# ═══════════════════════════════════════════════════════════════
+
+def build_power_systems_draft_block(db: "Session", project_id: str) -> str:
+    """写章路径统一力量体系块（多轴 registry + 道心 + 天地法则）。"""
+    from app.services.bootstrap.power_registry import build_draft_power_context_from_db
+
+    return build_draft_power_context_from_db(db, project_id)
+
+
+# ═══════════════════════════════════════════════════════════════
 # 情绪节律 + 反派行动线注入（Bootstrap Step 9.5 / 9.8 产物闭合）
 # ═══════════════════════════════════════════════════════════════
 

@@ -103,7 +103,7 @@ class WritingToolsMixin:
 {self._clip_context(character_states, 1200, None, field_name="char_states") or "（未提供）"}
 
 【境界体系规则（防止境界幻觉）】
-{self._clip_context(power_systems_summary, 800, None, field_name="power_systems") or "（未提供）"}
+{self._clip_context(power_systems_summary, 2400, None, field_name="power_systems") or "（未提供）"}
 
 【滚动连续性账本（最近章节状态）】
 {self._clip_context(continuity_state, 2000, None, field_name="continuity") or "（未提供）"}

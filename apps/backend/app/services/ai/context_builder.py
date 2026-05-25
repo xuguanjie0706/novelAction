@@ -134,22 +134,10 @@ def build_continuity_context(
     power_systems = db.query(PowerSystem).filter(
         PowerSystem.project_id == project_id
     ).order_by(PowerSystem.sort_order).all()
-    power_lines = []
-    for ps in power_systems[:3]:
-        level_names = []
-        for level in (ps.levels or [])[:8]:
-            if isinstance(level, dict) and level.get("name"):
-                rank = level.get("rank")
-                level_names.append(f"{rank}.{level.get('name')}" if rank else level.get("name"))
-        rule = truncate(ps.special_rules or ps.breakthrough_condition or ps.description, 80)
-        line = f"{ps.name}"
-        if level_names:
-            line += f"等级顺序={' > '.join(level_names)}"
-        if ps.protagonist_current_rank:
-            line += f"；主角当前rank={ps.protagonist_current_rank}"
-        if rule:
-            line += f"；规则={rule}"
-        power_lines.append(line)
+    from app.services.bootstrap.power_registry import build_draft_power_context_from_db
+
+    power_block = build_draft_power_context_from_db(db, project_id)
+    power_lines = [power_block] if power_block and power_block != "（未设定境界体系）" else []
 
     recent_chapters = db.query(Chapter).filter(
         Chapter.project_id == project_id,

@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 def _structural_precheck(svc: Any, project, ctx: dict) -> list[dict]:
     """纯代码结构性预检，不调用 AI，返回可直接合并到 issues 的 dict 列表。"""
     from app.models import Character, Item, OutlineNode, Skill
+    from app.services.bootstrap.power_registry import resolve_realm_in_registry
 
     issues: list[dict] = []
     db = svc.db
@@ -82,19 +83,31 @@ def _structural_precheck(svc: Any, project, ctx: dict) -> list[dict]:
     )
     power_level_names = ctx.get("power_level_names", [])
     level_rank_map = {name: i for i, name in enumerate(power_level_names)}
+    registry = ctx.get("power_level_registry") or {}
 
     for skill in skills:
         req_name = (skill.level_required or "").strip()
-        req_rank = level_rank_map.get(req_name)
+        req_rank = None
+        resolved = resolve_realm_in_registry(req_name, registry) if registry else None
+        if resolved and resolved in registry:
+            meta = registry[resolved]
+            if meta.get("axis") == "primary" and isinstance(meta.get("rank"), int):
+                req_rank = meta["rank"]
+        if req_rank is None:
+            req_rank = level_rank_map.get(resolved or req_name)
         if req_rank is None:
             continue
         for cid in (skill.mastered_by_character_ids or []):
             char = chars_by_id.get(str(cid))
             if not char:
                 continue
-            char_rank = char.realm_rank if char.realm_rank is not None else level_rank_map.get(
-                char.current_realm or "", None
-            )
+            char_rank = char.realm_rank if char.realm_rank is not None else None
+            if char_rank is None and registry:
+                cr = resolve_realm_in_registry(char.current_realm, registry)
+                if cr and cr in registry and registry[cr].get("axis") == "primary":
+                    char_rank = registry[cr].get("rank")
+            if char_rank is None:
+                char_rank = level_rank_map.get(char.current_realm or "", None)
             if char_rank is not None and char_rank < req_rank:
                 issues.append({
                     "severity": "medium",

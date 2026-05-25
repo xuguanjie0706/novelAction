@@ -7,6 +7,7 @@ from typing import Any
 from app.models import Project, StoryLine
 from app.services.bootstrap.context import get_genre_kit_block
 from app.services.bootstrap.parse import parse_json
+from app.services.bootstrap.power_registry import format_power_context_block
 from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
 
@@ -16,7 +17,7 @@ async def gen_storylines(svc: Any, project: Project, ctx: dict):
     prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 创意：{ctx['logline']}
 故事核：{ctx['story_core'].get('conflict', '')} | 主题：{ctx['story_core'].get('theme', '')}
-境界体系：{ctx.get('power_summary', '（未设定）')}
+{format_power_context_block(ctx)}
 
 【流派编辑手册约束】
 - 每条故事线的 core_conflict 和 resolution_direction 必须符合 genre_kit 的 satisfaction_tropes 和 pacing_guide

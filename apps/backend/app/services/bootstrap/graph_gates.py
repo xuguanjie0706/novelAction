@@ -109,6 +109,19 @@ async def node_gate_power_systems(state: BootstrapState, config: dict | None = N
             .filter(PowerSystem.project_id == state.get("project_id"))
             .count()
         )
+        pss = (
+            db.query(PowerSystem)
+            .filter(PowerSystem.project_id == state.get("project_id"))
+            .order_by(PowerSystem.sort_order)
+            .all()
+        )
+        from app.services.bootstrap.power_registry import axis_role_of, merge_power_into_ctx
+
+        merge_power_into_ctx(ctx, pss, project=project)
+        axis_summary = [
+            {"name": ps.name, "axis": axis_role_of(ps), "levels": len(ps.levels or [])}
+            for ps in pss
+        ]
         emit(
             run_id,
             "gate_pending",
@@ -116,7 +129,11 @@ async def node_gate_power_systems(state: BootstrapState, config: dict | None = N
             persist_status="awaiting_gate",
             step="power_systems",
             message="请确认境界体系后继续；若不满意可「重新生成」本步（会覆盖当前结果）。",
-            gate_preview={"power_systems_count": cnt},
+            gate_preview={
+                "power_systems_count": cnt,
+                "power_axes": axis_summary,
+                "primary_ladder": ctx.get("power_level_names") or [],
+            },
         )
         _persist(db, run_id, {}, gate_data={"kind": "power_systems", "count": cnt, "current_gate": "gate_power_systems"})
         cmd = interrupt({"step": "power_systems", "kind": "power_systems_gate", "count": cnt})

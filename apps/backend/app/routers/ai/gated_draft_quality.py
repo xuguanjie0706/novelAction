@@ -33,6 +33,7 @@ from app.routers.ai.context import (
     format_world_setting_context,
 )
 from app.routers.ai.quality_debt import sync_quality_debts
+from app.services.bootstrap.power_registry import build_draft_power_context_from_db
 from app.services.ai_service import AIService
 
 
@@ -98,25 +99,7 @@ async def _run_quality_check_inline(
         for s in active_storylines
     ]
 
-    power_systems = db.query(PowerSystem).filter(
-        PowerSystem.project_id == project_id
-    ).all()
-    power_systems_summary = []
-    for ps in power_systems:
-        levels = []
-        for level in (ps.levels or []):
-            if isinstance(level, dict):
-                rank = level.get("rank")
-                name = level.get("name") or ""
-                req_str = level.get("requirement") or level.get("description") or ""
-                levels.append(f"{rank}.{name}({req_str})" if rank else f"{name}({req_str})")
-            else:
-                levels.append(str(level))
-        rules = ps.special_rules or ps.breakthrough_condition or ps.description or ""
-        power_systems_summary.append(
-            f"{ps.name}：等级={' > '.join(levels) or '未知'}；"
-            f"主角当前={ps.protagonist_current_rank or '未知'}；规则={rules}"
-        )
+    power_systems_summary = [build_draft_power_context_from_db(db, project_id)]
 
     # 大纲上下文
     outline_context = ""

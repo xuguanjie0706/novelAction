@@ -5,6 +5,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.models import Character, Faction, PowerSystem, Project
+from app.services.bootstrap.power_registry import merge_power_into_ctx
 from app.services.genre_kit import get_genre_kit, normalize_genre, render_kit_for_prompt
 
 
@@ -50,20 +51,7 @@ def hydrate_ctx_from_project(db: Session, project: Project) -> dict:
         .order_by(PowerSystem.sort_order)
         .all()
     )
-    if pss:
-        main_ps = pss[0]
-        level_names = [
-            lv.get("name", "")
-            for lv in (main_ps.levels or [])
-            if isinstance(lv, dict) and lv.get("name")
-        ]
-        ctx["power_level_names"] = level_names
-        ctx["power_system_name"] = main_ps.name
-        ctx["power_summary"] = f"{main_ps.name}：" + " → ".join(level_names[:8])
-    else:
-        ctx["power_level_names"] = []
-        ctx["power_system_name"] = ""
-        ctx["power_summary"] = "（本项目尚未录入境界体系，设定卡可自行铺垫力量氛围，勿展开成完整境界表）"
+    merge_power_into_ctx(ctx, pss, project=project)
 
     facs = (
         db.query(Faction)

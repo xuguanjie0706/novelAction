@@ -44,6 +44,7 @@ class SceneDraftMixin:
         memory_snippets: Optional[List[str]] = None,
         location_context: str = "",
         scene_constraint_block: str = "",
+        power_systems_context: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         为单个 Scene 流式生成正文。
@@ -127,9 +128,17 @@ class SceneDraftMixin:
             f"\n{scene_constraint_block}\n" if scene_constraint_block else ""
         )
 
+        power_block = ""
+        if power_systems_context and power_systems_context.strip():
+            power_block = (
+                "\n【力量体系（多轴，禁止自创未登记境界/道途/法宝阶）】\n"
+                + power_systems_context.strip()[:2400]
+                + "\n"
+            )
+
         prompt = f"""章节：《{chapter_title}》
 章节摘要：{chapter_summary[:300]}
-{pos_block}{prev_block}{constraint_block}{mem_block}{loc_context_block}
+{pos_block}{prev_block}{power_block}{constraint_block}{mem_block}{loc_context_block}
 ---
 【第 {scene_order} 场】{('  ' + scene_title) if scene_title else ''}
 时间：{time or '同日'}　　地点：{location_name or '未知'}

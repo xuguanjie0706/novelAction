@@ -7,16 +7,16 @@ from typing import Any
 from app.models import Character, Project
 from app.services.bootstrap.context import get_genre_kit_block
 from app.services.bootstrap.parse import parse_json, safe_int
+from app.services.bootstrap.power_registry import format_power_context_block, resolve_realm_in_registry
 from app.services.bootstrap.prompts.character_naming import character_naming_constraints_for_prompt
 from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
 
 async def gen_characters(svc: Any, project: Project, ctx: dict):
     system = "你是网络小说人物设计专家。只返回JSON数组。"
-    power_hint = (
-        f"\n境界体系（current_realm 必须从此列表选择）：{ctx.get('power_summary', '')}"
-        if ctx.get('power_level_names') else ""
-    )
+    power_hint = ""
+    if ctx.get("power_level_names") or ctx.get("power_systems_full"):
+        power_hint = "\n" + format_power_context_block(ctx)
     kit_block = get_genre_kit_block(ctx)
     naming_block = character_naming_constraints_for_prompt(ctx.get("genre"))
     prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
@@ -136,6 +136,14 @@ arc_stages 要求：每人至少 2 个成长阶段（主角/核心反派 3-4 个
         faction_id_val = ctx.get("faction_name_to_id", {}).get(faction_name) or None
         raw_stages = item.get("arc_stages")
         arc_stages = raw_stages if isinstance(raw_stages, list) else []
+        registry = ctx.get("power_level_registry") or {}
+        current_realm = item.get("current_realm")
+        if registry and current_realm:
+            resolved = resolve_realm_in_registry(str(current_realm), registry)
+            if resolved:
+                current_realm = resolved
+            elif ctx.get("power_level_names"):
+                current_realm = ctx["power_level_names"][0]
         raw_alias = item.get("alias")
         alias_list = [a.strip() for a in raw_alias if isinstance(a, str) and a.strip()] if isinstance(raw_alias, list) else []
         c = Character(
@@ -153,7 +161,7 @@ arc_stages 要求：每人至少 2 个成长阶段（主角/核心反派 3-4 个
             motivation=item.get("motivation"),
             arc=item.get("arc"),
             arc_stages=arc_stages,
-            current_realm=item.get("current_realm"),
+            current_realm=current_realm,
             speech_style=item.get("speech_style"),
             speech_kit=item.get("speech_kit") or {},
             values=item.get("values"),

@@ -23,6 +23,7 @@ from app.models import (
     WorldSetting,
 )
 from app.services.ai_service import AIService
+from app.services.bootstrap.power_registry import build_draft_power_context_from_db
 from app.routers.ai.context import (
     build_chapter_index_context,
     build_continuity_context,
@@ -107,25 +108,7 @@ async def quality_check(
         for s in active_storylines
     ]
 
-    power_systems = db.query(PowerSystem).filter(
-        PowerSystem.project_id == project_id
-    ).all()
-    power_systems_summary = []
-    for ps in power_systems:
-        levels = []
-        for level in (ps.levels or []):
-            if isinstance(level, dict):
-                rank = level.get("rank")
-                name = level.get("name") or ""
-                requirement = level.get("requirement") or level.get("description") or ""
-                levels.append(f"{rank}.{name}({requirement})" if rank else f"{name}({requirement})")
-            else:
-                levels.append(str(level))
-        rules = ps.special_rules or ps.breakthrough_condition or ps.description or ""
-        power_systems_summary.append(
-            f"{ps.name}：等级={' > '.join(levels) or '未知'}；"
-            f"主角当前={ps.protagonist_current_rank or '未知'}；规则={rules}"
-        )
+    power_systems_summary = [build_draft_power_context_from_db(db, project_id)]
 
     outline_context = ""
     node: Optional[OutlineNode] = None
@@ -336,23 +319,8 @@ async def pre_write_warning(
         character_lines.append("，".join(parts))
     character_states = "\n".join(character_lines)
 
-    # 境界体系摘要
-    from app.models import PowerSystem
-    power_systems = db.query(PowerSystem).filter(PowerSystem.project_id == project_id).all()
-    ps_lines = []
-    for ps in power_systems:
-        levels = []
-        for lv in (ps.levels or [])[:20]:
-            if isinstance(lv, dict):
-                levels.append(lv.get("name") or "")
-            else:
-                levels.append(str(lv))
-        rule = ps.special_rules or ps.breakthrough_condition or ps.description or ""
-        ps_lines.append(
-            f"{ps.name}：境界序列=[{' < '.join(l for l in levels if l)}]；"
-            f"主角当前={ps.protagonist_current_rank or '未知'}；规则={rule[:120]}"
-        )
-    power_systems_summary = "\n".join(ps_lines)
+    # 境界体系（多轴全保真）
+    power_systems_summary = build_draft_power_context_from_db(db, project_id)
 
     # 大纲上下文（五要素）
     outline_context = ""

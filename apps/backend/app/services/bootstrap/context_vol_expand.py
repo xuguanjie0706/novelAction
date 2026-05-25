@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
+from app.services.bootstrap.power_registry import format_power_context_block, merge_power_into_ctx
 from app.models import (
     Character,
     CharacterRelationship,
@@ -80,7 +81,9 @@ def _build_positioning_block(project: Project) -> tuple[dict, str]:
 
 
 def _build_power_block(db: Session, project_id: str, ctx: dict) -> str:
-    """构建详细境界体系 prompt 块，比 hydrate_ctx 的简版更完整。"""
+    """构建详细境界体系 prompt 块（多轴全保真）。"""
+    from app.models import Project
+
     pss = (
         db.query(PowerSystem)
         .filter(PowerSystem.project_id == project_id)
@@ -90,25 +93,12 @@ def _build_power_block(db: Session, project_id: str, ctx: dict) -> str:
     if not pss:
         return ""
 
-    ctx["power_level_names"] = []
-    ctx["power_system_name"] = ""
-
-    parts: list[str] = []
-    for ps in pss[:2]:  # 最多两套体系
-        levels = ps.levels or []
-        level_names = [lv.get("name", "") for lv in levels if isinstance(lv, dict) and lv.get("name")]
-        if not ctx["power_level_names"] and level_names:
-            ctx["power_level_names"] = level_names
-            ctx["power_system_name"] = ps.name
-            ctx["power_summary"] = f"{ps.name}：" + " → ".join(level_names[:8])
-        desc = f"  {ps.name}：{' → '.join(level_names[:10])}"
-        if ps.description:
-            desc += f"（{ps.description[:60]}）"
-        parts.append(desc)
-
-    if not parts:
+    project = db.query(Project).filter(Project.id == project_id).first()
+    merge_power_into_ctx(ctx, pss, project=project)
+    block = format_power_context_block(ctx)
+    if not block or block == "（未设定境界体系）":
         return ""
-    return "\n【境界体系】\n" + "\n".join(parts)
+    return "\n" + block + "\n"
 
 
 def _build_world_settings_block(db: Session, project_id: str) -> str:

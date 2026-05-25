@@ -9,6 +9,8 @@ from typing import Any
 from app.models import Project, Skill
 from app.services.bootstrap.context import get_genre_kit_block
 from app.services.bootstrap.parse import parse_json
+from app.services.bootstrap.power_registry import format_power_context_block
+from app.services.bootstrap.power_grade_align import enrich_skill_power_fields
 from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
 logger = logging.getLogger(__name__)
@@ -22,7 +24,9 @@ async def gen_key_skills(svc: Any, project: Project, ctx: dict):
     ) or "（人物列表待生成）"
     prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 主角：{ctx.get('protagonist', '主角')}
-境界体系：{ctx.get('power_summary', '（未设定）')}
+{format_power_context_block(ctx)}
+
+【器物/道途对齐】若本书有多轴体系：grade 须与主轴境界匹配；填写 required_realm（主轴精确境界名）、artifact_tier（器物阶名）、required_path（sword/pill/body 等）、required_path_rank（道途阶名）。
 主要人物（姓名+UUID）：{char_id_hint}
 
 【流派编辑手册约束】
@@ -35,7 +39,11 @@ async def gen_key_skills(svc: Any, project: Project, ctx: dict):
     "skill_type": "combat",
     "grade": "earth",
     "source": "来源（如：上古秘典、宗门传承）",
-    "level_required": "修炼要求（境界，如：斗者三星以上）",
+    "level_required": "修炼要求（主轴境界名，须从上方列表精确选择）",
+    "required_realm": "同 level_required，主轴境界 canonical 名",
+    "artifact_tier": "所需器物阶（如灵宝，从器物轴选择，可选）",
+    "required_path": "所需道途 path_id（sword/pill/body 等，可选）",
+    "required_path_rank": "道途阶位名（从道途轴选择，可选）",
     "description": "功法/技能描述（40字内）",
     "effects": "使用效果",
     "limitations": "使用限制或副作用",
@@ -86,13 +94,18 @@ grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
         skill_extra = {}
         if item.get("plot_hook"):
             skill_extra["plot_hook"] = str(item["plot_hook"])[:300]
+        aligned = enrich_skill_power_fields(item, ctx)
+        level_required = aligned.get("level_required") or item.get("level_required")
+        for k in ("power_ref", "artifact_tier", "path_ref"):
+            if aligned.get(k) is not None:
+                skill_extra[k] = aligned[k]
         sk = Skill(
             project_id=project.id,
             name=item.get("name", f"功法{i+1}"),
             skill_type=item.get("skill_type", "combat"),
             grade=item.get("grade", "earth"),
             source=item.get("source"),
-            level_required=item.get("level_required"),
+            level_required=level_required,
             description=item.get("description"),
             effects=item.get("effects"),
             limitations=item.get("limitations"),

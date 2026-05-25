@@ -10,6 +10,8 @@ from uuid import UUID
 from app.models import Item, Project
 from app.services.bootstrap.context import get_genre_kit_block
 from app.services.bootstrap.parse import parse_json
+from app.services.bootstrap.power_registry import format_power_context_block
+from app.services.bootstrap.power_grade_align import enrich_item_power_fields
 from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
 logger = logging.getLogger(__name__)
@@ -23,7 +25,9 @@ async def gen_key_items(svc: Any, project: Project, ctx: dict):
     ) or "（人物列表待生成）"
     prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 主角：{ctx.get('protagonist', '主角')}
-境界体系：{ctx.get('power_summary', '（未设定）')}
+{format_power_context_block(ctx)}
+
+【器物对齐】填写 artifact_tier（从器物轴精确选名）与 required_realm（持有者须达到的主轴境界）；rarity 与器物阶应一致。
 主要人物（姓名+UUID）：{char_id_hint}
 主要势力：{', '.join(ctx.get('faction_names', [])[:4])}
 
@@ -36,6 +40,8 @@ async def gen_key_items(svc: Any, project: Project, ctx: dict):
     "name": "道具/法宝名称",
     "item_type": "artifact",
     "rarity": "legendary",
+    "artifact_tier": "灵宝（从器物轴精确选名）",
+    "required_realm": "持有人须达到的主轴境界名",
     "description": "外观与特征描述（30字内）",
     "origin": "来历（上古遗留、宗门镇宝等）",
     "effects": "核心能力效果",
@@ -96,6 +102,10 @@ status 只能是: intact / damaged / destroyed / lost / unknown
         item_extra = {}
         if item.get("plot_hook"):
             item_extra["plot_hook"] = str(item["plot_hook"])[:300]
+        aligned = enrich_item_power_fields(item, ctx)
+        for k in ("power_ref", "artifact_tier", "required_realm"):
+            if aligned.get(k) is not None:
+                item_extra[k] = aligned[k]
         it = Item(
             project_id=project.id,
             name=item.get("name", f"道具{i+1}"),

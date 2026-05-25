@@ -210,6 +210,16 @@ function previewSummary(
   if (!preview) return null
   if (step === 'power_systems') {
     const n = preview.power_systems_count
+    const axes = preview.power_axes
+    if (typeof n === 'number' && Array.isArray(axes) && axes.length > 0) {
+      const labels = axes
+        .slice(0, 5)
+        .map((a: { name?: string; axis?: string; levels?: number }) =>
+          `${a.axis ?? '轴'}:${a.name ?? ''}(${a.levels ?? 0}层)`,
+        )
+        .join(' · ')
+      return `已写入 ${n} 套 · ${labels}`
+    }
     return typeof n === 'number' ? `已写入 ${n} 套境界体系` : null
   }
   if (step === 'characters') {

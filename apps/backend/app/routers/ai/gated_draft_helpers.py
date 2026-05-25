@@ -28,7 +28,6 @@ from app.models import (
     Foreshadow,
     Location,
     OutlineNode,
-    PowerSystem,
     PreWriteWarningRecord,
     Project,
 )
@@ -168,19 +167,10 @@ async def _run_pre_write_warning_inline(
         char_lines.append(line)
     character_states = "\n".join(char_lines)
 
-    # 境界体系摘要
-    power_systems = db.query(PowerSystem).filter(PowerSystem.project_id == project_id).all()
-    ps_lines = []
-    for ps in power_systems:
-        levels = []
-        for lv in (ps.levels or [])[:20]:
-            levels.append(lv.get("name") or "" if isinstance(lv, dict) else str(lv))
-        rule = ps.special_rules or ps.breakthrough_condition or ps.description or ""
-        ps_lines.append(
-            f"{ps.name}：境界序列=[{' < '.join(l for l in levels if l)}]；"
-            f"主角当前={ps.protagonist_current_rank or '未知'}；规则={rule[:120]}"
-        )
-    power_systems_summary = "\n".join(ps_lines)
+    # 境界体系（多轴全保真）
+    from app.services.bootstrap.power_registry import build_draft_power_context_from_db
+
+    power_systems_summary = build_draft_power_context_from_db(db, project_id)
 
     # 大纲五要素
     outline_context = ""

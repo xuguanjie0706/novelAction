@@ -7,6 +7,7 @@ from typing import Any
 from app.models import Faction, Project
 from app.services.bootstrap.context import get_genre_kit_block
 from app.services.bootstrap.parse import parse_json
+from app.services.bootstrap.power_registry import format_power_context_block
 from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
 
@@ -16,7 +17,7 @@ async def gen_factions(svc: Any, project: Project, ctx: dict):
     prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 创意：{ctx['logline']}
 世界观：{ctx['world_overview'][:300]}
-境界体系：{ctx.get('power_summary', '（未设定）')}
+{format_power_context_block(ctx)}
 
 【流派编辑手册约束】
 - 势力定位与冲突必须符合 genre_kit 的 satisfaction_tropes（玄幻多宗门/打脸、悬疑多嫌疑人互咬、言情多家族/情敌）

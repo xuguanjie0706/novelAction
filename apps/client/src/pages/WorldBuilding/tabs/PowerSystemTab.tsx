@@ -18,6 +18,32 @@ const SYSTEM_TYPE_META: Record<string, string> = {
   hybrid: '混合体系',
 }
 
+const AXIS_ROLE_META: Record<string, { label: string; color: string }> = {
+  primary: { label: '修行主轴', color: 'bg-amber-100 text-amber-800 border-amber-200' },
+  path: { label: '道途', color: 'bg-violet-100 text-violet-800 border-violet-200' },
+  artifact: { label: '器物阶', color: 'bg-sky-100 text-sky-800 border-sky-200' },
+  sect: { label: '宗门位阶', color: 'bg-emerald-100 text-emerald-800 border-emerald-200' },
+  dao_heart: { label: '道心', color: 'bg-rose-100 text-rose-800 border-rose-200' },
+  secondary: { label: '副轴', color: 'bg-gray-100 text-gray-700 border-gray-200' },
+}
+
+function axisRoleOf(s: PowerSystem): string {
+  const role = s.extra?.axis_role
+  return typeof role === 'string' && role.trim() ? role.trim() : 'primary'
+}
+
+function groupByAxis(systems: PowerSystem[]): { axis: string; items: PowerSystem[] }[] {
+  const order = ['primary', 'path', 'artifact', 'sect', 'dao_heart', 'secondary']
+  const buckets = new Map<string, PowerSystem[]>()
+  for (const s of systems) {
+    const axis = axisRoleOf(s)
+    if (!buckets.has(axis)) buckets.set(axis, [])
+    buckets.get(axis)!.push(s)
+  }
+  const keys = [...new Set([...order.filter(k => buckets.has(k)), ...buckets.keys()])]
+  return keys.map(axis => ({ axis, items: buckets.get(axis) ?? [] }))
+}
+
 export default function PowerSystemTab({ projectId }: { projectId: string }) {
   const { powerSystems, setPowerSystems, upsertPowerSystem, removePowerSystem } = useAppStore()
   const [selected, setSelected] = useState<PowerSystem | null>(null)
@@ -118,26 +144,37 @@ export default function PowerSystemTab({ projectId }: { projectId: string }) {
   }
 
   const f = (key: keyof PowerSystem) => (v: string) => setForm(prev => ({ ...prev, [key]: v }))
+  const axisGroups = groupByAxis(powerSystems)
+  const selectedAxis = selected ? axisRoleOf(selected) : 'primary'
+  const selectedAxisMeta = AXIS_ROLE_META[selectedAxis] ?? AXIS_ROLE_META.secondary
 
   return (
     <div className="flex h-full">
-      <div className="w-52 border-r border-gray-100 bg-white flex flex-col shrink-0">
+      <div className="w-56 border-r border-gray-100 bg-white flex flex-col shrink-0">
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100">
-          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">境界体系</span>
+          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">力量体系</span>
           <button onClick={handleCreate} className="text-amber-500 hover:text-amber-600"><Plus size={16} /></button>
         </div>
         <div className="flex-1 overflow-auto py-2">
-          {powerSystems.map(s => (
-            <button key={s.id} onClick={() => selectItem(s)}
-              className={clsx('w-full flex items-start gap-2 px-4 py-2.5 text-left transition-colors border-l-2',
-                selected?.id === s.id ? 'bg-amber-50 border-l-amber-400' : 'border-l-transparent hover:bg-gray-50')}>
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-gray-800 truncate">{s.name}</div>
-                <div className="text-xs text-gray-400">{SYSTEM_TYPE_META[s.system_type] ?? s.system_type}</div>
-                <div className="text-xs text-amber-600">{s.levels?.length ?? 0} 个境界</div>
+          {axisGroups.map(({ axis, items }) => {
+            const meta = AXIS_ROLE_META[axis] ?? AXIS_ROLE_META.secondary
+            return (
+              <div key={axis} className="mb-2">
+                <div className="px-4 py-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{meta.label}</div>
+                {items.map(s => (
+                  <button key={s.id} onClick={() => selectItem(s)}
+                    className={clsx('w-full flex items-start gap-2 px-4 py-2.5 text-left transition-colors border-l-2',
+                      selected?.id === s.id ? 'bg-amber-50 border-l-amber-400' : 'border-l-transparent hover:bg-gray-50')}>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-gray-800 truncate">{s.name}</div>
+                      <div className="text-xs text-gray-400">{SYSTEM_TYPE_META[s.system_type] ?? s.system_type}</div>
+                      <div className="text-xs text-amber-600">{s.levels?.length ?? 0} 层</div>
+                    </div>
+                  </button>
+                ))}
               </div>
-            </button>
-          ))}
+            )
+          })}
           {powerSystems.length === 0 && <p className="text-xs text-gray-400 text-center py-8">暂无境界体系</p>}
         </div>
       </div>
@@ -148,9 +185,12 @@ export default function PowerSystemTab({ projectId }: { projectId: string }) {
             <EditorHeader
               name={form.name ?? selected.name}
               subtitle={SYSTEM_TYPE_META[form.system_type ?? 'cultivation']}
-              badge={<span className="text-xs px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200 font-medium">
-                {(form.levels ?? []).length} 个境界层级
-              </span>}
+              badge={<>
+                <span className={clsx('text-xs px-2 py-0.5 rounded-full border font-medium mr-2', selectedAxisMeta.color)}>{selectedAxisMeta.label}</span>
+                <span className="text-xs px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200 font-medium">
+                  {(form.levels ?? []).length} 层
+                </span>
+              </>}
               onDelete={() => handleDelete(selected.id)}
               saving={saving} onSave={handleSave}
             />

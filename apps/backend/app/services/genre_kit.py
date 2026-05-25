@@ -42,6 +42,17 @@ GENRE_KITS: dict[str, dict[str, Any]] = {
         ],
         "pacing_guide": "每3章一小爽点，每8-10章一中高潮，每卷一大反转。开局前3章必须让读者看到主角的'与众不同'。",
         "reader_expectation": "读者最想看到：主角如何从底层逆袭、打脸爽、升级细节、金手指新用法。避免：一上来就世界大战、配角无脑跪舔。",
+        "power_architecture_defaults": {
+            "multi_axis": True,
+            "required_axes": ["primary", "path", "artifact", "sect"],
+            "optional_axes": [],
+            "primary_min_levels": 7,
+            "paths_pool": ["combat", "beast", "array", "pill", "body"],
+            "paths_pick": 2,
+            "artifact_tier_names": ["凡器", "玄器", "地器", "天器", "圣器", "帝器", "神器"],
+            "sect_rank_names": ["外门弟子", "内门弟子", "核心弟子", "执事", "长老", "副宗主", "宗主"],
+            "breakthrough_trials_pool": ["resource", "insight", "battle", "bloodline"],
+        },
     },
     "仙侠": {
         "opening_beats": [
@@ -63,6 +74,17 @@ GENRE_KITS: dict[str, dict[str, Any]] = {
         ],
         "pacing_guide": "节奏偏中慢，每卷一个大境界突破，每10章一次心魔/因果收束。开局前5章必须建立'仙凡之别'的压迫感。",
         "reader_expectation": "读者最想看到：境界突破细节、法宝/功法新奇用法、红尘炼心、仙门权谋。避免：纯打斗无思考、感情线突兀。",
+        "power_architecture_defaults": {
+            "multi_axis": True,
+            "required_axes": ["primary", "path", "artifact", "sect"],
+            "optional_axes": ["dao_heart"],
+            "primary_min_levels": 7,
+            "paths_pool": ["sword", "pill", "body", "talisman", "array", "demon"],
+            "paths_pick": 2,
+            "artifact_tier_names": ["凡品", "灵器", "宝器", "灵宝", "古宝", "道器", "仙器"],
+            "sect_rank_names": ["外门弟子", "内门弟子", "真传弟子", "执事", "长老", "副掌门", "掌门", "老祖"],
+            "breakthrough_trials_pool": ["resource", "insight", "tribulation", "heart_demon"],
+        },
     },
     "都市": {
         "opening_beats": [

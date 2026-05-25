@@ -39,6 +39,7 @@ def build_full_ctx(db: Session, project: Any) -> dict:
         完整 ctx 字典；缺失字段保持默认值，不会引发 KeyError。
     """
     from app.models import Character, Faction, OutlineNode, PowerSystem, StoryLine, WorldSetting
+    from app.services.bootstrap.power_registry import merge_power_into_ctx
     from app.services.outline_planning import words_to_plan
 
     project_id = str(project.id)
@@ -69,18 +70,7 @@ def build_full_ctx(db: Session, project: Any) -> dict:
         .order_by(PowerSystem.sort_order)
         .all()
     )
-    if pss:
-        ps = pss[0]
-        levels = ps.levels or []
-        level_names = [
-            lv.get("name", "") for lv in levels
-            if isinstance(lv, dict) and lv.get("name")
-        ]
-        ctx["power_level_names"] = level_names
-        ctx["power_system_name"] = ps.name
-        ctx["power_summary"] = (
-            f"{ps.name}：" + " → ".join(level_names[:8]) if level_names else ps.name
-        )
+    merge_power_into_ctx(ctx, pss, project=project)
 
     # ── 势力 ─────────────────────────────────────────────────────────────
     factions = (

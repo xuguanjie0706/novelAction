@@ -60,6 +60,7 @@ from app.routers.ai.draft_context import (
     _build_reader_feedback_context,
     _build_reader_promise_context,
     _build_scene_blueprint,
+    build_power_systems_draft_block,
 )
 from app.routers.ai.pre_write_for_draft import resolve_pre_write_brief_for_draft
 
@@ -339,6 +340,8 @@ async def _build_draft_context(
         if c.name and (c.current_realm or "").strip()
     }
 
+    power_systems_context = build_power_systems_draft_block(db, project_id)
+
     return dict(
         chapter_title=chapter.title or "",
         outline_hook=outline_node.hook or "" if outline_node else "",
@@ -372,6 +375,7 @@ async def _build_draft_context(
         reader_promise_context=reader_promise_context,
         prev_directives=prev_directives_str,
         realm_snapshot=realm_snapshot_value,
+        power_systems_context=power_systems_context,
         rag_retrieval_log_id=str(_rag_log.id),
         rag_retrieval_snapshot=rag_retrieval_snapshot,
     )

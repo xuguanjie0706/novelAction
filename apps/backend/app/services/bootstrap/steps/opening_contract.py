@@ -5,8 +5,15 @@ from __future__ import annotations
 from typing import Any
 
 from app.models import Project
+from app.services.bootstrap.context import get_genre_kit_block
+from app.services.bootstrap.opening_contract_io import persist_opening_contract
 from app.services.bootstrap.parse import parse_json
 from app.services.bootstrap.reader_promise_seed import seed_reader_promises
+from app.services.xuanhuan_lexicon import (
+    format_modern_blacklist_for_prompt,
+    is_xuanhuan_like_genre,
+    sanitize_xuanhuan_text,
+)
 
 
 async def gen_opening_contract(svc: Any, project: Project, ctx: dict) -> dict:
@@ -19,8 +26,20 @@ async def gen_opening_contract(svc: Any, project: Project, ctx: dict) -> dict:
     tropes = positioning.get("tropes", [])
     pace_type = positioning.get("pace_type", "medium")
     target_audience = positioning.get("target_audience", "")
+    genre = ctx.get("genre", project.genre or "玄幻")
+    kit_block = get_genre_kit_block(ctx)
+    taboo_lines = positioning.get("taboo_lines") or []
+    if isinstance(taboo_lines, list):
+        taboo_text = "；".join(str(t) for t in taboo_lines if t)
+    else:
+        taboo_text = str(taboo_lines or "")
+    modern_block = (
+        "\n" + format_modern_blacklist_for_prompt()
+        if is_xuanhuan_like_genre(genre)
+        else ""
+    )
 
-    prompt = f"""小说：《{ctx.get('project_title', '未命名')}》（{ctx.get('genre', '')}）
+    prompt = f"""小说：《{ctx.get('project_title', '未命名')}》（{genre}）
 主角：{ctx.get('protagonist', '主角')}  起点境界：{ctx.get('power_level_names', ['（未知）'])[0] if ctx.get('power_level_names') else '（未知）'}
 创意：{ctx.get('logline', '')}
 核心爽点：{', '.join(tropes) or '（未设定）'}
@@ -37,10 +56,14 @@ async def gen_opening_contract(svc: Any, project: Project, ctx: dict) -> dict:
   "chapter3_payoff": "第3章小爽点：主角在前3章内必须获得的第一次具体反转/胜利/资源（要具体，不要'小小展示实力'这种废话）",
   "chapter5_foreshadow": "第5章必须埋下的长线伏笔：能支撑读者追到第30章的那个谜（一句话，具体到人物或秘密）",
   "chapter10_subscribe_reason": "第10章末尾：读者为什么要付费订阅第11章？给出一个让人无法放下的悬念设计（具体手法：强敌登场/秘密揭示/关系逆转/etc）",
-  "opening_traps_to_avoid": ["开局必须避免的3个常见坑（针对本书题材和爽点类型的具体风险）"],
+  "opening_traps_to_avoid": ["开局必须避免的3个常见坑（针对本书题材和爽点类型的具体风险；玄幻/仙侠须含一条「现代科技术语/商业话术出戏」类风险，如逆向工程、解析改良、畅销榜等）"],
   "chapter_rhythm": "前10章节奏设计：哪章快哪章慢，何时第一次打脸，何时第一次建立情感连接（50字内）"
 }}
-要求：每个字段必须结合本书具体设定给出，禁止使用通用模板语言。"""
+要求：每个字段必须结合本书具体设定给出，禁止使用通用模板语言。
+{('红线禁忌：' + taboo_text) if taboo_text else ''}
+{kit_block}
+{modern_block}
+玄幻/仙侠：承诺文案须用古风表达（辨药、拆方、重配丹纹、坊市热销），禁止逆向工程、科学解析、工业化、市场调研等现代用语。"""
 
     try:
         raw = await svc._call_with_retry(
@@ -52,13 +75,25 @@ async def gen_opening_contract(svc: Any, project: Project, ctx: dict) -> dict:
     except Exception:
         contract = {}
 
-    try:
-        extra = project.extra or {}
-        extra["opening_contract"] = contract
-        project.extra = extra
-        svc.db.commit()
-    except Exception:
-        pass
+    if contract and is_xuanhuan_like_genre(genre):
+        cleaned: dict = {}
+        for key, val in contract.items():
+            if isinstance(val, str):
+                cleaned[key] = sanitize_xuanhuan_text(val)
+            elif isinstance(val, list):
+                cleaned[key] = [
+                    sanitize_xuanhuan_text(str(x)) if isinstance(x, str) else x
+                    for x in val
+                ]
+            else:
+                cleaned[key] = val
+        contract = cleaned
+
+    if contract:
+        try:
+            persist_opening_contract(svc, project, contract)
+        except Exception:
+            pass
 
     ctx["opening_contract"] = contract
 

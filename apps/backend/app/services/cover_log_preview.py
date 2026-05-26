@@ -28,9 +28,9 @@ def _safe_debug_bundle_dir(rel: Optional[str]) -> Optional[Path]:
 
 
 def _mime_from_magic(blob: bytes) -> str:
-    from app.routers.cover import _image_magic_kind
+    from app.routers.cover_b64_decode import image_magic_kind
 
-    k = _image_magic_kind(blob)
+    k = image_magic_kind(blob)
     return {
         "png": "image/png",
         "jpeg": "image/jpeg",
@@ -84,10 +84,10 @@ def resolve_log_preview_image(row: CoverImageCallLog) -> Tuple[bytes, str]:
             return raw, _mime_from_magic(raw)
         b64f = bundle / "payload.b64.txt"
         if b64f.is_file():
-            from app.routers.cover import _decode_b64_image_payload
+            from app.routers.cover_b64_decode import decode_b64_image_payload
 
             txt = b64f.read_text(encoding="utf-8", errors="replace")
-            raw = _decode_b64_image_payload(txt)
+            raw = decode_b64_image_payload(txt)
             return raw, _mime_from_magic(raw)
 
     raise FileNotFoundError("no preview for log")

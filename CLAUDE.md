@@ -164,7 +164,7 @@ JSON 杂物字段，当前已知键：
 - `extra.villain_arc`：Step 9.8 产物，主要反派卷级行动计划
 - `extra.core_mysteries`：Step 11.5 产物，跨卷核心谜题预分配
 - `extra.opening_contract`：Step 12 产物，开局追读承诺清单
-- `extra.consistency_issues`：Step 14 产物，一致性矛盾列表
+- `extra.consistency_issues`：Step 13 产物，一致性矛盾列表
 
 ---
 
@@ -184,8 +184,11 @@ JSON 杂物字段，当前已知键：
 | `/api/v1/projects/{pid}/items/` | 道具法宝 CRUD |
 | `/api/v1/projects/{pid}/factions/` | 势力组织 CRUD |
 | `/api/v1/projects/{pid}/scenes/` | 分场 CRUD |
+| `/api/v1/projects/{pid}/outline/volumes/{vid}/expand-chapters` | **按卷懒展开章纲**（SSE，Bootstrap 之后） |
+| `/api/v1/projects/{pid}/consistency/fix` | 一致性问题 AI/规则修复 |
+| `/api/v1/projects/{pid}/consistency/rescan` | 一致性重扫 |
 | `/api/v1/projects/{pid}/reader-promises/` | 读者承诺 CRUD |
-| `POST /api/v1/bootstrap/runs` | **一句话→全量生成（Bootstrap，LangGraph 串行）** |
+| `POST /api/v1/bootstrap/runs` | **一句话→全量生成（Bootstrap，LangGraph）** |
 
 ---
 
@@ -200,34 +203,47 @@ JSON 杂物字段，当前已知键：
 ```
 logline
   → [Step 0  立项会议]       positioning        _gen_positioning
+  → [gate 立项确认]
   → [Step 1  项目]           project            _gen_project
   → [Step 2  境界体系]       power_systems      _gen_power_systems
+  → [gate_power 境界确认]
   → [Step 3  势力]           factions           _gen_factions
   → [Step 4  故事线]         storylines         _gen_storylines
   → [Step 5  人物]           characters         _gen_characters
-  → [Step 6  技能]           skills             _gen_key_skills
-  → [Step 7  道具]           items              _gen_key_items
+  → [gate_characters 人物确认]
+  → [Step 6+7 技能+道具]     skills_items       _gen_key_skills ∥ _gen_key_items
   → [Step 8  设定卡]         settings           _gen_settings
   → [Step 9  卷骨架+phase]   volumes            _gen_volumes
-  → [gate_vol 卷质量门控]
-  → [Step 9.5 情绪节律图]   emotion_arc        _gen_emotion_arc
-  → [Step 9.8 反派行动线]   villain_arc        _gen_villain_arc
-  → [Step 10 记忆]           memory             _gen_memory
-  → [Step 11 关系]           relations          _gen_relations
+  → [gate_volumes 卷质量门控]
+  → [Step 9.5+9.8 并行]      emotion_villain    _gen_emotion_arc ∥ _gen_villain_arc
+  → [Step 10+11 并行]        memory_relations   _gen_memory ∥ _gen_relations
   → [Step 11.5 核心谜题]    core_mysteries     _gen_core_mysteries
   → [Step 12 开局承诺]       opening_contract   _gen_opening_contract
-  → [Step 12.5 第一卷章纲]  vol1_chapters      _gen_vol1_chapter_plans
-  → [Step 13 第1章场景]      ch1_scenes         _gen_ch1_scenes
-  → [Step 14 一致性扫描]     consistency        _gen_consistency_scan
+  → [Step 13 一致性扫描]     consistency        _gen_consistency_scan
+  → END
 ```
+
+**Bootstrap 止于卷骨架 + 设定闭环，不生成章纲/场景。** 章级 `chapter_plan` 与 `Scene` 在写作期按需展开（见下节）。
 
 - 每步独立 prompt，上下文逐步累积（压缩摘要 + 立项定位传入）
 - 单步失败重试 1 次，不影响其他步骤
 - SSE 每步推送 `step_start` / `step_done` / `error` / `linter_blocked`
 - **Step 1 项目**：书名海选 15~20 个候选（6种策略，一次 LLM 调用内打分排序）；premise / world_overview 均为结构化对象，按字段精确存 `extra`，渲染为字符串写模型列（向后兼容）
 - **Step 0 立项会议**：从一句话推导目标读者画像、爽点类型、打脸频率、情感线占比、节奏类型，作为后续各步的全局约束。这是网文系统区别于"AI 自由发挥"的关键防线。
-- **Step 12.5 + Step 13**：设定落成可执行写作计划，先生成第一卷章节级 `chapter_plan`，再生成第1章场景级 `Scene` 蓝图。
-- **Step 14**：交叉核验所有生成物，矛盾列表写入 `Project.extra.consistency_issues`。
+- **Step 9**：只落库 `OutlineNode`（volume）；落库后跑 `lint_volume_entity_issues`，战力曲线异常最多定向重试 2 次（势力别名问题不自动重生）。
+- **Step 13**：交叉核验所有生成物，矛盾列表写入 `Project.extra.consistency_issues`。
+- **已移出 Bootstrap（2026-05）**：原 Step 12.5 `vol1_chapters`、原「第1章场景」`ch1_scenes`（旧拓扑中的独立步，非现 Step 13）不再挂入 `graph.py`；实现仍保留于 `steps/vol1_chapter_plans.py` / `ch1_scenes.py`，**单步 regen 不支持**；现 Step 13 仅指 `consistency`。
+
+### 写作期：按卷懒展开章纲（Bootstrap 之后）
+
+| 入口 | API | 实现 |
+|------|-----|------|
+| 大纲页「展开章纲」 | `POST /api/v1/projects/{pid}/outline/volumes/{volume_id}/expand-chapters`（SSE） | `build_vol_expand_ctx` + `gen_vol_chapter_plans` |
+| 章纲 → 分场 | `POST .../ai/scene_routes` plan-save / draft / stitch | 写作页 `ScenePipelinePanel` |
+
+- **每次只展开一卷**；第一卷与后续卷同路径（无 Bootstrap 特例）。
+- 上下文含 Tier1–5 editorial 块 + 已写章节摘要 / 记忆 / 读者承诺；分批 1–30 / 31–60 章生成，落库后过章纲 linter（GEN-02）。
+- 旧路径 `POST /outline/ai-expand`（arc 预览→commit）、`ai-full-generate` 仍保留，volume 主路径以 `expand-chapters` 为准。
 
 ---
 
@@ -261,9 +277,9 @@ logline
 | 人物关系 | `CharacterRelationship` | Step 11 `_gen_relations` |
 | 核心谜题 | `Foreshadow` + `Project.extra.core_mysteries` | Step 11.5 `_gen_core_mysteries` |
 | 开局追读承诺 | `Project.extra.opening_contract` + `ReaderPromise` | Step 12 `_gen_opening_contract` |
-| 第一卷章节蓝图 | `OutlineNode`（chapter_plan） | Step 12.5 `_gen_vol1_chapter_plans` |
-| 第1章场景蓝图 | `Scene` | Step 13 `_gen_ch1_scenes` |
-| 一致性矛盾列表 | `Project.extra.consistency_issues` | Step 14 `_gen_consistency_scan` |
+| 一致性矛盾列表 | `Project.extra.consistency_issues` | Step 13 `_gen_consistency_scan` |
+| 卷下章节蓝图 | `OutlineNode`（chapter_plan） | **写作期** `expand-chapters` → `gen_vol_chapter_plans`（非 Bootstrap） |
+| 章节分场蓝图 | `Scene` | **写作期** Scene 三层调度 / `scene_routes`（非 Bootstrap） |
 
 `WorldSetting` 只存**无专属结构化表的纯叙事内容**：作品立意、世界底层规则、历史谜团、地理格局、文化风俗。不再用文字卡存境界体系或势力描述。
 
@@ -281,7 +297,8 @@ logline
 - [x] 记忆提取 + **pgvector 语义检索**（embedding_service.py 完整实现；BAAI/bge-m3 1024维；复盘后自动触发 embed_chunk_async；写章路径：语义 Top-K + 时效衰减 + 最近 6 条时序锚定）
 - [x] 一句话生成（串行步进，LangGraph；方案B单次全量已移除）
 - [x] 故事线/境界体系/技能/道具/势力前端 UI（WorldBuildingPage 五标签页）
-- [x] Bootstrap 全量步骤（Step 0-14，含 9.5 情绪节律图 / 9.8 反派行动线 / 11.5 核心谜题）
+- [x] Bootstrap 全量步骤（Step 0–13，含 9.5 情绪节律图 / 9.8 反派行动线 / 11.5 核心谜题；**不含**章纲/场景）
+- [x] 按卷懒展开章纲（`expand-chapters` + `gen_vol_chapter_plans` + 章纲 linter）
 - [x] 伏笔台账双向关联（`foreshadow_sync.py`，幂等写入）
 - [x] 大纲生成防漂移（字数预算约束 + 卷间衔接强制承接）
 - [x] 章纲 linter v1.2（CH/SEQ/VL/OC/RP/CM；GEN-02 阻断；`VolumeLinterPanel`）
@@ -298,7 +315,7 @@ logline
   - `services/ai/promise_debrief.py`（新建）：`enrich_with_promise_ids` / `apply_fulfilled_by_ids` / `apply_plan_promise_fulfillment`
   - `auto_debrief` 服务端将 `fulfilled_promise_texts` 解析为精确 ID 列表写入缓存（层①）
   - `chapter_debrief` 按 `fulfilled_promise_ids` 直接按主键标记已兑现（层②）
-  - `chapter_debrief` 读取 `OutlineNode.extra.promise_fulfilled` 对 open 承诺做模糊匹配兜底（层③，连通 Bootstrap Step 12.5 规划信号）
+  - `chapter_debrief` 读取 `OutlineNode.extra.promise_fulfilled` 对 open 承诺做模糊匹配兜底（层③，连通章纲展开时写入的规划信号）
   - 剩余：队列自动复盘同步提交（`apply_source=queue_auto` 尚未完整触发 auto-debrief → chapter-debrief 链路）
 - [ ] **Location 模型**（当前 Scene.location_name 文本字段，location_id 已注释预留）
 - [ ] **人物关系图可视化**（ReactFlow）
@@ -344,23 +361,28 @@ logline
 
 ---
 
-## 上帝文件登记册（治理基线，2026-05-21 更新）
+## 上帝文件登记册（治理基线，2026-05-26 更新）
 
 | 文件 | 实测行数 | 状态 |
 |---|---:|---|
-| `apps/client/src/components/Writing/ChapterEditor/index.tsx` | 2146 | 🚫 严重违规（≥3x 硬上限）；冻结新增 props/`useState`；新功能走 `hooks/` 子 hook；JSX 待拆 TopToolBar/WarnPanel/ContextSidePanel |
+| `apps/client/src/components/Writing/ChapterEditor/index.tsx` | 2154 | 🚫 严重违规（≥3x 硬上限）；冻结新增 props/`useState`；新功能走 `hooks/` 子 hook；JSX 待拆 TopToolBar/WarnPanel/ContextSidePanel |
+| `apps/frontend/src/pages/ReadingReviewPage.tsx` | 1538 | 🚫 超硬上限；待拆 ReviewList / SnapshotDiff / useReviewSubmit |
+| ~~`apps/client/src/pages/ProjectDetailPage.tsx`~~ | ~~1188~~ | ✅ 已拆至 `pages/ProjectDetail/`（壳 354 行；最大 CoverModal 365 行） |
+| ~~`apps/client/src/pages/CluesPage.tsx`~~ | ~~1007~~ | ✅ 已拆至 `pages/Clues/`（壳 443 行；最大 QualityDebtCard 173 行） |
+| ~~`apps/backend/app/routers/cover.py`~~ | ~~908~~ | ✅ 已拆为 cover_b64_decode.py（367）+ cover_gateway.py（289）+ 薄壳（284） |
+| `apps/backend/app/services/ai/chapter_ingredients.py` | 552 | ⚠️ 软警戒线上方；已拆出 ingredient_types.py（104）+ ingredient_prompt.py（108） |
+| `apps/backend/app/routers/outline/qa_internal.py` | 878 | 🚫 超硬上限（600）；新逻辑放 `routers/outline/routes_*.py`，禁止在此文件新增 |
+| ~~`apps/backend/app/routers/outline/helpers/realm_timeline.py`~~ | ~~728~~ | ✅ 已拆为 realm_whitelist.py（204）+ realm_attribution.py（115）+ 薄壳（369） |
+| ~~`apps/backend/app/routers/ai/draft_context.py`~~ | ~~678~~ | ✅ 已拆为 draft_ctx_reader.py（116）+ draft_ctx_promise.py（139）+ 薄壳（363） |
+| ~~`apps/backend/app/services/bootstrap/graph.py`~~ | ~~649~~ | ✅ 已拆为 graph_sse.py（79）+ graph_runner.py（160）+ 薄壳（368） |
+| `apps/backend/app/services/bootstrap/context_vol_expand.py` | 624 | 🚫 超硬上限；新功能禁止增入；待拆分 |
+| `apps/backend/app/routers/chapters.py` | 606 | ⚠️ 刚超硬上限；新端点禁止增入；待拆 chapter_version_routes.py + chapter_index_routes.py |
+| `apps/backend/app/services/ai/writing_tools.py` | 603 | ⚠️ 刚超硬上限；新功能禁止增入；待拆分 |
 | ~~`apps/client/src/pages/OutlinePage.tsx`~~ | — | ✅ 已迁 `pages/Outline/`（2 行 re-export；子模块均 <600） |
 | `apps/backend/app/routers/outline/helpers_core.py` | 180 | ✅ 已大幅瘦身；新路由仍进 `routers/outline/routes_*.py` |
 | ~~`apps/client/src/components/Layout/GenerationQueuePanel.tsx`~~ | ~~1890~~ | ✅ 已拆至 `Layout/GenerationQueue/`（壳 2 行；最大 runner 297 行） |
-| `apps/frontend/src/pages/ReadingReviewPage.tsx` | 1538 | ⚠️ 超硬上限；待拆 ReviewList / SnapshotDiff / useReviewSubmit |
 | ~~`apps/client/src/pages/WorldBuildingPage.tsx`~~ | ~~1547~~ | ✅ 已拆至 `pages/WorldBuilding/`（壳 2 行；最大 Tab 321 行） |
 | ~~`apps/client/src/pages/CharactersPage.tsx`~~ | ~~1280~~ | ✅ 已拆至 `pages/Characters/`（壳 2 行；最大 CharacterEditor 551 行） |
-| `apps/backend/app/routers/outline/qa_internal.py` | 878 | 🚫 超硬上限（600）；新逻辑放 `routers/outline/routes_*.py`，禁止在此文件新增 |
-| `apps/backend/app/services/ai/context_builder.py` | 794 | 🚫 超硬上限；新功能禁止增入；待按职责拆分子模块 |
-| `apps/backend/app/services/ai/outline_ai.py` | 735 | 🚫 超硬上限；新功能禁止增入；待拆分 |
-| `apps/backend/app/services/ai/debrief.py` | 638 | 🚫 超硬上限；新功能禁止增入；待拆分 |
-| `apps/backend/app/routers/ai/debrief_routes.py` | 864 | 🚫 超硬上限；新功能禁止增入；待拆分为 chapter_debrief_route.py + auto_debrief_route.py |
-| `apps/backend/app/services/bootstrap/context_vol_expand.py` | 634 | 🚫 超硬上限；新功能禁止增入；待拆分 |
 | ~~`apps/client/src/components/Writing/ChapterEditor/DebriefPanel.tsx`~~ | ~~707~~ | ✅ 已拆至 `DebriefPanel/`（壳 2 行；编排 index 282 行） |
 
 > 任何一次让上表文件**增加 ≥ 50 行**的 PR 都必须同时包含等量或更多的「治旧」删除量；否则视为破坏红线。
@@ -375,6 +397,18 @@ logline
 | `apps/client/src/components/Writing/ChapterEditor.tsx`（3168行） | `Writing/ChapterEditor/` 包（index.tsx + types/utils/constants + PlanCard/CharacterMiniCard/DebriefPanel + hooks/）；残留 4 行壳 |
 | `apps/backend/app/routers/ai/gated_draft_routes.py` | gated_draft_helpers.py（461行）+ gated_draft_quality.py（367行）+ 编排壳（358行） |
 | `apps/backend/app/routers/ai/reader_simulation_routes.py` | reader_simulation_schemas.py（136行）+ reader_simulation_helpers.py（324行）+ 编排壳（534行） |
+| `apps/backend/app/services/ai/context_builder.py`（794行） | context_builder_continuity.py（266行）+ context_builder_brief.py（313行）+ context_builder_chat.py（236行）；壳 35 行 re-export |
+| `apps/backend/app/services/ai/outline_ai.py`（735行） | outline_ai_expand.py（299行）+ outline_ai_quality.py（432行）；壳 18 行组合继承 |
+| `apps/backend/app/services/ai/debrief.py`（662行） | debrief_helpers.py（140行）+ debrief_extract.py（505行）；壳 18 行 re-export |
+| `apps/backend/app/routers/ai/debrief_routes.py`（864行） | chapter_debrief_route.py（383行）+ auto_debrief_route.py（188行）+ debrief_char_updater.py（321行）+ debrief_chapter_core.py（360行）；壳 18 行聚合 |
+| `apps/backend/app/routers/ai/scene_routes.py`（730行） | scene_plan_routes.py（404行）+ scene_draft_routes.py（210行）+ scene_stitch_routes.py（137行）；壳 19 行聚合 |
+| `apps/backend/app/routers/cover.py`（908行） | cover_b64_decode.py（367行）+ cover_gateway.py（289行）；壳 284 行 |
+| `apps/backend/app/services/ai/chapter_ingredients.py`（895行） | ingredient_types.py（104行）+ ingredient_prompt.py（108行）；壳 552 行 |
+| `apps/backend/app/routers/outline/helpers/realm_timeline.py`（728行） | realm_whitelist.py（204行）+ realm_attribution.py（115行）；壳 369 行 re-export |
+| `apps/backend/app/routers/ai/draft_context.py`（678行） | draft_ctx_reader.py（116行）+ draft_ctx_promise.py（139行）；壳 363 行 re-export |
+| `apps/backend/app/services/bootstrap/graph.py`（649行） | graph_sse.py（79行）+ graph_runner.py（160行）；壳 368 行 re-export |
+| `apps/client/src/pages/ProjectDetailPage.tsx`（1188行） | `pages/ProjectDetail/`：CoverSvgUtils（83行）+ CoverModal（365行）+ GenerateJourneyPanel（227行）+ WritingConfigPanel（198行）；壳 354 行 |
+| `apps/client/src/pages/CluesPage.tsx`（1007行） | `pages/Clues/`：constants（69行）+ ForeshadowForm（132行）+ ForeshadowCard（123行）+ ChapterIndexCard（116行）+ QualityDebtCard（173行）；壳 443 行 |
 
 ---
 

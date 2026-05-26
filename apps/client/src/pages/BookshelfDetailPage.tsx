@@ -30,6 +30,7 @@ import {
 import { clearActiveBootstrapRun } from '../utils/bootstrapActiveRun'
 import type { OutlineNode } from '../types'
 import SectionContent, { type DetailData } from '../components/BookshelfDetail/SectionContent'
+import { countOpeningContractEntries, resolveOpeningContract } from '../utils/openingContractDisplay'
 
 // ── 分区配置 ─────────────────────────────────────────────────
 
@@ -115,12 +116,9 @@ const SECTIONS: SectionCfg[] = [
     label: '开局承诺',
     icon: <BookMarked size={16} />,
     color: '#22c55e',
-    countFn: d => {
-      const c = d.insights.opening_contract
-      if (!c) return 0
-      const arr = c.promises ?? c.contracts ?? c.items ?? (Array.isArray(c) ? c : null)
-      return Array.isArray(arr) ? arr.length : Object.keys(c).length
-    },
+    countFn: d => countOpeningContractEntries(
+      resolveOpeningContract(d.insights, d.project.extra),
+    ),
   },
   {
     id: 'consistency',
@@ -243,9 +241,24 @@ export default function BookshelfDetailPage() {
       ])
       const allNodes: OutlineNode[] = Array.isArray(outlineRes.data) ? outlineRes.data : []
       const volumes = allNodes.filter(n => n.node_type === 'volume')
+      const project = projectRes.data
+      const insightsPayload = insightsRes.data ?? {
+        consistency_issues: [],
+        opening_contract: {},
+        positioning: {},
+      }
       setData({
-        project: projectRes.data,
-        insights: insightsRes.data ?? { consistency_issues: [], opening_contract: {}, positioning: {} },
+        project,
+        insights: {
+          ...insightsPayload,
+          opening_contract: resolveOpeningContract(insightsPayload, project.extra),
+          consistency_issues: insightsPayload.consistency_issues
+            ?? project.extra?.consistency_issues
+            ?? [],
+          positioning: insightsPayload.positioning
+            ?? project.extra?.positioning
+            ?? {},
+        },
         characters: Array.isArray(charsRes.data) ? charsRes.data : [],
         relations: Array.isArray(relsRes.data) ? relsRes.data : [],
         factions: Array.isArray(factionsRes.data) ? factionsRes.data : [],

@@ -57,6 +57,35 @@ def test_rule_realm_from_suggestion():
     assert {p["new_value"] for p in patches} == {"皇印境"}
 
 
+def test_rule_realm_shewei_and_biaozhu_patterns():
+    chars = [
+        SimpleNamespace(name="莫沧", current_realm="灵尊境"),
+        SimpleNamespace(name="韩厉", current_realm="战卒"),
+    ]
+    pairs = [
+        (
+            18,
+            {
+                "type": "realm_mismatch",
+                "description": "莫沧(灵尊境)作为最终BOSS，未达到境界体系上限虚神境",
+                "suggestion": "将莫沧终局境界设为虚神境",
+            },
+        ),
+        (
+            19,
+            {
+                "type": "realm_mismatch",
+                "description": "韩厉境界标注为战卒，与主轴境界体系名称不一致",
+                "suggestion": "参照主轴统一标注为灵徒境",
+            },
+        ),
+    ]
+    patches = _rule_realm_patches(pairs, chars)
+    by_name = {p["entity_name"]: p["new_value"] for p in patches}
+    assert by_name.get("莫沧") == "虚神境"
+    assert by_name.get("韩厉") == "灵徒境"
+
+
 def test_rule_realm_jingjie_zhi_pattern():
     chars = [SimpleNamespace(name="柳红衣", current_realm="印士")]
     pairs = [

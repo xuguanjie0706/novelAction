@@ -175,6 +175,11 @@ def _rule_realm_patches(
             r"([^」\u201d\u300d\"'\s（(]{2,10})"
         ),
         re.compile(r"境界至\s*([^，。\s（(]{2,10})"),
+        re.compile(r"(?:境界)?设为\s*([\u4e00-\u9fff]{2,10})"),
+        re.compile(r"标注为\s*([\u4e00-\u9fff]{2,10})"),
+        re.compile(
+            r"统一标注为\s*([\u4e00-\u9fff]{2,10})"
+        ),
     )
     patches: list[dict] = []
     for seq, (real_idx, iss) in enumerate(selected_pairs):

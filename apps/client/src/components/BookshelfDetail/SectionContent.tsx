@@ -12,6 +12,14 @@ import type {
   Project, Character, CharacterRelationship, Faction, PowerSystem,
   Skill, Item, StoryLine, WorldSetting, OutlineNode,
 } from '../../types'
+import {
+  OPENING_CONTRACT_FIELDS,
+  countOpeningContractEntries,
+  formatContractDisplayValue,
+  hasContractValue,
+  priorityColor,
+  resolveOpeningContract,
+} from '../../utils/openingContractDisplay'
 
 // ── 数据 bundle ───────────────────────────────────────────────
 
@@ -482,29 +490,73 @@ function VolumesSection({ data }: { data: DetailData }) {
 // ── 区域渲染：开局承诺 ────────────────────────────────────────
 
 function ContractSection({ data }: { data: DetailData }) {
-  const oc = data.insights.opening_contract ?? {}
-  const promises: any[] = Array.isArray(oc.promises) ? oc.promises
-    : Array.isArray(oc.items) ? oc.items
-    : oc.chapter1_hook ? [{ text: oc.chapter1_hook, type: 'chapter1_hook', priority: 5 }]
+  const oc = resolveOpeningContract(data.insights, data.project.extra)
+  const legacyList: unknown[] = Array.isArray(oc.promises)
+    ? oc.promises
+    : Array.isArray(oc.items)
+      ? oc.items
+      : Array.isArray(oc.contracts)
+        ? oc.contracts
+        : []
+
+  const fieldEntries = OPENING_CONTRACT_FIELDS.filter(f => hasContractValue(oc[f.key]))
+  const traps = Array.isArray(oc.opening_traps_to_avoid)
+    ? oc.opening_traps_to_avoid.filter(hasContractValue)
     : []
+  const total = countOpeningContractEntries(oc)
+
+  if (total === 0) {
+    return <p style={S.muted}>暂无开局承诺数据（需完成 Bootstrap Step 12）</p>
+  }
 
   return (
     <>
-      {oc.chapter1_hook && (
-        <Card style={{ borderLeftWidth: 3, borderLeftColor: '#16a34a' }}>
-          <SectionTitle>第1章核心钩子</SectionTitle>
-          <p style={{ ...S.text, fontStyle: 'italic' }}>「{oc.chapter1_hook}」</p>
+      {fieldEntries.map(f => {
+        const color = priorityColor(f.priority)
+        const text = formatContractDisplayValue(oc[f.key])
+        return (
+          <Card key={f.key} style={{ borderLeftWidth: 3, borderLeftColor: color }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+              <div style={{
+                width: 22, height: 22, borderRadius: 5, background: color,
+                color: 'white', fontSize: 10, fontWeight: 700, flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>P{f.priority}</div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <SectionTitle>{f.label}</SectionTitle>
+                <p style={S.text}>{text}</p>
+              </div>
+            </div>
+          </Card>
+        )
+      })}
+
+      {traps.length > 0 && (
+        <Card style={{ borderLeftWidth: 3, borderLeftColor: '#f59e0b' }}>
+          <SectionTitle>开局需规避的坑</SectionTitle>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {traps.map((t, i) => (
+              <li key={i} style={{ ...S.text, marginBottom: 6 }}>
+                {formatContractDisplayValue(t)}
+              </li>
+            ))}
+          </ul>
         </Card>
       )}
-      {promises.length === 0 && !oc.chapter1_hook && (
-        <p style={S.muted}>暂无开局承诺数据</p>
-      )}
-      {promises.map((p: any, i) => {
-        const prio = p.priority ?? (5 - Math.min(i, 4))
-        const color = prio >= 5 ? '#ef4444' : prio >= 3 ? '#f97316' : '#22c55e'
-        const text = typeof p === 'string' ? p : (p.text ?? p.content ?? JSON.stringify(p))
+
+      {legacyList.map((p, i) => {
+        const prio = typeof p === 'object' && p && 'priority' in p
+          ? Number((p as { priority?: number }).priority) || (5 - Math.min(i, 4))
+          : 5 - Math.min(i, 4)
+        const color = priorityColor(prio)
+        const text = formatContractDisplayValue(
+          typeof p === 'string' ? p : (p as { text?: string; content?: string }),
+        )
+        const typeLabel = typeof p === 'object' && p && 'type' in p
+          ? formatContractDisplayValue((p as { type?: unknown }).type)
+          : ''
         return (
-          <Card key={i}>
+          <Card key={`legacy-${i}`}>
             <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
               <div style={{
                 width: 22, height: 22, borderRadius: 5, background: color,
@@ -513,7 +565,7 @@ function ContractSection({ data }: { data: DetailData }) {
               }}>P{prio}</div>
               <div>
                 <p style={S.text}>{text}</p>
-                {p.type && <p style={{ ...S.tiny, marginTop: 2 }}>{p.type}</p>}
+                {typeLabel ? <p style={{ ...S.tiny, marginTop: 2 }}>{typeLabel}</p> : null}
               </div>
             </div>
           </Card>

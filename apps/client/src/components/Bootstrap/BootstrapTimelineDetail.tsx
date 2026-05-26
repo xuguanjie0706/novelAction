@@ -18,6 +18,13 @@ import ConsistencyContent, { type FixState } from './ConsistencyContent'
 import StepDataContent from './StepDataContent'
 import { projectsApi } from '../../api/client'
 import BootstrapStepIcon from './BootstrapStepIcon'
+import {
+  OPENING_CONTRACT_FIELDS,
+  countOpeningContractEntries,
+  formatContractDisplayValue,
+  hasContractValue,
+  priorityColor,
+} from '../../utils/openingContractDisplay'
 
 function fmtDuration(ms: number): string {
   const s = ms / 1000
@@ -161,52 +168,75 @@ function PositioningContent({ data }: { data: Record<string, any> }) {
 
 
 function OpeningContractContent({ data }: { data: Record<string, any> }) {
-  const promises: any[] = Array.isArray(data.promises)
+  const total = countOpeningContractEntries(data)
+  const fieldEntries = OPENING_CONTRACT_FIELDS.filter(f => hasContractValue(data[f.key]))
+  const traps = Array.isArray(data.opening_traps_to_avoid)
+    ? data.opening_traps_to_avoid.filter(hasContractValue)
+    : []
+  const legacyList: unknown[] = Array.isArray(data.promises)
     ? data.promises
     : Array.isArray(data.items)
       ? data.items
-      : data.chapter1_hook
-        ? [{ text: data.chapter1_hook }]
-        : []
+      : []
+
+  if (total === 0) {
+    return (
+      <Card>
+        <p className="text-sm text-gray-500">
+          承诺数据已写入数据库，前往工作台的「读者承诺」页查看完整台账。
+        </p>
+      </Card>
+    )
+  }
 
   return (
     <>
-      {data.chapter1_hook && (
-        <Card title="第1章核心钩子">
-          <p className="text-sm italic leading-relaxed text-gray-900">「{data.chapter1_hook}」</p>
-        </Card>
-      )}
-      {promises.length > 0 && (
-        <Card title={`追读承诺清单（${promises.length} 条）`}>
-          {promises.map((p: any, i: number) => (
-            <div key={i} className="mb-3 flex gap-2 last:mb-0">
+      <Card title={`追读承诺清单（${total} 条）`}>
+        {fieldEntries.map(f => {
+          const color = priorityColor(f.priority)
+          return (
+            <div key={f.key} className="mb-3 flex gap-2 last:mb-0">
               <span
                 className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-[10px] font-bold text-white"
-                style={{
-                  background: i < 2 ? '#ef4444' : i < 4 ? '#f97316' : '#22c55e',
-                }}
+                style={{ background: color }}
               >
-                P{typeof p === 'object' && p.priority != null ? p.priority : 5 - Math.min(i, 4)}
+                P{f.priority}
               </span>
               <div className="min-w-0 flex-1">
-                <p className="text-xs leading-relaxed text-gray-800">
-                  {typeof p === 'string' ? p : (p.text || p.content || JSON.stringify(p))}
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                  {f.label}
                 </p>
-                {typeof p === 'object' && p.type && (
-                  <p className="mt-1 text-[10px] text-gray-400">{p.type}</p>
-                )}
+                <p className="text-xs leading-relaxed text-gray-800">
+                  {formatContractDisplayValue(data[f.key])}
+                </p>
               </div>
             </div>
-          ))}
-        </Card>
-      )}
-      {promises.length === 0 && !data.chapter1_hook && (
-        <Card>
-          <p className="text-sm text-gray-500">
-            承诺数据已写入数据库，前往工作台的「大纲」页查看完整列表。
-          </p>
-        </Card>
-      )}
+          )
+        })}
+        {traps.length > 0 && (
+          <div className="mt-2 border-t border-gray-100 pt-2">
+            <p className="mb-1 text-[10px] font-semibold text-gray-400">开局需规避的坑</p>
+            <ul className="list-disc pl-4 text-xs text-gray-700">
+              {traps.map((t, i) => (
+                <li key={i} className="mb-1">{formatContractDisplayValue(t)}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {legacyList.map((p, i) => (
+          <div key={`legacy-${i}`} className="mb-3 flex gap-2 last:mb-0">
+            <span
+              className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-[10px] font-bold text-white"
+              style={{ background: priorityColor(5 - Math.min(i, 4)) }}
+            >
+              P{5 - Math.min(i, 4)}
+            </span>
+            <p className="text-xs leading-relaxed text-gray-800">
+              {formatContractDisplayValue(p)}
+            </p>
+          </div>
+        ))}
+      </Card>
     </>
   )
 }
@@ -467,7 +497,8 @@ export default function BootstrapTimelineDetail({
           />
         )}
 
-        {step.key === 'opening_contract' && insights && Object.keys(insights.opening_contract ?? {}).length > 0 && (
+        {step.key === 'opening_contract' && step.status === 'done' && insights
+          && countOpeningContractEntries(insights.opening_contract ?? {}) > 0 && (
           <OpeningContractContent data={insights.opening_contract} />
         )}
 

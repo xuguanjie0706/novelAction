@@ -62,7 +62,7 @@ def build_unified_prompt(ctx: dict) -> str:
 • face_slap_pattern — 打脸节奏描述
 • emotional_arc   — none | low | medium | high
 • pace_type       — fast | medium | slow
-• taboo_lines     — 禁忌边界 2-4 条
+• taboo_lines     — 禁忌边界 2-4 条（玄幻/仙侠须含：禁止现代科技术语与商业话术，如逆向工程、解析改良、畅销榜、算法等）
 • market_risk     — 市场风险诚实评估（同质化/受众/饱和度各一句，合计50字）
 • differentiation_durability — 差异化持续性（60字内，指出几卷后最可能同质化）
 

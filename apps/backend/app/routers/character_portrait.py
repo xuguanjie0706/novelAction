@@ -18,10 +18,10 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Character
 from app.models.llm_provider import LlmProvider
-from app.routers.cover import (
-    _execute_images_generations,
-    _http_status_for_gateway_failure,
-    _raw_bytes_from_generate_out,
+from app.routers.cover import CoverGenerateOut, _raw_bytes_from_generate_out
+from app.routers.cover_gateway import (
+    execute_images_generations,
+    http_status_for_gateway_failure,
 )
 from app.services.character_portrait_prompt import build_character_sprite_prompt
 from app.services.character_portrait_storage import save_character_sprite_sheet
@@ -98,17 +98,18 @@ def _generate_and_persist(
     size: str,
     quality: str,
 ) -> CharacterPortraitGenerateOut:
-    call = _execute_images_generations(
+    call = execute_images_generations(
         base_url=provider.base_url,
         api_key=provider.api_key or "",
         model_name=provider.model_name,
         prompt=prompt,
         size=size,
         quality=quality,
+        cover_out_cls=CoverGenerateOut,
     )
     if not call.success:
         raise HTTPException(
-            _http_status_for_gateway_failure(call),
+            http_status_for_gateway_failure(call),
             call.error_user_message or "图片生成失败",
         )
 

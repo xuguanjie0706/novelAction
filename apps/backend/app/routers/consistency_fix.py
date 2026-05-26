@@ -115,12 +115,17 @@ _MANUAL_ONLY_ISSUE_TYPES = frozenset({"volume_order_gap", "storyline_gap"})
 
 
 def _is_manual_only_issue(issue: dict) -> bool:
-    """判断该条是否超出当前自动修复字段能力（如改境界体系表）。"""
+    """判断该条是否超出当前自动修复字段能力（如改境界体系 / 道途层级表）。
+
+    注意：描述里出现「境界体系」仅表示对照主轴校验，若 suggestion 指向人物境界，
+    仍应走规则补丁或远程模型（character.current_realm 在白名单内）。
+    """
     t = str(issue.get("type") or "")
     if t in _MANUAL_ONLY_ISSUE_TYPES:
         return True
-    desc = str(issue.get("description") or "")
-    if t == "realm_mismatch" and "境界体系" in desc:
+    sug = str(issue.get("suggestion") or "")
+    # 需修改 PowerSystem.levels / 道途层数等，当前 patch 无法落库
+    if any(k in sug for k in ("道途层", "扩层", "层级", "levels", "境界表")):
         return True
     return False
 
@@ -200,8 +205,9 @@ async def fix_consistency_issues(
                     status_code=422,
                     detail=(
                         "远程模型安全过滤拦截了本次请求（可能因角色/势力/技能名称触发）。"
-                        "建议：① 在「模型/线路」切换为本地模型后重试；"
-                        "② 或减少一次选中的问题数量，分批修复。"
+                        "建议：① 减少一次选中的问题数量（每批 3～5 条）分批修复；"
+                        "② 在补充说明中用「将 XX 的 current_realm 设为 YY 境」写明目标；"
+                        "③ 卷纲/道途层数类问题请在大纲或世界观页手动改。"
                     ),
                 )
             raise HTTPException(status_code=500, detail=f"AI 调用失败：{exc}")

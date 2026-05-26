@@ -699,6 +699,18 @@ def test_sanitize_generated_outline_chapter_for_xuanhuan_genre():
     assert "基因实验室" not in cleaned["end_hook"]
 
 
+def test_sanitize_xuanhuan_modern_stem_phrases():
+    from app.services.xuanhuan_lexicon import sanitize_xuanhuan_text
+
+    raw = (
+        "苏澈通过灵气逆向工程解析并改良了市面上最畅销的回元散"
+    )
+    cleaned = sanitize_xuanhuan_text(raw)
+    assert "逆向工程" not in cleaned
+    assert "市面上最畅销" not in cleaned
+    assert "解析并改良" not in cleaned
+
+
 # ─────────────────────────────────────────────────────────────
 #  Hard rule sub-checks: terminology + power curve
 # ─────────────────────────────────────────────────────────────

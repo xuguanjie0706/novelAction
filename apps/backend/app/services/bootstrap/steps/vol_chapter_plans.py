@@ -34,6 +34,11 @@ from app.services.outline_planning import (
     chapter_word_budget_for_phase,
     words_to_plan,
 )
+from app.services.xuanhuan_lexicon import (
+    format_modern_blacklist_for_prompt,
+    is_xuanhuan_like_genre,
+    sanitize_outline_chapter,
+)
 from app.utils.chapter_numbering import normalize_chapter_plan_title
 
 logger = logging.getLogger(__name__)
@@ -179,6 +184,11 @@ async def gen_vol_chapter_plans(
     quota_total_volumes = ctx.get("chapter_quota_total_volumes", plan["total_volumes"])
     quota_used = ctx.get("chapter_quota_used", 0)
 
+    genre = ctx.get("genre", project.genre or "玄幻")
+    modern_guard = ""
+    if is_xuanhuan_like_genre(genre):
+        modern_guard = "\n\n" + format_modern_blacklist_for_prompt()
+
     # ── 系统提示（总编辑级别，明确身份与职责）──────────────────────────────
     system = (
         "你是有30年网络小说从业经验的总编辑，深度参与过数百部上百万字长篇网文的策划。\n"
@@ -189,7 +199,10 @@ async def gen_vol_chapter_plans(
         "  3. 每章的 end_hook 决定读者是否点击下一章，废话不合格\n"
         "  4. 伏笔台账和读者承诺是你必须在本卷解决的债务，拖欠就是违约\n"
         "  5. 反派有自己的独立行动线，不是只在主角视角才存在\n"
+        "  6. 玄幻/仙侠/古风：禁用现代科技术语与商业话术（如逆向工程、解析改良、畅销榜、算法），"
+        "改用辨药、拆方、重配丹纹、坊市热销等世界观内表达\n"
         "只返回 JSON 数组，不要任何说明文字。"
+        + modern_guard
     )
 
     # ── 主角基本信息 ──────────────────────────────────────────────────────────
@@ -380,6 +393,8 @@ async def gen_vol_chapter_plans(
             "10. has_face_slap 的频率必须符合立项定位的 face_slap_pattern（不能全是 false）\n"
             "11. 若 phase=dark_hour，至少 40% 的章节 has_emotional_beat=true，且 pacing 不得连续 3 章是 fast\n"
             "12. involved_characters 只能使用上方已知人物名，不要发明新名字\n"
+            "13. 玄幻/仙侠：core_event/opening_hook 等字段禁止现代 STEM/商业用语"
+            "（逆向工程、解析改良、工业化、市场调研、畅销榜等），须用古风修仙表达\n"
             "只返回 JSON 数组，不要任何解释文字。"
         )
 
@@ -453,6 +468,8 @@ async def gen_vol_chapter_plans(
             continue
 
         for batch_index, item in enumerate(batch_data):
+            if isinstance(item, dict):
+                item = sanitize_outline_chapter(item, genre)
             ch_num = chapter_number_for_batch_item(batch_start, batch_index, item)
             involved_ids = [
                 char_name_to_id[n]

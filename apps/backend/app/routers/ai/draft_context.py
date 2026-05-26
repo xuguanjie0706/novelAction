@@ -1,12 +1,14 @@
 """
 draft_context.py — 起草路由的上下文组装 helpers
 
-职责：提供 _build_draft_context 所依赖的小型辅助函数，避免单一路由文件膨胀。
-这些函数均为 draft_routes.py 内部使用；需跨模块复用时请移入 services/ai/ 层。
+拆分结构：
+  - draft_ctx_reader.py: 读者模拟反馈 + 复盘指令
+  - draft_ctx_promise.py: ReaderPromise 注入 + hook 趋势预警
+  - 本文件: Scene 蓝图 + 人物摘要 + 力量体系块 + 叙事弧注入 + re-export
 
 禁止事项：
 - 禁止在此模块新增 APIRouter 端点
-- 禁止引入 DBSession 之外的副作用（写库操作属于路由层职责）
+- 禁止引入 DBSession 之外的副作用
 """
 from __future__ import annotations
 
@@ -15,273 +17,21 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
-from app.models import (
-    Character,
-    ChapterAnalysisRecord,
-    ChapterIndex,
-    OutlineNode,
-    ReaderPromise,
-    Scene,
-)
+from app.models import Character, ChapterIndex, OutlineNode, Scene
 from app.routers.ai.text_utils import truncate
 
 if TYPE_CHECKING:
     from app.models import Chapter
 
-
-# ═══════════════════════════════════════════════════════════════
-# 读者模拟反馈：上章分析结果注入写章路径
-# ═══════════════════════════════════════════════════════════════
-
-def _build_reader_feedback_context(
-    db: Session,
-    project_id: str,
-    prev_chapter,
-) -> str:
-    """
-    查询上一章最近一次 ChapterAnalysisRecord，将读者评分 / 劝退点 / 裁定 / 钩子建议
-    格式化为可追加到 writing_brief_context 的文本块，让本章写作主动规避已知弱点。
-
-    仅在上章存在分析记录时返回非空字符串；未分析过则静默跳过。
-
-    @param db: SQLAlchemy Session
-    @param project_id: 当前项目 UUID 字符串
-    @param prev_chapter: 上一章 Chapter ORM 对象（可为 None）
-    @returns 格式化后的读者反馈文本；无数据时返回空字符串
-    """
-    if prev_chapter is None:
-        return ""
-    try:
-        record = (
-            db.query(ChapterAnalysisRecord)
-            .filter(
-                ChapterAnalysisRecord.project_id == project_id,
-                ChapterAnalysisRecord.chapter_id == prev_chapter.id,
-            )
-            .order_by(ChapterAnalysisRecord.created_at.desc())
-            .first()
-        )
-    except Exception:
-        return ""
-    if record is None:
-        return ""
-
-    lines = ["\n【上章读者模拟反馈（本章写作必须回应）】"]
-    risk_zh = {"low": "低", "medium": "中", "high": "⚠️高"}
-    risk_label = risk_zh.get(record.drop_risk or "low", record.drop_risk or "")
-    lines.append(f"  综合评分：{record.score}/10  流失风险：{risk_label}")
-    if record.what_hooked:
-        lines.append(f"  ✅ 读者买单：{record.what_hooked[:120]}")
-    if record.what_repelled:
-        lines.append(f"  ⚠️ 读者劝退：{record.what_repelled[:120]}（本章须主动规避）")
-    if record.verdict:
-        lines.append(f"  模拟裁定：{record.verdict[:160]}")
-    if record.hook_suggestions:
-        suggestions = [str(s) for s in (record.hook_suggestions or [])[:2] if s]
-        if suggestions:
-            lines.append("  本章钩子优化建议：" + "；".join(suggestions)[:180])
-    return "\n".join(lines)
-
-
-# ═══════════════════════════════════════════════════════════════
-# 复盘闭环辅助：prev_directives 格式化
-# ═══════════════════════════════════════════════════════════════
-
-def _build_prev_directives(outline_node) -> str:
-    """
-    将 OutlineNode.extra.directives_from_prev 格式化为写章可用的纯文本指令块。
-
-    debrief_routes 在复盘提交时将 next_chapter_directives 写入下一章
-    OutlineNode.extra.directives_from_prev（最多保留最近5条）。
-    本函数提取最近2条有效指令，组织成可注入 draft_assist_stream prev_directives 参数的字符串。
-
-    @param outline_node: 当前章节对应的 OutlineNode ORM 对象（可为 None）
-    @returns 格式化指令字符串；无有效指令时返回空字符串
-    """
-    if outline_node is None or not isinstance(outline_node.extra, dict):
-        return ""
-    dirs = outline_node.extra.get("directives_from_prev") or []
-    if not dirs:
-        return ""
-
-    patch_key_zh = {
-        "adjust_pacing": ("节奏调整", lambda v: v),
-        "force_pov": ("强制POV视角", lambda v: v),
-        "add_foreshadow": ("伏笔延续要求", lambda v: v),
-        "reader_expectation_note": ("读者期待管理", lambda v: v),
-        "must_resolve_promise_in_next_N_chapters": (
-            "承诺兑现窗口",
-            lambda v: f"本章或接下来 {v} 章内必须兑现已有读者承诺",
-        ),
-        "increase_screen_time_for": (
-            "补足戏份",
-            lambda v: "、".join(str(x) for x in (v or [])[:4]) + " 上章戏份不足，本章必须有实质场景",
-        ),
-    }
-
-    dir_parts: list[str] = []
-    for d in dirs[-2:]:
-        patch = d.get("patch") or {}
-        reason = (d.get("reason") or "").strip()
-        from_title = (d.get("from_chapter_title") or "上章").strip()
-
-        parts: list[str] = []
-        for key, (label, fmt) in patch_key_zh.items():
-            val = patch.get(key)
-            if not val:
-                continue
-            try:
-                parts.append(f"{label}：{fmt(val)}")
-            except Exception:
-                parts.append(f"{label}：{val}")
-
-        if reason:
-            parts.append(f"编辑理由：{reason}")
-        if parts:
-            dir_parts.append(f"[来自《{from_title}》复盘] " + "；".join(parts))
-
-    return "\n".join(dir_parts)
-
-
-# ═══════════════════════════════════════════════════════════════
-# hook_strength 趋势预警辅助
-# ═══════════════════════════════════════════════════════════════
-
-def _append_hook_trend_warning(
-    db: Session,
-    project_id: str,
-    current_sort_order: int,
-    writing_brief_context: str,
-    window: int = 5,
-    threshold: float = 3.0,
-) -> str:
-    """
-    查询本章之前最近 ``window`` 章的 hook_strength 均值，若低于 ``threshold``
-    则向 writing_brief_context 追加主编强制钩子指令。
-
-    @param db: SQLAlchemy Session
-    @param project_id: 项目 UUID 字符串
-    @param current_sort_order: 当前章节 sort_order
-    @param writing_brief_context: 原文本（末尾追加）
-    @param window: 向前回看的章节数，默认5
-    @param threshold: 均值低于此值时触发预警，默认3.0（满分5）
-    @returns 追加预警后的 writing_brief_context；未触发时原样返回
-    """
-    if current_sort_order <= 0:
-        return writing_brief_context
-
-    recent = (
-        db.query(ChapterIndex.hook_strength)
-        .filter(
-            ChapterIndex.project_id == project_id,
-            ChapterIndex.chapter_number < current_sort_order,
-            ChapterIndex.hook_strength.isnot(None),
-        )
-        .order_by(ChapterIndex.chapter_number.desc())
-        .limit(window)
-        .all()
-    )
-    if len(recent) < 3:
-        return writing_brief_context
-
-    avg = sum(r[0] for r in recent) / len(recent)
-    if avg >= threshold:
-        return writing_brief_context
-
-    warning = (
-        f"\n\n▍【钩子趋势预警 · 主编强制指令】\n"
-        f"近 {len(recent)} 章 hook_strength 均值 {avg:.1f}/5（连续偏弱），读者续读意愿存在系统性风险。\n"
-        "本章章末钩子升级为最高优先级硬约束：\n"
-        "· 必须选用悬念揭示型（A）或格局颠覆反转型（C）钩子，禁止以心理独白、景色描写或总结句收尾\n"
-        "· 最后一段 ≤ 80 字，用一个具体的、尚未解决的行动/对话节点结束，不要解释、不要抒情\n"
-        "· 该章整体须含 ≥ 1 处可被读者截图传播的「高光瞬间」以对冲前期低钩章带来的读者疲劳"
-    )
-    return writing_brief_context + warning
-
-
-# ═══════════════════════════════════════════════════════════════
-# ReaderPromise 写章注入辅助
-# ═══════════════════════════════════════════════════════════════
-
-def _build_reader_promise_context(
-    db: Session,
-    project_id: str,
-    chapter_sort_order: int,
-    lookahead: int = 5,
-) -> str:
-    """
-    查询当前章节覆盖窗口内 open 状态的读者承诺，格式化为写章约束文本。
-
-    分两级：
-    - 必须兑现：承诺截止章号 ≤ 当前 sort_order（已到期）
-    - 可以兑现：截止章号在 [当前+1, 当前+lookahead] 内，或 priority≥4 的无截止高优承诺
-
-    @returns 格式化文本；无匹配承诺时返回空字符串。
-    """
-    open_promises: list[ReaderPromise] = (
-        db.query(ReaderPromise)
-        .filter(
-            ReaderPromise.project_id == project_id,
-            ReaderPromise.status == "open",
-        )
-        .order_by(ReaderPromise.priority.desc())
-        .limit(40)
-        .all()
-    )
-    if not open_promises:
-        return ""
-
-    must_fulfill: list[ReaderPromise] = []
-    can_fulfill: list[ReaderPromise] = []
-
-    for p in open_promises:
-        if p.expected_chapter_window is not None:
-            src = p.source_chapter_number or 0
-            deadline = src + p.expected_chapter_window
-        else:
-            deadline = None
-
-        if deadline is not None and deadline <= chapter_sort_order:
-            must_fulfill.append(p)
-        elif deadline is not None and chapter_sort_order < deadline <= chapter_sort_order + lookahead:
-            can_fulfill.append(p)
-        elif deadline is None and (p.priority or 3) >= 4:
-            can_fulfill.append(p)
-
-    if not must_fulfill and not can_fulfill:
-        return ""
-
-    type_zh = {
-        "chapter_ending": "章末预告",
-        "volume_ending": "卷末预告",
-        "name_implication": "名字/称号暗示",
-        "chapter_comment_consensus": "章评共识",
-        "protagonist_claim": "主角宣言",
-    }
-
-    def _fmt(p: ReaderPromise, show_deadline: bool = False) -> str:
-        ptype = type_zh.get(p.promise_type or "", p.promise_type or "承诺")
-        stars = "⭐" * min(max(p.priority or 3, 1), 5)
-        line = f"  [{ptype} {stars}] {p.promise_text}"
-        if show_deadline and p.expected_chapter_window is not None:
-            src = p.source_chapter_number or 0
-            line += f"  （截止第 {src + p.expected_chapter_window} 章）"
-        return line
-
-    lines: list[str] = ["【读者承诺台账（写章时必须对照）】"]
-    if must_fulfill:
-        lines.append(f"⚠️  本章【必须兑现】的承诺（共 {len(must_fulfill)} 条，已到期）：")
-        for p in must_fulfill:
-            lines.append(_fmt(p, show_deadline=True))
-    if can_fulfill:
-        lines.append(f"💡  本章【可以兑现】的承诺（共 {len(can_fulfill)} 条，即将到期或高优先级）：")
-        for p in can_fulfill:
-            lines.append(_fmt(p, show_deadline=True))
-    lines.append(
-        "兑现要求：在正文中以具体行动/对话/事件落实承诺，不要口号式敷衍；"
-        "复盘环节会自动检测兑现情况并更新承诺状态，不需要在正文里追加任何标注。"
-    )
-    return "\n".join(lines)
+# ── re-export：保持外部 import 路径不变 ──────────────────────────
+from app.routers.ai.draft_ctx_reader import (  # noqa: F401
+    build_reader_feedback_context as _build_reader_feedback_context,
+    build_prev_directives as _build_prev_directives,
+)
+from app.routers.ai.draft_ctx_promise import (  # noqa: F401
+    append_hook_trend_warning as _append_hook_trend_warning,
+    build_reader_promise_context as _build_reader_promise_context,
+)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -289,17 +39,10 @@ def _build_reader_promise_context(
 # ═══════════════════════════════════════════════════════════════
 
 def _build_scene_blueprint(
-    db: Session,
-    project_id: str,
-    chapter: "Chapter",
-    outline_node: "OutlineNode | None",
+    db: Session, project_id: str, chapter: "Chapter", outline_node: "OutlineNode | None",
 ) -> str:
     """
     查询本章对应的 Scene 记录，格式化为结构化分场蓝图文本。
-
-    查找顺序：
-    1. 按 outline_node_id 匹配（Bootstrap 生成的场景）
-    2. 按 chapter_id 匹配（已成稿绑定的场景）
 
     @returns 格式化后的分场蓝图字符串；无 Scene 记录时返回空字符串。
     """
@@ -307,24 +50,16 @@ def _build_scene_blueprint(
 
     if outline_node is not None:
         scenes = (
-            db.query(Scene)
-            .filter(
-                Scene.project_id == project_id,
-                Scene.outline_node_id == outline_node.id,
-            )
-            .order_by(Scene.order)
-            .all()
+            db.query(Scene).filter(
+                Scene.project_id == project_id, Scene.outline_node_id == outline_node.id,
+            ).order_by(Scene.order).all()
         )
 
     if not scenes and chapter.id is not None:
         scenes = (
-            db.query(Scene)
-            .filter(
-                Scene.project_id == project_id,
-                Scene.chapter_id == chapter.id,
-            )
-            .order_by(Scene.order)
-            .all()
+            db.query(Scene).filter(
+                Scene.project_id == project_id, Scene.chapter_id == chapter.id,
+            ).order_by(Scene.order).all()
         )
 
     if not scenes:
@@ -339,20 +74,14 @@ def _build_scene_blueprint(
 
     id_to_name: dict[str, str] = {}
     if char_ids:
-        rows = (
-            db.query(Character.id, Character.name)
-            .filter(Character.id.in_(char_ids))
-            .all()
-        )
+        rows = db.query(Character.id, Character.name).filter(Character.id.in_(char_ids)).all()
         id_to_name = {str(r.id): r.name for r in rows}
 
     total_budget = sum(sc.word_budget or 0 for sc in scenes)
     lines: list[str] = [
         f"【本章分场蓝图（共 {len(scenes)} 场，总预算约 {total_budget} 字）】",
-        "严格按此结构逐场写作，每场字数在预算 ±15% 内；每场以钩子收束，串联下一场。",
-        "",
+        "严格按此结构逐场写作，每场字数在预算 ±15% 内；每场以钩子收束，串联下一场。", "",
     ]
-
     pacing_zh = {"fast": "快节奏", "mid": "中节奏", "slow": "慢节奏"}
 
     for sc in scenes:
@@ -363,9 +92,7 @@ def _build_scene_blueprint(
         hook_stars = "⭐" * min(max(sc.hook_strength or 3, 1), 5)
         budget = sc.word_budget or 400
 
-        scene_lines = [
-            f"▶ 场 {sc.order}｜{sc.title or '（无标题）'}  （预算 {budget} 字，{pacing_str}）",
-        ]
+        scene_lines = [f"▶ 场 {sc.order}｜{sc.title or '（无标题）'}  （预算 {budget} 字，{pacing_str}）"]
         if sc.location_name:
             scene_lines.append(f"  地点：{sc.location_name}")
         if sc.time:
@@ -383,12 +110,9 @@ def _build_scene_blueprint(
         if sc.hook:
             scene_lines.append(f"  钩子：{sc.hook}（强度 {hook_stars}）")
         if sc.sensory_focus and sc.sensory_focus != "mixed":
-            sense_zh = {
-                "sight": "视觉", "sound": "听觉", "smell": "嗅觉",
-                "taste": "味觉", "touch": "触觉",
-            }
+            sense_zh = {"sight": "视觉", "sound": "听觉", "smell": "嗅觉",
+                        "taste": "味觉", "touch": "触觉"}
             scene_lines.append(f"  感官焦点：{sense_zh.get(sc.sensory_focus, sc.sensory_focus)}")
-
         lines.extend(scene_lines)
         lines.append("")
 
@@ -396,22 +120,14 @@ def _build_scene_blueprint(
 
 
 # ═══════════════════════════════════════════════════════════════
-# 人物清单与摘要构建（从 _build_draft_context 抽出，减少单函数行数）
+# 人物清单与摘要构建
 # ═══════════════════════════════════════════════════════════════
 
 def _build_character_summary(
-    db: Session,
-    project_id: str,
-    characters: list,
-    outline_node,
-    chapter,
+    db: Session, project_id: str, characters: list,
+    outline_node, chapter,
 ) -> tuple[str, list[str]]:
-    """
-    构建章节人物摘要字符串与本章人物清单（manifest）。
-
-    从 characters 列表中筛选本章出场人物，组装详细摘要。
-    同时构建 chapter_manifest_names 作为 AI 的出场限制约束。
-    """
+    """构建章节人物摘要字符串与本章人物清单（manifest）。"""
     involved_ids: set = set()
     if outline_node and outline_node.involved_character_ids:
         involved_ids = set(str(cid) for cid in (outline_node.involved_character_ids or []))
@@ -436,7 +152,6 @@ def _build_character_summary(
     if not chapter_manifest_names:
         seen: set[str] = set()
         fallback_names: list[str] = []
-
         for c in characters:
             if not c.name:
                 continue
@@ -447,14 +162,11 @@ def _build_character_summary(
 
         if chapter.sort_order is not None and chapter.sort_order > 1:
             recent_indexes = (
-                db.query(ChapterIndex)
-                .filter(
+                db.query(ChapterIndex).filter(
                     ChapterIndex.project_id == project_id,
                     ChapterIndex.chapter_number < chapter.sort_order,
                     ChapterIndex.chapter_number >= max(1, chapter.sort_order - 5),
-                )
-                .order_by(ChapterIndex.chapter_number.desc())
-                .all()
+                ).order_by(ChapterIndex.chapter_number.desc()).all()
             )
             for ci in recent_indexes:
                 for fa in (ci.first_appearances or [])[:8]:
@@ -521,9 +233,7 @@ def _build_character_summary(
             _stage_name = (_cur_stage.get("name") or _cur_stage.get("stage") or "").strip()
             _stage_goal = (_cur_stage.get("goal") or _cur_stage.get("description") or "").strip()
             if _stage_name:
-                parts.append(
-                    f"成长弧:[{_stage_name}]{f'({_stage_goal[:50]})' if _stage_goal else ''}"
-                )
+                parts.append(f"成长弧:[{_stage_name}]{f'({_stage_goal[:50]})' if _stage_goal else ''}")
         char_lines.append("".join(parts))
 
     return "\n".join(char_lines), chapter_manifest_names
@@ -536,55 +246,40 @@ def _build_character_summary(
 def build_power_systems_draft_block(db: "Session", project_id: str) -> str:
     """写章路径统一力量体系块（多轴 registry + 道心 + 天地法则）。"""
     from app.services.bootstrap.power_registry import build_draft_power_context_from_db
-
     return build_draft_power_context_from_db(db, project_id)
 
 
 # ═══════════════════════════════════════════════════════════════
-# 情绪节律 + 反派行动线注入（Bootstrap Step 9.5 / 9.8 产物闭合）
+# 情绪节律 + 反派行动线注入
 # ═══════════════════════════════════════════════════════════════
 
 def _build_narrative_arc_context(
-    project_extra: dict,
-    outline_node: "OutlineNode | None",
+    project_extra: dict, outline_node: "OutlineNode | None",
     db: "Session | None" = None,
 ) -> str:
     """
-    从 ``Project.extra`` 中取出当前卷对应的 emotion_arc（情绪节律图）和
-    villain_arc（反派行动线），格式化为写章硬约束文本块。
+    从 ``Project.extra`` 中取出当前卷对应的 emotion_arc 和 villain_arc，
+    格式化为写章硬约束文本块。
 
-    Bootstrap Step 9.5 / 9.8 生成的高质量叙事规划通过此函数闭合回正文写章 prompt，
-    确保每章的情绪基调和反派行为逻辑与全书蓝图一致，而不是靠 AI 自由发挥。
-
-    卷索引解析优先级：
-    1. outline_node.parent（卷节点）.sort_order
-    2. outline_node.extra["vol_index"]
-    3. 兜底：取 emotion_arc / villain_arc 中第一条
-
-    @param project_extra: ``Project.extra`` 字典（可为空 dict）
+    @param project_extra: ``Project.extra`` 字典
     @param outline_node: 当前章节的 OutlineNode（可为 None）
-    @param db: SQLAlchemy Session（解析父卷时使用；为 None 则跳过父节点查询）
-    @returns 格式化文本块；emotion_arc 和 villain_arc 均无数据时返回空字符串
+    @param db: SQLAlchemy Session（解析父卷时使用）
+    @returns 格式化文本块；无数据时返回空字符串
     """
     if not isinstance(project_extra, dict):
         return ""
 
     emotion_arc: list = project_extra.get("emotion_arc") or []
     villain_arc: list = project_extra.get("villain_arc") or []
-
     if not emotion_arc and not villain_arc:
         return ""
 
-    # ── 确定当前卷索引 ──────────────────────────────────────────
+    # ── 确定当前卷索引 ──
     vol_index: int | None = None
-
     if outline_node is not None:
-        # 优先从 extra 直接读 vol_index（bootstrap 有些版本会写入）
         _extra_vi = (outline_node.extra or {}).get("vol_index")
         if isinstance(_extra_vi, int):
             vol_index = _extra_vi
-
-        # 次优：查父卷的 sort_order
         if vol_index is None and db is not None and outline_node.parent_id is not None:
             try:
                 vol_node = db.query(OutlineNode).filter(
@@ -594,14 +289,10 @@ def _build_narrative_arc_context(
                     vol_index = int(vol_node.sort_order)
             except Exception:
                 pass
-
-    # 兜底：取列表第一条（单卷/测试场景）
     if vol_index is None:
         vol_index = 0
 
-    # ── 按 vol_index 取对应条目 ──────────────────────────────────
     def _find_by_vol(arc_list: list, idx: int) -> dict | None:
-        """按 vol_index 字段匹配；未命中则取 sort_order 等于 idx 的；再兜底取第一条。"""
         if not arc_list:
             return None
         exact = next((v for v in arc_list if isinstance(v, dict) and v.get("vol_index") == idx), None)
@@ -614,17 +305,15 @@ def _build_narrative_arc_context(
 
     cur_emotion = _find_by_vol(emotion_arc, vol_index)
     cur_villain = _find_by_vol(villain_arc, vol_index)
-
     if cur_emotion is None and cur_villain is None:
         return ""
 
     lines: list[str] = ["【本卷叙事规划约束（写章必须贯彻，禁止随意突破）】"]
 
-    # ── 情绪节律块 ───────────────────────────────────────────────
     if cur_emotion:
-        tone        = (cur_emotion.get("tone") or cur_emotion.get("main_tone") or "").strip()
-        deposit     = (cur_emotion.get("deposit") or cur_emotion.get("accumulate") or "").strip()
-        withdraw    = (cur_emotion.get("withdraw") or cur_emotion.get("release") or "").strip()
+        tone = (cur_emotion.get("tone") or cur_emotion.get("main_tone") or "").strip()
+        deposit = (cur_emotion.get("deposit") or cur_emotion.get("accumulate") or "").strip()
+        withdraw = (cur_emotion.get("withdraw") or cur_emotion.get("release") or "").strip()
         net_balance = (cur_emotion.get("net_balance") or cur_emotion.get("balance") or "").strip()
 
         lines.append("▎情绪节律（情感账户状态）")
@@ -636,7 +325,6 @@ def _build_narrative_arc_context(
             lines.append(f"  释放节点：{truncate(withdraw, 120)}")
         if net_balance:
             lines.append(f"  净余额走向：{truncate(net_balance, 120)}")
-        # 生成硬约束指令
         if tone and ("克制" in tone or "蓄力" in tone or "压抑" in tone):
             lines.append(
                 "  ⚠️ 硬约束：本卷处于情绪蓄力阶段，禁止提前引爆大爽点；"
@@ -647,14 +335,13 @@ def _build_narrative_arc_context(
                 "  ✅ 约束：本卷处于情绪释放阶段，可安排显著爽点，但需同时埋下下一轮蓄力种子。"
             )
 
-    # ── 反派行动线块 ─────────────────────────────────────────────
     if cur_villain:
         villain_name = (cur_villain.get("villain") or cur_villain.get("name") or "").strip()
-        desire       = (cur_villain.get("desire") or cur_villain.get("goal") or "").strip()
-        obstacle     = (cur_villain.get("obstacle") or "").strip()
-        choice       = (cur_villain.get("choice") or cur_villain.get("action") or "").strip()
-        cost         = (cur_villain.get("cost") or cur_villain.get("price") or "").strip()
-        blind_spot   = (cur_villain.get("blind_spot") or cur_villain.get("weakness") or "").strip()
+        desire = (cur_villain.get("desire") or cur_villain.get("goal") or "").strip()
+        obstacle = (cur_villain.get("obstacle") or "").strip()
+        choice = (cur_villain.get("choice") or cur_villain.get("action") or "").strip()
+        cost = (cur_villain.get("cost") or cur_villain.get("price") or "").strip()
+        blind_spot = (cur_villain.get("blind_spot") or cur_villain.get("weakness") or "").strip()
 
         name_label = f"反派【{villain_name}】" if villain_name else "反派"
         lines.append(f"▎{name_label}本卷行动逻辑")
@@ -667,9 +354,7 @@ def _build_narrative_arc_context(
         if cost:
             lines.append(f"  付出代价：{truncate(cost, 100)}")
         if blind_spot:
-            lines.append(
-                f"  ⚠️ 盲点（AI 写反派时严禁越过此边界）：{truncate(blind_spot, 160)}"
-            )
+            lines.append(f"  ⚠️ 盲点（AI 写反派时严禁越过此边界）：{truncate(blind_spot, 160)}")
         lines.append(
             "  写反派台词/行动时必须符合以上逻辑，"
             "不得让反派表现出对其盲点已知悉或提前防范的迹象。"

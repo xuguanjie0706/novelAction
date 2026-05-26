@@ -285,11 +285,13 @@ def get_project_insights(
     - opening_contract：开局前10章追读承诺清单（Step 12）
     调用方：Bootstrap 完成页、项目概览、写前预警。
     """
+    from app.services.bootstrap.opening_contract_io import resolve_opening_contract
+
     project = _owned_or_404(db, project_id, current_user)
     extra = project.extra if isinstance(project.extra, dict) else {}
     return {
         "project_id": str(project.id),
         "consistency_issues": extra.get("consistency_issues") or [],
-        "opening_contract": extra.get("opening_contract") or {},
+        "opening_contract": resolve_opening_contract(db, project),
         "positioning": extra.get("positioning") or {},
     }

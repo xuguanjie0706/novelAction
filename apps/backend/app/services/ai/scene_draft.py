@@ -45,6 +45,7 @@ class SceneDraftMixin:
         location_context: str = "",
         scene_constraint_block: str = "",
         power_systems_context: str = "",
+        character_context: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         为单个 Scene 流式生成正文。
@@ -71,6 +72,8 @@ class SceneDraftMixin:
             memory_snippets: 相关记忆片段（最多 6 条）。
             location_context: 由 _build_single_location_block 生成的感官基准约束块；
                               非空时注入 prompt，强制 AI 遵守地点感官一致性。
+            character_context: 出场人物完整档案 + 人物关系 + 势力信息 + 谜题约束；
+                               由 context_assembler.assemble_for_scene_draft 生成。
 
         Yields:
             逐 token 文本块（与 ``_stream_ai`` 返回格式一致）。
@@ -136,9 +139,18 @@ class SceneDraftMixin:
                 + "\n"
             )
 
+        # 人物档案 + 关系 + 势力 + 谜题约束（由 context_assembler 生成）
+        char_block = ""
+        if character_context and character_context.strip():
+            char_block = (
+                "\n【在场人物档案（外貌/性格/关系须严格对齐，禁止矛盾）】\n"
+                + character_context.strip()[:4000]
+                + "\n"
+            )
+
         prompt = f"""章节：《{chapter_title}》
 章节摘要：{chapter_summary[:300]}
-{pos_block}{prev_block}{power_block}{constraint_block}{mem_block}{loc_context_block}
+{pos_block}{prev_block}{power_block}{char_block}{constraint_block}{mem_block}{loc_context_block}
 ---
 【第 {scene_order} 场】{('  ' + scene_title) if scene_title else ''}
 时间：{time or '同日'}　　地点：{location_name or '未知'}

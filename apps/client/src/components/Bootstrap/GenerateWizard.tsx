@@ -196,6 +196,15 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
       .catch(() => {/* 非关键，忽略 */})
   }, [projectId])
 
+  const openingContractStep = steps.find(s => s.key === 'opening_contract')
+  // Step 12 完成后立即刷新 insights（开局承诺写入 extra 或 ReaderPromise 回退）
+  useEffect(() => {
+    if (!projectId || openingContractStep?.status !== 'done') return
+    projectsApi.getInsights(projectId)
+      .then(res => setInsights(prev => ({ ...(prev ?? { consistency_issues: [] }), ...res.data })))
+      .catch(() => {})
+  }, [projectId, openingContractStep?.status, openingContractStep?.completedAt])
+
   const modelHint = useMemo(() => {
     const selectedProviderId = llmProviderIdFromRoute(aiBackendRoute)
     const selectedProvider = llmOverview?.remote_providers?.find(p => p.id === selectedProviderId)

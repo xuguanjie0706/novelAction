@@ -311,6 +311,25 @@ async def gen_vol_chapter_plans(
             batch_end=batch_end,
         )
 
+        opening_contract_block = ""
+        if (volume_node.sort_order or 0) == 0 and batch_start <= 10:
+            from app.services.ai.opening_contract_context import (
+                build_opening_contract_expand_block,
+            )
+
+            _oc = ctx.get("opening_contract") or (
+                (project.extra or {}).get("opening_contract") if project.extra else {}
+            )
+            if isinstance(_oc, dict) and _oc:
+                opening_contract_block = build_opening_contract_expand_block(
+                    _oc,
+                    batch_start,
+                    batch_end,
+                    vol1_summary=volume_node.summary or "",
+                    vol1_conflict=volume_node.conflict or "",
+                    vol1_hook=volume_node.hook or "",
+                )
+
         # ── 完整 prompt 拼装 ──────────────────────────────────────────────────
         prompt = (
             f"# 创作任务：《{ctx.get('project_title', project.title)}》{volume_node.title}\n\n"
@@ -327,6 +346,7 @@ async def gen_vol_chapter_plans(
             + protag_psychology
             + "\n"
             + editorial_prompt_block  # Tier 1-5 富上下文
+            + opening_contract_block  # 第一卷前10章：开局承诺硬对齐
             + prev_vol_hook_block     # 卷间衔接：上卷末悬念硬约束（仅第一批有效）
             + written_block           # 动态：已写章节摘要
             + memory_block            # 动态：记忆锚点

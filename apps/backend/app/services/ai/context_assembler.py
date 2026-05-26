@@ -99,6 +99,7 @@ async def assemble_full(
 
     # 卷索引（用于 emotion_arc / villain_arc / core_mysteries）
     volume_index = _resolve_volume_index(db, outline_node)
+    ch_no = chapter.sort_order or 0
 
     # 上章结尾
     prev_chapter = db.query(Chapter).filter(
@@ -140,9 +141,6 @@ async def assemble_full(
         chapter.title or "",
     ]))
     world_summary = query_relevant_settings_block(db, project_id, query_kw, max_count=4)
-
-    # 伏笔台账（窗口内到期 + 高优先级）
-    ch_no = chapter.sort_order or 0
 
     # 读者承诺（窗口内到期）
     from app.routers.ai.draft_context import _build_reader_promise_context
@@ -247,6 +245,13 @@ async def assemble_full(
     )
     if _issues_block:
         continuity_context = continuity_context + _issues_block
+
+    # 第一卷 1–10 章：注入完整开局承诺（与上章/章纲/卷骨架衔接）
+    from app.services.ai.opening_contract_context import append_opening_contract_draft_brief
+
+    writing_brief_context = append_opening_contract_draft_brief(
+        db, project, chapter, outline_node, volume_index, prev_tail, writing_brief_context,
+    )
 
     # 爽点结算章硬约束
     _face_slap = (positioning_value or {}).get("face_slap_pattern") or ""

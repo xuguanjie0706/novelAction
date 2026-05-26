@@ -184,6 +184,11 @@ async def gen_vol_chapter_plans(
     quota_total_volumes = ctx.get("chapter_quota_total_volumes", plan["total_volumes"])
     quota_used = ctx.get("chapter_quota_used", 0)
 
+    vol_extra = volume_node.extra if isinstance(volume_node.extra, dict) else {}
+    vol_prot_start = (vol_extra.get("protagonist_realm_start") or "").strip()
+    vol_prot_end = (vol_extra.get("protagonist_realm_end") or "").strip()
+    vol_boss_realm = (vol_extra.get("volume_boss_realm") or "").strip()
+
     genre = ctx.get("genre", project.genre or "玄幻")
     modern_guard = ""
     if is_xuanhuan_like_genre(genre):
@@ -213,21 +218,46 @@ async def gen_vol_chapter_plans(
     protag_psychology = ""
     if protagonist in char_profiles:
         p = char_profiles[protagonist]
+        if vol_prot_start or vol_prot_end:
+            realm_state = (
+                f"{vol_prot_start} → 本卷目标 {vol_prot_end}"
+                if vol_prot_start and vol_prot_end
+                else (vol_prot_end or vol_prot_start)
+            )
+        else:
+            realm_state = p.get("current_realm", "未知")
         protag_psychology = (
             f"\n【主角「{protagonist}」心理档案（章节行为的底层驱动器，最高优先级约束）】\n"
-            f"  境界状态：{p.get('current_realm', '未知')} | 当前位置：{p.get('current_location', '未知')}\n"
+            f"  境界状态：{realm_state} | 当前位置：{p.get('current_location', '未知')}\n"
             f"  核心恐惧/创伤：{p.get('core_wound', '（未设定）')}\n"
             f"  当前最强欲望：{p.get('current_desire', '（未设定）')}\n"
             f"  价值观：{p.get('values', '（未设定）')}\n"
             f"  人物弧线：{p.get('arc', '（未设定）')}\n"
             f"  未暴露的秘密：{p.get('secrets', '（无）')}\n"
         )
+        if vol_prot_end:
+            protag_psychology += (
+                f"  ⚠️ 本卷末主角须达到「{vol_prot_end}」；"
+                f"章纲 power_milestone 须在本卷内合理分配突破节点，禁止卷末仍停留在卷初境界。\n"
+            )
+        if vol_boss_realm:
+            protag_psychology += (
+                f"  ⚠️ 当卷 BOSS 境界「{vol_boss_realm}」；"
+                f"对决章节主角 effective 境界须接近卷末目标，禁止 rank 差距超过 2 档。\n"
+            )
 
     # 人物阵容概览
     char_lines: list[str] = []
     for name in ctx.get("char_names", []):
         tier = "核心" if name in ctx.get("core_char_names", []) else "配角"
-        realm = ctx.get("char_realms", {}).get(name, "")
+        if name == protagonist and (vol_prot_start or vol_prot_end):
+            realm = (
+                f"{vol_prot_start}→{vol_prot_end}"
+                if vol_prot_start and vol_prot_end
+                else (vol_prot_end or vol_prot_start)
+            )
+        else:
+            realm = ctx.get("char_realms", {}).get(name, "")
         profile = char_profiles.get(name, {})
         status = profile.get("current_status", "alive")
         status_str = "" if status == "alive" else f"·{status}"
@@ -311,6 +341,12 @@ async def gen_vol_chapter_plans(
             batch_end=batch_end,
         )
 
+        from app.services.bootstrap.volume_beats import build_volume_beat_expand_block
+
+        volume_beat_block = build_volume_beat_expand_block(
+            volume_node, batch_start, batch_end,
+        )
+
         opening_contract_block = ""
         if (volume_node.sort_order or 0) == 0 and batch_start <= 10:
             from app.services.ai.opening_contract_context import (
@@ -341,11 +377,22 @@ async def gen_vol_chapter_plans(
             f"  phase：{volume_node.phase}（{planned}章）\n"
             f"  卷摘要：{volume_node.summary or '（未填写）'}\n"
             f"  核心冲突：{volume_node.conflict or '（未填写）'}\n"
-            f"  卷末悬念种子：{volume_node.hook or '（未填写）'}\n\n"
+            f"  卷末悬念种子：{volume_node.hook or '（未填写）'}\n"
+            f"  卷末高潮摘要：{volume_node.highlight or '（见导演单 volume_climax）'}\n"
+            + (
+                f"  主角境界路线：{vol_prot_start} → {vol_prot_end}\n"
+                if vol_prot_start and vol_prot_end
+                else (
+                    f"  主角卷末目标境界：{vol_prot_end}\n" if vol_prot_end else ""
+                )
+            )
+            + (f"  当卷 BOSS 境界：{vol_boss_realm}\n" if vol_boss_realm else "")
+            + "\n"
             f"## 人物阵容概览\n  {char_snapshot}\n"
             + protag_psychology
             + "\n"
             + editorial_prompt_block  # Tier 1-5 富上下文
+            + volume_beat_block       # 卷级燃点/高潮节拍
             + opening_contract_block  # 第一卷前10章：开局承诺硬对齐
             + prev_vol_hook_block     # 卷间衔接：上卷末悬念硬约束（仅第一批有效）
             + written_block           # 动态：已写章节摘要

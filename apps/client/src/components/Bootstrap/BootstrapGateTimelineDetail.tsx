@@ -10,6 +10,7 @@ import PositioningGatePanel, { type PositioningGatePanelHandle } from './Positio
 import type { GatePendingStep } from './hooks/useBootstrapStream'
 import { STEP_META } from './hooks/useBootstrapStream'
 import BootstrapStepIcon from './BootstrapStepIcon'
+import { formatProtagonistRealmRange } from '../../utils/volumeBeatsDisplay'
 
 const LOG_PREFIX = '[BootstrapGate]'
 
@@ -168,15 +169,18 @@ function VolumesGateReview({ preview }: { preview: Record<string, unknown> }) {
       )}
       {rows.length > 0 && (
         <div>
-          <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">卷级 BOSS 一览</h3>
+          <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-500">卷级战力一览</h3>
           <div className="max-h-[min(22rem,50vh)] overflow-auto rounded-lg border border-gray-200">
             <table className="w-full min-w-[300px] border-collapse text-left text-[13px]">
               <thead className="sticky top-0 z-[1] bg-gray-50 text-[11px] font-semibold text-gray-600">
                 <tr>
                   <th className="border-b border-gray-200 px-3 py-2">卷</th>
                   <th className="border-b border-gray-200 px-2 py-2">阶段</th>
+                  <th className="border-b border-gray-200 px-2 py-2">主角境界</th>
                   <th className="border-b border-gray-200 px-2 py-2">核心 BOSS</th>
-                  <th className="border-b border-gray-200 px-2 py-2">境界</th>
+                  <th className="border-b border-gray-200 px-2 py-2">BOSS 境界</th>
+                  <th className="border-b border-gray-200 px-2 py-2">燃点</th>
+                  <th className="border-b border-gray-200 px-2 py-2">高潮章</th>
                 </tr>
               </thead>
               <tbody className="text-gray-800">
@@ -186,11 +190,31 @@ function VolumesGateReview({ preview }: { preview: Record<string, unknown> }) {
                       {String(row.title ?? `第${Number(row.sort_order ?? i) + 1}卷`)}
                     </td>
                     <td className="whitespace-nowrap px-2 py-2 text-gray-600">{String(row.phase ?? '—')}</td>
+                    <td
+                      className="max-w-[120px] truncate px-2 py-2 text-indigo-800"
+                      title={formatProtagonistRealmRange(
+                        row.protagonist_realm_start as string | undefined,
+                        row.protagonist_realm_end as string | undefined,
+                      )}
+                    >
+                      {formatProtagonistRealmRange(
+                        row.protagonist_realm_start as string | undefined,
+                        row.protagonist_realm_end as string | undefined,
+                      ) || '—'}
+                    </td>
                     <td className="max-w-[100px] truncate px-2 py-2 text-gray-700" title={String(row.volume_boss ?? '')}>
                       {row.volume_boss ? String(row.volume_boss) : '—'}
                     </td>
                     <td className="max-w-[100px] truncate px-2 py-2 text-gray-700" title={String(row.volume_boss_realm ?? '')}>
                       {row.volume_boss_realm ? String(row.volume_boss_realm) : '—'}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-2 text-gray-600">
+                      {typeof row.beat_highlights_count === 'number' && row.beat_highlights_count > 0
+                        ? `${row.beat_highlights_count} 处`
+                        : '—'}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-2 text-gray-600">
+                      {row.volume_climax_chapter != null ? `第${row.volume_climax_chapter}章` : '—'}
                     </td>
                   </tr>
                 ))}

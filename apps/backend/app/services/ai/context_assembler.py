@@ -253,6 +253,17 @@ async def assemble_full(
         db, project, chapter, outline_node, volume_index, prev_tail, writing_brief_context,
     )
 
+    from app.services.bootstrap.volume_beats import append_volume_beat_draft_brief
+
+    _vol_for_beats = None
+    if outline_node and outline_node.parent_id:
+        _vol_for_beats = db.query(OutlineNode).filter(
+            OutlineNode.id == outline_node.parent_id,
+        ).first()
+    writing_brief_context = append_volume_beat_draft_brief(
+        _vol_for_beats, outline_node, writing_brief_context,
+    )
+
     # 爽点结算章硬约束
     _face_slap = (positioning_value or {}).get("face_slap_pattern") or ""
     _hook_req = _calc_hook_requirement(

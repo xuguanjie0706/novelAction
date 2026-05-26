@@ -20,6 +20,9 @@ import {
   priorityColor,
   resolveOpeningContract,
 } from '../../utils/openingContractDisplay'
+import { VolumeDirectorCard } from '../Outline/VolumeDirectorView'
+import { EmotionArcSection, VillainArcSection } from './NarrativeArcSections'
+import { resolveEmotionArc, resolveVillainArc } from '../../utils/narrativeArcDisplay'
 
 // ── 数据 bundle ───────────────────────────────────────────────
 
@@ -441,45 +444,24 @@ function SettingsSection({ data }: { data: DetailData }) {
 
 // ── 区域渲染：卷级结构 ────────────────────────────────────────
 
-const PHASE_CFG: Record<string, { label: string; color: string }> = {
-  opening:   { label: '开局期', color: '#22c55e' },
-  rising:    { label: '起飞期', color: '#06b6d4' },
-  turning:   { label: '转折期', color: '#f59e0b' },
-  dark_hour: { label: '至暗期', color: '#a78bfa' },
-  climax:    { label: '高潮期', color: '#ef4444' },
-  ending:    { label: '收束期', color: '#8b5cf6' },
-}
-
 function VolumesSection({ data }: { data: DetailData }) {
+  const hasProtagonistRealm = data.volumes.some(
+    v => Boolean(v.extra?.protagonist_realm_start || v.extra?.protagonist_realm_end),
+  )
   return (
     <>
       {data.volumes.length === 0 && <p style={S.muted}>暂无卷级数据</p>}
+      {data.volumes.length > 0 && !hasProtagonistRealm && (
+        <p style={{ ...S.muted, marginBottom: 12, padding: '10px 12px', background: '#fffbeb', borderRadius: 8, border: '1px solid #fde68a' }}>
+          本卷尚未写入主角境界区间。请刷新页面（系统会按境界体系自动补全）；若仍为空，请确认已生成「境界体系」后重新运行 Bootstrap Step 9。
+        </p>
+      )}
       {data.volumes.map((vol, i) => {
-        const phase = (vol as any).phase ?? vol.extra?.phase
-        const pc = PHASE_CFG[phase] ?? null
         const chapterCount = vol.children?.filter(n => n.node_type === 'chapter_plan').length
           ?? vol.children?.reduce((s, arc) => s + (arc.children?.length ?? 0), 0) ?? 0
         return (
           <Card key={vol.id}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <span style={{ ...S.tiny, width: 36 }}>第{i + 1}卷</span>
-              <strong style={S.text}>{vol.title}</strong>
-              {pc && (
-                <span style={{ ...S.badge(pc.color), marginLeft: 'auto' }}>{pc.label}</span>
-              )}
-              {chapterCount > 0 && (
-                <span style={{ ...S.tiny }}>{chapterCount} 章</span>
-              )}
-            </div>
-            {vol.summary && <p style={S.muted}>{vol.summary}</p>}
-            {vol.hook && (
-              <p style={{ ...S.tiny, marginTop: 6, color: '#7c3aed' }}>
-                钩子：{vol.hook}
-              </p>
-            )}
-            {vol.conflict && (
-              <p style={{ ...S.tiny, marginTop: 4 }}>冲突：{vol.conflict}</p>
-            )}
+            <VolumeDirectorCard vol={vol} index={i} chapterCount={chapterCount} variant="inline" />
           </Card>
         )
       })}
@@ -646,6 +628,18 @@ export default function SectionContent({ sectionId, data }: Props) {
     case 'items':        return <ItemsSection data={data} />
     case 'settings':     return <SettingsSection data={data} />
     case 'volumes':      return <VolumesSection data={data} />
+    case 'emotion_arc':  return (
+      <EmotionArcSection
+        entries={resolveEmotionArc(data.project.extra)}
+        emptyHint="暂无情绪节律数据（需完成 Bootstrap Step 9.5）"
+      />
+    )
+    case 'villain_arc':  return (
+      <VillainArcSection
+        entries={resolveVillainArc(data.project.extra)}
+        emptyHint="暂无反派行动线数据（需完成 Bootstrap Step 9.8）"
+      />
+    )
     case 'contract':     return <ContractSection data={data} />
     case 'consistency':  return <ConsistencySection data={data} />
     default:             return <p style={S.muted}>选择左侧区域查看内容</p>

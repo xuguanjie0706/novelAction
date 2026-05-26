@@ -3,7 +3,7 @@
  *
  * 职责：
  * - 从后端并行拉取项目所有生成数据（人物、势力、设定等）
- * - 渲染左侧分区导航（11 个区域，带条目数 badge）
+ * - 渲染左侧分区导航（13 个区域，带条目数 badge）
  * - 右侧渲染 SectionContent 对应区域的富内容
  * - 提供「返回书架」「进入工作台」与未结束 Bootstrap 的「继续生成」
  *
@@ -16,7 +16,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft, BookOpen, Layers, Users, Zap, Sword, Package,
   Map, BookMarked, CheckSquare, GitBranch, Loader2, AlertCircle,
-  Castle,
+  Castle, HeartPulse, Swords,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import GenerateWizard from '../components/Bootstrap/GenerateWizard'
@@ -31,6 +31,7 @@ import { clearActiveBootstrapRun } from '../utils/bootstrapActiveRun'
 import type { OutlineNode } from '../types'
 import SectionContent, { type DetailData } from '../components/BookshelfDetail/SectionContent'
 import { countOpeningContractEntries, resolveOpeningContract } from '../utils/openingContractDisplay'
+import { resolveEmotionArc, resolveVillainArc } from '../utils/narrativeArcDisplay'
 
 // ── 分区配置 ─────────────────────────────────────────────────
 
@@ -110,6 +111,20 @@ const SECTIONS: SectionCfg[] = [
     icon: <Layers size={16} />,
     color: '#f97316',
     countFn: d => d.volumes.length,
+  },
+  {
+    id: 'emotion_arc',
+    label: '情绪节律',
+    icon: <HeartPulse size={16} />,
+    color: '#ec4899',
+    countFn: d => resolveEmotionArc(d.project.extra).length,
+  },
+  {
+    id: 'villain_arc',
+    label: '反派行动线',
+    icon: <Swords size={16} />,
+    color: '#ef4444',
+    countFn: d => resolveVillainArc(d.project.extra).length,
   },
   {
     id: 'contract',

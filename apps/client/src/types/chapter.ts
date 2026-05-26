@@ -26,6 +26,7 @@ export interface OutlineNode {
   power_milestone?: string
   foreshadows_laid?: Array<{ id?: string; description: string }>
   foreshadows_resolved?: Array<{ id?: string; description: string }>
+  phase?: string
   // P2 三层调度新增
   character_screen_time?: Record<string, number>
   pov_character_id?: string

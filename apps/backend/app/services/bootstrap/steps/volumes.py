@@ -6,9 +6,10 @@ import logging
 from typing import Any
 
 from app.models import OutlineNode, Project
-from app.services.bootstrap.context import get_genre_kit_block
+from app.services.bootstrap.prompts.volumes import build_volumes_prompt
+from app.services.bootstrap.protagonist_progression import apply_volume_protagonist_fields
+from app.services.bootstrap.volume_beats import apply_volume_beat_fields
 from app.services.bootstrap.volume_entity_registry import (
-    build_volume_entity_prompt_block,
     format_volume_realm_fix_hint,
     lint_volume_entity_issues,
 )
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 _MAX_VOLUME_REALM_RETRIES = 2
 
 
-def _persist_volumes(svc: Any, project: Project, data: list, n_volumes: int) -> list:
+def _persist_volumes(svc: Any, project: Project, data: list, ctx: dict, n_volumes: int) -> list:
     """将 AI 卷级 JSON 落库为 OutlineNode（volume）。"""
     valid_phases = {"opening", "rising", "turning", "dark_hour", "climax", "ending"}
     results = []
@@ -60,6 +61,8 @@ def _persist_volumes(svc: Any, project: Project, data: list, n_volumes: int) -> 
             vol_extra["volume_boss_path"] = boss_path
         if boss_path_rank:
             vol_extra["volume_boss_path_rank"] = boss_path_rank
+        apply_volume_protagonist_fields(vol, vol_extra, i, ctx, n_volumes)
+        highlight_text = apply_volume_beat_fields(vol, vol_extra)
         node = OutlineNode(
             project_id=project.id,
             parent_id=None,
@@ -68,6 +71,7 @@ def _persist_volumes(svc: Any, project: Project, data: list, n_volumes: int) -> 
             summary=vol.get("summary"),
             hook=vol.get("hook"),
             conflict=vol.get("conflict"),
+            highlight=highlight_text,
             sort_order=i,
             phase=phase_val,
             extra=vol_extra,
@@ -88,95 +92,10 @@ def _wipe_volumes(svc: Any, project_id: Any) -> None:
 
 async def gen_volumes(svc: Any, project: Project, ctx: dict):
     """Bootstrap 阶段只生成卷级骨架（volume），不生成 chapter_plan。"""
-    system = "你是网络小说结构策划专家。只返回JSON数组。"
-    storyline_hint = (
-        f"\n故事线（每卷 summary 应说明推进了哪条线）：{ctx.get('storyline_summary', '')}"
-        if ctx.get('storyline_summary') else ""
-    )
+    system, prompt_base = build_volumes_prompt(project, ctx)
     tw = int(project.target_words or 1_200_000)
     plan = words_to_plan(tw)
     n_volumes = plan["total_volumes"]
-    total_chapters_hint = plan["total_chapters"]
-
-    positioning = ctx.get("positioning") or {}
-    positioning_block = ""
-    if isinstance(positioning, dict) and positioning:
-        # 只注入对卷级结构生成有用的字段，排除 market_risk / hook_test 等分析性字段
-        _pos_lines = []
-        if positioning.get("target_audience"):
-            _pos_lines.append(f"  目标读者：{positioning['target_audience']}")
-        if positioning.get("tropes"):
-            _pos_lines.append(f"  核心爽点：{'、'.join(positioning['tropes'])}")
-        if positioning.get("face_slap_pattern"):
-            _pos_lines.append(f"  打脸节奏：{positioning['face_slap_pattern']}")
-        if positioning.get("emotional_arc"):
-            _pos_lines.append(f"  感情线占比：{positioning['emotional_arc']}")
-        if positioning.get("pace_type"):
-            _pos_lines.append(f"  节奏类型：{positioning['pace_type']}")
-        if positioning.get("taboo_lines"):
-            _pos_lines.append(f"  红线禁忌：{'；'.join(positioning['taboo_lines'])}")
-        if positioning.get("selling_point"):
-            _pos_lines.append(f"  核心卖点：{positioning['selling_point']}")
-        if _pos_lines:
-            positioning_block = "\n【立项定位（每卷必须贯彻）】\n" + "\n".join(_pos_lines) + "\n"
-    kit_block = get_genre_kit_block(ctx)
-    entity_block = build_volume_entity_prompt_block(ctx)  # 已内含 path/dao 块
-
-    villain_timelines = ctx.get("villain_timelines", [])
-    villain_block = ""
-    if villain_timelines:
-        villain_block = (
-            "\n【反派行动时间线（卷级 phase 必须与之对齐）】\n"
-            + "\n".join(f"- {vt}" for vt in villain_timelines)
-            + "\n⚠️ 对齐规则：反派明显占优/主角处于劣势的卷 → phase=dark_hour；\n"
-            "反派计划被终结/代价完全兑现的卷 → phase=climax。\n"
-        )
-
-    prompt_base = f"""小说：《{ctx['project_title']}》主角：{ctx.get('protagonist', '主角')}
-创意：{ctx['logline']}
-立意与类型：{ctx.get('premise', '')[:700] or '（未填写）'}
-设定摘要：{ctx['settings_summary']}{storyline_hint}{villain_block}{positioning_block}{entity_block}{kit_block}
-
-主线核心角色（固定卡司，非全书全部人物）：{', '.join(ctx.get('char_names', []))}
-⚠️ 以上只是主线人物。每卷 summary/conflict 允许并鼓励提及未命名配角（如"某城守将""地下情报商""宗门长老"等职能角色），章节细化时会按需正式创建他们。
-
-根据故事规模规划卷级结构，返回JSON数组。
-【字数目标】全书目标：{tw:,}字，折合约{total_chapters_hint}章；**必须恰好 {n_volumes} 卷**（由目标字数推算，数组长度必须等于{n_volumes}；不得为多塞 phase 而加卷，卷少时合并阶段）。
-每卷 planned_chapters 填 15-80 内的整数（标准卷 30 或 60，过渡/收束卷可填 20-25，高潮卷可填 40-50）。
-所有卷的 planned_chapters 之和须尽量接近{total_chapters_hint}章。
-
-【卷级战力曲线铁律（30年网文编辑标准，违反即废稿）】
-- 每卷必须指定当卷核心对立角色 volume_boss 及其 volume_boss_realm（从境界阶梯精确选名）。
-- 若存在道途轴：填写 volume_boss_path（path_id 如 sword/pill）与 volume_boss_path_rank（道途阶位精确名）。
-- 后卷的 volume_boss_realm rank 必须严格大于前卷（禁止卷四 BOSS 低于卷三 BOSS 这类致命错误）。
-- 终局卷 BOSS 须逼近境界体系最高档；前期卷 BOSS 可以是中低境界，但绝不能越写越弱。
-- summary/conflict 中若写「某某（XX境）」，须与 volume_boss_realm 一致。
-
-【phase 阶段标记（必填，单值）】每卷必须从下列阶段中选一个，全书必须按以下顺序大致单调推进：
-  - opening    第一卷固定为开局期（新手村、立金手指、密集爽点）
-  - rising     起飞期（势力扩张、感情线接入），通常 1-2 卷
-  - turning    转折期（矛盾升级、代价兑现），通常 1 卷
-  - dark_hour  至暗期（虐主、节奏放缓），通常 1 卷或与 turning 合并
-  - climax     高潮期（伏笔回收、终战），通常 1 卷
-  - ending     收束期（最终卷，留下一卷悬念种子）
-若总卷数较少，可省略 dark_hour 或合并 turning + dark_hour，但 opening 与 climax 必须存在。
-
-[
-  {{
-    "title": "第一卷：卷标题（有画面感，带悬念）",
-    "sort_order": 0,
-    "summary": "本卷核心剧情概述，60字内",
-    "hook": "本卷核心悬念：读者最想知道的问题",
-    "conflict": "本卷主要矛盾冲突",
-    "volume_boss": "当卷核心对立角色名（必填）",
-    "volume_boss_realm": "当卷 BOSS 主轴境界（必填，从境界阶梯精确选名）",
-    "volume_boss_path": "当卷 BOSS 道途 path_id 或道途体系名（有道途轴时建议填）",
-    "volume_boss_path_rank": "当卷 BOSS 道途阶位名（从道途轴精确选名，可选）",
-    "planned_chapters": 60,
-    "phase": "opening"
-  }}
-]
-只返回JSON数组，不要任何说明文字。"""
 
     fix_hint = ""
     data: list = []
@@ -220,7 +139,7 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
 
         if attempt > 0:
             _wipe_volumes(svc, project.id)
-        results = _persist_volumes(svc, project, data, n_volumes)
+        results = _persist_volumes(svc, project, data, ctx, n_volumes)
 
         try:
             vol_lint = lint_volume_entity_issues(svc.db, project.id, ctx)
@@ -231,7 +150,12 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
         high_realm = [
             i for i in vol_lint
             if i.get("severity") == "high"
-            and i.get("type") in ("villain_alignment", "realm_mismatch", "path_alignment")
+            and i.get("type") in (
+                "villain_alignment",
+                "realm_mismatch",
+                "path_alignment",
+                "protagonist_alignment",
+            )
         ]
         if high_realm and attempt < _MAX_VOLUME_REALM_RETRIES:
             fix_hint = format_volume_realm_fix_hint(high_realm)

@@ -20,6 +20,12 @@ import {
   ChapterLinterIssuePanel,
 } from '../../components/Outline/ChapterLinterBadge'
 import { Field } from './shared/Field'
+import {
+  VolumeDirectorPanel,
+  volumeDirectorFormFromNode,
+  buildVolumeDirectorSavePayload,
+  type VolumeDirectorForm,
+} from '../../components/Outline/VolumeDirectorView'
 
 export default function NodeDetailPanel({
   node, projectId, onOpenChapter, onSaved, onAICommitDone, onJumpToChapterPlan, onQualityCheck,
@@ -51,6 +57,7 @@ export default function NodeDetailPanel({
   const [activeTab, setActiveTab] = useState<'overview' | 'quality' | 'chapters' | 'chapter' | 'scene' | 'ai'>('overview')
   /** 章节清单 Tab 中展开 linter 详情的章号（1-based） */
   const [expandedLintChapter, setExpandedLintChapter] = useState<number | null>(null)
+  const [volumeForm, setVolumeForm] = useState<VolumeDirectorForm>(() => volumeDirectorFormFromNode(node))
   const [form, setForm] = useState({
     title: node.title ?? '',
     summary: node.summary ?? '',
@@ -72,6 +79,7 @@ export default function NodeDetailPanel({
     const resolved = (initialTab === ('linter' as string)) ? 'quality' : (initialTab ?? 'overview')
     setActiveTab(resolved as 'overview' | 'quality' | 'chapters' | 'chapter' | 'scene' | 'ai')
     // 重置表单（包含 P2 新字段）
+    setVolumeForm(volumeDirectorFormFromNode(node))
     setForm({
       title: node.title ?? '',
       summary: node.summary ?? '',
@@ -90,12 +98,17 @@ export default function NodeDetailPanel({
   const handleSave = async () => {
     setSaving(true)
     try {
-      const payload: Record<string, any> = {
-        title: form.title,
-        summary: form.summary,
-        hook: form.hook,
-        highlight: form.highlight,
-        conflict: form.conflict,
+      let payload: Record<string, any>
+      if (node.node_type === 'volume') {
+        payload = buildVolumeDirectorSavePayload(node, volumeForm)
+      } else {
+        payload = {
+          title: form.title,
+          summary: form.summary,
+          hook: form.hook,
+          highlight: form.highlight,
+          conflict: form.conflict,
+        }
       }
       // 章节节点才传新字段，避免干扰卷节点
       if (node.node_type === 'chapter_plan') {
@@ -331,7 +344,16 @@ export default function NodeDetailPanel({
 
       {/* 「质检」Tab：linter 规则检测（上） + AI 叙事质检（下），合并展示避免重复 */}
 
-      {activeTab === 'overview' && (
+      {activeTab === 'overview' && node.node_type === 'volume' && (
+        <VolumeDirectorPanel
+          node={node}
+          editing={editing}
+          form={volumeForm}
+          setForm={setVolumeForm}
+        />
+      )}
+
+      {activeTab === 'overview' && node.node_type !== 'volume' && (
       <div className="space-y-4">
         <Field label="标题" value={form.title} editing={editing} onChange={v => setForm(f => ({ ...f, title: v }))} singleLine />
         <Field label="情节摘要" sublabel="删掉会损失什么" value={form.summary} editing={editing} onChange={v => setForm(f => ({ ...f, summary: v }))} />

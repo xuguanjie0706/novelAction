@@ -27,6 +27,10 @@ router = APIRouter()
 
 @router.get("/", response_model=List[OutlineNodeOut])
 def get_outline_tree(project_id: str, db: Session = Depends(get_db)):
+    from app.services.bootstrap.protagonist_progression import backfill_volume_protagonist_realms
+
+    # 存量卷骨架可能仅有 BOSS 境界、缺主角起止（Step 9 升级前生成）
+    backfill_volume_protagonist_realms(db, project_id)
     nodes = db.query(OutlineNode).filter(
         OutlineNode.project_id == project_id
     ).order_by(OutlineNode.sort_order, OutlineNode.created_at).all()

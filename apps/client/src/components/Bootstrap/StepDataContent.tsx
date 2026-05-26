@@ -10,6 +10,7 @@
  */
 import React from 'react'
 import type { StepKey } from './hooks/useBootstrapStream'
+import { parseVolumeDirector } from '../../utils/volumeBeatsDisplay'
 
 // ── 通用子组件 ────────────────────────────────────────────────────────────────
 
@@ -387,9 +388,10 @@ function VolumesContent({ data }: { data: any[] }) {
       {vols.slice(0, SHOW).map((v: any, i: number) => {
         const phase = v.phase ?? v.extra?.phase ?? ''
         const phaseStyle = PHASE_COLOR[phase] ?? 'background:#f3f4f6;color:#374151'
+        const d = parseVolumeDirector(v)
         return (
           <div key={i} className="mb-3 rounded-lg border border-gray-100 bg-gray-50 p-3 last:mb-0">
-            <div className="mb-1.5 flex items-center justify-between gap-2">
+            <div className="mb-1.5 flex items-center justify-between gap-2 flex-wrap">
               <span className="text-sm font-bold text-gray-900">{v.title}</span>
               {phase && (
                 <span
@@ -399,9 +401,36 @@ function VolumesContent({ data }: { data: any[] }) {
                   {PHASE_LABEL[phase] ?? phase}
                 </span>
               )}
+              {d.beatHighlights.length > 0 && (
+                <span className="text-[10px] text-orange-600">{d.beatHighlights.length} 燃点</span>
+              )}
             </div>
+            {(d.protagonistRealmRange || d.volumeBoss || d.volumeBossRealm) && (
+              <p className="mb-1.5 text-[11px] leading-snug text-indigo-800">
+                {d.protagonistRealmRange ? <span className="font-medium">主角：{d.protagonistRealmRange}</span> : null}
+                {d.protagonistRealmRange && (d.volumeBoss || d.volumeBossRealm) ? (
+                  <span className="mx-1 text-gray-400">·</span>
+                ) : null}
+                {(d.volumeBoss || d.volumeBossRealm) && (
+                  <span className="text-gray-600">
+                    BOSS：{d.volumeBoss || '—'}
+                    {d.volumeBossRealm ? `（${d.volumeBossRealm}）` : ''}
+                  </span>
+                )}
+              </p>
+            )}
             {v.summary && (
               <p className="line-clamp-2 text-xs leading-relaxed text-gray-500">{v.summary}</p>
+            )}
+            {d.climaxSummary && (
+              <p className="mt-1 text-[11px] text-red-700 line-clamp-1">
+                高潮{d.volumeClimax?.chapter_hint ? `·第${d.volumeClimax.chapter_hint}章` : ''}：{d.climaxSummary}
+              </p>
+            )}
+            {(d.legacyReaderHook || d.nextVolumeHook) && (
+              <p className="mt-1 text-[11px] text-violet-700 line-clamp-1">
+                {d.legacyReaderHook ? `追读：${d.legacyReaderHook}` : `下卷：${d.nextVolumeHook}`}
+              </p>
             )}
           </div>
         )

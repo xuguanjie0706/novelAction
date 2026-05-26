@@ -23,6 +23,7 @@ from app.services.outline_linter.rules_volume import (
     lint_volume,
     prev_volume_hook_from_db,
 )
+from app.services.outline_linter.rules_volume_beats import lint_volume_beats
 from app.services.outline_linter.schemas import LINTER_VERSION, LinterReport
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,12 @@ def run_volume_linter(
         pace_type=pace_type,
         prev_volume_hook=prev_hook,
         is_first_volume=(vol_sort == 0),
+    ))
+    report.issues.extend(lint_volume_beats(
+        snapshots,
+        extra_vol,
+        planned_chapters=planned,
+        volume_phase=vol_phase or "rising",
     ))
     report.issues.extend(lint_reader_promises(
         db,

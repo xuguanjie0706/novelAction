@@ -16,6 +16,8 @@ from app.models import (
     ReaderPromise,
     StoryLine,
 )
+from app.services.bootstrap.volume_beats import format_volume_beats_skeleton_block
+from app.services.bootstrap.protagonist_progression import format_volume_realm_anchor_line
 
 
 # ── Tier 3：故事现状 ──────────────────────────────────────────────────────────
@@ -173,8 +175,16 @@ def _build_volumes_skeleton(
             line += f"\n      卷摘要：{v.summary[:80]}"
         if v.conflict:
             line += f"\n      核心冲突：{v.conflict[:60]}"
+        anchor = format_volume_realm_anchor_line(v.extra)
+        if anchor:
+            line += f"\n      战力锚点：{anchor}"
         if v.hook:
             line += f"\n      卷末悬念种子：{v.hook[:60]}"
+        if v.highlight:
+            line += f"\n      卷末高潮（摘要）：{str(v.highlight)[:60]}"
+        beat_lines = format_volume_beats_skeleton_block(v, is_current=is_current)
+        if beat_lines:
+            line += "\n" + beat_lines
         vol_lines.append(line)
 
         vt = (v.extra or {}).get("villain_timeline", "")

@@ -183,6 +183,17 @@ def _char_effective_rank(
     return _resolve_realm_rank(getattr(char, "current_realm", None), rank_map, level_names)
 
 
+def _volume_protagonist_end_rank(vol: Any, rank_map: dict[str, int], level_names: list[str]) -> int:
+    """从 volume.extra 读取主角卷末境界 rank。"""
+    extra = getattr(vol, "extra", None) or {}
+    if not isinstance(extra, dict):
+        return -1
+    stored = extra.get("protagonist_realm_end_rank")
+    if isinstance(stored, int):
+        return stored
+    return _resolve_realm_rank(extra.get("protagonist_realm_end"), rank_map, level_names)
+
+
 def _volume_structured_boss(vol: Any, rank_map: dict[str, int], level_names: list[str]) -> tuple[str, int]:
     """从 volume.extra 读取结构化 BOSS 字段。"""
     extra = getattr(vol, "extra", None) or {}
@@ -269,7 +280,12 @@ def format_volume_realm_fix_hint(issues: list[dict]) -> str:
     """将卷级境界校验问题格式化为定向修正提示（供 gen_volumes 重试注入）。"""
     realm_issues = [
         i for i in issues
-        if i.get("type") in ("villain_alignment", "realm_mismatch", "path_alignment")
+        if i.get("type") in (
+            "villain_alignment",
+            "realm_mismatch",
+            "path_alignment",
+            "protagonist_alignment",
+        )
         and i.get("severity") == "high"
     ]
     if not realm_issues:
@@ -280,8 +296,10 @@ def format_volume_realm_fix_hint(issues: list[dict]) -> str:
     lines.append(
         "铁律：后卷 volume_boss_realm 的 rank 必须严格大于前卷；"
         "后卷 volume_boss_path_rank（道途）宜同步递增；"
+        "protagonist_realm_end rank 须单调递增；"
+        "volume_boss_realm rank ≤ protagonist_realm_end rank + 2；"
         "当卷 BOSS 可以是新角色，但境界绝不能倒退。"
-        "请逐卷核对 volume_boss / volume_boss_realm 后再输出 JSON。"
+        "请逐卷核对 volume_boss / volume_boss_realm / protagonist_realm_* 后再输出 JSON。"
     )
     return "\n".join(lines) + "\n"
 
@@ -321,15 +339,30 @@ def build_volumes_gate_preview(
                 boss = inferred_name
             if not realm and inferred_rank >= 0 and level_names:
                 realm = level_names[inferred_rank]
+        from app.services.bootstrap.volume_beats import volume_beats_from_extra
+
+        beat_data = volume_beats_from_extra(extra)
+        beat_count = len(beat_data.get("beat_highlights") or [])
+        climax = beat_data.get("volume_climax")
+        climax_hint = (
+            int(climax.get("chapter_hint"))
+            if isinstance(climax, dict) and climax.get("chapter_hint")
+            else None
+        )
         preview_rows.append({
             "sort_order": vol.sort_order,
             "title": vol.title or "",
             "phase": vol.phase or "",
+            "protagonist_realm_start": (extra.get("protagonist_realm_start") or "").strip() or None,
+            "protagonist_realm_end": (extra.get("protagonist_realm_end") or "").strip() or None,
             "volume_boss": boss or None,
             "volume_boss_realm": realm or None,
             "volume_boss_path": (extra.get("volume_boss_path") or "").strip() or None,
             "volume_boss_path_rank": (extra.get("volume_boss_path_rank") or "").strip() or None,
             "planned_chapters": (extra or {}).get("planned_chapters"),
+            "beat_highlights_count": beat_count,
+            "volume_climax_chapter": climax_hint,
+            "pacing_skeleton": (beat_data.get("pacing_skeleton") or "")[:80] or None,
         })
 
     lint_issues = lint_volume_entity_issues(db, project_id, ctx)
@@ -562,32 +595,114 @@ def lint_volume_entity_issues(
                 "auto_detected": True,
             })
 
-    # ── 4. 终局卷 Boss 境界低于体系顶档 ─────────────────────────────────────
-    if max_rank >= 0 and level_names:
+    # ── 4. 终局卷 Boss 境界检查（无条件校验结构化字段，不依赖文本关键词）────
+    # 旧逻辑依赖 _BOSS_HINT_RE 文本匹配，导致普通名字的 Boss（如「墨残生」）被漏检。
+    # 新逻辑：直接读 extra.volume_boss_realm 结构化字段，对最后两卷无条件校验。
+    if max_rank >= 1 and level_names:
         top_name = level_names[-1]
+        second_name = level_names[max_rank - 1]
+        # 优先取 phase=climax/ending 的卷；若无则取最后两卷
         late_vols = [v for v in volumes if (v.phase or "") in ("climax", "ending")]
-        for vol in late_vols or volumes[-1:]:
-            blob = " ".join(
-                filter(None, [vol.title, vol.summary, vol.conflict, vol.hook])
+        if not late_vols:
+            late_vols = volumes[-2:] if len(volumes) >= 2 else volumes[-1:]
+
+        for vol in late_vols:
+            # 先读结构化字段
+            extra = getattr(vol, "extra", None) or {}
+            boss_realm = (
+                (extra.get("volume_boss_realm") or "").strip()
+                if isinstance(extra, dict) else ""
             )
-            if not _BOSS_HINT_RE.search(blob):
+            boss_rank = _resolve_realm_rank(boss_realm, rank_map, level_names)
+
+            # 结构化字段缺失时退而求其次：扫文本中出现的最高境界名
+            if boss_rank < 0:
+                blob = " ".join(filter(None, [vol.title, vol.summary, vol.conflict, vol.hook]))
+                mentioned_ranks = [rank_map[ln] for ln in level_names if ln in blob and ln in rank_map]
+                boss_rank = max(mentioned_ranks) if mentioned_ranks else -1
+                boss_realm = level_names[boss_rank] if boss_rank >= 0 else "（未知）"
+
+            if boss_rank < 0:
+                # 完全无信息，跳过本卷
                 continue
-            mentioned_ranks = [
-                rank_map[ln]
-                for ln in level_names
-                if ln in blob and ln in rank_map
-            ]
-            if mentioned_ranks and max(mentioned_ranks) < max_rank - 1:
-                low = level_names[max(mentioned_ranks)]
+
+            if boss_rank < max_rank - 1:
                 issues.append({
                     "severity": "high",
                     "type": "realm_mismatch",
                     "description": (
-                        f"终局卷「{vol.title}」Boss 境界「{low}」低于体系最高「{top_name}」"
+                        f"终局卷「{vol.title}」Boss 境界「{boss_realm}」（rank={boss_rank}）"
+                        f"低于体系次高档「{second_name}」（rank={max_rank - 1}），"
+                        f"导致顶层 {max_rank - boss_rank} 档境界彻底废案"
                     ),
-                    "suggestion": f"将终局 Boss 境界提升至「{top_name}」或次高档",
+                    "suggestion": (
+                        f"将终局 Boss volume_boss_realm 提升至「{second_name}」或最高档「{top_name}」；"
+                        f"或将境界体系裁剪至 {boss_rank + 2} 层"
+                    ),
                     "auto_detected": True,
                 })
-                break
+
+    # ── 5. 主角卷末境界须单调递增 ───────────────────────────────────────────
+    if rank_map and level_names:
+        protag_peak_by_vol: list[tuple[int, int, str]] = []
+        for vol in volumes:
+            end_rank = _volume_protagonist_end_rank(vol, rank_map, level_names)
+            if end_rank >= 0:
+                end_realm = (
+                    (vol.extra or {}).get("protagonist_realm_end")
+                    or level_names[end_rank]
+                )
+                protag_peak_by_vol.append((vol.sort_order, end_rank, str(end_realm)))
+
+        for i in range(1, len(protag_peak_by_vol)):
+            prev_idx, prev_r, prev_realm = protag_peak_by_vol[i - 1]
+            cur_idx, cur_r, cur_realm = protag_peak_by_vol[i]
+            if cur_r < prev_r:
+                issues.append({
+                    "severity": "high",
+                    "type": "protagonist_alignment",
+                    "description": (
+                        f"第{cur_idx + 1}卷主角卷末境界「{cur_realm}」（rank={cur_r}）"
+                        f"低于第{prev_idx + 1}卷「{prev_realm}」（rank={prev_r}）"
+                    ),
+                    "suggestion": (
+                        f"将第{cur_idx + 1}卷 protagonist_realm_end 提升至"
+                        f"「{level_names[min(prev_r + 1, max_rank)]}」或以上"
+                        if level_names and max_rank >= 0
+                        else "提升主角当卷末境界，保证跨卷单调递增"
+                    ),
+                    "auto_detected": True,
+                })
+
+    # ── 6. BOSS 境界不得超过主角卷末 +2 ─────────────────────────────────────
+    if rank_map and level_names:
+        for vol in volumes:
+            extra = getattr(vol, "extra", None) or {}
+            if not isinstance(extra, dict):
+                extra = {}
+            boss_realm = (extra.get("volume_boss_realm") or "").strip()
+            boss_rank = _resolve_realm_rank(boss_realm, rank_map, level_names)
+            protag_end_rank = _volume_protagonist_end_rank(vol, rank_map, level_names)
+            if boss_rank < 0 or protag_end_rank < 0:
+                continue
+            if boss_rank > protag_end_rank + 2:
+                protag_end_realm = (
+                    extra.get("protagonist_realm_end")
+                    or level_names[protag_end_rank]
+                )
+                cap_rank = min(protag_end_rank + 2, max_rank)
+                issues.append({
+                    "severity": "high",
+                    "type": "protagonist_alignment",
+                    "description": (
+                        f"第{(vol.sort_order or 0) + 1}卷 Boss「{boss_realm}」（rank={boss_rank}）"
+                        f"超出主角卷末「{protag_end_realm}」（rank={protag_end_rank}）+2 上限"
+                    ),
+                    "suggestion": (
+                        f"将 volume_boss_realm 降至「{level_names[cap_rank]}」或以下，"
+                        f"或提升 protagonist_realm_end"
+                    ),
+                    "auto_detected": True,
+                })
 
     return issues

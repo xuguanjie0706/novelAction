@@ -5,7 +5,7 @@
  */
 import React from 'react'
 import clsx from 'clsx'
-import { BookOpen, CheckSquare, ClipboardList, Clock, History, Layers, Minimize2, PenLine, RefreshCw, Save, ShieldAlert, Trash2, ChevronDown, Maximize2 } from 'lucide-react'
+import { BookOpen, CheckSquare, ClipboardList, Clock, Flame, History, Layers, Minimize2, PenLine, RefreshCw, Save, ShieldAlert, Trash2, ChevronDown, Maximize2 } from 'lucide-react'
 import type { Chapter, OutlineNode } from '../../../types'
 import { STATUS_OPTIONS, TOP_TOOL_BUTTON_ACTIVE, TOP_TOOL_BUTTON_BASE, TOP_TOOL_BUTTON_IDLE, TOP_TOOL_DEBRIEF_BUTTON_IDLE, TOP_TOOL_ICON_BUTTON, TOP_TOOL_PRIMARY_BUTTON } from './constants'
 import type { PreWriteWarnResult } from './types'
@@ -44,6 +44,10 @@ export default function TopToolbar({
   cleaningChapter,
 
   manualSave,
+  syncToFanqie,
+  fanqieSyncing,
+  fanqieBookId,
+  fanqieSyncMeta,
 }: {
   focusMode: boolean
   onToggleFocusMode: () => void
@@ -76,6 +80,15 @@ export default function TopToolbar({
   cleaningChapter: boolean
 
   manualSave: () => void | Promise<void>
+
+  /** 同步当前章节到番茄草稿箱 */
+  syncToFanqie: () => void | Promise<void>
+  /** 是否正在同步中 */
+  fanqieSyncing: boolean
+  /** 当前是否已绑定番茄书籍（空字符串 = 未绑定） */
+  fanqieBookId: string
+  /** 本章已同步到番茄的映射（有则按钮显示「更新」） */
+  fanqieSyncMeta: { itemId: string; title: string } | null
 }) {
   return (
     <div
@@ -305,6 +318,36 @@ export default function TopToolbar({
           <Save size={16} strokeWidth={2.25} className="shrink-0" />
           保存
         </button>
+
+        {/* 同步到番茄（保存按钮右侧紧跟） */}
+        {!focusMode && (
+          <button
+            type="button"
+            onClick={() => void syncToFanqie()}
+            disabled={fanqieSyncing}
+            title={
+              !fanqieBookId
+                ? '未绑定番茄书籍，请先到「小说详情」页绑定'
+                : fanqieSyncMeta
+                  ? `更新番茄草稿「${fanqieSyncMeta.title || chapterTitle}」（item ${fanqieSyncMeta.itemId}）`
+                  : `首次同步到番茄草稿箱（${fanqieBookId}）`
+            }
+            className={clsx(
+              TOP_TOOL_BUTTON_BASE,
+              fanqieSyncing
+                ? 'border-red-200 bg-red-50 text-red-400 opacity-70'
+                : fanqieBookId
+                  ? 'border-red-200 bg-red-50 text-red-500 hover:bg-red-100 hover:border-red-300'
+                  : 'border-gray-200 bg-transparent text-gray-300 cursor-not-allowed',
+            )}
+          >
+            {fanqieSyncing
+              ? <RefreshCw size={13} className="animate-spin shrink-0" />
+              : <Flame size={13} className="shrink-0" fill={fanqieBookId ? 'currentColor' : 'none'} />
+            }
+            {fanqieSyncMeta ? '更新番茄' : '同步番茄'}
+          </button>
+        )}
       </div>
     </div>
   )

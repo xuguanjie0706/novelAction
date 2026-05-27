@@ -60,8 +60,16 @@ export function useBootstrapResumeBanner(projectId?: string | null) {
         setSnapshot(null)
         return
       }
-      const res = await bootstrapRunsApi.get(stored.runId)
-      const r = res.data
+      let r
+      try {
+        const res = await bootstrapRunsApi.get(stored.runId)
+        r = res.data
+      } catch (err: unknown) {
+        const status = (err as { response?: { status?: number } })?.response?.status
+        if (status === 404) clearActiveBootstrapRun()
+        setSnapshot(null)
+        return
+      }
       if (r.status === 'done' || r.status === 'cancelled') {
         clearActiveBootstrapRun()
         setSnapshot(null)

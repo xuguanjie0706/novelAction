@@ -328,7 +328,13 @@ export default function ProjectDetailPage() {
         <WritingConfigPanel projectId={project.id} />
 
         {/* 发布到番茄 */}
-        <FanqiePublishPanel project={project} />
+        <FanqiePublishPanel
+          project={project}
+          onProjectUpdated={p => {
+            setProject(p)
+            setCurrentProject(p)
+          }}
+        />
 
         {/* 底部快速操作 */}
         <div className="mt-12 rounded-2xl border border-amber-100 bg-gradient-to-br from-amber-50 to-orange-50 p-6">

@@ -25,6 +25,16 @@ export interface FanqieConfigSummary {
   has_csrf_token?: boolean
   has_ms_token?: boolean
   has_a_bogus?: boolean
+  ms_token_preview?: string
+  a_bogus_preview?: string
+  default_book_id?: string
+  default_volume_id?: string
+  default_volume_name?: string
+}
+
+export interface FanqieSaveConfigResponse extends FanqieConfigSummary {
+  ok: boolean
+  message: string
 }
 
 export interface FanqiePublishRequest {
@@ -40,10 +50,14 @@ export interface FanqiePublishRequest {
   volume_name?: string
   delay_seconds?: number
   chapter_ids?: string[]
-  /** DevTools 复制的 book/create cURL，刷新 a_bogus */
+  /** DevTools 复制的 cURL（cover_article / book/create 等），刷新 msToken、a_bogus */
   fresh_create_curl?: string
   /** 创建新书时自动上传项目封面 */
   upload_cover?: boolean
+  /** 写作页单章同步：编辑器当前 HTML，优先于数据库已保存正文 */
+  content_html?: string
+  /** 写作页单章同步：章节标题，优先于数据库 chapter.title */
+  chapter_title?: string
 }
 
 export interface FanqiePublishChapterResult {
@@ -52,6 +66,10 @@ export interface FanqiePublishChapterResult {
   item_id?: string
   status: string
   message?: string
+  /** 上传正文的纯文本约计字数 */
+  content_chars?: number
+  /** create=首次写入草稿槽；update=带 item_id 更新已同步草稿 */
+  sync_mode?: 'create' | 'update'
 }
 
 export interface FanqiePublishResponse {
@@ -61,6 +79,7 @@ export interface FanqiePublishResponse {
   thumb_uri?: string | null
   uploaded: FanqiePublishChapterResult[]
   failed: FanqiePublishChapterResult[]
+  skipped_empty?: number
   total_chapters: number
 }
 
@@ -118,8 +137,9 @@ export interface FanqieUserInfo {
  * 保存番茄凭据到后端。
  * Cookie 字符串直接从 DevTools「Copy as cURL」的 -b '...' 里粘贴。
  */
-export async function saveFanqieConfig(config: FanqieConfig): Promise<void> {
-  await api.post('/fanqie/config', config)
+export async function saveFanqieConfig(config: FanqieConfig): Promise<FanqieSaveConfigResponse> {
+  const res = await api.post<FanqieSaveConfigResponse>('/fanqie/config', config)
+  return res.data
 }
 
 /** 读取当前凭据摘要（敏感字段已脱敏）。 */

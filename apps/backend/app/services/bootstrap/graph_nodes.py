@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 
 from app.services.bootstrap.graph import BootstrapState, _make_svc, emit, _resolve_config
+from app.services.bootstrap.graph_ctx import sanitize_bootstrap_ctx
 from app.services.bootstrap.step_failure import pause_for_step_retry, user_wants_step_retry
 from app.services.llm_errors import format_llm_error_message
 
@@ -21,7 +22,7 @@ async def node_characters(state: BootstrapState, config: dict | None = None) -> 
     db = config["configurable"]["db"]
     run_id = state["run_id"]
     svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     from app.models import Project
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
 
@@ -38,12 +39,12 @@ async def node_characters(state: BootstrapState, config: dict | None = None) -> 
             ctx["_char_ids"] = [str(c.id) for c in chars]
             preview = "、".join(c.name for c in chars[:3]) if chars else "（跳过）"
             emit(run_id, "step_done", db, step="characters", count=len(chars), preview=preview)
-            return {"ctx": ctx, "completed_steps": ["characters"]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": ["characters"]}
 
         user = await pause_for_step_retry(state, config, step="characters", message=msg, ctx=ctx)
         if user_wants_step_retry(user):
             continue
-        return {"ctx": ctx, "errors": [{"step": "characters", "reason": msg}]}
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "characters", "reason": msg}]}
 
 
 async def node_skills_items(state: BootstrapState, config: dict | None = None) -> dict:
@@ -52,7 +53,7 @@ async def node_skills_items(state: BootstrapState, config: dict | None = None) -
     db = config["configurable"]["db"]
     run_id = state["run_id"]
     svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     from app.models import Project
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
 
@@ -73,7 +74,7 @@ async def node_skills_items(state: BootstrapState, config: dict | None = None) -
             user = await pause_for_step_retry(state, config, step="skills", message=msg, ctx=ctx)
             if user_wants_step_retry(user):
                 continue
-            return {"ctx": ctx, "errors": [{"step": "skills_items", "reason": "timeout"}]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "skills_items", "reason": "timeout"}]}
 
         failed: list[tuple[str, BaseException]] = []
         for step_name, res in (("skills", results[0]), ("items", results[1])):
@@ -92,13 +93,13 @@ async def node_skills_items(state: BootstrapState, config: dict | None = None) -
             )
             if user_wants_step_retry(user):
                 continue
-            return {"ctx": ctx, "errors": [{"step": step_name, "reason": msg}]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": step_name, "reason": msg}]}
 
         skills = results[0] if not isinstance(results[0], BaseException) else []
         items = results[1] if not isinstance(results[1], BaseException) else []
         emit(run_id, "step_done", db, step="skills", count=len(skills))
         emit(run_id, "step_done", db, step="items", count=len(items))
-        return {"ctx": ctx, "completed_steps": ["skills", "items"]}
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": ["skills", "items"]}
 
 
 async def node_volumes(state: BootstrapState, config: dict | None = None) -> dict:
@@ -107,7 +108,7 @@ async def node_volumes(state: BootstrapState, config: dict | None = None) -> dic
     db = config["configurable"]["db"]
     run_id = state["run_id"]
     svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     from app.models import Project
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
 
@@ -125,12 +126,12 @@ async def node_volumes(state: BootstrapState, config: dict | None = None) -> dic
                 run_id, "step_done", db, step="volumes", count=len(nodes),
                 preview=f"共{len(nodes)}卷" if nodes else "（跳过）",
             )
-            return {"ctx": ctx, "completed_steps": ["volumes"]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": ["volumes"]}
 
         user = await pause_for_step_retry(state, config, step="volumes", message=msg, ctx=ctx)
         if user_wants_step_retry(user):
             continue
-        return {"ctx": ctx, "errors": [{"step": "volumes", "reason": msg}]}
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "volumes", "reason": msg}]}
 
 
 async def node_relations(state: BootstrapState, config: dict | None = None) -> dict:
@@ -139,7 +140,7 @@ async def node_relations(state: BootstrapState, config: dict | None = None) -> d
     db = config["configurable"]["db"]
     run_id = state["run_id"]
     svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     from app.models import Project, Character
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
     char_ids = ctx.pop("_char_ids", None) or []
@@ -160,12 +161,12 @@ async def node_relations(state: BootstrapState, config: dict | None = None) -> d
             msg = f"人物关系生成失败：{format_llm_error_message(exc)}"
         else:
             emit(run_id, "step_done", db, step="relations", count=len(rels))
-            return {"ctx": ctx, "completed_steps": ["relations"]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": ["relations"]}
 
         user = await pause_for_step_retry(state, config, step="relations", message=msg, ctx=ctx)
         if user_wants_step_retry(user):
             continue
-        return {"ctx": ctx, "errors": [{"step": "relations", "reason": msg}]}
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "relations", "reason": msg}]}
 
 
 async def node_vol1_chapters(state: BootstrapState, config: dict | None = None) -> dict:
@@ -174,7 +175,7 @@ async def node_vol1_chapters(state: BootstrapState, config: dict | None = None) 
     db = config["configurable"]["db"]
     run_id = state["run_id"]
     svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     from app.models import Project, OutlineNode
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
     volume_ids = ctx.get("_volume_ids") or []
@@ -199,7 +200,7 @@ async def node_vol1_chapters(state: BootstrapState, config: dict | None = None) 
             )
             if user_wants_step_retry(user):
                 continue
-            return {"ctx": ctx, "errors": [{"step": "vol1_chapters", "reason": "timeout"}]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "vol1_chapters", "reason": "timeout"}]}
         except Exception as exc:
             msg = f"章级大纲生成失败：{format_llm_error_message(exc)}"
             user = await pause_for_step_retry(
@@ -207,7 +208,7 @@ async def node_vol1_chapters(state: BootstrapState, config: dict | None = None) 
             )
             if user_wants_step_retry(user):
                 continue
-            return {"ctx": ctx, "errors": [{"step": "vol1_chapters", "reason": str(exc)}]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "vol1_chapters", "reason": str(exc)}]}
 
         ctx["_vol1_plan_ids"] = [str(p.id) for p in plans]
         vol1 = volumes[0] if volumes else None
@@ -227,10 +228,10 @@ async def node_vol1_chapters(state: BootstrapState, config: dict | None = None) 
             )
             if user_wants_step_retry(user):
                 continue
-            return {"ctx": ctx, "errors": [{"step": "vol1_chapters", "reason": linter_message}]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "vol1_chapters", "reason": linter_message}]}
 
         emit(run_id, "step_done", db, step="vol1_chapters", **sse)
-        return {"ctx": ctx, "completed_steps": ["vol1_chapters"]}
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": ["vol1_chapters"]}
 
 
 async def node_ch1_scenes(state: BootstrapState, config: dict | None = None) -> dict:
@@ -239,7 +240,7 @@ async def node_ch1_scenes(state: BootstrapState, config: dict | None = None) -> 
     db = config["configurable"]["db"]
     run_id = state["run_id"]
     svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     from app.models import Project, OutlineNode
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
     vol1_plan_ids = ctx.get("_vol1_plan_ids") or []
@@ -266,12 +267,12 @@ async def node_ch1_scenes(state: BootstrapState, config: dict | None = None) -> 
                 run_id, "step_done", db, step="ch1_scenes", count=len(scenes),
                 preview=f"第1章共{len(scenes)}场" if scenes else "（跳过）",
             )
-            return {"ctx": ctx, "completed_steps": ["ch1_scenes"]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": ["ch1_scenes"]}
 
         user = await pause_for_step_retry(state, config, step="ch1_scenes", message=msg, ctx=ctx)
         if user_wants_step_retry(user):
             continue
-        return {"ctx": ctx, "errors": [{"step": "ch1_scenes", "reason": msg}]}
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "ch1_scenes", "reason": msg}]}
 
 
 async def node_consistency(state: BootstrapState, config: dict | None = None) -> dict:
@@ -280,7 +281,7 @@ async def node_consistency(state: BootstrapState, config: dict | None = None) ->
     db = config["configurable"]["db"]
     run_id = state["run_id"]
     svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     from app.models import Project
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
 
@@ -298,12 +299,12 @@ async def node_consistency(state: BootstrapState, config: dict | None = None) ->
                 preview=f"发现{len(issues)}处需确认项" if issues else "无明显矛盾",
             )
             emit(run_id, "complete", db, persist_status="done", project_id=state.get("project_id"))
-            return {"ctx": ctx, "completed_steps": ["consistency"]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": ["consistency"]}
 
         user = await pause_for_step_retry(state, config, step="consistency", message=msg, ctx=ctx)
         if user_wants_step_retry(user):
             continue
-        return {"ctx": ctx, "errors": [{"step": "consistency", "reason": msg}]}
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "consistency", "reason": msg}]}
 
 
 async def node_emotion_villain(state: BootstrapState, config: dict | None = None) -> dict:
@@ -317,7 +318,7 @@ async def node_emotion_villain(state: BootstrapState, config: dict | None = None
     db = config["configurable"]["db"]
     run_id = state["run_id"]
     svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     from app.models import Project
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
 
@@ -338,7 +339,7 @@ async def node_emotion_villain(state: BootstrapState, config: dict | None = None
             user = await pause_for_step_retry(state, config, step="emotion_arc", message=msg, ctx=ctx)
             if user_wants_step_retry(user):
                 continue
-            return {"ctx": ctx, "errors": [{"step": "emotion_villain", "reason": "timeout"}]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "emotion_villain", "reason": "timeout"}]}
 
         failed: list[tuple[str, BaseException]] = []
         for step_name, res in (("emotion_arc", results[0]), ("villain_arc", results[1])):
@@ -355,13 +356,13 @@ async def node_emotion_villain(state: BootstrapState, config: dict | None = None
             )
             if user_wants_step_retry(user):
                 continue
-            return {"ctx": ctx, "errors": [{"step": step_name, "reason": msg}]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": step_name, "reason": msg}]}
 
         emotion_arc = results[0] if not isinstance(results[0], BaseException) else []
         villain_arc = results[1] if not isinstance(results[1], BaseException) else []
         emit(run_id, "step_done", db, step="emotion_arc", count=len(emotion_arc))
         emit(run_id, "step_done", db, step="villain_arc", count=len(villain_arc))
-        return {"ctx": ctx, "completed_steps": ["emotion_arc", "villain_arc"]}
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": ["emotion_arc", "villain_arc"]}
 
 
 async def node_memory_relations(state: BootstrapState, config: dict | None = None) -> dict:
@@ -374,7 +375,7 @@ async def node_memory_relations(state: BootstrapState, config: dict | None = Non
     db = config["configurable"]["db"]
     run_id = state["run_id"]
     svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     from app.models import Character, Project
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
     char_ids = ctx.pop("_char_ids", None) or []
@@ -402,7 +403,7 @@ async def node_memory_relations(state: BootstrapState, config: dict | None = Non
             user = await pause_for_step_retry(state, config, step="memory", message=msg, ctx=ctx)
             if user_wants_step_retry(user):
                 continue
-            return {"ctx": ctx, "errors": [{"step": "memory_relations", "reason": "timeout"}]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "memory_relations", "reason": "timeout"}]}
 
         failed: list[tuple[str, BaseException]] = []
         for step_name, res in (("memory", results[0]), ("relations", results[1])):
@@ -419,10 +420,10 @@ async def node_memory_relations(state: BootstrapState, config: dict | None = Non
             )
             if user_wants_step_retry(user):
                 continue
-            return {"ctx": ctx, "errors": [{"step": step_name, "reason": msg}]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": step_name, "reason": msg}]}
 
         memories = results[0] if not isinstance(results[0], BaseException) else []
         rels = results[1] if not isinstance(results[1], BaseException) else []
         emit(run_id, "step_done", db, step="memory", count=len(memories))
         emit(run_id, "step_done", db, step="relations", count=len(rels))
-        return {"ctx": ctx, "completed_steps": ["memory", "relations"]}
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": ["memory", "relations"]}

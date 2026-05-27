@@ -1,10 +1,15 @@
 /**
- * FanqiePublishPanel — 书架详情页「发布到番茄」
+ * FanqiePublishPanel — 书架详情页「绑定 + 发布到番茄」
+ *
+ * 两大功能：
+ * 1. 绑定：从番茄书单中选择一本书，将 fanqie_book_id 存入 project.extra，
+ *    写作页「同步」按钮将用此 ID 上传当前章节。
+ * 2. 发布：批量将章节上传到番茄草稿箱（原有功能）。
  *
  * 依赖后端 /api/v1/fanqie/* 代理；凭据通过 ConnectModal 配置。
  */
 import React, { useCallback, useEffect, useState } from 'react'
-import { Flame, ImagePlus, Loader2, Upload } from 'lucide-react'
+import { CheckCircle2, Flame, ImagePlus, Link2, Loader2, Upload, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import type { Project } from '../../types'
 import {
@@ -13,17 +18,21 @@ import {
   saveFanqieConfig,
   uploadFanqieCover,
 } from '../../api/fanqieApi'
-import type { FanqieConfig, FanqieConfigSummary, FanqiePublishResponse } from '../../api/fanqieApi'
+import type { FanqieBook, FanqieConfig, FanqieConfigSummary, FanqiePublishResponse } from '../../api/fanqieApi'
 import ConnectModal from '../FanqiePage/ConnectModal'
+import FanqieBookPickerModal from './FanqieBookPickerModal'
+import { projectsApi } from '../../api/client'
 
 interface Props {
   project: Project
+  /** 绑定/解绑成功后同步父级 project 状态，避免刷新前与 store 不一致 */
+  onProjectUpdated?: (project: Project) => void
 }
 
 const DEFAULT_CATEGORY = '257,758,856,868'
 const FANQIE_BOOK_NAME_MAX = 15
 
-export default function FanqiePublishPanel({ project }: Props) {
+export default function FanqiePublishPanel({ project, onProjectUpdated }: Props) {
   const [summary, setSummary] = useState<FanqieConfigSummary | null>(null)
   const [connectOpen, setConnectOpen] = useState(false)
   const [publishing, setPublishing] = useState(false)
@@ -41,10 +50,21 @@ export default function FanqiePublishPanel({ project }: Props) {
   const [coverUploading, setCoverUploading] = useState(false)
   const coverInputRef = React.useRef<HTMLInputElement>(null)
 
-  const savedFanqieBookId =
-    typeof project.extra === 'object' && project.extra && 'fanqie_book_id' in project.extra
-      ? String((project.extra as Record<string, unknown>).fanqie_book_id ?? '')
-      : ''
+  // ── 绑定状态 ──────────────────────────────────────────────
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [boundBook, setBoundBook] = useState<FanqieBook | null>(null)
+  const [bindingSaving, setBindingSaving] = useState(false)
+
+  const projectExtra =
+    typeof project.extra === 'object' && project.extra ? (project.extra as Record<string, unknown>) : null
+
+  const savedFanqieBookId = projectExtra?.fanqie_book_id
+    ? String(projectExtra.fanqie_book_id)
+    : ''
+
+  const savedFanqieBookName = projectExtra?.fanqie_book_name
+    ? String(projectExtra.fanqie_book_name)
+    : ''
 
   const refreshConfig = useCallback(() => {
     getFanqieConfigSummary()
@@ -67,9 +87,59 @@ export default function FanqiePublishPanel({ project }: Props) {
     }
   }, [savedFanqieBookId])
 
+  /** 用户在 Picker 中选择书籍后，将其持久化到 project.extra.fanqie_book_id */
+  async function handleSelectBook(book: FanqieBook) {
+    setBoundBook(book)
+    setBookId(book.book_id)
+    setMode('existing')
+    setBindingSaving(true)
+    try {
+      const res = await projectsApi.update(project.id, {
+        extra: {
+          ...(project.extra as Record<string, unknown> ?? {}),
+          fanqie_book_id: book.book_id,
+          fanqie_book_name: book.book_name,
+        },
+      })
+      onProjectUpdated?.(res.data)
+      toast.success(`已绑定：${book.book_name}`)
+    } catch {
+      toast.error('绑定保存失败，稍后可重试')
+    } finally {
+      setBindingSaving(false)
+    }
+  }
+
+  /** 解除绑定 */
+  async function handleUnbind() {
+    setBindingSaving(true)
+    try {
+      const extra = { ...(project.extra as Record<string, unknown> ?? {}) }
+      delete extra.fanqie_book_id
+      delete extra.fanqie_book_name
+      const res = await projectsApi.update(project.id, { extra })
+      onProjectUpdated?.(res.data)
+      setBoundBook(null)
+      setBookId('')
+      setMode('create')
+      toast.success('已解除番茄绑定')
+    } catch {
+      toast.error('解除绑定失败')
+    } finally {
+      setBindingSaving(false)
+    }
+  }
+
   async function handleSaveConfig(cfg: FanqieConfig) {
-    await saveFanqieConfig(cfg)
-    toast.success('番茄凭据已保存')
+    const res = await saveFanqieConfig(cfg)
+    if (res.has_ms_token && res.has_a_bogus) {
+      toast.success(res.message || '番茄凭据已保存（含上传签名）')
+    } else {
+      toast(res.message || '番茄凭据已保存', { icon: '⚠️' })
+      if (!res.has_a_bogus) {
+        toast.error('未检测到 a_bogus，请粘贴 cover_article 完整 cURL', { duration: 6000 })
+      }
+    }
     refreshConfig()
   }
 
@@ -154,6 +224,10 @@ export default function FanqiePublishPanel({ project }: Props) {
   }
 
   const configured = summary?.configured ?? false
+  // 绑定展示：优先用本次 session 刚选定的 boundBook，其次用 savedFanqieBookId
+  const displayBoundId = boundBook?.book_id ?? savedFanqieBookId
+  const displayBoundName =
+    boundBook?.book_name ?? savedFanqieBookName ?? (savedFanqieBookId ? `ID: ${savedFanqieBookId}` : '')
 
   return (
     <section className="mt-8 rounded-2xl border border-red-100 bg-gradient-to-br from-red-50/80 to-orange-50/50 p-6">
@@ -163,11 +237,17 @@ export default function FanqiePublishPanel({ project }: Props) {
         onClose={() => setConnectOpen(false)}
         onSave={handleSaveConfig}
       />
+      <FanqieBookPickerModal
+        open={pickerOpen}
+        currentBookId={displayBoundId || undefined}
+        onSelect={handleSelectBook}
+        onClose={() => setPickerOpen(false)}
+      />
 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-center gap-2">
           <Flame size={20} className="text-red-500" fill="currentColor" />
-          <h2 className="text-lg font-bold text-gray-900">发布到番茄小说</h2>
+          <h2 className="text-lg font-bold text-gray-900">番茄小说</h2>
         </div>
         {!configured && (
           <button
@@ -180,13 +260,87 @@ export default function FanqiePublishPanel({ project }: Props) {
         )}
       </div>
 
-      <p className="mt-2 text-sm leading-relaxed text-gray-600">
-        在后端代理你的作家 Cookie，创建番茄新书并批量上传章节草稿。
-        创建书籍需粘贴含 <strong>msToken、a_bogus</strong> 的 cURL（book/create 或 upload_pic）；封面须先上传得到 thumb_uri，否则易报 code=-2 参数有误。
+      {/* ── 绑定区域（账号配置后展示）─────────────────────────── */}
+      {configured && (
+        <div className="mt-4 rounded-xl border border-red-200/60 bg-white/70 p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+            <Link2 size={15} className="text-red-400" />
+            绑定番茄书籍
+          </div>
+          <p className="mt-1 text-xs text-gray-500">
+            绑定后，写作页的「同步番茄」按钮会将当前章节直接上传到对应书的草稿箱，无需每次手动填写书籍 ID。
+          </p>
+
+          {displayBoundId ? (
+            /* 已绑定态 */
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+                <CheckCircle2 size={14} className="shrink-0 text-emerald-500" />
+                <span className="text-sm font-medium text-emerald-700 max-w-xs truncate">
+                  {displayBoundName}
+                </span>
+                <span className="font-mono text-[10px] text-emerald-500">{displayBoundId}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPickerOpen(true)}
+                disabled={bindingSaving}
+                className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-600 hover:border-red-200 hover:text-red-600 disabled:opacity-50"
+              >
+                更换绑定
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleUnbind()}
+                disabled={bindingSaving}
+                className="flex items-center gap-1 rounded-lg border border-gray-100 bg-white px-2.5 py-2 text-xs text-gray-400 hover:border-red-200 hover:text-red-500 disabled:opacity-50"
+              >
+                {bindingSaving ? <Loader2 size={11} className="animate-spin" /> : <X size={11} />}
+                解除
+              </button>
+            </div>
+          ) : (
+            /* 未绑定态 */
+            <button
+              type="button"
+              onClick={() => setPickerOpen(true)}
+              className="mt-3 flex items-center gap-2 rounded-lg border border-dashed border-red-300 bg-red-50/50 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50"
+            >
+              <Link2 size={14} />
+              从番茄书单中选择并绑定
+            </button>
+          )}
+        </div>
+      )}
+
+      <p className="mt-4 text-sm leading-relaxed text-gray-600">
+        批量发布：在后端代理你的作家 Cookie，创建番茄新书并批量上传章节草稿。
+        <strong>上传草稿</strong>：首次同步先 <code className="text-xs">new_article</code> 新建章节，再{' '}
+        <code className="text-xs">cover_article</code> 写入标题+正文；更新已同步章节仅走 cover_article。保存后再调{' '}
+        <code className="text-xs">save_doc_history</code>。凭据须含 <strong>msToken、a_bogus</strong>（粘贴
+        cover_article 或 save_doc_history 的整段 cURL 均可）；仅 Cookie 只能拉书单。
       </p>
 
       {configured && (
         <div className="mt-5 space-y-4">
+          <div className="sm:col-span-2">
+            <label className="mb-1 block text-xs font-medium text-gray-700">
+              刷新签名 cURL（上传/创建前粘贴，含 msToken、a_bogus）
+            </label>
+            <textarea
+              value={freshCreateCurl}
+              onChange={e => setFreshCreateCurl(e.target.value)}
+              rows={2}
+              placeholder="curl 'https://fanqienovel.com/api/author/article/cover_article/v0/?msToken=...&a_bogus=...' ..."
+              className="w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-mono text-gray-800"
+            />
+            {summary && (!summary.has_a_bogus || !summary.has_ms_token) && (
+              <p className="mt-1 text-xs text-amber-600">
+                当前凭据缺少 msToken/a_bogus，上传会失败。请粘贴 cover_article 或 book/create 的完整 cURL 后再点发布。
+              </p>
+            )}
+          </div>
+
           <div className="flex flex-wrap gap-4">
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -239,18 +393,6 @@ export default function FanqiePublishPanel({ project }: Props) {
                     当前 {bookName.length} 字，发布时将截为前 {FANQIE_BOOK_NAME_MAX} 字
                   </p>
                 )}
-              </div>
-              <div className="sm:col-span-2">
-                <label className="mb-1 block text-xs font-medium text-gray-700">
-                  cURL（必填，book/create 或 upload_pic，含 msToken、a_bogus）
-                </label>
-                <textarea
-                  value={freshCreateCurl}
-                  onChange={e => setFreshCreateCurl(e.target.value)}
-                  rows={3}
-                  placeholder="curl 'https://fanqienovel.com/api/author/data/upload_pic_v1/v0?msToken=...&a_bogus=...' ..."
-                  className="w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-mono text-gray-800"
-                />
               </div>
               <div className="sm:col-span-2">
                 <label className="mb-2 block text-xs font-medium text-gray-700">封面上传（推荐，解决 code=-2）</label>
@@ -375,6 +517,14 @@ export default function FanqiePublishPanel({ project }: Props) {
           )}
           <p className="mt-1 text-gray-600">
             成功 {result.uploaded.length} 章
+            {(() => {
+              const nUpdate = result.uploaded.filter(u => u.sync_mode === 'update').length
+              const nCreate = result.uploaded.length - nUpdate
+              if (nUpdate > 0 || nCreate > 0) {
+                return `（新建 ${nCreate}，更新 ${nUpdate}）`
+              }
+              return ''
+            })()}
             {result.failed.length > 0 && `，失败 ${result.failed.length} 章`}
           </p>
           {result.failed.length > 0 && (

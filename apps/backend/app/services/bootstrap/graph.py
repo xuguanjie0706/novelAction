@@ -29,6 +29,7 @@ from langgraph.types import interrupt, Command
 from app.models.bootstrap_run import BootstrapRun
 
 # ── re-export：保持外部 import 路径不变 ──────────────────────────
+from app.services.bootstrap.graph_ctx import sanitize_bootstrap_ctx
 from app.services.bootstrap.graph_sse import (  # noqa: F401
     subscribe, unsubscribe, emit, push as _push, persist as _persist,
 )
@@ -97,7 +98,9 @@ def restore_bootstrap_checkpoint_if_lost(
 
     from app.services.bootstrap.graph_recovery import rebuild_ctx_from_db
     db = config["configurable"]["db"]
-    ctx = rebuild_ctx_from_db(db, project_id or "", gd, logline, premise, target_words)
+    ctx = sanitize_bootstrap_ctx(
+        rebuild_ctx_from_db(db, project_id or "", gd, logline, premise, target_words),
+    )
 
     gate_to_completed: dict[str, list[str]] = {
         "positioning":        ["positioning"],
@@ -157,7 +160,7 @@ async def _run_step(state: BootstrapState, config: dict | None,
     db = config["configurable"]["db"]
     run_id = _state_run_id(state, config)
     svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     from app.models import Project
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
 
@@ -180,12 +183,12 @@ async def _run_step(state: BootstrapState, config: dict | None,
             else:
                 count = 1 if result else 0
             emit(run_id, "step_done", db, step=step, count=count)
-            return {"ctx": ctx, "completed_steps": [step]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": [step]}
 
         user = await pause_for_step_retry(state, config, step=step, message=msg, ctx=ctx)
         if user_wants_step_retry(user):
             continue
-        return {"ctx": ctx, "errors": [{"step": step, "reason": msg}]}
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": step, "reason": msg}]}
 
 
 # ──────────────────────────────────────────────────────
@@ -200,7 +203,7 @@ async def node_positioning(state: BootstrapState, config: dict | None = None) ->
     db = config["configurable"]["db"]
     run_id = _state_run_id(state, config)
     svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     ctx.update({"logline": state["logline"], "premise": state["premise"],
                 "target_words": state["target_words"]})
 
@@ -214,7 +217,7 @@ async def node_positioning(state: BootstrapState, config: dict | None = None) ->
         user = await pause_for_step_retry(state, config, step="positioning", message=msg, ctx=ctx)
         if user_wants_step_retry(user):
             continue
-        return {"ctx": ctx, "errors": [{"step": "positioning", "reason": msg}]}
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "positioning", "reason": msg}]}
 
     ctx["positioning"] = positioning
     emit(run_id, "step_done", db, step="positioning", count=1,
@@ -227,7 +230,11 @@ async def node_positioning(state: BootstrapState, config: dict | None = None) ->
         "logline": state["logline"], "premise": state.get("premise") or "",
         "target_words": state.get("target_words"),
     })
-    return {"positioning": positioning, "ctx": ctx, "completed_steps": ["positioning"]}
+    return {
+        "positioning": positioning,
+        "ctx": sanitize_bootstrap_ctx(ctx),
+        "completed_steps": ["positioning"],
+    }
 
 
 async def node_gate(state: BootstrapState, config: dict | None = None) -> dict:
@@ -237,7 +244,7 @@ async def node_gate(state: BootstrapState, config: dict | None = None) -> dict:
     run_id = _state_run_id(state, config)
     svc = _make_svc(config)
     positioning = dict(state.get("positioning") or {})
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
 
     while True:
         user_input: Any = interrupt({
@@ -289,7 +296,7 @@ async def node_gate(state: BootstrapState, config: dict | None = None) -> dict:
         ctx["positioning"] = updated
         emit(run_id, "gate_passed", db, persist_status="running",
              step="positioning", positioning=updated)
-        return {"positioning": updated, "ctx": ctx}
+        return {"positioning": updated, "ctx": sanitize_bootstrap_ctx(ctx)}
 
 
 async def node_project(state: BootstrapState, config: dict | None = None) -> dict:
@@ -299,12 +306,16 @@ async def node_project(state: BootstrapState, config: dict | None = None) -> dic
     run_id = _state_run_id(state, config)
     svc = _make_svc(config)
     emit(run_id, "step_start", db, step="project", label="生成项目基础信息...")
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     project, ctx = await svc._gen_project(ctx)
     emit(run_id, "step_done", db, step="project", count=1,
          preview=f"《{project.title}》{project.genre}")
     _persist(db, run_id, {}, project_id=str(project.id))
-    return {"project_id": str(project.id), "ctx": ctx, "completed_steps": ["project"]}
+    return {
+        "project_id": str(project.id),
+        "ctx": sanitize_bootstrap_ctx(ctx),
+        "completed_steps": ["project"],
+    }
 
 
 # ──────────────────────────────────────────────────────

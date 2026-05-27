@@ -14,9 +14,10 @@ import httpx
 from fastapi import HTTPException
 
 from app.services.fanqie.creds import (
-    extract_a_bogus,
-    extract_csrf_token,
-    extract_ms_token,
+    _FANQIE_POST_CREDS_HINT,
+    build_creds_from_curl_text,
+    ensure_fanqie_post_creds,
+    normalize_cookie_header,
     sanitize_cookie_input,
 )
 
@@ -48,21 +49,20 @@ def prepare_creds_from_body(
     a_bogus: str = "",
     author_id: str = "",
 ) -> dict:
-    """解析用户提交的凭据（支持整段 cURL 粘贴）。"""
-    raw = cookies_raw or ""
-    cookies = sanitize_cookie_input(raw)
-    if not cookies:
+    """解析用户提交的凭据（支持整段 cover_article cURL 粘贴，自动落库 msToken/a_bogus）。"""
+    creds = build_creds_from_curl_text(
+        cookies_raw or "",
+        csrf_token=csrf_token,
+        ms_token=ms_token,
+        a_bogus=a_bogus,
+        author_id=author_id,
+    )
+    if not creds.get("cookies"):
         raise HTTPException(
             status_code=400,
-            detail="无法解析 Cookie：请粘贴 DevTools cURL 中 -b '...' 的内容，或裸 Cookie 串",
+            detail="无法解析 Cookie：请粘贴 DevTools「Copy as cURL」（含 -b 与 URL 中 msToken、a_bogus）",
         )
-    return {
-        "cookies": cookies,
-        "csrf_token": (csrf_token or "").strip() or extract_csrf_token(raw),
-        "ms_token": (ms_token or "").strip() or extract_ms_token(raw),
-        "a_bogus": (a_bogus or "").strip() or extract_a_bogus(raw),
-        "author_id": (author_id or "").strip(),
-    }
+    return creds
 
 
 def _auth_params(creds: dict) -> dict[str, str]:
@@ -86,7 +86,7 @@ def make_client(creds: dict, referer: str | None = None) -> httpx.AsyncClient:
         "sec-fetch-dest": "empty",
         "sec-fetch-mode": "cors",
         "sec-fetch-site": "same-origin",
-        "cookie": creds.get("cookies", ""),
+        "cookie": normalize_cookie_header(creds.get("cookies", "")),
     }
     csrf = creds.get("csrf_token", "").strip()
     if csrf:
@@ -133,6 +133,7 @@ async def proxy_post(
     creds: dict | None = None,
 ) -> Any:
     active = creds or require_creds()
+    ensure_fanqie_post_creds(active)
     merged = _auth_params(active)
     headers_extra = {"content-type": content_type}
     try:
@@ -179,13 +180,21 @@ def _parse_json_response(resp: httpx.Response) -> Any:
     ct = resp.headers.get("content-type", "")
     if "json" not in ct:
         preview = resp.text[:200].replace("\n", " ")
+        hint = _FANQIE_POST_CREDS_HINT if "plain" in ct and not preview.strip() else ""
         raise HTTPException(
             status_code=502,
-            detail=f"番茄返回非 JSON（Content-Type: {ct}），Cookie 可能已过期。响应预览: {preview}",
+            detail=(
+                f"番茄返回非 JSON（Content-Type: {ct}）。"
+                f"{' ' + hint if hint else ''}"
+                f"{' 响应预览: ' + preview if preview.strip() else ''}"
+            ).strip(),
         )
     body = resp.json()
     code = body.get("code", -1)
     if code != 0:
         msg = body.get("message") or body.get("msg") or json.dumps(body, ensure_ascii=False)[:200]
-        raise HTTPException(status_code=502, detail=f"番茄 API 错误 code={code}: {msg}")
+        from app.services.fanqie.draft_resolve import fanqie_error_hint
+
+        detail = fanqie_error_hint(int(code), str(msg)) if int(code) == -2004 else f"番茄 API 错误 code={code}: {msg}"
+        raise HTTPException(status_code=502, detail=detail)
     return body.get("data", body)

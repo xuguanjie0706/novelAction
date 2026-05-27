@@ -15,6 +15,7 @@ from app.services.bootstrap.gate_regenerate import (
     regenerate_power_systems,
     regenerate_volumes,
 )
+from app.services.bootstrap.graph_ctx import sanitize_bootstrap_ctx
 from app.services.bootstrap.graph import (
     BootstrapState,
     _make_svc,
@@ -97,11 +98,11 @@ async def node_gate_power_systems(state: BootstrapState, config: dict | None = N
     db = config["configurable"]["db"]
     run_id = state["run_id"]
     svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
     if not project:
         emit(run_id, "error", db, step="power_systems", message="项目不存在，闸门中止")
-        return {"ctx": ctx, "errors": [{"step": "gate_power_systems", "reason": "no_project"}]}
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "gate_power_systems", "reason": "no_project"}]}
 
     while True:
         cnt = (
@@ -154,7 +155,7 @@ async def node_gate_power_systems(state: BootstrapState, config: dict | None = N
             continue
         emit(run_id, "gate_passed", db, persist_status="running", step="power_systems")
         break
-    return {"ctx": ctx}
+    return {"ctx": sanitize_bootstrap_ctx(ctx)}
 
 
 async def node_gate_characters(state: BootstrapState, config: dict | None = None) -> dict:
@@ -163,12 +164,12 @@ async def node_gate_characters(state: BootstrapState, config: dict | None = None
     db = config["configurable"]["db"]
     run_id = state["run_id"]
     svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
     pid = state.get("project_id")
     if not project:
         emit(run_id, "error", db, step="characters", message="项目不存在，闸门中止")
-        return {"ctx": ctx, "errors": [{"step": "gate_characters", "reason": "no_project"}]}
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "gate_characters", "reason": "no_project"}]}
 
     while True:
         preview = _characters_gate_preview(db, pid)
@@ -197,7 +198,7 @@ async def node_gate_characters(state: BootstrapState, config: dict | None = None
     chars = db.query(Character).filter(Character.project_id == pid).all()
     ctx["_char_ids"] = [str(c.id) for c in chars]
     ctx.setdefault("protagonist", "主角")
-    return {"ctx": ctx}
+    return {"ctx": sanitize_bootstrap_ctx(ctx)}
 
 
 async def node_gate_volumes(state: BootstrapState, config: dict | None = None) -> dict:
@@ -206,12 +207,12 @@ async def node_gate_volumes(state: BootstrapState, config: dict | None = None) -
     db = config["configurable"]["db"]
     run_id = state["run_id"]
     svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
+    ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
     pid = state.get("project_id")
     if not project:
         emit(run_id, "error", db, step="volumes", message="项目不存在，闸门中止")
-        return {"ctx": ctx, "errors": [{"step": "gate_volumes", "reason": "no_project"}]}
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "gate_volumes", "reason": "no_project"}]}
 
     from app.services.bootstrap.volume_entity_registry import build_volumes_gate_preview
 
@@ -268,4 +269,4 @@ async def node_gate_volumes(state: BootstrapState, config: dict | None = None) -
         .all()
     )
     ctx["_volume_ids"] = [str(v.id) for v in vols]
-    return {"ctx": ctx}
+    return {"ctx": sanitize_bootstrap_ctx(ctx)}

@@ -1,7 +1,12 @@
 """
 番茄发布：创建书籍 + 批量上传章节草稿。
 
-从 novelAction 项目数据映射到番茄作家后台 form 字段。
+作家后台保存草稿的两步（与 DevTools 一致）：
+
+1. **cover_article/v0** — 写入标题 + 正文 HTML（新建不传 item_id；更新传 item_id）
+2. **save_doc_history/v0** — 落历史版本（仅 book_id + item_id，无正文）
+
+用户粘贴的 save_doc_history cURL 可用于刷新 msToken/a_bogus/csrf，但上传正文须走 cover_article。
 """
 from __future__ import annotations
 
@@ -14,9 +19,21 @@ from sqlalchemy.orm import Session
 from app.models import Chapter, Character, Project
 from app.services.export_service import chapter_to_plain
 from app.services.fanqie.client import BASE, load_creds, proxy_post, save_creds
+from app.services.fanqie.html import chapter_html_to_fanqie_html, fanqie_html_plain_length
 from app.services.fanqie.cover import load_project_cover_bytes, upload_cover_image
-from app.services.fanqie.creds import merge_creds_from_curl
-from app.services.fanqie.html import plain_to_fanqie_html
+from app.services.fanqie.creds import ensure_fanqie_post_creds, merge_creds_from_curl
+from app.services.fanqie.draft_resolve import (
+    fanqie_error_hint,
+    fetch_book_volume,
+    resolve_fanqie_item_id,
+)
+from app.services.fanqie.new_article import create_fanqie_new_article
+from app.services.fanqie.sync_record import (
+    collect_book_fanqie_item_ids,
+    get_stored_fanqie_item_id_for_upload,
+    persist_fanqie_sync,
+    resolve_chapter_title,
+)
 
 _PATH_BOOK_CREATE = "/api/author/book/create/v0/"
 _PATH_COVER_ARTICLE = "/api/author/article/cover_article/v0/"
@@ -66,17 +83,35 @@ async def create_fanqie_book(
     return await proxy_post(_PATH_BOOK_CREATE, form, referer=referer, creds=creds)
 
 
+def _draft_editor_referer(
+    book_id: str,
+    item_id: str = "",
+    *,
+    enter_from: str = "newdraft",
+) -> str:
+    """与作家后台编辑页 Referer 对齐（更新=newdraft，新建章节=newchapter_0）。"""
+    if item_id:
+        return f"{BASE}/main/writer/{book_id}/publish/{item_id}?enter_from={enter_from}"
+    return f"{BASE}/main/writer/{book_id}/"
+
+
 async def upload_fanqie_draft(
     *,
     book_id: str,
     title: str,
     content_html: str,
+    item_id: str = "",
     volume_id: str = "",
     volume_name: str = "",
+    enter_from: str = "newdraft",
 ) -> dict[str, Any]:
-    """新建一章草稿（cover_article，不传 item_id）。"""
-    referer = f"{BASE}/main/writer/{book_id}/"
-    form = {
+    """
+    保存草稿正文（cover_article/v0）。
+
+    须先通过 new_article 或已有映射获得 item_id；新建章节用 enter_from=newchapter_0。
+    """
+    referer = _draft_editor_referer(book_id, item_id, enter_from=enter_from)
+    form: dict[str, str] = {
         "aid": "2503",
         "app_name": "muye_novel",
         "book_id": book_id,
@@ -85,12 +120,14 @@ async def upload_fanqie_draft(
         "volume_name": volume_name,
         "volume_id": volume_id,
     }
+    if item_id:
+        form["item_id"] = item_id
     return await proxy_post(_PATH_COVER_ARTICLE, form, referer=referer)
 
 
 async def save_fanqie_doc_history(*, book_id: str, item_id: str) -> None:
-    """与番茄前端一致：保存草稿历史版本（失败不阻断主流程）。"""
-    referer = f"{BASE}/main/writer/{book_id}/"
+    """第 2 步：保存草稿历史版本（失败不阻断主流程）。"""
+    referer = _draft_editor_referer(book_id, item_id)
     form = {
         "aid": "2503",
         "app_name": "muye_novel",
@@ -131,6 +168,17 @@ def _extract_book_id(data: Any) -> str:
     return ""
 
 
+def _chapter_fanqie_html(chapter: Chapter, content_override: str | None = None) -> str:
+    """优先使用请求携带的编辑器 HTML，否则读 DB 经清洗后转番茄 HTML。"""
+    if content_override is not None and content_override.strip():
+        return chapter_html_to_fanqie_html(content_override)
+    raw = (chapter.content or "").strip()
+    if raw:
+        return chapter_html_to_fanqie_html(raw)
+    plain = chapter_to_plain(chapter)
+    return chapter_html_to_fanqie_html(plain) if plain.strip() else ""
+
+
 def _extract_item_id(data: Any) -> str:
     if not isinstance(data, dict):
         return ""
@@ -158,6 +206,8 @@ async def publish_project_to_fanqie(
     chapter_ids: list[str] | None,
     fresh_create_curl: str = "",
     upload_cover: bool = False,
+    chapter_content_html: str | None = None,
+    chapter_title: str | None = None,
 ) -> dict[str, Any]:
     """
     将项目章节批量上传到番茄草稿箱。
@@ -173,6 +223,9 @@ async def publish_project_to_fanqie(
     if fresh_create_curl.strip():
         creds = merge_creds_from_curl(creds, fresh_create_curl)
         save_creds(creds)
+
+    # 上传草稿 / 创建书籍均为 POST，缺 msToken、a_bogus 时番茄返回空 text/plain
+    ensure_fanqie_post_creds(creds)
 
     resolved_roles = roles if roles else _default_roles(db, str(project.id))
 
@@ -194,11 +247,6 @@ async def publish_project_to_fanqie(
             raise ValueError(
                 "创建新书需要封面 thumb_uri：请在本页「上传封面到番茄」选择图片，"
                 "或手动填写 thumb_uri，或为项目设置封面并勾选自动上传"
-            )
-
-        if not creds.get("a_bogus", "").strip():
-            raise ValueError(
-                "创建书籍需要有效的 a_bogus 签名：请在下方粘贴 DevTools 复制的 book/create cURL（含 msToken、a_bogus）"
             )
 
         resolved_name = (book_name or project.title or "未命名").strip()
@@ -224,6 +272,23 @@ async def publish_project_to_fanqie(
     elif not target_book_id:
         raise ValueError("existing 模式必须提供 book_id")
 
+    book_volume_id, book_volume_name = await fetch_book_volume(target_book_id)
+    if not volume_id.strip():
+        volume_id = book_volume_id
+    if not volume_name.strip():
+        volume_name = book_volume_name
+    # 仅当凭据 cURL 来自同一本书时才用 default_volume（避免 A 书卷 ID 写到 B 书）
+    if creds.get("default_book_id") == target_book_id:
+        if not volume_id.strip() and creds.get("default_volume_id"):
+            volume_id = str(creds.get("default_volume_id") or "")
+        if not volume_name.strip() and creds.get("default_volume_name"):
+            volume_name = str(creds.get("default_volume_name") or "")
+    if not volume_id.strip():
+        raise ValueError(
+            f"无法解析书籍 {target_book_id} 的卷 volume_id，"
+            "请先在番茄作家后台打开该书并保存一次草稿后再同步"
+        )
+
     q = db.query(Chapter).filter(
         Chapter.project_id == project.id,
         Chapter.deleted_at.is_(None),
@@ -235,39 +300,118 @@ async def publish_project_to_fanqie(
 
     uploaded: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
+    skipped_empty = 0
+
+    single_chapter = chapter_ids is not None and len(chapter_ids) == 1
+    content_override = chapter_content_html if single_chapter else None
+    title_override = chapter_title.strip() if single_chapter and chapter_title else None
+
+    # 本书已被各章占用的草稿 id；同批上传时动态追加，避免多章写入同一条
+    occupied_item_ids = collect_book_fanqie_item_ids(db, project.id, target_book_id)
 
     for ch in chapters:
-        plain = chapter_to_plain(ch)
-        if not plain.strip():
+        html = _chapter_fanqie_html(
+            ch,
+            content_override if single_chapter and str(ch.id) == (chapter_ids[0] if chapter_ids else "") else None,
+        )
+        plain_len = fanqie_html_plain_length(html)
+        if plain_len < 10:
+            skipped_empty += 1
+            failed.append({
+                "chapter_id": str(ch.id),
+                "title": ch.title or "",
+                "status": "error",
+                "message": "正文为空或过短：请先在编辑器保存章节后再同步，或确认章节已有内容",
+            })
             continue
-        title = ch.title or f"第{ch.sort_order}章"
-        html = plain_to_fanqie_html(plain)
+        title = resolve_chapter_title(
+            ch,
+            title_override if single_chapter and str(ch.id) == (chapter_ids[0] if chapter_ids else "") else None,
+        )
+        stored_item_id = get_stored_fanqie_item_id_for_upload(
+            db, ch, project.id, target_book_id,
+        )
+        sync_mode = "update" if stored_item_id else "create"
+        exclude_ids = {x for x in occupied_item_ids if x != stored_item_id}
+        item_id, slot_hint = await resolve_fanqie_item_id(
+            target_book_id,
+            title,
+            stored_item_id,
+            allow_unnamed_slot=False,
+            exclude_item_ids=exclude_ids,
+        )
+        enter_from = "newdraft"
+        if not item_id and not stored_item_id:
+            try:
+                item_id = await create_fanqie_new_article(
+                    book_id=target_book_id,
+                    volume_id=volume_id,
+                    volume_name=volume_name,
+                )
+                slot_hint = "已通过番茄 new_article 新建章节"
+                enter_from = "newchapter_0"
+            except Exception as exc:
+                failed.append({
+                    "chapter_id": str(ch.id),
+                    "title": title,
+                    "status": "error",
+                    "message": f"新建番茄章节失败: {exc}",
+                })
+                continue
+
         try:
             data = await upload_fanqie_draft(
                 book_id=target_book_id,
                 title=title,
                 content_html=html,
+                item_id=item_id,
                 volume_id=volume_id,
                 volume_name=volume_name,
+                enter_from=enter_from,
             )
-            item_id = _extract_item_id(data)
-            if item_id:
-                await save_fanqie_doc_history(book_id=target_book_id, item_id=item_id)
+            new_item_id = _extract_item_id(data) or item_id
+            if not new_item_id and not stored_item_id:
+                raise ValueError(
+                    "未能获得番茄草稿 item_id：请先在作家后台新建空白草稿后再同步本章"
+                )
+            if new_item_id:
+                await save_fanqie_doc_history(book_id=target_book_id, item_id=new_item_id)
+                persist_fanqie_sync(
+                    ch,
+                    book_id=target_book_id,
+                    item_id=new_item_id,
+                    title=title,
+                    volume_id=volume_id,
+                    db=db,
+                )
+                occupied_item_ids.add(new_item_id)
             uploaded.append({
                 "chapter_id": str(ch.id),
                 "title": title,
-                "item_id": item_id,
+                "item_id": new_item_id,
                 "status": "ok",
+                "sync_mode": sync_mode,
+                "content_chars": plain_len,
+                "message": slot_hint or None,
             })
         except Exception as exc:
+            raw = str(exc)
+            if "code=-2004" in raw or "章节不存在" in raw:
+                raw = fanqie_error_hint(-2004, "章节不存在")
             failed.append({
                 "chapter_id": str(ch.id),
                 "title": title,
                 "status": "error",
-                "message": str(exc),
+                "message": raw,
             })
         if delay_seconds > 0:
             await asyncio.sleep(delay_seconds)
+
+    if not uploaded and not failed and (skipped_empty > 0 or not chapters):
+        raise ValueError(
+            "没有可上传的正文：请确认章节已保存且含有内容，"
+            "或检查 chapter_ids 是否属于当前项目"
+        )
 
     return {
         "book_id": target_book_id,
@@ -276,5 +420,6 @@ async def publish_project_to_fanqie(
         "thumb_uri": resolved_thumb or None,
         "uploaded": uploaded,
         "failed": failed,
+        "skipped_empty": skipped_empty,
         "total_chapters": len(uploaded) + len(failed),
     }

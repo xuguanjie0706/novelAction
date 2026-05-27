@@ -16,7 +16,7 @@ from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 logger = logging.getLogger(__name__)
 
 
-def _build_char_realm_hint(ctx: dict) -> str:
+def _build_char_realm_hint(ctx: dict, *, db=None, project_id: str | None = None) -> str:
     """为 skill prompt 生成人物当前境界 rank 速查表，防止 AI 把高阶技能分配给低境界角色。"""
     power_level_names: list[str] = ctx.get("power_level_names") or []
     rank_map = {name: i for i, name in enumerate(power_level_names)}
@@ -25,12 +25,12 @@ def _build_char_realm_hint(ctx: dict) -> str:
 
     from app.models import Character
     chars_by_name: dict[str, Character] = {}
-    # 尝试从 db 拉取，失败则跳过（不阻断流程）
+    # 从 DB 拉取人物境界；禁止把 Session 写入 ctx（会破坏 LangGraph checkpoint）
+    pid = project_id or ctx.get("project_id")
     try:
-        db = ctx.get("_db")
-        if db and ctx.get("project_id"):
+        if db is not None and pid:
             from app.models import Character as _C
-            for c in db.query(_C).filter(_C.project_id == ctx["project_id"]).all():
+            for c in db.query(_C).filter(_C.project_id == pid).all():
                 chars_by_name[c.name] = c
     except Exception:
         pass
@@ -67,9 +67,10 @@ async def gen_key_skills(svc: Any, project: Project, ctx: dict):
         f"{c['name']}（id={c['id']}）" for c in ctx.get("char_id_list", [])[:8]
     ) or "（人物列表待生成）"
     # 注入人物当前境界速查，供 mastered_by 合法性判断
-    ctx["_db"] = svc.db
     ctx["project_id"] = str(project.id)
-    char_realm_hint = _build_char_realm_hint(ctx)
+    char_realm_hint = _build_char_realm_hint(
+        ctx, db=svc.db, project_id=str(project.id),
+    )
     prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 主角：{ctx.get('protagonist', '主角')}
 {format_power_context_block(ctx)}

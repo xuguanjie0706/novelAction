@@ -17,9 +17,20 @@ interface Props {
 const STEPS = [
   '登录 fanqienovel.com 作家专区',
   '打开 DevTools → Network',
-  '刷新页面，找到 /api/author/book/ 请求',
-  '右键 Copy as cURL，整段粘贴到下方',
+  '在作家后台编辑草稿并保存，Network 里找 cover_article（写正文）或 save_doc_history',
+  '右键 Copy as cURL，整段粘贴到下方（须含 msToken、a_bogus 与 -b Cookie）',
 ]
+
+function previewCurlPaste(raw: string) {
+  const text = raw.trim()
+  return {
+    hasCookie: /(?:-b\s+['"]|sessionid=)/.test(text),
+    hasMs: /msToken=/.test(text),
+    hasBogus: /a_bogus=/.test(text),
+    hasCsrf: /x-secsdk-csrf-token/i.test(text),
+    isCoverArticle: /cover_article/.test(text),
+  }
+}
 
 export default function ConnectModal({ open, summary, onClose, onSave }: Props) {
   const [saving, setSaving] = useState(false)
@@ -27,8 +38,10 @@ export default function ConnectModal({ open, summary, onClose, onSave }: Props) 
     cookies: '',
     csrf_token: '',
     ms_token: '',
+    a_bogus: '',
     author_id: '',
   })
+  const curlPreview = previewCurlPaste(form.cookies)
 
   useEffect(() => {
     if (!open) return
@@ -108,11 +121,30 @@ export default function ConnectModal({ open, summary, onClose, onSave }: Props) 
               value={form.cookies}
               onChange={e => setForm(f => ({ ...f, cookies: e.target.value }))}
               rows={5}
-              placeholder="curl 'https://fanqienovel.com/api/author/book/book_list/v0?...' -b 'novel_web_id=...; sessionid=...' ..."
+              placeholder="curl 'https://fanqienovel.com/api/author/article/cover_article/v0/?msToken=...&a_bogus=...' -b '...' --data-raw '...'"
               className="w-full resize-none rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-xs font-mono text-gray-800 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-amber-400"
               required
               autoFocus
             />
+            {form.cookies.trim() && (
+              <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+                <span className={curlPreview.hasCookie ? 'text-emerald-600' : 'text-gray-400'}>
+                  Cookie {curlPreview.hasCookie ? '✓' : '✗'}
+                </span>
+                <span className={curlPreview.hasMs ? 'text-emerald-600' : 'text-amber-600'}>
+                  msToken {curlPreview.hasMs ? '✓' : '✗'}
+                </span>
+                <span className={curlPreview.hasBogus ? 'text-emerald-600' : 'text-amber-600'}>
+                  a_bogus {curlPreview.hasBogus ? '✓' : '✗'}
+                </span>
+                {curlPreview.isCoverArticle && (
+                  <span className="text-blue-600">cover_article ✓</span>
+                )}
+              </div>
+            )}
+            <p className="mt-1.5 text-[11px] text-gray-500">
+              保存后后端会自动写入 msToken、a_bogus 到 fanqie_creds.json，无需手填下方可选框。
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -137,7 +169,9 @@ export default function ConnectModal({ open, summary, onClose, onSave }: Props) 
           </div>
 
           <div className="flex items-center justify-between gap-3 pt-1">
-            <p className="text-[11px] text-gray-400">Cookie 约 60 天有效，失效后重新粘贴即可</p>
+            <p className="text-[11px] text-gray-400">
+              Cookie 约 60 天有效；msToken/a_bogus 很短，上传失败时请重新粘贴最新 cURL
+            </p>
             <button
               type="submit"
               disabled={saving || !form.cookies.trim()}

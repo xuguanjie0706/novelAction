@@ -42,7 +42,7 @@ from app.services.fanqie.client import (
 from app.services.fanqie.normalize import merge_chapter_lists, normalize_books, normalize_chapters
 from app.services.fanqie.cover import upload_cover_image
 from app.services.fanqie.cover_image import fetch_cover_image
-from app.services.fanqie.creds import merge_creds_from_curl
+from app.services.fanqie.creds import creds_summary, merge_creds_from_curl
 from app.services.fanqie.publish import publish_project_to_fanqie
 
 router = APIRouter(prefix="/fanqie", tags=["fanqie"])
@@ -81,6 +81,14 @@ class PublishProjectBody(BaseModel):
         description="DevTools 复制的 book/create cURL，用于刷新 msToken、a_bogus（有效期极短）",
     )
     upload_cover: bool = Field(default=True, description="创建新书时自动上传项目封面到番茄")
+    content_html: str | None = Field(
+        default=None,
+        description="单章同步时可选：编辑器当前 HTML，优先于数据库 chapter.content",
+    )
+    chapter_title: str | None = Field(
+        default=None,
+        description="单章同步时可选：章节标题，优先于数据库 chapter.title",
+    )
 
 
 # ─────────────────────────────────────────
@@ -89,7 +97,11 @@ class PublishProjectBody(BaseModel):
 
 @router.post("/config", summary="保存番茄凭据")
 async def save_config(body: FanqieConfig):
-    """保存用户的番茄 Cookie / Token（支持 cURL 整段粘贴，自动提取 -b Cookie）。"""
+    """
+    保存番茄凭据（支持整段 cover_article cURL）。
+
+    从 URL 自动提取并持久化 msToken、a_bogus；从 -b 提取 Cookie；从 --data-raw 提取默认卷信息。
+    """
     creds = prepare_creds_from_body(
         body.cookies,
         csrf_token=body.csrf_token,
@@ -98,7 +110,13 @@ async def save_config(body: FanqieConfig):
         author_id=body.author_id,
     )
     save_creds(creds)
-    return {"ok": True, "message": "凭据已保存"}
+    summary = creds_summary(creds)
+    msg = "凭据已保存"
+    if summary["has_ms_token"] and summary["has_a_bogus"]:
+        msg = "凭据已保存（已提取 msToken、a_bogus，可上传草稿）"
+    elif not summary["has_a_bogus"]:
+        msg = "Cookie 已保存，但未检测到 a_bogus，请粘贴 cover_article 完整 cURL"
+    return {"ok": True, "message": msg, **summary}
 
 
 @router.get("/config", summary="读取凭据摘要")
@@ -117,12 +135,9 @@ async def get_config():
             break
 
     return {
-        "configured": bool(cookie_str),
         "session_preview": session_id,
         "author_id": creds.get("author_id", ""),
-        "has_csrf_token": bool(creds.get("csrf_token")),
-        "has_ms_token": bool(creds.get("ms_token")),
-        "has_a_bogus": bool(creds.get("a_bogus")),
+        **creds_summary(creds),
     }
 
 
@@ -214,6 +229,8 @@ async def publish_project(
             chapter_ids=body.chapter_ids,
             fresh_create_curl=body.fresh_create_curl,
             upload_cover=body.upload_cover,
+            chapter_content_html=body.content_html,
+            chapter_title=body.chapter_title,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

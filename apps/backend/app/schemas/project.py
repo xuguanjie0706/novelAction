@@ -24,6 +24,7 @@ class ProjectUpdate(BaseModel):
     status: Optional[str] = None
     target_words: Optional[int] = None
     cover_url: Optional[str] = None
+    extra: Optional[dict] = None
 
 
 class ProjectOut(BaseModel):

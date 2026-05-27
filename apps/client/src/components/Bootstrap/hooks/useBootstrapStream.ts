@@ -540,6 +540,10 @@ export function useBootstrapStream() {
         method: 'GET',
         signal: abort.signal,
       })
+      if (snapRes.status === 404) {
+        clearActiveBootstrapRun()
+        throw new Error('该生成任务不存在或无权访问，请从项目「生成纪要」重新开始')
+      }
       if (!snapRes.ok) throw new Error(await snapRes.text().catch(() => `无法恢复 run (${snapRes.status})`))
       const run = await snapRes.json() as {
         status: string

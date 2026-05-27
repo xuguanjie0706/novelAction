@@ -70,10 +70,17 @@ export default function FanqiePage() {
   }, [configured, loadBooks])
 
   async function handleSaveConfig(cfg: FanqieConfig) {
-    await saveFanqieConfig(cfg)
+    const res = await saveFanqieConfig(cfg)
+    if (res.has_ms_token && res.has_a_bogus) {
+      toast.success(res.message || '番茄凭据已保存（含上传签名）')
+    } else {
+      toast.success(res.message || '番茄凭据已保存')
+      if (!res.has_a_bogus) {
+        toast.error('未检测到 a_bogus，请粘贴 cover_article 完整 cURL', { duration: 6000 })
+      }
+    }
     const summary = await getFanqieConfigSummary()
     setConfigSummary(summary)
-    toast.success('番茄账号已连接')
     await loadBooks()
   }
 

@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>章节展开系统诊断 — 30年作家 vs 30年总编辑</title>
+<style>
+  :root {
+    --bg: #fafaf8;
+    --bg-card: #ffffff;
+    --bg-secondary: #f5f4f0;
+    --text: #1a1a1a;
+    --text-secondary: #6b6b68;
+    --text-tertiary: #9c9c98;
+    --border: rgba(0,0,0,0.08);
+    --border-strong: rgba(0,0,0,0.15);
+    --purple-50: #EEEDFE; --purple-600: #534AB7; --purple-800: #3C3489; --purple-900: #26215C;
+    --teal-50: #E1F5EE; --teal-600: #0F6E56; --teal-800: #085041;
+    --pink-50: #FBEAF0; --pink-600: #993556; --pink-800: #72243E;
+    --red-50: #FCEBEB; --red-800: #791F1F;
+    --amber-50: #FAEEDA; --amber-800: #633806;
+    --blue-50: #E6F1FB; --blue-800: #0C447C;
+    --gray-50: #F1EFE8; --gray-800: #444441;
+    --green-50: #EAF3DE; --green-800: #27500A;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
+    --font-mono: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+    --radius: 10px;
+    --radius-lg: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a1a;
+      --bg-card: #242424;
+      --bg-secondary: #2a2a2a;
+      --text: #e8e8e8;
+      --text-secondary: #a0a0a0;
+      --text-tertiary: #707070;
+      --border: rgba(255,255,255,0.08);
+      --border-strong: rgba(255,255,255,0.15);
+      --purple-50: #2a2650; --purple-600: #8b83e0; --purple-800: #CECBF6; --purple-900: #EEEDFE;
+      --teal-50: #0a2e24; --teal-600: #5DCAA5; --teal-800: #9FE1CB;
+      --pink-50: #3a1828; --pink-600: #ED93B1; --pink-800: #F4C0D1;
+      --red-50: #3a1818; --red-800: #F7C1C1;
+      --amber-50: #302010; --amber-800: #FAC775;
+      --blue-50: #102030; --blue-800: #B5D4F4;
+      --gray-50: #2c2c2a; --gray-800: #D3D1C7;
+      --green-50: #1a2a10; --green-800: #C0DD97;
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: var(--font-sans);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  .container {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 3rem 1.5rem 4rem;
+  }
+  header {
+    text-align: center;
+    margin-bottom: 2.5rem;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 {
+    font-size: 26px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    letter-spacing: -0.5px;
+  }
+  header .subtitle {
+    font-size: 15px;
+    color: var(--text-secondary);
+  }
+  header .date {
+    font-size: 13px;
+    color: var(--text-tertiary);
+    margin-top: 6px;
+  }
+
+  /* tabs */
+  .tab-row {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1.5rem;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 10;
+    padding-top: 4px;
+  }
+  .tab-btn {
+    padding: 12px 20px;
+    font-size: 14px;
+    font-weight: 500;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+    font-family: var(--font-sans);
+  }
+  .tab-btn.active { color: var(--text); border-bottom-color: var(--purple-600); }
+  .tab-btn:hover:not(.active) { color: var(--text); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* section intro */
+  .section-intro {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 1.5rem;
+    padding: 1rem 1.25rem;
+    background: var(--bg-secondary);
+    border-radius: var(--radius);
+    line-height: 1.75;
+  }
+
+  /* issue card */
+  .issue-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 14px;
+    transition: border-color 0.15s;
+  }
+  .issue-card:hover { border-color: var(--border-strong); }
+  .issue-card h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 8px;
+    line-height: 1.55;
+  }
+  .issue-card p {
+    font-size: 14px;
+    line-height: 1.75;
+    color: var(--text-secondary);
+    margin: 0 0 10px;
+  }
+  .issue-card p:last-of-type { margin-bottom: 0; }
+  .issue-card b { color: var(--text); font-weight: 600; }
+
+  .evidence {
+    font-size: 12.5px;
+    color: var(--text-tertiary);
+    font-family: var(--font-mono);
+    background: var(--bg-secondary);
+    padding: 10px 14px;
+    border-radius: var(--radius);
+    margin-top: 12px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  /* severity badges */
+  .sev {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 10px;
+    border-radius: 6px;
+    font-weight: 600;
+    margin-right: 6px;
+    letter-spacing: 0.3px;
+  }
+  .sev-crit { background: var(--red-50); color: var(--red-800); }
+  .sev-high { background: var(--amber-50); color: var(--amber-800); }
+  .sev-med  { background: var(--blue-50); color: var(--blue-800); }
+  .sev-idea { background: var(--purple-50); color: var(--purple-800); }
+
+  .role-badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 10px;
+    border-radius: 6px;
+    font-weight: 600;
+  }
+  .role-writer { background: var(--teal-50); color: var(--teal-800); }
+  .role-editor { background: var(--pink-50); color: var(--pink-800); }
+  .both        { background: var(--gray-50); color: var(--gray-800); }
+
+  /* summary section */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 2rem;
+  }
+  .stat-card {
+    background: var(--bg-secondary);
+    border-radius: var(--radius);
+    padding: 1rem 1.25rem;
+  }
+  .stat-card .label {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+  .stat-card .value {
+    font-size: 22px;
+    font-weight: 600;
+  }
+  .stat-card .value.crit { color: var(--red-800); }
+  .stat-card .value.high { color: var(--amber-800); }
+  .stat-card .value.med  { color: var(--blue-800); }
+
+  /* prose section at bottom */
+  .prose { margin-top: 2.5rem; padding-top: 2rem; border-top: 1px solid var(--border); }
+  .prose h2 { font-size: 18px; font-weight: 600; margin-bottom: 1rem; }
+  .prose p { font-size: 14px; line-height: 1.8; color: var(--text-secondary); margin-bottom: 1rem; }
+  .prose strong { color: var(--text); }
+
+  footer {
+    margin-top: 3rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>章节展开系统诊断报告</h1>
+  <div class="subtitle">30年作家 vs 30年总编辑 — 双视角问题审计</div>
+  <div class="date">novelAction 项目 &middot; 2026-05-28</div>
+</header>
+
+<!-- Summary stats -->
+<div class="summary-grid">
+  <div class="stat-card">
+    <div class="label">致命问题</div>
+    <div class="value crit">6</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">严重问题</div>
+    <div class="value high">6</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">中等问题</div>
+    <div class="value med">5</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">涉及文件</div>
+    <div class="value">12+</div>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div class="tab-row">
+  <button class="tab-btn active" onclick="switchTab('writer')">30年作家视角</button>
+  <button class="tab-btn" onclick="switchTab('editor')">30年总编辑视角</button>
+  <button class="tab-btn" onclick="switchTab('consensus')">共识问题</button>
+</div>
+
+<!-- ========== 作家视角 ========== -->
+<div id="panel-writer" class="tab-panel active">
+
+<div class="section-intro">
+  以一位30年创作经验的网文作家视角审视：章纲生成系统能否真正帮助写出「读者放不下的小说」？聚焦感官体验、人物声音、情感力学、配角弧线、空间感五个维度。
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-crit">致命</span> 四元组是骨架，但没有血肉——「感官体验」完全缺席</h3>
+  <p>章纲只有「欲望→障碍→选择→代价」，这是戏剧结构的抽象骨架。但网文读者不是在读剧本梗概——他们需要<b>身临其境</b>。缺一个字段：这一章的<b>核心感官画面</b>是什么？读者闭上眼能「看到」什么？闻到什么？</p>
+  <p>30年写作经验告诉我：读者记住的永远不是「主角选择牺牲令牌」，而是「他把令牌扔进熔炉时，手指被烫出焦痕」。系统在生成<b>可执行的戏剧结构</b>，但不是在生成<b>可阅读的小说体验</b>。</p>
+  <div class="evidence">缺失字段建议：sensory_anchor — "本章最具画面感的一个瞬间（视/听/触/嗅，≤25字）"
+写正文时注入 prompt → 强制要求正文在前800字内展开这个画面</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-crit">致命</span> 对话风格和人物声音被系统性忽略</h3>
+  <p>章纲里有 involved_characters，有 character_change，但<b>没有任何关于对话风格的指引</b>。网文读者判断角色是否「活」的第一标准就是：这个人说话像他自己吗？系统有 speech_style 字段但只在 Character 表里静默存着，<b>章纲展开时完全没注入</b>。</p>
+  <p>结果：AI 写30章正文，所有角色说话像同一个人——这是网文读者弃文的头号原因之一。</p>
+  <div class="evidence">vol_chapter_plans.py 第250-265行：char_snapshot 只含 name(tier,realm,status)
+speech_style / clothing_style / appearance 未注入章纲生成 prompt
+→ 写正文时 context_assembler 才注入，但章纲层已丢失「本章谁的声音最重要」的规划</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-high">严重</span> 情感节奏只有标签，没有「情感力学」</h3>
+  <p>emotional_tone 是 exciting/tense/sad 这种单词标签。30年写作经验告诉我：情感不是一个状态，是一个<b>变化过程</b>。一章的力量不在于「本章是悲伤的」，而在于「从安全感→突然失去→木然→崩溃」这个<b>情感轨迹</b>。</p>
+  <p>reader_emotion_target 只记录终态，不记录<b>起始情绪</b>和<b>转折点</b>。AI 写出来的章节情感曲线会很平——从头到尾一个调子。</p>
+  <div class="evidence">建议：emotion_arc_in_chapter: "安心→震惊→愤怒（转折点：第二幕发现真相）"
+比 emotional_tone: "tense" 多100倍的写作指导价值</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-high">严重</span> 「配角聚光灯」只是摆设——没有配角弧线规划</h3>
+  <p>supporting_spotlight 字段要求填「哪个配角有独立情节推进」，但这只是<b>单章声明</b>。配角的弧线是什么？他在第5章做出的选择和第25章有什么因果？<b>系统只给主角做了四元组因果链，配角完全是散点式的</b>。</p>
+  <p>网文大神和萌新的核心区别之一：配角有没有自己的「欲望→代价」小弧线。现在的系统让配角沦为「主角叙事的道具」。</p>
+  <div class="evidence">Character 表有 arc_stages 字段，但 vol_chapter_plans 的 prompt 没有
+"配角 X 在本卷的弧线阶段"这一约束注入
+→ AI 每章随机分配 supporting_spotlight，无法形成连贯的配角成长线</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-med">中等</span> 「空间」维度严重缺失——场景只有事件没有地点</h3>
+  <p>章纲完全没有 location 字段。一个章节发生在密室还是在悬崖边，对节奏、情感、冲突方式都有本质影响。Location 模型已经做了，但<b>章纲层没接</b>。</p>
+  <p>30年写小说，最怕的就是「飘在空中的对话」——两个人在说话，但读者不知道他们站在哪里。场景感是网文的氧气。</p>
+  <div class="evidence">Location model 已实现 + location_debrief 入库复盘已有
+但 vol_chapter_plans prompt 中无 location 相关字段
+Scene 模型有 location_name，但那是章纲之后的层级</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-med">中等</span> 开局10章和中后期用同一套四元组模板——节奏错配</h3>
+  <p>虽然有 phase_guidance 按区间注入节奏约束，但<b>输出 JSON 模板完全一样</b>。开局3章的章纲应该多一个「爽点类型」字段（金手指首秀/打脸/意外获得）；至暗期的章纲应该多一个「内心独白核心句」字段。不同阶段需要不同的创作蓝图结构。</p>
+  <div class="evidence">phase_guidance 只是提示词文本约束，不改变 JSON 输出结构
+opening 期缺 hook_type / power_fantasy_beat
+dark_hour 期缺 inner_monologue_seed / belief_shattered</div>
+</div>
+
+</div>
+
+<!-- ========== 总编辑视角 ========== -->
+<div id="panel-editor" class="tab-panel">
+
+<div class="section-intro">
+  以一位30年总编辑视角审视：章纲生成系统在工程层面的质量控制、流程闭环、数据一致性是否经得起百万字长篇的考验？聚焦 token 经济、linter 闭环、伏笔审计、语义检测、预算管控。
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-crit">致命</span> 30章一批的 token 炸弹——上下文压缩到失真</h3>
+  <p>一次生成30章 JSON，每章约20个字段。加上 Tier 1-5 的上下文（立项定位+人物+关系+伏笔+骨架+节奏），总 prompt 轻松超过 20K tokens，输出要求更高。<b>AI 在生成第25-30章时，上下文窗口里第1-10章的细节已经被注意力稀释了</b>。</p>
+  <p>这就是为什么 linter 要查 SEQ-01（章际因果断裂）——因为 AI 确实会在后半段「忘记」前面章节的代价链。但 linter 只查相邻两章，<b>不查跨5-10章的伏笔线断裂</b>。</p>
+  <div class="evidence">vol_chapter_plans.py batch_ranges: [(1,30), (31,60)]
+30章 JSON ≈ 15K-20K output tokens
+SEQ-01 只检查 chapter N → N+1 的代价承接
+缺失：跨章伏笔线完整性检查（埋→加热→收 是否形成闭环）</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-crit">致命</span> Linter 是「验收员」不是「教练」——没有修复引导闭环</h3>
+  <p>linter 发现 CH-04（choice_cost 为空）后标记 linter_blocked，但<b>然后呢？</b>用户在前端看到红色警告，要手动编辑 JSON 字段？这不是给作家用的工具，这是给程序员的调试面板。</p>
+  <p>总编辑的做法不是把稿子退回说「这里不行」，而是<b>给出修改方向</b>：「你第7章的选择太便宜了，可以考虑让他付出XXX的代价，因为第8章需要承接YYY」。repair_hints.py 有这个文件但逻辑很薄。</p>
+  <div class="evidence">gate.py: finalize_volume_chapter_commit → linter_blocked=True
+repair_hints.py: 存在但仅生成通用提示，不含上下文感知修复建议
+前端 VolumeLinterPanel: 展示 issue 列表，无 AI 辅助修复入口
+缺失：「AI 修复建议」→ 用户确认 → 局部重生成 的闭环</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-high">严重</span> 批次2看批次1「完整大纲」，但编辑改了批次1怎么办？</h3>
+  <p>用户展开第1-30章后，可能花几天修改章纲（调整代价链、重排伏笔）。然后展开31-60章时，prev_summary 注入的是<b>落库时的版本</b>，如果用户在前端编辑了章纲但没重新生成……第31章承接的是过时信息。</p>
+  <div class="evidence">vol_chapter_plans.py 第296-319行：prev_summary 从 all_results 构建
+all_results 来自本次生成（同一次 API 调用内）
+但如果批次1和批次2分两次调用（用户先生成1-30，改了几天，再生成31-60），
+prev_summary 应从数据库读取用户编辑后的最新版本
+→ 目前 routes_vol_expand 会重新构建 ctx，但需确认是否读取了最新 extra 字段</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-high">严重</span> 伏笔检查只做格式验证，不做「伏笔经济学」审计</h3>
+  <p>foreshadow_sync 能识别「埋/加热/收」的格式，但不做经济学审计：本卷埋了几条线？加热了几条？回收了几条？如果30章里埋了15条伏笔只收了2条，是伏笔通胀——读者会记不住。如果全收不埋，下卷无弹药。</p>
+  <p>30年总编辑的铁律：<b>每卷伏笔收支必须平衡</b>。当前卷新埋 ≤ 回收数 × 1.5，否则退稿。</p>
+  <div class="evidence">foreshadow_sync.py: 只做 DB 写入（幂等），不做收支统计
+rules_chapter.py: 无伏笔密度规则
+rules_sequence.py: 无跨章伏笔闭环检查
+缺失规则：FS-01（卷级伏笔收支比）、FS-02（伏笔加热间距 ≤ 8章）、FS-03（陈年伏笔预警）</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-high">严重</span> 故事线织网是声明式的——没有「交叉验证」</h3>
+  <p>storyline_weave_block 告诉 AI「本卷各线的节拍」，AI 在 storyline_refs 里声明推进了哪条线。但<b>没有人验证这个声明是否为真</b>——AI 说第3章推进了「感情线」，但 core_event 里可能完全没有感情线的内容。</p>
+  <p>SEQ-02 只查「不能连续3章同一条线」，不查「声明推进但实际内容不匹配」。</p>
+  <div class="evidence">storyline_refs: AI 自行声明 → _resolve_storyline_ids 映射为 DB ID
+SEQ-02: 只查 storyline_ids 连续相同，不查 storyline vs content 匹配度
+缺失：storyline_content_alignment 验证
+（可选方案：linter 检查 core_event/summary 是否包含该故事线的关键词）</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-med">中等</span> SEQ-05 语义重复检测用 Jaccard 太粗——同义改写轻松逃逸</h3>
+  <p>Jaccard 基于 3-gram 字面重叠。「主角击败了守卫」和「主角打败了看门人」Jaccard 接近 0，但语义 100% 重复。系统有 pgvector + embedding 能力，<b>章纲层的重复检测应该用 embedding 余弦相似度</b>，不是字符串匹配。</p>
+  <div class="evidence">rules_sequence.py lint_semantic_duplicates: _jaccard_similarity threshold=0.88
+embedding_service.py 已实现 + pgvector 已部署
+outline_linter/embedding_seq.py 存在但功能受限
+→ 应升级为 embedding 余弦相似度检测</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-med">中等</span> 字数预算是「软约束」——没有卷级总量硬校验</h3>
+  <p>expected_words 是 AI 自行填的，CH-15 只查单章偏短。但<b>没有卷级总量校验</b>：30章 × 每章 AI 填 3000字 = 9万字，可能远超卷预算。也没有 linter 规则检查全卷 expected_words 之和是否在目标范围内。</p>
+  <div class="evidence">build_book_budget_block: 只注入提示文本，不做输出校验
+CH-15: 只查单章 vs phase 基准，偏短警告
+缺失：VOL-BUDGET（卷级 sum(expected_words) vs 目标字数 ±15%）</div>
+</div>
+
+</div>
+
+<!-- ========== 共识问题 ========== -->
+<div id="panel-consensus" class="tab-panel">
+
+<div class="section-intro">
+  作家和编辑在以下问题上达成高度一致——这些是系统层面的结构性缺陷，不是单一角度的偏好问题。
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-crit">致命</span><span class="role-badge both" style="margin-left:8px">共识</span> 章纲与正文之间的「翻译鸿沟」</h3>
+  <p><b>作家说</b>：章纲给我的是结构骨架，但写正文时我需要的是「这一章从哪个画面开始，核心对话是什么调子，高潮在第几个场景爆发」。章纲到正文之间缺一层「导演笔记」。</p>
+  <p><b>编辑说</b>：章纲里的 opening_hook / core_event / end_hook 是30字以内的极压缩摘要，AI 拿这个去写3000字正文时，大量细节靠「自由发挥」填充。自由发挥就是「AI 味」的来源——因为它会用最平庸的方式填满字数。</p>
+  <p><b>共识</b>：需要在章纲和正文之间增加一个「章节导演单」层级——不是 Scene（那是更细的分场），而是「本章的3个关键场景分别要达成什么效果」的中粒度规划。</p>
+  <div class="evidence">当前路径：chapter_plan (30字摘要) → [缺失层] → Scene 三层调度 / 直接 gated-draft
+Scene 是可选路径，大多数用户可能直接走 gated-draft
+gated-draft 的 context 注入了章纲字段，但缺乏"本章3幕结构"的中粒度指导
+→ AI 写正文时自行决定章内节奏分配，导致「开头拖沓、中间空洞、结尾匆忙」的系统性问题</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-crit">致命</span><span class="role-badge both" style="margin-left:8px">共识</span> 「代价链」只有文字声明，没有叙事权重</h3>
+  <p><b>作家说</b>：choice_cost 写着「被迫交出令牌」，但这个代价的<b>叙事权重</b>有多大？是一句话带过还是要用2000字来渲染？不知道。</p>
+  <p><b>编辑说</b>：SEQ-01 只查「下章开头有没有提到上章代价的关键词」，但关键词出现 ≠ 读者真的感受到了代价。如果上章牺牲了挚友，下章用一句「他想起了老友」就「承接」了，这在技术上通过 linter 但在叙事上完全不合格。</p>
+  <div class="evidence">choice_cost: 纯文本字段，无权重/优先级标记
+SEQ-01: text_overlap 函数只做 ≥2字 字符重叠检查
+缺失：cost_weight (1-5) 字段 → 权重≥4的代价必须在下章花≥500字处理
+缺失：cost_resolution_depth 验证（正文写完后复盘检查代价处理字数）</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-high">严重</span><span class="role-badge both" style="margin-left:8px">共识</span> 反派行动线是「贴标签」而非「平行叙事」</h3>
+  <p><b>作家说</b>：villain_action 要求填「反派这一章在做什么」，但反派的动机、计划推进阶段、资源消耗在哪里？我需要知道反派在第几步棋才能写出真正有压迫感的暗线。</p>
+  <p><b>编辑说</b>：Step 4.5 的 antagonist_ladder 和 Step 9.8 的 villain_arc 都是卷级规划。但到了章级，villain_action 变成了散装声明，没有人检查30章的 villain_action 是否构成一条<b>递进的行动线</b>。</p>
+  <div class="evidence">villain_arc (Project.extra): 卷级行动计划
+villain_action (chapter extra): 章级声明，无序号/阶段标记
+缺失：linter 规则 VIL-01（反派行动递进性检查：30章内是否从「暗中布局」→「试探」→「正面冲突」递进）
+缺失：villain_action 与 villain_arc 的对齐校验</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-high">严重</span><span class="role-badge both" style="margin-left:8px">共识</span> 信息揭示节奏无控制——读者知道什么、什么时候知道</h3>
+  <p><b>作家说</b>：悬疑感的核心不是「发生了什么」，而是「读者在第几章知道了什么」。系统没有「信息揭示时间表」——哪些信息在哪一章对读者公开、哪些信息读者知道但主角不知道（戏剧反讽）。</p>
+  <p><b>编辑说</b>：core_mysteries (Step 11.5) 做了跨卷谜题分配，但<b>章级信息揭示</b>是空白。读者「知道什么」的精确控制是网文大神的核心能力——系统在这个维度上零覆盖。</p>
+  <div class="evidence">core_mysteries: 仅到卷级（哪个卷揭示哪个谜题）
+chapter_plan: 无 "reader_knows_after_this_chapter" / "dramatic_irony" 字段
+foreshadow: 记录「埋/加热/收」但不记录「读者认知状态变化」
+→ AI 写正文时可能过早泄露关键信息或反复铺垫读者已知的内容</div>
+</div>
+
+<div class="issue-card">
+  <h3><span class="sev sev-med">中等</span><span class="role-badge both" style="margin-left:8px">共识</span> 章纲编辑后没有「涟漪传播」机制</h3>
+  <p><b>作家说</b>：我改了第8章的 choice_cost，第9章的 opening_hook 就该自动标红提醒我需要同步修改。但现在没有。</p>
+  <p><b>编辑说</b>：这不只是 UI 问题。如果用户改了第8章的核心事件，第10-15章里依赖第8章伏笔的章节都应该被标记为「可能需要更新」。现在改一章的连锁影响完全靠人脑追踪。</p>
+  <div class="evidence">前端 NodeDetailPanel: 编辑章纲字段 → 直接 PATCH 更新
+无 "影响分析" 或 "涟漪检测" 逻辑
+linter 只在生成时运行，不在编辑后增量运行
+缺失：edit_impact_analysis → 标记受影响章节 → 用户可选「AI 修复受影响章节」</div>
+</div>
+
+</div>
+
+<!-- ========== 综合建议 ========== -->
+<div class="prose">
+  <h2>优先行动建议</h2>
+
+  <p><strong>第一优先级（解决「AI 味」系统性根因）：</strong>在章纲 JSON 中增加 <code>sensory_anchor</code>（核心感官画面）、<code>emotion_arc_in_chapter</code>（章内情感轨迹）、<code>cost_weight</code>（代价叙事权重 1-5）三个字段。这三个字段直接影响正文质量，投入产出比最高。同时在 char_snapshot 注入中补充 speech_style，让章纲层就知道「本章谁的声音最重要」。</p>
+
+  <p><strong>第二优先级（堵住 linter 的结构性漏洞）：</strong>新增 FS-01（伏笔收支比）、FS-02（加热间距）、VIL-01（反派行动递进性）三条 linter 规则。将 SEQ-05 的 Jaccard 检测升级为 embedding 余弦相似度。新增 VOL-BUDGET 规则校验卷级字数总量。</p>
+
+  <p><strong>第三优先级（完善闭环体验）：</strong>将 repair_hints.py 升级为上下文感知的 AI 修复建议（读取前后章信息，给出具体修改方向）。实现章纲编辑后的「涟漪检测」——改一章后标记可能受影响的相邻章节。考虑在 gated-draft 路径中自动生成「3幕微纲」作为章纲→正文的中间层。</p>
+
+  <p><strong>长期方向：</strong>引入 <code>reader_knowledge_state</code> 字段追踪信息揭示节奏，实现章级信息揭示时间表。将 villain_action 从散装声明升级为带阶段标记的递进行动线，与卷级 villain_arc 自动对齐。为核心配角在章纲层生成微型弧线规划。</p>
+</div>
+
+<footer>
+  novelAction 章节展开系统诊断 &middot; 基于 vol_chapter_plans.py / context_vol_expand.py / outline_linter 全套规则的代码级审计 &middot; 2026-05-28
+</footer>
+
+</div>
+
+<script>
+function switchTab(id) {
+  document.querySelectorAll('.tab-btn').forEach(function(b, i) {
+    var ids = ['writer', 'editor', 'consensus'];
+    b.classList.toggle('active', ids[i] === id);
+  });
+  document.querySelectorAll('.tab-panel').forEach(function(p) {
+    p.classList.toggle('active', p.id === 'panel-' + id);
+  });
+}
+</script>
+</body>
+</html>

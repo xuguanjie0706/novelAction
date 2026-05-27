@@ -97,10 +97,19 @@ def update_project(
     current_user: User = Depends(get_current_user),
 ):
     project = _owned_or_404(db, project_id, current_user)
-    for field, value in payload.model_dump(exclude_none=True).items():
+    update_data = payload.model_dump(exclude_none=True)
+    extra_patch = update_data.pop("extra", None)
+
+    for field, value in update_data.items():
         if field == "user_id":
             continue  # 不允许通过 PATCH 改变项目归属
         setattr(project, field, value)
+
+    if extra_patch is not None:
+        extra = dict(project.extra) if isinstance(project.extra, dict) else {}
+        extra.update(extra_patch)
+        project.extra = extra
+
     db.commit()
     db.refresh(project)
     return project

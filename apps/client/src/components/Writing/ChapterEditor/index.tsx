@@ -26,6 +26,7 @@ import { useChapterHistory } from './hooks/useChapterHistory'
 import { useChapterDraftQueue } from './hooks/useChapterDraftQueue'
 import { useQueueDebriefHydrate } from './hooks/useQueueDebriefHydrate'
 import { useChapterStatusUpdate } from './hooks/useChapterStatusUpdate'
+import { useFanqieChapterSync } from './hooks/useFanqieChapterSync'
 import type { ChapterEditorProps as Props, AutoDebriefResponse } from './types'
 import { STATUS_OPTIONS } from './constants'
 
@@ -127,6 +128,15 @@ export default function ChapterEditor({
     },
   })
 
+  const fanqieSync = useFanqieChapterSync({
+    projectId,
+    chapter,
+    getEditorHtml: () => tiptap.editor?.getHTML() ?? '',
+    onChapterPatched: (patch) => {
+      upsertChapter({ ...chapter, ...patch } as typeof chapter)
+    },
+  })
+
   const { updateStatus } = useChapterStatusUpdate({
     projectId,
     chapterId: chapter.id,
@@ -208,6 +218,10 @@ export default function ChapterEditor({
         cleanupChapter={() => void autosave.cleanupChapter()}
         cleaningChapter={autosave.cleaningChapter}
         manualSave={() => void autosave.manualSave()}
+        syncToFanqie={() => void fanqieSync.syncToFanqie()}
+        fanqieSyncing={fanqieSync.syncing}
+        fanqieBookId={fanqieSync.fanqieBookId}
+        fanqieSyncMeta={fanqieSync.syncMeta}
       />
 
       <StorylinePreWarnBanner

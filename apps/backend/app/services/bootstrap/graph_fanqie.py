@@ -32,6 +32,7 @@ from langgraph.types import interrupt, Command
 from app.database import SessionLocal
 from app.models import Project
 from app.models.bootstrap_run import BootstrapRun
+from app.services.bootstrap.graph_ctx import sanitize_bootstrap_ctx
 from app.services.bootstrap.graph import (
     BootstrapState,
     _checkpointer,
@@ -81,15 +82,15 @@ async def _fanqie_step(
             result = await asyncio.wait_for(fn(svc, ctx), timeout=300.0)
     except asyncio.TimeoutError:
         emit(run_id, "error", db, step=step, message=f"{step} 超时，已跳过")
-        return {"ctx": ctx, "completed_steps": [step],
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": [step],
                 "errors": [{"step": step, "reason": "timeout"}]}
     except Exception as exc:
         emit(run_id, "error", db, step=step, message=f"{step} 失败：{exc}")
-        return {"ctx": ctx, "completed_steps": [step],
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": [step],
                 "errors": [{"step": step, "reason": str(exc)}]}
     count = len(result) if isinstance(result, list) else (1 if result else 0)
     emit(run_id, "step_done", db, step=step, count=count)
-    return {"ctx": ctx, "completed_steps": [step]}
+    return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": [step]}
 
 
 # ──────────────────────────────────────────────────────

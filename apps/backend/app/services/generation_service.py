@@ -169,9 +169,9 @@ class GenerationService:
         from app.services.bootstrap.steps.settings import gen_settings_append
         return await gen_settings_append(self, project, ctx, **kwargs)
 
-    async def _gen_volumes(self, project: Project, ctx: dict):
+    async def _gen_volumes(self, project: Project, ctx: dict, **kwargs):
         from app.services.bootstrap.steps.volumes import gen_volumes
-        return await gen_volumes(self, project, ctx)
+        return await gen_volumes(self, project, ctx, **kwargs)
 
     async def _gen_memory(self, project: Project, ctx: dict):
         from app.services.bootstrap.steps.memory import gen_memory

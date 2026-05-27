@@ -232,7 +232,7 @@ logline
 - SSE 每步推送 `step_start` / `step_done` / `error` / `linter_blocked`
 - **Step 1 项目**：书名海选 15~20 个候选（6种策略，一次 LLM 调用内打分排序）；premise / world_overview 均为结构化对象，按字段精确存 `extra`，渲染为字符串写模型列（向后兼容）
 - **Step 0 立项会议**：从一句话推导目标读者画像、爽点类型、打脸频率、情感线占比、节奏类型，作为后续各步的全局约束。这是网文系统区别于"AI 自由发挥"的关键防线。
-- **Step 9**：只落库 `OutlineNode`（volume）；每卷含 **导演单节拍**（`extra.beat_highlights` 燃点 2～4 条、`volume_climax` 卷末高潮、`pacing_skeleton` 等，`highlight` 列存高潮摘要）；落库后跑 `lint_volume_entity_issues`，战力曲线异常最多定向重试 2 次（势力别名问题不自动重生）。章纲展开/写正文注入节拍；章纲 linter 规则 VB-* 校验燃点/高潮呼应。
+- **Step 9**：只落库 `OutlineNode`（volume）；每卷含 **导演单节拍**（`extra.beat_highlights` 燃点 2～4 条、`volume_climax` 卷末高潮、`pacing_skeleton` 等，`highlight` 列存高潮摘要）；落库后跑 `lint_volume_entity_issues`，战力曲线 high 级问题写入 `ctx.volume_entity_lint`，**不自动重试 LLM**；闸门「重新生成」或单步重跑时 `inject_realm_fix_hint=True` 注入修正提示后再调一次。章纲展开/写正文注入节拍；章纲 linter 规则 VB-* 校验燃点/高潮呼应。
 - **Step 13**：交叉核验所有生成物，矛盾列表写入 `Project.extra.consistency_issues`。
 - **已移出 Bootstrap（2026-05）**：原 Step 12.5 `vol1_chapters`、原「第1章场景」`ch1_scenes`（旧拓扑中的独立步，非现 Step 13）不再挂入 `graph.py`；实现仍保留于 `steps/vol1_chapter_plans.py` / `ch1_scenes.py`，**单步 regen 不支持**；现 Step 13 仅指 `consistency`。
 

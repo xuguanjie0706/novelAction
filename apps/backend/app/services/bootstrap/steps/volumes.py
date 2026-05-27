@@ -20,7 +20,36 @@ from app.services.outline_planning import words_to_plan
 
 logger = logging.getLogger(__name__)
 
-_MAX_VOLUME_REALM_RETRIES = 2
+_HIGH_REALM_ISSUE_TYPES = frozenset({
+    "villain_alignment",
+    "realm_mismatch",
+    "path_alignment",
+    "protagonist_alignment",
+})
+
+
+def _high_realm_issues(vol_lint: list) -> list:
+    return [
+        i for i in vol_lint
+        if i.get("severity") == "high"
+        and i.get("type") in _HIGH_REALM_ISSUE_TYPES
+    ]
+
+
+def realm_fix_hint_from_ctx(ctx: dict) -> str:
+    """从 ctx 中上次 linter 结果提取战力修正提示（供手动重试注入）。"""
+    vol_lint = ctx.get("volume_entity_lint") or []
+    high = _high_realm_issues(vol_lint)
+    return format_volume_realm_fix_hint(high) if high else ""
+
+
+def run_volume_entity_lint(db: Any, project_id: Any, ctx: dict) -> list:
+    """运行卷级实体校验；失败时返回空列表。"""
+    try:
+        return lint_volume_entity_issues(db, project_id, ctx)
+    except Exception:
+        logger.exception("bootstrap.volumes 实体校验跳过 project=%s", project_id)
+        return []
 
 
 def _persist_volumes(svc: Any, project: Project, data: list, ctx: dict, n_volumes: int) -> list:
@@ -84,106 +113,78 @@ def _persist_volumes(svc: Any, project: Project, data: list, ctx: dict, n_volume
     return results
 
 
-def _wipe_volumes(svc: Any, project_id: Any) -> None:
-    svc.db.query(OutlineNode).filter(
-        OutlineNode.project_id == project_id,
-        OutlineNode.node_type == "volume",
-    ).delete(synchronize_session=False)
-    svc.db.commit()
+async def gen_volumes(
+    svc: Any,
+    project: Project,
+    ctx: dict,
+    *,
+    inject_realm_fix_hint: bool = False,
+):
+    """Bootstrap 阶段只生成卷级骨架（volume），不生成 chapter_plan。
 
-
-async def gen_volumes(svc: Any, project: Project, ctx: dict):
-    """Bootstrap 阶段只生成卷级骨架（volume），不生成 chapter_plan。"""
+    自动模式仅调用 LLM 一次；战力曲线 high 级问题写入 ctx，由闸门/单步重跑时
+    ``inject_realm_fix_hint=True`` 注入修正提示后再手动重试。
+    """
     system, prompt_base = build_volumes_prompt(project, ctx)
     tw = int(project.target_words or 1_200_000)
     plan = words_to_plan(tw)
     n_volumes = plan["total_volumes"]
 
-    fix_hint = ""
-    data: list = []
-    results: list = []
+    fix_hint = realm_fix_hint_from_ctx(ctx) if inject_realm_fix_hint else ""
+    prompt = prompt_base + fix_hint
+    logger.info(
+        "bootstrap.volumes 开始 project=%s 期望卷数=%d target_words=%d manual_realm_fix=%s",
+        project.id,
+        n_volumes,
+        tw,
+        bool(fix_hint),
+    )
 
-    for attempt in range(_MAX_VOLUME_REALM_RETRIES + 1):
-        prompt = prompt_base + fix_hint
-        logger.info(
-            "bootstrap.volumes 开始 project=%s 期望卷数=%d target_words=%d attempt=%d",
+    raw = ""
+    try:
+        raw = await svc._call_with_retry(
+            system,
+            prompt,
+            max_tokens=max_tokens_bootstrap_completion(),
+            task="bootstrap.volumes",
+        )
+        data = parse_json(raw)
+    except Exception as exc:
+        logger.error(
+            "bootstrap.volumes JSON 解析失败 project=%s: %s; raw_tail=%r",
+            project.id,
+            exc,
+            (raw or "")[-500:],
+        )
+        raise
+    if not isinstance(data, list):
+        data = data.get("outline", data.get("volumes", []))
+    if len(data) != n_volumes:
+        logger.warning(
+            "bootstrap.volumes 卷数漂移 project=%s 期望=%d 实际=%d",
             project.id,
             n_volumes,
-            tw,
-            attempt + 1,
+            len(data),
         )
-        raw = ""
-        try:
-            raw = await svc._call_with_retry(
-                system,
-                prompt,
-                max_tokens=max_tokens_bootstrap_completion(),
-                task="bootstrap.volumes",
-            )
-            data = parse_json(raw)
-        except Exception as exc:
-            logger.error(
-                "bootstrap.volumes JSON 解析失败 project=%s: %s; raw_tail=%r",
-                project.id,
-                exc,
-                (raw or "")[-500:],
-            )
-            raise
-        if not isinstance(data, list):
-            data = data.get("outline", data.get("volumes", []))
-        if len(data) != n_volumes:
+
+    results = _persist_volumes(svc, project, data, ctx, n_volumes)
+    vol_lint = run_volume_entity_lint(svc.db, project.id, ctx)
+    high_realm = _high_realm_issues(vol_lint)
+
+    if vol_lint:
+        ctx["volume_entity_lint"] = vol_lint
+        if high_realm:
             logger.warning(
-                "bootstrap.volumes 卷数漂移 project=%s 期望=%d 实际=%d",
+                "bootstrap.volumes 战力曲线问题（请手动重试修正）project=%s issues=%d",
                 project.id,
-                n_volumes,
-                len(data),
-            )
-
-        if attempt > 0:
-            _wipe_volumes(svc, project.id)
-        results = _persist_volumes(svc, project, data, ctx, n_volumes)
-
-        try:
-            vol_lint = lint_volume_entity_issues(svc.db, project.id, ctx)
-        except Exception:
-            logger.exception("bootstrap.volumes 实体校验跳过 project=%s", project.id)
-            vol_lint = []
-
-        high_realm = [
-            i for i in vol_lint
-            if i.get("severity") == "high"
-            and i.get("type") in (
-                "villain_alignment",
-                "realm_mismatch",
-                "path_alignment",
-                "protagonist_alignment",
-            )
-        ]
-        if high_realm and attempt < _MAX_VOLUME_REALM_RETRIES:
-            fix_hint = format_volume_realm_fix_hint(high_realm)
-            logger.warning(
-                "bootstrap.volumes 战力曲线错误，定向重试 project=%s attempt=%d issues=%d",
-                project.id,
-                attempt + 1,
                 len(high_realm),
             )
-            continue
-
-        if vol_lint:
-            ctx["volume_entity_lint"] = vol_lint
-            if high_realm:
-                logger.warning(
-                    "bootstrap.volumes 战力曲线仍有问题（已达重试上限）project=%s issues=%d",
-                    project.id,
-                    len(high_realm),
-                )
-            else:
-                logger.warning(
-                    "bootstrap.volumes 实体校验发现 %d 项 project=%s",
-                    len(vol_lint),
-                    project.id,
-                )
-        break
+        else:
+            logger.warning(
+                "bootstrap.volumes 实体校验发现 %d 项 project=%s",
+                len(vol_lint),
+                project.id,
+            )
 
     logger.info(
         "bootstrap.volumes 完成 project=%s 写入卷数=%d phases=%s",
@@ -195,11 +196,9 @@ async def gen_volumes(svc: Any, project: Project, ctx: dict):
         f"{n.title}：{(n.summary or '')[:40]}" for n in results
     )
 
-    # ── 全书章节配额计数器（在此初始化，供 vol*_chapter_plans 累计使用）────
-    # 以 target_words 为单一数据源，与卷级 planned_chapters 之和保持一致
     plan = words_to_plan(tw)
     ctx["chapter_quota_total"] = plan["total_chapters"]
     ctx["chapter_quota_total_volumes"] = plan["total_volumes"]
-    ctx["chapter_quota_used"] = 0  # 每次懒展开章纲后累加，防止跨卷漂移
+    ctx["chapter_quota_used"] = 0
 
     return results

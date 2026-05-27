@@ -398,7 +398,7 @@ async def dispatch_regen(svc: Any, project: Any, step: str, ctx: dict) -> Any:
         return rels or []
 
     if step == "volumes":
-        nodes = await svc._gen_volumes(project, ctx)
+        nodes = await svc._gen_volumes(project, ctx, inject_realm_fix_hint=True)
         if isinstance(nodes, list):
             ctx["_volume_ids"] = [str(n.id) for n in nodes]
             ctx["volumes_summary"] = " | ".join(

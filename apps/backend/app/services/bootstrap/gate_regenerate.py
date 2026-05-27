@@ -63,7 +63,7 @@ async def regenerate_characters(svc: Any, project: Project, ctx: dict) -> int:
 
 async def regenerate_volumes(svc: Any, project: Project, ctx: dict) -> int:
     wipe_volume_nodes(svc.db, project.id)
-    nodes = await svc._gen_volumes(project, ctx)
+    nodes = await svc._gen_volumes(project, ctx, inject_realm_fix_hint=True)
     if not isinstance(nodes, list):
         nodes = []
     ctx["_volume_ids"] = [str(n.id) for n in nodes]

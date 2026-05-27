@@ -28,9 +28,9 @@ async def gen_settings(
     blueprints: Optional[list] = None,
     prompt_addon: str = "",
 ):
-    """生成纯叙事设定卡；默认按蓝图分批并行调用 AI。"""
-    _SETTINGS_BATCH_SIZE = 6
-    _BATCH_MAX_TOKENS = 8192
+    """生成纯叙事设定卡；24 张蓝图拆 2 批并行调用 AI。"""
+    _SETTINGS_BATCH_SIZE = 12
+    _BATCH_MAX_TOKENS = max_tokens_bootstrap_completion()
 
     bps = blueprints if blueprints is not None else GEMINI_SETTING_BLUEPRINTS
     batches = [bps[i:i + _SETTINGS_BATCH_SIZE] for i in range(0, len(bps), _SETTINGS_BATCH_SIZE)]

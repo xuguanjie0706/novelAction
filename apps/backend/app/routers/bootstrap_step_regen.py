@@ -123,13 +123,23 @@ async def regenerate_step(
             # ① 通知前端：步骤开始（在主线程 wipe 之前告知，避免前端无反应）
             yield _sse(_emit_payload(step, "step_start", label=label))
 
-            # ② 清除旧产物（同步，在协程内直接执行，db 会话独属此 stream）
+            # ② 卷级重跑：wipe 前先 lint，供 inject_realm_fix_hint 使用
+            volume_lint_cache: list | None = None
+            if step == "volumes":
+                from app.services.bootstrap.steps.volumes import run_volume_entity_lint
+
+                ctx_pre = build_full_ctx(db, project)
+                volume_lint_cache = run_volume_entity_lint(db, project_id, ctx_pre)
+
+            # ③ 清除旧产物（同步，在协程内直接执行，db 会话独属此 stream）
             wipe_step(db, project_id, step)
 
-            # ③ 重建 ctx
+            # ④ 重建 ctx
             ctx = build_full_ctx(db, project)
+            if volume_lint_cache:
+                ctx["volume_entity_lint"] = volume_lint_cache
 
-            # ④ 初始化 GenerationService
+            # ⑤ 初始化 GenerationService
             svc = GenerationService(
                 db=db,
                 model_profile=req.model_profile,
@@ -137,7 +147,7 @@ async def regenerate_step(
                 user_id=str(current_user.id),
             )
 
-            # ⑤ 调用对应 gen 函数
+            # ⑥ 调用对应 gen 函数
             result = await asyncio.wait_for(
                 dispatch_regen(svc, project, step, ctx),
                 timeout=360.0,

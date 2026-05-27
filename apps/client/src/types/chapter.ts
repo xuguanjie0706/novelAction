@@ -56,7 +56,9 @@ export interface Chapter {
   manuscript_raw_snapshot?: string | null
   word_count: number
   sort_order: number
-  status: 'draft' | 'writing' | 'done' | 'reviewed'
+  status: 'draft' | 'writing' | 'done' | 'reviewed' | 'needs_review'
+  /** 番茄同步等杂项（fanqie_book_id / fanqie_item_id / …） */
+  extra?: Record<string, unknown>
   last_quality_score?: number
   last_quality_report?: QualityReport
   quality_checked_at?: string

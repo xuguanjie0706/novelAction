@@ -84,7 +84,7 @@ export function formatPhase(phase: string): string {
     climax: '高潮',
     ending: '收束',
   }
-  return map[phase] ?? phase || '—'
+  return map[phase] ?? (phase || '—')
 }
 
 export function realmTicks(scale: RealmScaleLevel[]): RealmScaleLevel[] {

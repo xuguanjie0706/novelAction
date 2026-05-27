@@ -12,6 +12,7 @@ const ChapterEditor = lazy(() => import('../components/Writing/ChapterEditor'))
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import type { Chapter, OutlineNode } from '../types'
+import { ChapterTreeLeadingIndicator } from '../components/Writing/FanqieSyncSlot'
 
 function findNode(tree: OutlineNode[], id: string): OutlineNode | undefined {
   for (const n of tree) {
@@ -58,6 +59,7 @@ export default function WritePage() {
     activeChapterId, setActiveChapterId,
     outlineTree, setOutlineTree,
     setStoryLines,
+    currentProject,
   } = useAppStore()
 
   const [creating, setCreating] = useState(false)
@@ -118,6 +120,12 @@ export default function WritePage() {
     () => sortRootNodesForWriteSidebar(outlineTree),
     [outlineTree],
   )
+
+  const fanqieBookId = useMemo(() => {
+    const extra = currentProject?.extra
+    if (typeof extra !== 'object' || extra === null || !('fanqie_book_id' in extra)) return ''
+    return String((extra as Record<string, unknown>).fanqie_book_id ?? '')
+  }, [currentProject?.extra])
 
   // 占位章在侧栏已隐藏：若当前仍选中该章，改选第一本非占位章（或独立章）
   useEffect(() => {
@@ -219,9 +227,11 @@ export default function WritePage() {
               ? 'bg-amber-50 border-amber-200 border-l-2 border-l-amber-500'
               : 'border-transparent hover:bg-gray-50'
           )}>
-          {ch
-            ? <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', statusDot(ch.status))} />
-            : <span className="w-1.5 h-1.5 rounded-full shrink-0 border border-gray-200" />}
+          <ChapterTreeLeadingIndicator
+            chapter={ch}
+            fanqieBookId={fanqieBookId}
+            statusDotClass={ch ? statusDot(ch.status) : 'bg-gray-300'}
+          />
           <PenLine size={10} className={clsx('shrink-0', isActive ? 'text-amber-500' : 'text-gray-300')} />
           <span className={clsx('text-xs truncate flex-1 min-w-0',
             isActive ? 'text-amber-800 font-medium' : ch ? 'text-gray-800' : 'text-gray-400')}>
@@ -322,6 +332,11 @@ export default function WritePage() {
                         ch.id === activeChapterId
                           ? 'bg-amber-50 border-amber-200 border-l-2 border-l-amber-500'
                           : 'border-transparent hover:bg-gray-50')}>
+                      <ChapterTreeLeadingIndicator
+                        chapter={ch}
+                        fanqieBookId={fanqieBookId}
+                        statusDotClass={statusDot(ch.status)}
+                      />
                       <FileText size={11} className="text-gray-300 shrink-0" />
                       <span className="text-xs text-gray-700 truncate flex-1">{ch.title}</span>
                       <span className="text-[10px] text-gray-400 shrink-0">{ch.word_count.toLocaleString()}字</span>

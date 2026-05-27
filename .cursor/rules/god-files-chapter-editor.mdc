@@ -1,13 +1,61 @@
 ---
-description: ChapterEditor 上帝文件 — 冻结堆叠，先读登记册
+description: ChapterEditor 包治理 — 在全局 ≤600 行之上叠加落点约束
 globs: apps/client/src/components/Writing/ChapterEditor/**
 alwaysApply: false
 ---
 
-# ChapterEditor 治理
+# ChapterEditor 治理（强制）
 
-改本目录前：**Read `CLAUDE.md`** →「上帝文件登记册」「前端组件拆分蓝图」中与 ChapterEditor / DebriefPanel 相关行。
+改本目录前：**Read `CLAUDE.md`** →「上帝文件登记册」；**全仓库 ≤600 行**见 [`.cursor/rules/file-size-600-global.mdc`](../file-size-600-global.mdc)（`alwaysApply`）。
 
-- `index.tsx`：冻结新增 props / `useState`；新逻辑进 `hooks/` 或子组件（TopToolBar / WarnPanel / ContextSidePanel）。
-- ~~`DebriefPanel.tsx`~~：✅ 已迁 `DebriefPanel/` 子目录；新块进对应 Section 文件。
-- 禁止让登记册文件净增 ≥50 行而无等量「治旧」删除。
+## 本包额外约束（在全局 600 之上）
+
+## `index.tsx` 禁止清单
+
+- 禁止新增 `useState` / `useEffect`（仅允许 ≤2 个「章节切换 reset」类 effect，且不得膨胀）
+- 禁止新增 `useCallback` / `useMemo` 业务逻辑
+- 禁止内联 >15 行 JSX（应进子组件）
+- 禁止直接 `import` 大段 API 调用（进 `hooks/`）
+- 禁止复制粘贴生成新的 `generateDraft` / `runAutoDebrief` 等（必须复用已有 hook）
+
+## 新功能落点（必须二选一，禁止写进 index）
+
+| 能力域 | 落点 |
+|--------|------|
+| 自动保存 / 清理章节 / 记忆·故事线同步 | `hooks/useChapterAutosave.ts` |
+| 写前预警 | `hooks/usePreWriteWarning.ts` |
+| 复盘 | `hooks/useDebriefRun.ts` + `DebriefPanel/` |
+| AI 生成 / 续写 / 选区改写 | `hooks/useChapterDraftQueue.ts` |
+| 版本历史 | `hooks/useChapterHistory.ts` |
+| TipTap / 选区条 | `hooks/useChapterTiptapEditor.ts` |
+| 原文·正文视图 | `hooks/useChapterManuscript.ts` |
+| 侧栏 Tab / 专注模式 | `hooks/useChapterContextUi.ts` |
+| 伏笔·ChapterIndex | `hooks/useChapterSideData.ts` |
+| 写作门控配置 | `hooks/useWritingConfigHydration.ts` |
+| 队列复盘 hydrate | `hooks/useQueueDebriefHydrate.ts` |
+| 顶栏 / 编辑区 / 右侧栏 / 弹窗 | `TopToolbar` / `EditorMainArea` / `ContextSidePanel` / `ChapterHistoryModal` / `WarnPanel` |
+
+## 子组件与类型
+
+- 共享类型只放 `types.ts`；纯函数放 `utils.ts`；UI 常量放 `constants.tsx`
+- 子组件只做展示与 `onXxx` 回调，不直连 `useAppStore`（除非已有先例且 <3 行）
+
+## Agent 自检（改完必做）
+
+```bash
+wc -l apps/client/src/components/Writing/ChapterEditor/index.tsx
+# 目标：≤600
+
+pnpm -C apps/client exec tsc --noEmit 2>&1 | rg ChapterEditor || true
+```
+
+## 目录结构（勿扁平化回上帝文件）
+
+```
+ChapterEditor/
+├── index.tsx              # 编排壳 ≤600
+├── types.ts / utils.ts / constants.tsx
+├── TopToolbar.tsx / EditorMainArea.tsx / ContextSidePanel.tsx / …
+├── DebriefPanel/           # 复盘 UI 块
+└── hooks/                  # 全部业务逻辑
+```

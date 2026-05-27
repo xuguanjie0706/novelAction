@@ -8,9 +8,10 @@
 ## 使用说明（给 Agent）
 
 1. **动手前先读 [`CLAUDE.md`](./CLAUDE.md)** — 含 Bootstrap 步骤、数据模型、API 约定、代码结构红线、已完成功能与待办。
-2. Cursor 强制预检：[`.cursor/rules/claude-md-preflight.mdc`](./.cursor/rules/claude-md-preflight.mdc)（`alwaysApply`）；上帝文件路径另见 `god-files-*.mdc`。
-3. 日常研发约束另见 [`.cursor/rules/novelaction-core-principles.mdc`](./.cursor/rules/novelaction-core-principles.mdc)（产品定位、monorepo 路径、AI 调用分层等）。
-4. **更新进度时只编辑 `CLAUDE.md`**；无需把相同条目再抄进本文件。
+2. Cursor 强制预检：[`.cursor/rules/claude-md-preflight.mdc`](./.cursor/rules/claude-md-preflight.mdc)（`alwaysApply`）；**全仓库单文件 ≤600 行**：[`.cursor/rules/file-size-600-global.mdc`](./.cursor/rules/file-size-600-global.mdc)（`alwaysApply`）。
+3. 上帝文件路径另见 `god-files-*.mdc`（在全局 600 之上叠加领域落点）。
+4. 日常研发约束另见 [`.cursor/rules/novelaction-core-principles.mdc`](./.cursor/rules/novelaction-core-principles.mdc)（产品定位、monorepo 路径、AI 调用分层等）。
+5. **更新进度时只编辑 `CLAUDE.md`**；无需把相同条目再抄进本文件。
 
 ---
 
@@ -21,6 +22,7 @@
 | Scene 三层调度（plan-save / draft / stitch + 写作页分场面板） | 「已完成功能」Scene 相关 `[x]` 条目 |
 | Bootstrap 串行步骤与 SSE 映射 | 「Bootstrap 步骤映射表」 |
 | 任务级采样 `llm_task_profiles` | 「AI 模型策略」→ 任务级采样配置 |
+| 单文件 ≤600 行（全仓库） | `.cursor/rules/file-size-600-global.mdc` + `CLAUDE.md`「代码结构红线」 |
 | Service/Router 拆分蓝图、上帝文件登记册 | 「代码结构红线」「上帝文件登记册」 |
 | 本地启动 | 文末「本地启动命令」 |
 

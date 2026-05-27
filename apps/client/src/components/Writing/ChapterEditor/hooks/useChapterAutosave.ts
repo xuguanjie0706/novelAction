@@ -11,7 +11,7 @@
  * 副作用范围：chaptersApi / aiApi / storylinesApi；更新 store 的 upsertChapter /
  * setMemories / setStoryLines / removeChapter / setActiveChapterId。
  */
-import { useCallback, useRef } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import type { Editor } from '@tiptap/react'
 import { chaptersApi, aiApi, storylinesApi } from '../../../../api/client'
@@ -32,6 +32,8 @@ interface UseChapterAutosaveOptions {
   setStoryLines: (lines: StoryLine[]) => void
   removeChapter: (id: string) => void
   setActiveChapterId: (id: string | null) => void
+  /** 与 TipTap onUpdate 共用；由编排壳创建并传入 */
+  saveTimerRef?: React.MutableRefObject<ReturnType<typeof setTimeout> | undefined>
 }
 
 export interface UseChapterAutosaveReturn {
@@ -50,6 +52,7 @@ export interface UseChapterAutosaveReturn {
   autoSyncStorylinesAfterChapter: (showToast?: boolean) => Promise<void>
   /** 定时器 ref，供编辑器 onUpdate 写入 clearTimeout */
   saveTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | undefined>
+  cleaningChapter: boolean
 }
 
 /**
@@ -69,8 +72,11 @@ export function useChapterAutosave({
   setStoryLines,
   removeChapter,
   setActiveChapterId,
+  saveTimerRef: externalSaveTimerRef,
 }: UseChapterAutosaveOptions): UseChapterAutosaveReturn {
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const internalSaveTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const saveTimerRef = externalSaveTimerRef ?? internalSaveTimerRef
+  const [cleaningChapter, setCleaningChapter] = useState(false)
   const lastMemoryAutoExtractAtRef = useRef(0)
   const storylineAutoSyncingRef = useRef(false)
   const memoryAutoSyncingRef = useRef(false)
@@ -207,6 +213,7 @@ export function useChapterAutosave({
       `确认清理《${chapter.title}》？\n\n这会删除本章正文、版本历史、对应记忆数据和 ChapterIndex。大纲中的章节计划会保留，可稍后重新创建。`,
     )
     if (!ok) return
+    setCleaningChapter(true)
     try {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
       await chaptersApi.delete(projectId, chapter.id)
@@ -220,6 +227,8 @@ export function useChapterAutosave({
       toast.success('章节已清理')
     } catch {
       toast.error('清理章节失败')
+    } finally {
+      setCleaningChapter(false)
     }
   }, [projectId, chapter, chapters, removeChapter, setActiveChapterId, setMemories])
 
@@ -230,5 +239,6 @@ export function useChapterAutosave({
     autoExtractMemoryAfterChapter,
     autoSyncStorylinesAfterChapter,
     saveTimerRef,
+    cleaningChapter,
   }
 }

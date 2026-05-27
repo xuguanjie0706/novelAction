@@ -1,0 +1,62 @@
+---
+description: 全仓库单文件 ≤600 行硬上限（新建/修改/生成代码一律遵守）
+alwaysApply: true
+---
+
+# 单文件 ≤600 行（全仓库强制）
+
+> 权威细则与登记册见 `CLAUDE.md` →「代码结构红线」「上帝文件登记册」。本节约束 **所有 Agent 新建或改动的业务代码**，不限于某一目录。
+
+## 硬指标（PR 不合入）
+
+| 对象 | 软警戒 | 硬上限 |
+|------|--------|--------|
+| 单文件 LOC（`.py` / `.ts` / `.tsx`，含注释） | 400 | **600** |
+| 单函数 / 单 React 组件函数体 | 80 | **150** |
+| 单类公共方法数 | 10 | **15** |
+| 单文件 `useState` + `useEffect`（前端） | 20 | **40** |
+| Prompt 字符串字面量（后端） | 30 | **60** → 抽到 `prompts/*.py` |
+
+**例外（可不拆）**：Alembic migration、OpenAPI/schema 自动生成、第三方 vendored、仅 re-export 的 2～10 行壳文件。
+
+## 新建文件（Agent 必须遵守）
+
+1. **禁止**一次性生成 >600 行的单文件；目标 **≤400**，预留迭代空间。
+2. 预计超 400 行时，**先拆目录再写代码**（见下方落点表），不要写完再拆。
+3. 页面/编排类入口：只做 **薄壳**（组合 hooks + 子组件），业务进 `hooks/` 或 `services/`。
+
+## 修改已有文件
+
+- 目标文件 **已 ≥600 行**：**禁止**继续堆功能；新逻辑进新文件，原文件只做迁移删减。
+- 目标文件在登记册标 🚫：**禁止净增 ≥50 行**而无等量「治旧」删除。
+- 单次编辑后若将超 600：**同一任务内先拆分再提交**，不得留「下次再拆」。
+
+## 新代码落点（禁止写进正在膨胀的单文件）
+
+| 层级 | 落点 |
+|------|------|
+| 创作端页面 | `pages/<Feature>/` + `index.tsx` 薄壳 + `hooks/` + 子组件 |
+| 创作端组件 | `components/<Feature>/` 包目录；`index.tsx` 编排 ≤600 |
+| 管理后台 | 同 client，路径 `apps/frontend/src/` |
+| FastAPI 路由 | `routers/<resource>/routes_*.py`，禁止 `helpers_core` / 巨型 `qa_internal` 增行 |
+| AI / 业务 | `services/ai/<capability>.py` 或 `services/bootstrap/steps/<step>.py` |
+| 长 Prompt | `*/prompts/*.py` |
+| JSON 解析 | 包内 `parse.py` 或已有 `_parse_json` |
+
+领域专项规则（在全局 600 之上叠加）：`god-files-*.mdc`（ChapterEditor、Outline、GenerationQueue 等）。
+
+## 完成前自检（必做）
+
+```bash
+# 列出本次改动且可能触线的文件
+wc -l <你新建或大幅修改的文件路径>
+```
+
+- 任一业务文件 **>600** → 继续拆分，不得向用户交付。
+- 回复用户时用一句话说明已遵守「全仓库 ≤600」并给出关键文件行数（如 `index.tsx: 322`）。
+
+## 反模式（禁止）
+
+- 为省事把新页面/新 API 写进已有 800+ 行文件「再加一段」
+- 复制粘贴整段 JSX/路由/handler 进 `index.tsx` 或 `*Page.tsx`
+- 新建单文件 hook 塞满 UI + API + 副作用（应拆多个 `hooks/useXxx.ts`）

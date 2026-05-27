@@ -369,8 +369,8 @@ logline
 
 | 文件 | 实测行数 | 状态 |
 |---|---:|---|
-| `apps/client/src/components/Writing/ChapterEditor/index.tsx` | 2154 | 🚫 严重违规（≥3x 硬上限）；冻结新增 props/`useState`；新功能走 `hooks/` 子 hook；JSX 待拆 TopToolBar/WarnPanel/ContextSidePanel |
-| `apps/frontend/src/pages/ReadingReviewPage.tsx` | 1538 | 🚫 超硬上限；待拆 ReviewList / SnapshotDiff / useReviewSubmit |
+| `apps/client/src/components/Writing/ChapterEditor/index.tsx` | 322 | ✅ 编排壳（≤600）；禁止新增 useState/业务逻辑；见 `.cursor/rules/god-files-chapter-editor.mdc` |
+| ~~`apps/frontend/src/pages/ReadingReviewPage.tsx`~~ | ~~1538~~ | ✅ 已拆至 `pages/ReadingReview/`（壳 2 行；最大 useReadingReviewPage 453 行） |
 | ~~`apps/client/src/pages/ProjectDetailPage.tsx`~~ | ~~1188~~ | ✅ 已拆至 `pages/ProjectDetail/`（壳 354 行；最大 CoverModal 365 行） |
 | ~~`apps/client/src/pages/CluesPage.tsx`~~ | ~~1007~~ | ✅ 已拆至 `pages/Clues/`（壳 443 行；最大 QualityDebtCard 173 行） |
 | ~~`apps/backend/app/routers/cover.py`~~ | ~~908~~ | ✅ 已拆为 cover_b64_decode.py（367）+ cover_gateway.py（289）+ 薄壳（284） |
@@ -424,6 +424,7 @@ logline
 | `apps/backend/app/services/bootstrap/graph.py`（649行） | graph_sse.py（79行）+ graph_runner.py（160行）；壳 368 行 re-export |
 | `apps/client/src/pages/ProjectDetailPage.tsx`（1188行） | `pages/ProjectDetail/`：CoverSvgUtils（83行）+ CoverModal（365行）+ GenerateJourneyPanel（227行）+ WritingConfigPanel（198行）；壳 354 行 |
 | `apps/client/src/pages/CluesPage.tsx`（1007行） | `pages/Clues/`：constants（69行）+ ForeshadowForm（132行）+ ForeshadowCard（123行）+ ChapterIndexCard（116行）+ QualityDebtCard（173行）；壳 443 行 |
+| `apps/frontend/src/pages/ReadingReviewPage.tsx`（1538行） | `pages/ReadingReview/`：index 165 + useReadingReviewPage 453 + HistoryReportList 197 + RevisionDrawer 236 + tabs/* + hooks；壳 2 行 re-export |
 
 ---
 
@@ -434,9 +435,9 @@ logline
 | ~~`apps/client/src/pages/OutlinePage.tsx`~~ | — | ✅ `pages/Outline/`：`index` / `OutlineTreeSidebar` / `NodeDetailPanel` / `tabs/*` / `diffUtils` / modals |
 | ~~`apps/client/src/components/Layout/GenerationQueuePanel.tsx`~~ | — | ✅ 已落地 `Layout/GenerationQueue/` |
 | ~~`apps/client/src/pages/WorldBuildingPage.tsx`~~ | — | ✅ 已落地 `pages/WorldBuilding/`（见下方蓝图） |
-| `apps/frontend/src/pages/ReadingReviewPage.tsx` | 1538 | 拆 `ReviewList` / `SnapshotDiff` / `useReviewSubmit` |
+| ~~`apps/frontend/src/pages/ReadingReviewPage.tsx`~~ | — | ✅ 已落地 `pages/ReadingReview/`（HistoryReportList / SnapshotDiffModal / useCoherenceRevision） |
 | ~~`apps/client/src/pages/CharactersPage.tsx`~~ | — | ✅ 已落地 `pages/Characters/` |
-| `apps/client/src/components/Writing/ChapterEditor/index.tsx` | 2146 | 继续拆 `TopToolBar` / `WarnPanel` / `ContextSidePanel` JSX 块 |
+| ~~`apps/client/src/components/Writing/ChapterEditor/index.tsx`~~ | — | ✅ 已拆：编排壳 322 行 + `hooks/*` + `TopToolbar` / `EditorMainArea` / `ContextSidePanel` 等 |
 
 **约束**：上述文件**冻结新增功能**；新需求必须先开拆分 PR。
 
@@ -553,7 +554,7 @@ ChapterEditor/DebriefPanel/
 
 7. **改创作端 UI**：主要改 `apps/client/`；**管理后台**改 `apps/frontend/`（与 client 独立依赖与构建）。
 
-8. **PR 自检**：提交前对触线文件执行 `wc -l <file>`，超硬上限必须**先拆再合**；新建 step / capability / sub-router 必须落到蓝图指定路径。
+8. **PR 自检 / Agent 生成**：**任意**新建或交付的 `.py`/`.ts`/`.tsx` 业务文件必须 **≤600 行**（目标 ≤400）；提交前 `wc -l <file>`；超硬上限**先拆再合**。Cursor 全局规则：`.cursor/rules/file-size-600-global.mdc`（`alwaysApply`）。新建 step / capability / sub-router 必须落到蓝图指定路径，禁止写进登记册中的上帝文件。
 
 ---
 

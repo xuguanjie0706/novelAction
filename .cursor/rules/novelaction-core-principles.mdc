@@ -39,3 +39,9 @@ alwaysApply: true
 
 - 小参数本地模型控制 prompt 长度并加强 JSON 容错解析。
 - 大上下文模型可启用 `single_shot`，但保持接口参数兼容。
+
+## 文件规模（全仓库，与 ChapterEditor 无关）
+
+- **所有**新建/改动的 `.py` / `.ts` / `.tsx` 业务文件：**硬上限 600 行**（软警戒 400）；详见 [`.cursor/rules/file-size-600-global.mdc`](./file-size-600-global.mdc)（`alwaysApply`）。
+- Agent **禁止**生成超过 600 行的单文件；预计 >400 行须先拆 `hooks/`、`steps/`、子路由或子组件再实现。
+- 触线文件清单与拆分蓝图只维护在 `CLAUDE.md`「上帝文件登记册」。

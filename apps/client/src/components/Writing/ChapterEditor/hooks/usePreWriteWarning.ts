@@ -46,6 +46,7 @@ export interface UsePreWriteWarningReturn {
   setWarnHistory: React.Dispatch<React.SetStateAction<PreWriteWarnHistoryRow[]>>
   selectedWarnRecordId: string | null
   setSelectedWarnRecordId: React.Dispatch<React.SetStateAction<string | null>>
+  gatedPreWarnDoneForChapter: boolean
   /** 主动调用 AI 写前预警 API，写入 warnResult 并追加 warnHistory */
   runPreWriteWarning: () => Promise<void>
   /** 从服务端拉取本章预警历史列表 */
@@ -181,6 +182,7 @@ export function usePreWriteWarning({
     setWarnHistory,
     selectedWarnRecordId,
     setSelectedWarnRecordId,
+    gatedPreWarnDoneForChapter,
     runPreWriteWarning,
     refreshWarnHistoryFromServer,
   }

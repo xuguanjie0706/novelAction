@@ -14,6 +14,6 @@ alwaysApply: false
 | ~~`WorldBuildingPage.tsx`~~ | ✅ 已迁 `pages/WorldBuilding/` |
 | ~~`CharactersPage.tsx`~~ | ✅ 已迁 `pages/Characters/` |
 | ~~`GenerationQueuePanel.tsx`~~ | ✅ 已迁 `Layout/GenerationQueue/` |
-| `ReadingReviewPage.tsx` | 拆 ReviewList / SnapshotDiff / hook |
+| ~~`ReadingReviewPage.tsx`~~ | ✅ 已迁 `pages/ReadingReview/`（管理端 frontend） |
 
 新需求默认**先开拆分 PR**，不在原文件继续膨胀。

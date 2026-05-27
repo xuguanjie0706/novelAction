@@ -99,6 +99,8 @@ class ChapterIngredients:
     emotional_quota: dict = field(default_factory=dict)
     # ⑨ 世界规则（场景相关的 WorldSetting 卡片摘要）
     world_rules: list[str] = field(default_factory=list)
+    # ⑩ 故事线织网约束文本块（分场 path，与整章 storyline_summary 对齐）
+    storyline_weave_block: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)

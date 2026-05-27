@@ -46,13 +46,13 @@ from app.services.ai.context_queries import (
     query_due_foreshadows_block,
     query_due_promises_block,
     query_filtered_characters,
-    query_filtered_storylines_block,
     query_mystery_constraints_block,
     query_narrative_arc_block,
     query_related_factions_block,
     query_relationships_block,
     query_relevant_settings_block,
 )
+from app.services.ai.storyline_weave_engine import query_storyline_weave_context_block
 
 logger = logging.getLogger(__name__)
 
@@ -131,8 +131,10 @@ async def assemble_full(
     # 势力（按出场人物关联，含层级/领地）
     factions_block = query_related_factions_block(db, project_id, characters)
 
-    # 故事线（按索引过滤）
-    storyline_summary = query_filtered_storylines_block(db, project_id, storyline_ids)
+    storyline_summary = query_storyline_weave_context_block(
+        db, project_id, storyline_ids, ch_no,
+        outline_node_id=str(outline_node.id) if outline_node else None,
+    )
 
     # 世界观设定（按章纲关键词过滤，非全量）
     query_kw = " ".join(filter(None, [

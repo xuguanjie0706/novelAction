@@ -71,7 +71,7 @@ export async function runContinueChapters(
         },
         {
           signal,
-          onSideEvent: draftAssistSideEventHandler(pushProgress, phaseStep),
+          onSideEvent: draftAssistSideEventHandler(pushProgress, phaseStep, chapterId),
         },
       )
 

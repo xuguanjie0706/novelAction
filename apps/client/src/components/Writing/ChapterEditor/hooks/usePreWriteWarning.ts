@@ -13,7 +13,7 @@ import toast from 'react-hot-toast'
 import { aiApi } from '../../../../api/client'
 import { useAppStore, modelProfileFromRoute, llmProviderIdFromRoute } from '../../../../store'
 import type { OutlineNode } from '../../../../types'
-import type { PreWriteWarnResult, PreWriteWarnHistoryRow } from '../types'
+import type { PreWriteWarnResult, PreWriteWarnHistoryRow, StorylinePreWarnItem } from '../types'
 import { parsePreWriteWarningHistoryPayload, normalizePreWriteWarnResult } from '../utils'
 
 // GenTask 最小接口（避免循环依赖 store 完整类型）
@@ -41,6 +41,7 @@ interface UsePreWriteWarningOptions {
 export interface UsePreWriteWarningReturn {
   warnLoading: boolean
   warnResult: PreWriteWarnResult | null
+  storylinePreWarns: StorylinePreWarnItem[]
   setWarnResult: React.Dispatch<React.SetStateAction<PreWriteWarnResult | null>>
   warnHistory: PreWriteWarnHistoryRow[]
   setWarnHistory: React.Dispatch<React.SetStateAction<PreWriteWarnHistoryRow[]>>
@@ -71,6 +72,7 @@ export function usePreWriteWarning({
 }: UsePreWriteWarningOptions): UsePreWriteWarningReturn {
   const [warnLoading, setWarnLoading] = useState(false)
   const [warnResult, setWarnResult] = useState<PreWriteWarnResult | null>(null)
+  const [storylinePreWarns, setStorylinePreWarns] = useState<StorylinePreWarnItem[]>([])
   const [warnHistory, setWarnHistory] = useState<PreWriteWarnHistoryRow[]>([])
   const [selectedWarnRecordId, setSelectedWarnRecordId] = useState<string | null>(null)
 
@@ -92,6 +94,25 @@ export function usePreWriteWarning({
     [genQueue, projectId, chapterId],
   )
   const gatedPreWarnSyncedRef = useRef(false)
+
+  useEffect(() => {
+    setStorylinePreWarns([])
+  }, [chapterId])
+
+  /** 门控写作 SSE 推送的故事线织网预警 */
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ chapterId?: string; items?: StorylinePreWarnItem[] }>
+      if (ce.detail?.chapterId !== chapterId) return
+      const items = (ce.detail?.items ?? []) as StorylinePreWarnItem[]
+      setStorylinePreWarns(items)
+      setWarnResult(prev => (prev
+        ? { ...prev, storyline_pre_warns: items }
+        : { ok: true, risk_count: 0, risks: [], reminders: [], storyline_pre_warns: items }))
+    }
+    window.addEventListener('novelaction:storyline-pre-warn', handler)
+    return () => window.removeEventListener('novelaction:storyline-pre-warn', handler)
+  }, [chapterId])
 
   // ── 数据加载 ─────────────────────────────────────────────────────────────
 
@@ -178,6 +199,7 @@ export function usePreWriteWarning({
     warnLoading,
     warnResult,
     setWarnResult,
+    storylinePreWarns,
     warnHistory,
     setWarnHistory,
     selectedWarnRecordId,

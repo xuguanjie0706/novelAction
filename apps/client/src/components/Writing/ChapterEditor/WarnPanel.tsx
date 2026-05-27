@@ -13,13 +13,14 @@ import {
   ShieldCheck,
   Target,
 } from 'lucide-react'
-import type { PreWriteWarnResult, PreWriteWarnHistoryRow } from './types'
+import type { PreWriteWarnResult, PreWriteWarnHistoryRow, StorylinePreWarnItem } from './types'
 import { normalizePreWriteWarnResult } from './utils'
 
 export default function WarnPanel({
   runPreWriteWarning,
   warnLoading,
   warnResult,
+  storylinePreWarns,
   warnHistory,
   selectedWarnRecordId,
   setSelectedWarnRecordId,
@@ -29,6 +30,7 @@ export default function WarnPanel({
   runPreWriteWarning: () => void | Promise<void>
   warnLoading: boolean
   warnResult: PreWriteWarnResult | null
+  storylinePreWarns: StorylinePreWarnItem[]
   warnHistory: PreWriteWarnHistoryRow[]
   selectedWarnRecordId: string | null
   setSelectedWarnRecordId: React.Dispatch<React.SetStateAction<string | null>>
@@ -104,6 +106,30 @@ export default function WarnPanel({
               <br />
               可查看连续性、伏笔与写法简报
             </>
+          )}
+        </div>
+      )}
+
+      {(storylinePreWarns.length > 0 || (warnResult?.storyline_pre_warns?.length ?? 0) > 0) && (
+        <div className="space-y-1.5 rounded-lg border border-indigo-200 bg-indigo-50/80 p-2.5">
+          <p className="text-[10px] font-semibold text-indigo-800 uppercase tracking-wide">
+            故事线织网预警
+          </p>
+          {(storylinePreWarns.length ? storylinePreWarns : warnResult?.storyline_pre_warns ?? []).map(
+            (w, i) => (
+              <div
+                key={w.warn_id || i}
+                className={clsx(
+                  'text-xs rounded-md px-2 py-1.5 border',
+                  w.severity === 'critical' && 'bg-rose-50 border-rose-200 text-rose-900',
+                  w.severity === 'warning' && 'bg-amber-50 border-amber-200 text-amber-900',
+                  w.severity === 'info' && 'bg-sky-50 border-sky-200 text-sky-900',
+                )}
+              >
+                <p className="font-medium">{w.title}</p>
+                {w.detail && <p className="mt-0.5 opacity-90">{w.detail}</p>}
+              </div>
+            ),
           )}
         </div>
       )}

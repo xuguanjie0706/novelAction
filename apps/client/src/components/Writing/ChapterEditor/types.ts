@@ -36,6 +36,17 @@ export type NewCharacterSuggestion = {
   author_notes?: string
 }
 
+/** 故事线织网写前预警（SSE storyline_pre_warn） */
+export type StorylinePreWarnItem = {
+  warn_id: string
+  severity: 'critical' | 'warning' | 'info'
+  title: string
+  detail?: string
+  suggested_action?: string
+  storyline_id?: string
+  storyline_name?: string
+}
+
 export type PreWriteWarnResult = {
   ok: boolean
   risk_count: number
@@ -62,6 +73,8 @@ export type PreWriteWarnResult = {
   hallucination_traps?: string[]
   error?: string
   record_id?: string
+  /** 故事线织网预警（门控 SSE storyline_pre_warn 聚合） */
+  storyline_pre_warns?: StorylinePreWarnItem[]
 }
 
 export type PreWriteWarnHistoryRow = {
@@ -87,6 +100,10 @@ export type AutoDebriefResponse = {
     storyline_name?: string
     status?: string
     beat?: string
+    actual_tension?: number
+    beat_match_score?: number
+    crossover_executed?: boolean
+    screen_time_words?: number
   }>
   new_characters?: NewCharacterSuggestion[]
   asset_updates?: Record<string, unknown>
@@ -114,6 +131,16 @@ export type AutoDebriefResponse = {
   fulfilled_promise_texts?: string[]
 }
 
+/** 复盘表单：故事线推进 + 织网 actual_beats 四字段 */
+export type StorylineBeatFormFields = {
+  status?: string
+  beat?: string
+  actual_tension?: number | ''
+  beat_match_score?: number | ''
+  crossover_executed?: boolean
+  screen_time_words?: number | ''
+}
+
 // ─── DebriefPanel Props ───────────────────────────────────────────────────────
 
 export interface DebriefPanelProps {
@@ -130,7 +157,7 @@ export interface DebriefPanelProps {
     add_skill_mastery?: string
   }>
   setCharUpdates: React.Dispatch<React.SetStateAction<DebriefPanelProps['charUpdates']>>
-  storylineBeats: Record<string, { status?: string; beat?: string }>
+  storylineBeats: Record<string, StorylineBeatFormFields>
   setStorylineBeats: React.Dispatch<React.SetStateAction<DebriefPanelProps['storylineBeats']>>
   debriefNotes: string
   setDebriefNotes: (v: string) => void

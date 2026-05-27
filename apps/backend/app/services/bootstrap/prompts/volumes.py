@@ -7,6 +7,7 @@ from app.services.bootstrap.protagonist_progression import build_protagonist_pro
 from app.services.bootstrap.volume_beats import VOLUME_JSON_BEAT_SCHEMA
 from app.services.bootstrap.antagonist_roster import build_antagonist_ladder_prompt_block
 from app.services.bootstrap.volume_entity_registry import build_volume_entity_prompt_block
+from app.services.bootstrap.storyline_weave_blocks import build_storyline_weave_volumes_block
 from app.services.outline_planning import words_to_plan
 
 
@@ -17,11 +18,7 @@ def build_volumes_prompt(project: Project, ctx: dict) -> tuple[str, str]:
         "只返回 JSON 数组，不要任何说明文字。"
     )
 
-    storyline_hint = (
-        f"\n故事线（每卷 summary 应说明推进了哪条线）：{ctx.get('storyline_summary', '')}"
-        if ctx.get("storyline_summary")
-        else ""
-    )
+    storyline_hint = build_storyline_weave_volumes_block(ctx)
     tw = int(project.target_words or 1_200_000)
     plan = words_to_plan(tw)
     n_volumes = plan["total_volumes"]

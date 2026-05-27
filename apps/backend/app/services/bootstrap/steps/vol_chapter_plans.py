@@ -342,9 +342,16 @@ async def gen_vol_chapter_plans(
         )
 
         from app.services.bootstrap.volume_beats import build_volume_beat_expand_block
+        from app.services.bootstrap.storyline_weave_blocks import build_volume_storyline_weave_block
 
         volume_beat_block = build_volume_beat_expand_block(
             volume_node, batch_start, batch_end,
+        )
+        storyline_weave_block = build_volume_storyline_weave_block(
+            svc.db,
+            str(project.id),
+            volume_node.sort_order or 0,
+            planned,
         )
 
         opening_contract_block = ""
@@ -393,6 +400,7 @@ async def gen_vol_chapter_plans(
             + "\n"
             + editorial_prompt_block  # Tier 1-5 富上下文
             + volume_beat_block       # 卷级燃点/高潮节拍
+            + storyline_weave_block   # 故事线织网：本卷各线节拍与交叉
             + opening_contract_block  # 第一卷前10章：开局承诺硬对齐
             + prev_vol_hook_block     # 卷间衔接：上卷末悬念硬约束（仅第一批有效）
             + written_block           # 动态：已写章节摘要
@@ -432,6 +440,7 @@ async def gen_vol_chapter_plans(
             '    "reader_emotion_target": "本章结束时读者的目标情绪（exciting/tense/sad/romantic/mysterious/warm/anxious/epic）",\n'
             '    "involved_characters": ["出场人物名（只用已知人物名）"],\n'
             '    "storyline_refs": ["推进了哪条故事线（从已有故事线选）"],\n'
+            '    "storyline_beat_ref": "本章主要兑现的故事线名（与导演单一致，可空）",\n'
             '    "pacing": "fast/normal/slow/climax",\n'
             '    "emotional_tone": "exciting/tense/sad/romantic/mysterious/funny/epic/calm",\n'
             '    "power_milestone": "若本章有境界突破/技能习得/法宝获得则描述，否则填空",\n'
@@ -589,6 +598,7 @@ async def gen_vol_chapter_plans(
                     "reader_emotion_target": (item.get("reader_emotion_target") or "").strip(),
                     "bootstrap_generated": False,
                     "lazy_expanded": True,
+                    "storyline_beat_ref": (item.get("storyline_beat_ref") or "").strip(),
                 },
             )
             svc.db.add(node)

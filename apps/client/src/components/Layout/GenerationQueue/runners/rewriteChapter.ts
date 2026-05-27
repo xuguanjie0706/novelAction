@@ -9,7 +9,7 @@ import { autoCommitGeneratedChapterDebrief } from '../../../../utils/generatedCh
 import { postDraftAssistAccumulatedWithPrewriteRetry } from '../../../../utils/draftPrewriteBlocked'
 import { splitStreamedDraftText, parseChapterIndexMarkdown, fallbackChapterIndexFromRawMarkdown } from '../../../../utils/draftChapterIndexSplit'
 import { useAppStore } from '../../../../store'
-import { ragContextSideEventHandler, plainTextDraftToHtml } from '../utils/sseHelpers'
+import { draftAssistSideEventHandler, plainTextDraftToHtml } from '../utils/sseHelpers'
 
 export async function runRewriteChapter(
   task: GenTask,
@@ -58,7 +58,7 @@ export async function runRewriteChapter(
       },
       {
         signal,
-        onSideEvent: ragContextSideEventHandler(pushProgress, 'rag_context'),
+        onSideEvent: draftAssistSideEventHandler(pushProgress, phase => phase, chapterId),
       },
     )
 

@@ -190,6 +190,11 @@ def chapter_debrief(
     updated_storylines = apply_storyline_updates(
         db, project_id, req.storyline_updates, req.chapter_id, chapter,
     )
+    from app.services.ai.storyline_drift import apply_storyline_weave_actuals
+
+    storyline_drift_report = apply_storyline_weave_actuals(
+        db, project_id, chapter, req.storyline_updates,
+    )
 
     # 记忆条目（直接写入，无需外部调用）
     for mu in req.memory_updates:
@@ -367,6 +372,7 @@ def chapter_debrief(
         "ok": True,
         "updated_characters": updated_chars,
         "updated_storylines": updated_storylines,
+        "storyline_drift_report": storyline_drift_report,
         "added_memories": added_memories,
         "added_new_characters": added_new_characters,
         "chapter_index_saved": chapter_index_saved,

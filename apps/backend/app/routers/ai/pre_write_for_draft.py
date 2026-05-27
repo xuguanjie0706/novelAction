@@ -79,6 +79,27 @@ def try_reuse_pre_write_brief_from_record(
     )
 
 
+def _append_storyline_pre_warn_events(
+    db: Session,
+    *,
+    project_id: str,
+    chapter: Chapter,
+    events: list[dict[str, Any]],
+) -> None:
+    """在写前预警流中追加故事线织网 SSE（与主编审稿并行，纯 DB）。"""
+    from app.services.ai.storyline_pre_warn import compute_storyline_pre_warn_events
+
+    ch_no = chapter.sort_order or 0
+    outline_nid = str(chapter.outline_node_id) if chapter.outline_node_id else None
+    sl_events = compute_storyline_pre_warn_events(
+        db,
+        project_id,
+        ch_no,
+        outline_node_id=outline_nid,
+    )
+    events.extend(sl_events)
+
+
 async def resolve_pre_write_brief_for_draft(
     db: Session,
     *,
@@ -119,7 +140,11 @@ async def resolve_pre_write_brief_for_draft(
         )
         if reused is not None:
             brief, done_evt = reused
-            return brief, [done_evt]
+            events: list[dict[str, Any]] = [done_evt]
+            _append_storyline_pre_warn_events(
+                db, project_id=project_id, chapter=chapter, events=events,
+            )
+            return brief, events
 
     events: list[dict[str, Any]] = [{"event": "pre_warn_running"}]
     try:
@@ -149,6 +174,9 @@ async def resolve_pre_write_brief_for_draft(
             record_id = str(rec.id)
 
         events.append(_pre_warn_done_payload(warn_result, record_id=record_id, reused=False))
+        _append_storyline_pre_warn_events(
+            db, project_id=project_id, chapter=chapter, events=events,
+        )
         return brief, events
     except Exception as exc:
         events.append({

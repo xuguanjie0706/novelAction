@@ -19,7 +19,7 @@ import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload } from '../
 import type { StoryLine } from '../../../../types'
 import { isUuidLike, hasHtmlTextContent } from '../utils'
 import { formatApiError } from '../../../../utils/apiError'
-import type { AutoDebriefResponse, NewCharacterSuggestion } from '../types'
+import type { AutoDebriefResponse, NewCharacterSuggestion, StorylineBeatFormFields } from '../types'
 
 interface UseDebriefRunOptions {
   projectId: string
@@ -48,7 +48,7 @@ type CharUpdates = Record<string, {
   add_skill_mastery?: string
 }>
 
-type StorylineBeats = Record<string, { status?: string; beat?: string }>
+type StorylineBeats = Record<string, StorylineBeatFormFields>
 
 export interface UseDebriefRunReturn {
   debriefSubmitting: boolean
@@ -193,7 +193,12 @@ export function useDebriefRun({
     const suggestedSlIds = new Set<string>()
     for (const su of data.storyline_updates || []) {
       const { storyline_id, storyline_name, ...fields } = su
-      if (!Object.keys(fields).some(k => (fields as any)[k])) continue
+      const hasFields = Object.entries(fields).some(([, v]) => {
+        if (v === false) return true
+        if (v === 0) return true
+        return v !== undefined && v !== null && v !== ''
+      })
+      if (!hasFields) continue
       let resolvedId = storyline_id
       if (!isUuidLike(resolvedId)) {
         const byName = storyline_name
@@ -360,12 +365,23 @@ export function useDebriefRun({
     const storylineUpdates = Object.entries(storylineBeats)
       .map(([storyline_id, upd]) => {
         if (!isUuidLike(storyline_id)) return null
-        const entry: Record<string, any> = { storyline_id }
+        const entry: Record<string, unknown> = { storyline_id }
         if (upd.status) entry.status = upd.status
         if (upd.beat) entry.append_beat = upd.beat
+        if (upd.actual_tension !== '' && upd.actual_tension != null) {
+          entry.actual_tension = Number(upd.actual_tension)
+        }
+        if (upd.beat_match_score !== '' && upd.beat_match_score != null) {
+          entry.beat_match_score = Number(upd.beat_match_score)
+        }
+        if (upd.crossover_executed === true) entry.crossover_executed = true
+        if (upd.crossover_executed === false) entry.crossover_executed = false
+        if (upd.screen_time_words !== '' && upd.screen_time_words != null) {
+          entry.screen_time_words = Number(upd.screen_time_words)
+        }
         return entry
       })
-      .filter((e): e is Record<string, any> => !!e && Object.keys(e).length > 1)
+      .filter((e): e is Record<string, unknown> => !!e && Object.keys(e).length > 1)
 
     const effectiveAssetUpdates = selectedAssetUpdates ?? aiSuggestedAssetUpdates ?? null
     const hasAssetUpdates = Boolean(
@@ -407,10 +423,18 @@ export function useDebriefRun({
         model_profile: modelProfileFromRoute(route),
         ...routeLlmProviderPayload(route),
       })
-      const pc = Number((res.data as { promises_created?: number })?.promises_created ?? 0)
-      const pf = Number((res.data as { promises_fulfilled?: number })?.promises_fulfilled ?? 0)
+      const body = res.data as {
+        message?: string
+        promises_created?: number
+        promises_fulfilled?: number
+        storyline_drift_report?: { debts_created?: number; corrections?: unknown[] }
+      }
+      const pc = Number(body.promises_created ?? 0)
+      const pf = Number(body.promises_fulfilled ?? 0)
       const promiseToast = (pc > 0 || pf > 0) ? `（承诺 +${pc} / 兑现 ${pf}）` : ''
-      toast.success(`${res.data.message}${promiseToast}`)
+      const driftDebts = Number(body.storyline_drift_report?.debts_created ?? 0)
+      const driftToast = driftDebts > 0 ? `；织网漂移已记 ${driftDebts} 条质检债` : ''
+      toast.success(`${body.message ?? '复盘已提交'}${promiseToast}${driftToast}`)
       setDebriefHistoryTick(t => t + 1)
 
       const [refreshedStorylines, refreshedMemories, refreshedCharsRes] = await Promise.all([

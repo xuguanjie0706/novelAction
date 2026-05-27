@@ -1,6 +1,6 @@
 import React from 'react'
 import { NavLink } from 'react-router-dom'
-import { BarChart2, BookOpen, Users, Map, FileText, Brain, Globe, Bookmark, BookMarked, GanttChart, Sparkles, Sword } from 'lucide-react'
+import { BarChart2, BookOpen, Users, Map, FileText, Brain, Globe, Bookmark, BookMarked, GanttChart, Sparkles, Sword, GitBranch } from 'lucide-react'
 import clsx from 'clsx'
 
 interface Props { projectId: string }
@@ -14,6 +14,7 @@ const NAV = [
   { to: 'settings',      icon: Map,      label: '设定' },
   { to: 'timeline',      icon: GanttChart, label: '时间线' },
   { to: 'powercurve',    icon: Sword,      label: '战力轴' },
+  { to: 'storyweave',    icon: GitBranch,  label: '织网' },
   { to: 'memory',        icon: Brain,     label: '记忆库' },
   { to: 'clues',         icon: Bookmark,    label: '线索' },
   { to: 'promises',      icon: BookMarked,  label: '承诺' },

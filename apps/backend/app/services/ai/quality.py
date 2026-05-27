@@ -131,10 +131,22 @@ class QualityMixin:
 
         # 根据传入数据决定是否追加专属维度说明，避免 AI 对空数据做无效评分
         _extra_dim_doc = ""
+        has_weave_hint = storylines_context and any(
+            "故事线织网" in (s or "") for s in storylines_context
+        )
         if storylines_context:
             _extra_dim_doc += (
                 '\n    "storyline_progress": {{"score": 8, "status": "pass",'
                 ' "comment": "本章推进了哪条故事线？有无与故事线状态矛盾的情节？（当前活跃故事线与本章内容的匹配度，0-10）"}},'
+            )
+        if has_weave_hint:
+            _extra_dim_doc += (
+                '\n    "storyline_beat_match": {{"score": 8, "status": "pass",'
+                ' "comment": "本章实际推进是否兑现了织网中的计划节拍？（0-10）"}},'
+                '\n    "storyline_tension_fit": {{"score": 8, "status": "pass",'
+                ' "comment": "情节张力是否与计划张力曲线一致（±30 为合格）？（0-10）"}},'
+                '\n    "storyline_screen_balance": {{"score": 8, "status": "pass",'
+                ' "comment": "各故事线戏份是否与 weight 预算大致匹配？（0-10）"}},'
             )
         if power_systems_summary:
             _extra_dim_doc += (
@@ -147,6 +159,11 @@ class QualityMixin:
             _extra_constraints += (
                 "\n- storyline_progress < 6 时，issues 中必须加一条 type=\"storyline_neglect\" 的 warning，"
                 "指出哪条活跃故事线被本章完全忽略或与状态矛盾"
+            )
+        if has_weave_hint:
+            _extra_constraints += (
+                "\n- storyline_beat_match < 6 时，issues 须加 type=\"storyline_drift\" 的 warning"
+                "\n- storyline_tension_fit < 6 时，issues 须说明哪条线张力偏离计划"
             )
         if power_systems_summary:
             _extra_constraints += (

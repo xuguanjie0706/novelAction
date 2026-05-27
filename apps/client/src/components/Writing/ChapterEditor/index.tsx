@@ -9,6 +9,7 @@ import clsx from 'clsx'
 import { foreshadowsApi, chaptersApi } from '../../../api/client'
 import { useAppStore } from '../../../store'
 import TopToolbar from './TopToolbar'
+import StorylinePreWarnBanner from './StorylinePreWarnBanner'
 import EditorMainArea from './EditorMainArea'
 import ContextSidePanel from './ContextSidePanel'
 import ChapterHistoryModal from './ChapterHistoryModal'
@@ -209,6 +210,14 @@ export default function ChapterEditor({
         manualSave={() => void autosave.manualSave()}
       />
 
+      <StorylinePreWarnBanner
+        items={warn.storylinePreWarns}
+        onOpenWarnTab={() => {
+          ctx.setContextOpen(true)
+          ctx.setContextTab('warn')
+        }}
+      />
+
       <div className="flex flex-1 min-h-0">
         <EditorMainArea
           focusMode={ctx.focusMode}
@@ -299,6 +308,7 @@ export default function ChapterEditor({
           gatedPreWarnDoneForChapter={warn.gatedPreWarnDoneForChapter}
           warnLoading={warn.warnLoading}
           warnResult={warn.warnResult}
+          storylinePreWarns={warn.storylinePreWarns}
           warnHistory={warn.warnHistory}
           selectedWarnRecordId={warn.selectedWarnRecordId}
           setSelectedWarnRecordId={warn.setSelectedWarnRecordId}

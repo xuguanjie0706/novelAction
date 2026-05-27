@@ -290,16 +290,32 @@ def build_plot_dossier_context(db: Session, project_id: str, chapter: Chapter, l
     )
     storyline_lines = []
     for s in storyline_rows[:24]:
-        beats = list(s.key_beats or [])
+        extra = s.extra if isinstance(s.extra, dict) else {}
+        weave_beats = extra.get("volume_beats") or []
+        weight = extra.get("weight")
         tail = ""
-        if beats:
-            last = beats[-1]
-            if isinstance(last, dict):
-                tail = str(last.get("beat") or last.get("milestone") or "")
-            else:
-                tail = str(last)
+        if weave_beats:
+            active = [b for b in weave_beats if isinstance(b, dict) and b.get("is_active", True)]
+            preview = " | ".join(
+                f"卷{int(b.get('vol_index', 0))}:{(b.get('beat') or '')[:20]}"
+                for b in active[:3]
+            )
+            tail = f"织网[{preview}]"
+        else:
+            beats = list(s.key_beats or [])
+            if beats:
+                last = beats[-1]
+                if isinstance(last, dict):
+                    tail = str(last.get("beat") or last.get("milestone") or "")
+                else:
+                    tail = str(last)
+        wtxt = f" 权重{weight}" if weight else ""
+        actuals = extra.get("actual_beats") or []
+        if actuals and isinstance(actuals[-1], dict):
+            la = actuals[-1]
+            tail += f" 最近实:t{la.get('actual_tension', '?')}"
         storyline_lines.append(
-            f"{s.name}（{s.line_type}/{s.status}）："
+            f"{s.name}（{s.line_type}/{s.status}{wtxt}）："
             f"{truncate(tail or s.core_conflict or s.description, 260)}"
         )
 

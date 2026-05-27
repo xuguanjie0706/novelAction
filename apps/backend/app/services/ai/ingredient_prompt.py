@@ -17,6 +17,10 @@ def build_constraints_prompt_block(ingredients: ChapterIngredients) -> str:
     """
     parts: list[str] = []
 
+    # 故事线织网（与整章 path 同源）
+    if ingredients.storyline_weave_block:
+        parts.append(ingredients.storyline_weave_block)
+
     # 故事线推进任务
     must_moves = [m for m in ingredients.storyline_moves if m.must_advance]
     optional_moves = [m for m in ingredients.storyline_moves if not m.must_advance]

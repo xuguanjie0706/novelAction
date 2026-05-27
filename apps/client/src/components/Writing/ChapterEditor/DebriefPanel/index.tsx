@@ -60,7 +60,11 @@ export default function DebriefPanel({
     }))
   }
 
-  const updateStoryline = (id: string, field: string, value: string) => {
+  const updateStoryline = (
+    id: string,
+    field: keyof import('../types').StorylineBeatFormFields,
+    value: string | number | boolean,
+  ) => {
     setStorylineBeats(prev => ({
       ...prev,
       [id]: { ...prev[id], [field]: value },
@@ -162,6 +166,7 @@ export default function DebriefPanel({
       />
 
       <StorylineSection
+        chapterNumber={chapter.sort_order ?? 1}
         activeStorylines={activeStorylines}
         storylineBeats={storylineBeats}
         aiSuggestedSlIds={aiSuggestedSlIds}

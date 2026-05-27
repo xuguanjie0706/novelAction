@@ -6,8 +6,15 @@ import uuid
 from app.database import get_db
 from app.models import StoryLine
 from app.schemas.storyline import StoryLineCreate, StoryLineUpdate, StoryLineOut
+from app.services.ai.storyline_drift import build_weave_matrix_overview
 
 router = APIRouter(prefix="/projects/{project_id}/storylines", tags=["故事线"])
+
+
+@router.get("/weave-matrix")
+def get_storyline_weave_matrix(project_id: uuid.UUID, db: Session = Depends(get_db)):
+    """故事线 × 卷织网矩阵（计划张力 + 复盘实际值 + 漂移警报）。"""
+    return build_weave_matrix_overview(db, str(project_id))
 
 
 @router.get("/", response_model=List[StoryLineOut])

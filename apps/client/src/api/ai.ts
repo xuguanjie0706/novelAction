@@ -149,6 +149,10 @@ export const aiApi = {
       storyline_name?: string
       status?: string
       append_beat?: string
+      actual_tension?: number
+      beat_match_score?: number
+      crossover_executed?: boolean
+      screen_time_words?: number
     }>
     memory_updates?: Array<{
       memory_type?: 'event' | 'character_state' | 'foreshadow' | 'setting' | 'conflict'

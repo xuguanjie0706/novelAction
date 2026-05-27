@@ -44,6 +44,7 @@ export const charactersApi = {
 
 // ── StoryLines ────────────────────────────────────────
 export const storylinesApi = {
+  weaveMatrix: (pid: string) => api.get(`/projects/${pid}/storylines/weave-matrix`),
   list: (pid: string) => api.get(`/projects/${pid}/storylines/`),
   create: (pid: string, data: any) => api.post(`/projects/${pid}/storylines/`, data),
   update: (pid: string, id: string, data: any) => api.patch(`/projects/${pid}/storylines/${id}`, data),

@@ -132,13 +132,26 @@ export function useChapterAutosave({
         ...routeLlmProviderPayload(route),
       })
       const data = auto.data as {
-        storyline_updates?: Array<{ storyline_id?: string; storyline_name?: string; status?: string; beat?: string }>
+        storyline_updates?: Array<{
+          storyline_id?: string
+          storyline_name?: string
+          status?: string
+          beat?: string
+          actual_tension?: number
+          beat_match_score?: number
+          crossover_executed?: boolean
+          screen_time_words?: number
+        }>
       }
       const storylineUpdates = (data.storyline_updates || [])
         .map((su) => {
-          const fields: Record<string, any> = {}
+          const fields: Record<string, unknown> = {}
           if (su.status) fields.status = su.status
           if (su.beat) fields.append_beat = su.beat
+          if (su.actual_tension != null) fields.actual_tension = su.actual_tension
+          if (su.beat_match_score != null) fields.beat_match_score = su.beat_match_score
+          if (su.crossover_executed != null) fields.crossover_executed = su.crossover_executed
+          if (su.screen_time_words != null) fields.screen_time_words = su.screen_time_words
           if (Object.keys(fields).length === 0) return null
           let resolvedId = su.storyline_id || ''
           if (!isUuidLike(resolvedId) && su.storyline_name) {
@@ -148,7 +161,7 @@ export function useChapterAutosave({
           if (!isUuidLike(resolvedId)) return null
           return { storyline_id: resolvedId, ...fields }
         })
-        .filter((x): x is { storyline_id: string; status?: string; append_beat?: string } => !!x)
+        .filter((x): x is Record<string, unknown> & { storyline_id: string } => !!x)
 
       if (storylineUpdates.length === 0) return
       await aiApi.chapterDebrief(projectId, {

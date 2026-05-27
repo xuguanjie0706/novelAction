@@ -14,6 +14,10 @@ _QUALITY_DEBT_TYPES = {
     "setting",
     "setting_consistency",
     "power_system",
+    "storyline_drift",
+    "storyline_crossover",
+    "storyline_screen_time",
+    "storyline_neglect",
 }
 _QUALITY_DEBT_SEVERITIES = {"critical", "high", "medium"}
 

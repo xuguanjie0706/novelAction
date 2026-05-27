@@ -97,6 +97,17 @@ async def compute_chapter_ingredients(
 
     ingredients = ChapterIngredients()
     ingredients.storyline_moves = await _compute_storyline_moves(db, project_id, node, chapter_number)
+    from app.services.ai.storyline_weave_engine import compute_directive
+
+    _weave_dir = compute_directive(
+        db, project_id, chapter_number, outline_node_id=str(node.id),
+    )
+    if (
+        _weave_dir.planned_beats
+        or _weave_dir.crossover_instruction
+        or _weave_dir.gap_warnings
+    ):
+        ingredients.storyline_weave_block = _weave_dir.to_prompt_block()
     ingredients.faction_colors = _compute_faction_colors(db, project_id, node)
     ingredients.asset_spotlight = _compute_asset_spotlight(db, project_id, node)
     ingredients.foreshadow_ops = _compute_foreshadow_ops(db, project_id, node, chapter_number)
@@ -116,8 +127,32 @@ async def compute_chapter_ingredients(
 async def _compute_storyline_moves(
     db: Session, project_id: str, node, chapter_number: int,
 ) -> list[StorylineMove]:
-    """计算本章需推进的故事线及推进指令。"""
+    """计算本章需推进的故事线及推进指令（优先织网 volume_beats，否则 key_beats + 断档）。"""
     from app.models import OutlineNode, StoryLine
+    from app.services.ai.storyline_weave_engine import (
+        compute_directive,
+        directive_to_storyline_moves,
+    )
+
+    directive = compute_directive(
+        db,
+        project_id,
+        chapter_number,
+        outline_node_id=str(node.id) if node else None,
+    )
+    if directive.planned_beats or directive.gap_warnings:
+        moves = directive_to_storyline_moves(directive)
+        if moves:
+            line_map = {
+                str(sl.id): sl
+                for sl in db.query(StoryLine).filter(StoryLine.project_id == project_id).all()
+            }
+            for m in moves:
+                sl = line_map.get(m.storyline_id)
+                if sl:
+                    m.line_type = sl.line_type or m.line_type
+                    m.current_state = (sl.description or sl.core_conflict or "")[:150]
+            return moves
 
     storyline_ids = node.storyline_ids or []
     if not storyline_ids:

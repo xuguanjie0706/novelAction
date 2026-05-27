@@ -151,9 +151,14 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
       "storyline_id": "故事线id",
       "storyline_name": "故事线名称（供显示）",
       "status": "新状态 planned/active/climax/resolved/dropped（如有变化）",
-      "beat": "本章该故事线发生了什么（一句话）"
+      "beat": "本章该故事线发生了什么（一句话）",
+      "actual_tension": 55,
+      "beat_match_score": 0.72,
+      "crossover_executed": true,
+      "screen_time_words": 420
     }}
   ],
+  （有织网 volume_beats 时：每条推进线尽量填 actual_tension/beat_match_score/crossover_executed/screen_time_words）
   "memory_updates": [
     {{
       "memory_type": "event / character_state / foreshadow / setting / conflict 之一",
@@ -371,9 +376,16 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                     char_updates.append(cleaned)
             sl_updates = []
             for su in data.get("storyline_updates", []):
-                cleaned = {k: v for k, v in su.items() if v and k not in ("storyline_name",)}
+                cleaned = {
+                    k: v for k, v in su.items()
+                    if v is not None and v != "" and k not in ("storyline_name",)
+                }
+                if su.get("crossover_executed") is False:
+                    cleaned["crossover_executed"] = False
                 if len(cleaned) > 1:
                     cleaned["storyline_name"] = su.get("storyline_name", "")
+                    if cleaned.get("beat") and not cleaned.get("append_beat"):
+                        cleaned["append_beat"] = cleaned["beat"]
                     sl_updates.append(cleaned)
             memory_updates = []
             valid_memory_types = {"event", "character_state", "foreshadow", "setting", "conflict"}

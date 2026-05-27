@@ -2,6 +2,7 @@
  * @file 世界观 — 故事线 CRUD
  */
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Plus, ChevronRight, GitBranch } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
@@ -9,6 +10,8 @@ import { storylinesApi } from '../../../api/client'
 import { useAppStore } from '../../../store'
 import type { StoryLine } from '../../../types'
 import { ChipSelect, EditorHeader, Field, Section, TextArea, TextInput } from '../shared/components'
+import StorylineWeaveSummary from './StorylineWeaveSummary'
+import { hasStorylineWeave } from '../../../utils/storylineWeaveUtils'
 
 const LINE_TYPE_META: Record<string, { label: string; color: string }> = {
   main:       { label: '主线',   color: 'bg-purple-100 text-purple-700 border-purple-200' },
@@ -94,7 +97,12 @@ export default function StoryLinesTab({ projectId }: { projectId: string }) {
                 <span className={clsx('mt-0.5 w-1.5 h-1.5 rounded-full shrink-0', sm.dot)} />
                 <div className="min-w-0">
                   <div className="text-sm font-medium text-gray-800 truncate">{s.name}</div>
-                  <span className={clsx('text-xs px-1.5 py-0.5 rounded border', tm.color)}>{tm.label}</span>
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <span className={clsx('text-xs px-1.5 py-0.5 rounded border', tm.color)}>{tm.label}</span>
+                    {hasStorylineWeave(s) && (
+                      <span className="text-[9px] text-indigo-600">织网</span>
+                    )}
+                  </div>
                 </div>
               </button>
             )
@@ -148,6 +156,16 @@ export default function StoryLinesTab({ projectId }: { projectId: string }) {
               <Field label="故事线简述"><TextArea value={form.description ?? ''} onChange={f('description')} rows={3} placeholder="这条线讲什么故事？" /></Field>
               <Field label="核心矛盾"><TextArea value={form.core_conflict ?? ''} onChange={f('core_conflict')} rows={3} placeholder="核心冲突是什么？" /></Field>
               <Field label="解决方向"><TextArea value={form.resolution_direction ?? ''} onChange={f('resolution_direction')} rows={2} placeholder="预计如何收尾？" /></Field>
+            </Section>
+
+            <Section title="织网导演单" icon={<GitBranch size={12} />}>
+              <StorylineWeaveSummary projectId={projectId} storyline={selected} />
+              <Link
+                to={`/project/${projectId}/storyweave`}
+                className="inline-block text-xs text-indigo-600 hover:underline mt-2"
+              >
+                查看全书织网矩阵 →
+              </Link>
             </Section>
           </div>
         ) : (

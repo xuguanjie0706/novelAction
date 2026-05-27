@@ -72,6 +72,8 @@ function SceneCard({
   const isDone      = draftState?.status === 'done'  || status === 'written'
   const isStreaming = draftState?.status === 'streaming'
   const isError     = draftState?.status === 'error'
+  const mustStoryline = (scene?.storyline_moves ?? []).some(m => m.must_advance)
+  const isCrossover = (scene?.storyline_moves?.length ?? 0) >= 2
 
   const pacingLabel: Record<string, string> = { fast: '快', mid: '中', slow: '慢' }
   const statusBadge = isDone
@@ -99,6 +101,7 @@ function SceneCard({
   return (
     <div className={clsx(
       'rounded-novel border px-3 py-2.5 transition-novel',
+      mustStoryline && 'border-l-4 border-l-red-500',
       isDone ? 'border-emerald-200 bg-emerald-50/40' :
       isError ? 'border-red-200 bg-red-50/30' :
       'border-novel-border bg-novel-card',
@@ -109,6 +112,11 @@ function SceneCard({
           <span className="shrink-0 text-[10px] font-bold text-novel-ink-muted bg-novel-panel rounded px-1 py-0.5">
             {order}
           </span>
+          {isCrossover && (
+            <span className="shrink-0 text-[9px] font-bold text-indigo-600 border border-indigo-200 rounded px-1" title="双线交叉场">
+              交叉
+            </span>
+          )}
           {title && (
             <span className="text-[11px] font-medium text-novel-ink truncate">{title}</span>
           )}

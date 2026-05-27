@@ -19,7 +19,12 @@ import {
   X,
 } from 'lucide-react'
 import type { Chapter, Character, OutlineNode, StoryLine, ChapterIndex } from '../../../types'
-import type { DebriefPanelProps, PreWriteWarnHistoryRow, PreWriteWarnResult } from './types'
+import type {
+  DebriefPanelProps,
+  PreWriteWarnHistoryRow,
+  PreWriteWarnResult,
+  StorylinePreWarnItem,
+} from './types'
 import PlanCard from './PlanCard'
 import WarnPanel from './WarnPanel'
 import DebriefPanel from './DebriefPanel'
@@ -51,6 +56,7 @@ export default function ContextSidePanel({
   gatedPreWarnDoneForChapter,
   warnLoading,
   warnResult,
+  storylinePreWarns,
   warnHistory,
   selectedWarnRecordId,
   setSelectedWarnRecordId,
@@ -80,6 +86,7 @@ export default function ContextSidePanel({
   gatedPreWarnDoneForChapter: boolean
   warnLoading: boolean
   warnResult: PreWriteWarnResult | null
+  storylinePreWarns: StorylinePreWarnItem[]
   warnHistory: PreWriteWarnHistoryRow[]
   selectedWarnRecordId: string | null
   setSelectedWarnRecordId: React.Dispatch<React.SetStateAction<string | null>>
@@ -262,6 +269,7 @@ export default function ContextSidePanel({
             runPreWriteWarning={runPreWriteWarning}
             warnLoading={warnLoading}
             warnResult={warnResult}
+            storylinePreWarns={storylinePreWarns}
             warnHistory={warnHistory}
             selectedWarnRecordId={selectedWarnRecordId}
             setSelectedWarnRecordId={setSelectedWarnRecordId}

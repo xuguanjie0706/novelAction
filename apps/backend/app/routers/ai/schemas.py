@@ -145,6 +145,11 @@ class StoryLineUpdate(BaseModel):
     storyline_name: Optional[str] = None
     status: Optional[str] = None          # planned/active/climax/resolved/dropped
     append_beat: Optional[str] = None     # 追加到 key_beats 的新节点描述
+    beat: Optional[str] = None            # 与 append_beat 同义（复盘 JSON 用 beat）
+    actual_tension: Optional[int] = Field(default=None, ge=0, le=100)
+    beat_match_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    crossover_executed: Optional[bool] = None
+    screen_time_words: Optional[int] = Field(default=None, ge=0)
 
 
 class MemoryUpdate(BaseModel):

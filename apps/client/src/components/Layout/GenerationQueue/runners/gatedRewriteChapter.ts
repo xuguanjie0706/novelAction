@@ -8,6 +8,7 @@ import { formatApiError } from '../../../../utils/apiError'
 import { autoCommitGeneratedChapterDebrief } from '../../../../utils/generatedChapterDebrief'
 import { authFetchGatedDraftStreamWithPrewriteRetry } from '../../../../utils/draftPrewriteBlocked'
 import { formatRagContextProgressLabel } from '../../../../utils/draftAssistSse'
+import { dispatchStorylinePreWarn, toStorylinePreWarnItem } from '../../../../utils/storylinePreWarnEvents'
 import { useAppStore } from '../../../../store'
 
 export async function runGatedRewriteChapter(
@@ -64,6 +65,7 @@ export async function runGatedRewriteChapter(
     let buf = ''
     let currentAttempt = 1
     let draftAccumulated = ''     // 当前轮次文字累积（显示字数用）
+    const storylinePreWarns: Array<Record<string, unknown>> = []
 
     const processLine = (line: string) => {
       const t = line.trim()
@@ -118,12 +120,23 @@ export async function runGatedRewriteChapter(
         return
       }
 
+      if (ev === 'storyline_pre_warn') {
+        storylinePreWarns.push(obj)
+        return
+      }
+
       if (ev === 'pre_warn_done') {
         const ok = obj.ok !== false
         const riskCount = typeof obj.risk_count === 'number' ? obj.risk_count : 0
         const errMsg = typeof obj.error === 'string' ? obj.error : null
         const ragLogId = typeof obj.rag_retrieval_log_id === 'string' ? obj.rag_retrieval_log_id : null
         const reused = obj.reused === true
+        if (storylinePreWarns.length > 0 && chapterId) {
+          dispatchStorylinePreWarn(
+            chapterId,
+            storylinePreWarns.map(o => toStorylinePreWarnItem(o)),
+          )
+        }
         pushProgress({
           step: 'pre_warn',
           label: errMsg

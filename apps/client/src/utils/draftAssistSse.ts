@@ -166,7 +166,7 @@ export function parseSseDraftDataLine(line: string): SseParsed | null {
     const obj = JSON.parse(raw) as Record<string, unknown>
     if (typeof obj.event === 'string') {
       const gatedTypes = new Set([
-        'gate_config', 'pre_warn_running', 'pre_warn_done',
+        'gate_config', 'pre_warn_running', 'pre_warn_done', 'storyline_pre_warn',
         'attempt_start', 'attempt_done', 'qc_running', 'qc_result',
         'gate_passed', 'rewrite_queued', 'gate_failed',
       ])

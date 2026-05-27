@@ -78,7 +78,8 @@ def apply_storyline_updates(
             normalized = normalize_storyline_status(su.status)
             if normalized:
                 sl.status = normalized
-        if su.append_beat:
+        beat_text = (su.append_beat or getattr(su, "beat", None) or "").strip()
+        if beat_text:
             beats = list(sl.key_beats or [])
             chapter_key = str(chapter_id)
             beats = [
@@ -88,7 +89,7 @@ def apply_storyline_updates(
             beats.append({
                 "chapter": display_chapter_number(chapter.title, chapter.sort_order),
                 "chapter_title": chapter.title,
-                "beat": su.append_beat,
+                "beat": beat_text,
                 "chapter_id": chapter_key,
             })
             sl.key_beats = beats

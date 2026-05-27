@@ -90,14 +90,24 @@ async def _run_quality_check_inline(
         for c in characters
     ]
 
-    active_storylines = db.query(StoryLine).filter(
-        StoryLine.project_id == project_id,
-        StoryLine.status.in_(["active", "climax"])
-    ).all()
-    storylines_context = [
-        f"{s.name}（{s.line_type}，{s.status}）：{s.core_conflict or s.description or ''}"
-        for s in active_storylines
-    ]
+    from app.services.ai.storyline_weave_engine import query_storyline_weave_context_block
+
+    outline_nid = str(chapter.outline_node_id) if chapter.outline_node_id else None
+    ch_no = chapter.sort_order or 0
+    weave_block = query_storyline_weave_context_block(
+        db, project_id, [], ch_no, outline_node_id=outline_nid,
+    )
+    if weave_block:
+        storylines_context = [weave_block]
+    else:
+        active_storylines = db.query(StoryLine).filter(
+            StoryLine.project_id == project_id,
+            StoryLine.status.in_(["active", "climax"]),
+        ).all()
+        storylines_context = [
+            f"{s.name}（{s.line_type}，{s.status}）：{s.core_conflict or s.description or ''}"
+            for s in active_storylines
+        ]
 
     power_systems_summary = [build_draft_power_context_from_db(db, project_id)]
 

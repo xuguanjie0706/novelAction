@@ -1,20 +1,27 @@
 /**
- * @file 复盘 — 故事线推进表单
+ * @file 复盘 — 故事线推进表单（含织网 volume_beats / actual_beats）
  */
 import clsx from 'clsx'
 import { Swords, Bot } from 'lucide-react'
 import type { StoryLine } from '../../../../types'
-import type { DebriefPanelProps } from '../types'
+import type { DebriefPanelProps, StorylineBeatFormFields } from '../types'
 import { STORYLINE_STATUS_LABEL } from './constants'
+import { formatPlannedBeatHint } from '../../../../utils/storylineWeaveUtils'
 
 export interface StorylineSectionProps {
+  chapterNumber: number
   activeStorylines: StoryLine[]
   storylineBeats: DebriefPanelProps['storylineBeats']
   aiSuggestedSlIds: Set<string>
-  onUpdateStoryline: (id: string, field: string, value: string) => void
+  onUpdateStoryline: (
+    id: string,
+    field: keyof StorylineBeatFormFields,
+    value: string | number | boolean,
+  ) => void
 }
 
 export function StorylineSection({
+  chapterNumber,
   activeStorylines,
   storylineBeats,
   aiSuggestedSlIds,
@@ -33,8 +40,9 @@ export function StorylineSection({
       <div className="space-y-2">
         {activeStorylines.map(sl => {
           const upd = storylineBeats[sl.id] || {}
-          const hasChange = Object.values(upd).some(Boolean)
+          const hasChange = Object.values(upd).some(v => v !== undefined && v !== '' && v !== false)
           const isAiSuggested = aiSuggestedSlIds.has(sl.id)
+          const plannedHint = formatPlannedBeatHint(sl, chapterNumber)
           return (
             <div
               key={sl.id}
@@ -61,6 +69,11 @@ export function StorylineSection({
                   {STORYLINE_STATUS_LABEL[sl.status] || sl.status}
                 </span>
               </div>
+              {plannedHint && (
+                <p className="text-[10px] text-indigo-700/90 bg-indigo-50/80 rounded px-2 py-1">
+                  {plannedHint}
+                </p>
+              )}
               <div className="grid grid-cols-2 gap-1.5">
                 <div>
                   <label className="text-[9px] text-novel-ink-faint block mb-0.5">更新状态</label>
@@ -86,6 +99,67 @@ export function StorylineSection({
                     placeholder="发生了什么（可空）"
                     className="w-full text-[11px] border border-novel-border rounded px-2 py-1 bg-white text-novel-ink placeholder:text-novel-ink-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-novel-accent"
                   />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5 pt-0.5">
+                <div>
+                  <label className="text-[9px] text-novel-ink-faint block mb-0.5">实际张力 0–100</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={upd.actual_tension === '' || upd.actual_tension == null ? '' : upd.actual_tension}
+                    onChange={e => onUpdateStoryline(
+                      sl.id,
+                      'actual_tension',
+                      e.target.value === '' ? '' : Number(e.target.value),
+                    )}
+                    placeholder="—"
+                    className="w-full text-[11px] border border-novel-border rounded px-2 py-1 bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[9px] text-novel-ink-faint block mb-0.5">节拍匹配 0–1</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={upd.beat_match_score === '' || upd.beat_match_score == null ? '' : upd.beat_match_score}
+                    onChange={e => onUpdateStoryline(
+                      sl.id,
+                      'beat_match_score',
+                      e.target.value === '' ? '' : Number(e.target.value),
+                    )}
+                    placeholder="AI 可填"
+                    className="w-full text-[11px] border border-novel-border rounded px-2 py-1 bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-[9px] text-novel-ink-faint block mb-0.5">戏份字数</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={upd.screen_time_words === '' || upd.screen_time_words == null ? '' : upd.screen_time_words}
+                    onChange={e => onUpdateStoryline(
+                      sl.id,
+                      'screen_time_words',
+                      e.target.value === '' ? '' : Number(e.target.value),
+                    )}
+                    placeholder="约多少字"
+                    className="w-full text-[11px] border border-novel-border rounded px-2 py-1 bg-white"
+                  />
+                </div>
+                <div className="flex items-end pb-1">
+                  <label className="flex items-center gap-1.5 text-[11px] text-novel-ink cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={upd.crossover_executed === true}
+                      onChange={e => onUpdateStoryline(sl.id, 'crossover_executed', e.target.checked)}
+                      className="rounded border-novel-border"
+                    />
+                    本章已执行交叉线
+                  </label>
                 </div>
               </div>
             </div>

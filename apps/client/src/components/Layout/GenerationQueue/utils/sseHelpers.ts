@@ -5,6 +5,7 @@ import type { GenProgressItem } from '../../../../types'
 import { authQueryString } from '../../../../api/authFetch'
 import { formatRagContextProgressLabel } from '../../../../utils/draftAssistSse'
 import { htmlToPlainForSplit } from '../../../../utils/draftChapterIndexSplit'
+import { createStorylinePreWarnCollector } from '../../../../utils/storylinePreWarnEvents'
 
 /** 续写：旧叙事 plain + 本次流式全文，便于与入库正文对照 */
 export function ragContextSideEventHandler(
@@ -26,8 +27,11 @@ export function ragContextSideEventHandler(
 export function draftAssistSideEventHandler(
   pushProgress: (item: GenProgressItem) => void,
   phaseStep: (phase: string) => string,
+  chapterId?: string,
 ) {
+  const storylineCollector = chapterId ? createStorylinePreWarnCollector(chapterId) : null
   return (obj: Record<string, unknown>) => {
+    storylineCollector?.handle(obj)
     const ev = obj.event
     if (ev === 'rag_context') {
       pushProgress({

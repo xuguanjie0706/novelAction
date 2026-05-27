@@ -107,6 +107,7 @@ TASK_PROFILES: dict[str, dict] = {
     "bootstrap.power_systems": {"temperature": 0.6, "top_p": 0.9},
     "bootstrap.factions": {"temperature": 0.7, "top_p": 0.9},
     "bootstrap.storylines": {"temperature": 0.7, "top_p": 0.9},
+    "bootstrap.storyline_weave": {"temperature": 0.3, "top_p": 0.85},
     "bootstrap.characters": {"temperature": 0.75, "top_p": 0.9},
     "bootstrap.skills": {"temperature": 0.65, "top_p": 0.9},
     "bootstrap.items": {"temperature": 0.65, "top_p": 0.9},

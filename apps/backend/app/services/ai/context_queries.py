@@ -280,6 +280,10 @@ def query_filtered_storylines_block(
     按 storyline_ids 过滤查询活跃故事线，格式化为文本块。
 
     若 storyline_ids 为空，回退查所有 active/climax 状态的故事线（最多 4 条）。
+
+    .. deprecated::
+        写作路径请优先使用 ``storyline_weave_engine.query_storyline_weave_context_block``；
+        本函数仍作为无织网数据时的摘要回退。
     """
     if storyline_ids:
         uuid_ids = [UUID(s) for s in storyline_ids[:6]]

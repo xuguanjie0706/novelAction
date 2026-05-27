@@ -14,9 +14,10 @@ const RhythmMapPage = lazy(() => import('./RhythmMapPage'))
 const ReaderPromisesPage = lazy(() => import('./ReaderPromisesPage'))
 const GlobalTimelinePage = lazy(() => import('./GlobalTimelinePage'))
 const PowerTimelinePage = lazy(() => import('./PowerTimelinePage'))
+const StorylineWeavePage = lazy(() => import('./StorylineWeavePage'))
 const RelationsGraphPage = lazy(() => import('./RelationsGraphPage'))
 
-const TABS = ['outline', 'write', 'characters', 'relations', 'worldbuilding', 'settings', 'timeline', 'powercurve', 'memory', 'clues', 'rhythmmap', 'promises'] as const
+const TABS = ['outline', 'write', 'characters', 'relations', 'worldbuilding', 'settings', 'timeline', 'powercurve', 'storyweave', 'memory', 'clues', 'rhythmmap', 'promises'] as const
 type Tab = (typeof TABS)[number]
 
 const TAB_PAGES: Record<Tab, React.LazyExoticComponent<() => JSX.Element>> = {
@@ -32,6 +33,7 @@ const TAB_PAGES: Record<Tab, React.LazyExoticComponent<() => JSX.Element>> = {
   promises: ReaderPromisesPage,
   timeline: GlobalTimelinePage,
   powercurve: PowerTimelinePage,
+  storyweave: StorylineWeavePage,
 }
 
 function isTab(s: string | undefined): s is Tab {

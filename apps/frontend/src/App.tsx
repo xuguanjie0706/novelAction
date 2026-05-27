@@ -7,6 +7,7 @@ import RequireAdminAuth from './components/RequireAdminAuth'
 import PageSpinner from './components/PageSpinner'
 
 const AdminLoginPage = lazy(() => import('./pages/AdminLoginPage'))
+const DashboardPage = lazy(() => import('./pages/Dashboard/index'))
 const LlmCallLogsPage = lazy(() => import('./pages/LlmCallLogsPage'))
 const LlmProvidersPage = lazy(() => import('./pages/LlmProvidersPage'))
 const ImageProvidersPage = lazy(() => import('./pages/ImageProvidersPage'))
@@ -42,7 +43,8 @@ export default function App() {
                 </RequireAdminAuth>
               }
             >
-              <Route index element={<Navigate to="/novels" replace />} />
+              <Route index element={<Navigate to="/dashboard" replace />} />
+              <Route path="dashboard" element={<LazyPage page={DashboardPage} />} />
               <Route path="novels" element={<LazyPage page={NovelManagementPage} />} />
               <Route path="debriefs" element={<LazyPage page={DebriefListPage} />} />
               <Route path="llm" element={<LazyPage page={LlmProvidersPage} />} />

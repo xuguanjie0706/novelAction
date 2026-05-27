@@ -67,11 +67,12 @@ def test_build_auto_resume_positioning():
     assert payload.get("positioning")
 
 
-def test_build_auto_resume_retry():
+def test_build_auto_resume_retry_not_auto():
+    """自动模式不再对失败步骤自动 retry_step。"""
     run = SimpleNamespace(
         id="r2",
         status="awaiting_retry",
         mode="sequential",
         gate_data={"kind": "step_retry", "step": "characters"},
     )
-    assert build_auto_resume_payload(run) == {"action": "retry_step", "step": "characters"}
+    assert build_auto_resume_payload(run) is None

@@ -328,7 +328,7 @@ async def run_bootstrap_fanqie(
         }}
         await fanqie_graph.ainvoke(initial, config=config)
         run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
-        if not run or run.status not in ("awaiting_gate", "awaiting_retry"):
+        if not run or run.status != "awaiting_gate":
             _push(run_id, {"event": "__stream_end__"})
         else:
             from app.services.bootstrap.gate_auto import schedule_auto_resume_for_run
@@ -398,7 +398,7 @@ async def _resume_bootstrap_fanqie_impl(
             run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
             if run and run.status in ("done", "failed", "cancelled"):
                 _push(run_id, {"event": "__stream_end__"})
-            elif run and run.status in ("awaiting_gate", "awaiting_retry"):
+            elif run and run.status == "awaiting_gate":
                 from app.services.bootstrap.gate_auto import schedule_auto_resume_for_run
 
                 schedule_auto_resume_for_run(run_id)

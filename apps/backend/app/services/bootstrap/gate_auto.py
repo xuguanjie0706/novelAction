@@ -1,7 +1,7 @@
-"""Bootstrap 自动模式：闸门 / 步骤重试处无需人工确认，由后端链式 resume。
+"""Bootstrap 自动模式：仅自动通过人工闸门，步骤失败不自动重试。
 
-``gate_data.auto_mode=true`` 时在 ``awaiting_gate`` / ``awaiting_retry`` 后自动
-提交 approve 或 retry_step，直至终态或无法构造 resume 载荷。
+``gate_data.auto_mode=true`` 时仅在 ``awaiting_gate`` 链式 ``approve``（跳过闸门 UI）。
+``awaiting_retry`` 不自动 ``retry_step``，由用户在创作端点「重试此步骤」。
 """
 
 from __future__ import annotations
@@ -77,8 +77,7 @@ def build_auto_resume_payload(run: BootstrapRun) -> dict | None:
     gd = run.gate_data if isinstance(run.gate_data, dict) else {}
 
     if run.status == "awaiting_retry" or gd.get("kind") == "step_retry":
-        step = str(gd.get("step") or "").strip()
-        return {"action": "retry_step", "step": step} if step else None
+        return None
 
     if run.status != "awaiting_gate":
         return None
@@ -138,13 +137,13 @@ def schedule_auto_resume_if_needed(
     user_id: Any,
     resume_fn: Callable[..., Awaitable[None]],
 ) -> None:
-    """若 run 为自动模式且停在闸门/重试，排队后台链式 resume（防重复任务）。"""
+    """若 run 为自动模式且停在闸门，排队后台链式 approve（不处理 awaiting_retry）。"""
     db = SessionLocal()
     try:
         run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
         if not run or not is_auto_mode(run.gate_data):
             return
-        if run.status not in ("awaiting_gate", "awaiting_retry"):
+        if run.status != "awaiting_gate":
             return
         if build_auto_resume_payload(run) is None:
             return

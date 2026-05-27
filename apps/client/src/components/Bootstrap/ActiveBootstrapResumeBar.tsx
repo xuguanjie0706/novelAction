@@ -27,11 +27,13 @@ export default function ActiveBootstrapResumeBar({
 }: Props) {
   if (hidden || !snapshot) return null
   const sub =
-    snapshot.status === 'awaiting_gate'
-      ? '等待你确认根设定'
-      : snapshot.status === 'awaiting_retry'
-        ? '某步骤失败，等待重试'
-        : '生成正在进行中'
+    snapshot.resumableFailed
+      ? '生成已中断，可从上次闸门继续（已落库内容会保留）'
+      : snapshot.status === 'awaiting_gate'
+        ? '等待你确认根设定'
+        : snapshot.status === 'awaiting_retry'
+          ? '某步骤失败，等待重试'
+          : '生成正在进行中'
 
   return (
     <div
@@ -45,7 +47,7 @@ export default function ActiveBootstrapResumeBar({
         <div className="min-w-0 pt-0.5">
           <p className="text-sm font-semibold text-gray-950">{sub}</p>
           <p className="mt-0.5 truncate text-xs leading-relaxed text-gray-600">
-            {snapshot.logline || '（无创意摘要）'}
+            {snapshot.resumeHint || snapshot.logline || '（无创意摘要）'}
           </p>
         </div>
       </div>

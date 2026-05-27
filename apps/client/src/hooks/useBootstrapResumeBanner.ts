@@ -11,11 +11,19 @@ import {
   readActiveBootstrapRun,
   saveActiveBootstrapRun,
 } from '../utils/bootstrapActiveRun'
+import {
+  gateResumeHint,
+  isResumableFailedRun,
+  pickResumableBootstrapRun,
+} from '../utils/bootstrapResumable'
 
 export interface BootstrapResumeSnapshot {
   runId: string
   logline: string
   status: string
+  /** failed 但 gate_data 仍有效，可 POST resume 从闸门续跑 */
+  resumableFailed?: boolean
+  resumeHint?: string
 }
 
 export function useBootstrapResumeBanner(projectId?: string | null) {
@@ -25,14 +33,18 @@ export function useBootstrapResumeBanner(projectId?: string | null) {
     try {
       if (projectId) {
         const res = await bootstrapRunsApi.listByProject(projectId)
-        const row = res.data.find(r =>
-          r.status === 'running' || r.status === 'awaiting_gate' || r.status === 'awaiting_retry',
-        )
+        const row = pickResumableBootstrapRun(res.data)
         if (row) {
+          const gd = row.gate_data
+          const failedGate = isResumableFailedRun(row)
           const snap: BootstrapResumeSnapshot = {
             runId: row.run_id,
             logline: (row.logline || '').trim(),
             status: row.status,
+            resumableFailed: failedGate,
+            resumeHint: failedGate && gd && typeof gd === 'object'
+              ? gateResumeHint(gd as Record<string, unknown>)
+              : undefined,
           }
           setSnapshot(snap)
           saveActiveBootstrapRun({
@@ -50,15 +62,26 @@ export function useBootstrapResumeBanner(projectId?: string | null) {
       }
       const res = await bootstrapRunsApi.get(stored.runId)
       const r = res.data
-      if (r.status === 'done' || r.status === 'failed' || r.status === 'cancelled') {
+      if (r.status === 'done' || r.status === 'cancelled') {
         clearActiveBootstrapRun()
         setSnapshot(null)
         return
       }
+      if (r.status === 'failed' && !isResumableFailedRun(r)) {
+        clearActiveBootstrapRun()
+        setSnapshot(null)
+        return
+      }
+      const gd = r.gate_data
+      const failedGate = r.status === 'failed' && isResumableFailedRun(r)
       setSnapshot({
         runId: r.run_id,
         logline: ((r.logline ?? stored.logline) || '').trim(),
         status: r.status,
+        resumableFailed: failedGate,
+        resumeHint: failedGate && gd && typeof gd === 'object'
+          ? gateResumeHint(gd as Record<string, unknown>)
+          : undefined,
       })
     } catch {
       setSnapshot(null)

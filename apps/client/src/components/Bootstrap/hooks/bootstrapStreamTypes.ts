@@ -73,7 +73,7 @@ export interface StartParams {
   targetWords: number
   modelProfile: string
   llmProviderId?: string | null
-  /** 为 true 时跳过闸门人工确认，由后端链式自动 resume */
+  /** 为 true 时自动通过闸门；步骤失败不自动重试 */
   autoMode?: boolean
 }
 

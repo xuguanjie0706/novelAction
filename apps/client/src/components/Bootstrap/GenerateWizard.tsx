@@ -441,7 +441,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
               <span className="min-w-0 flex-1">
                 <span className="text-sm font-medium text-gray-800">自动模式</span>
                 <span className="mt-0.5 block text-xs leading-relaxed text-gray-500">
-                  跳过立项 / 境界 / 人物 / 卷骨架等闸门确认；步骤失败时自动重试并继续，无需手动点「继续生成」。
+                  自动通过立项 / 境界 / 人物 / 卷骨架等闸门；某步失败时会暂停，需你手动点「重试此步骤」。
                 </span>
               </span>
             </label>

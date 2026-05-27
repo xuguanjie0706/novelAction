@@ -14,6 +14,7 @@ import {
   saveActiveBootstrapRun,
 } from '../../../utils/bootstrapActiveRun'
 import { readBootstrapAutoMode } from '../../../utils/bootstrapAutoMode'
+import { isResumableFailedRun } from '../../../utils/bootstrapResumable'
 
 // ── 类型导出 ──────────────────────────────────────────────────
 
@@ -80,7 +81,7 @@ export interface StartParams {
   targetWords: number
   modelProfile: string
   llmProviderId?: string | null
-  /** 为 true 时跳过闸门人工确认，由后端链式自动 resume */
+  /** 为 true 时跳过闸门人工确认（后端自动 approve）；步骤失败不自动重试 */
   autoMode?: boolean
 }
 
@@ -369,6 +370,7 @@ export function useBootstrapStream() {
     } else if (event === 'error' || event === 'step_halted') {
       const msg = (typeof message === 'string' && message.trim()) ? message : '生成失败'
       if (key) {
+        setPhase('generating')
         setHaltedStep(key)
         setSteps(prev => blockStepsAfter(
           prev.map(s =>
@@ -614,14 +616,17 @@ export function useBootstrapStream() {
       }
 
       if (run.status === 'awaiting_retry') {
+        autoModeRef.current = false
         const gd = run.gate_data as { step?: string; message?: string } | null | undefined
         const failed = toKey(gd?.step)
-        const haltMsg = typeof gd?.message === 'string' ? gd.message : '步骤失败，请重试'
+        const haltMsg = typeof gd?.message === 'string' ? gd.message : '步骤失败，请手动重试此步骤'
         if (failed) {
           setHaltedStep(failed)
           setErrorMsg(haltMsg)
           setSteps(prev => blockStepsAfter(prev, failed))
+          setPhase('generating')
         }
+        return
       }
 
       if (run.status === 'done') {
@@ -631,8 +636,34 @@ export function useBootstrapStream() {
         clearActiveBootstrapRun()
         return
       }
-      if (run.status === 'failed' || run.status === 'cancelled') {
-        setErrorMsg(run.error_message || `生成已${run.status === 'failed' ? '失败' : '取消'}`)
+      if (run.status === 'cancelled') {
+        setErrorMsg(run.error_message || '生成已取消')
+        setPhase('input')
+        clearActiveBootstrapRun()
+        return
+      }
+      if (run.status === 'failed' && isResumableFailedRun(run)) {
+        if (run.project_id) {
+          setProjectId(run.project_id)
+          saveActiveBootstrapRun({
+            runId: rid,
+            logline: (run.logline || opts?.loglineHint || '').trim() || undefined,
+            projectId: run.project_id,
+          })
+        }
+        autoModeRef.current = false
+        patchGateFromSnapshot(gateData as Record<string, any> | null | undefined)
+        const errTail = (run.error_message || '').trim()
+        setErrorMsg(
+          errTail
+            ? `上次中断：${errTail.slice(0, 200)}。请确认下方闸门后点击「继续」，无需重头生成。`
+            : '请确认下方闸门后点击「继续」，从已落库内容续跑。',
+        )
+        setPhase('gate')
+        return
+      }
+      if (run.status === 'failed') {
+        setErrorMsg(run.error_message || '生成已失败')
         setPhase('input')
         clearActiveBootstrapRun()
         return
@@ -695,7 +726,7 @@ export function useBootstrapStream() {
   }
 
   /**
-   * 自动模式：后端 gate_auto 为主；重连时若 DB 已丢 auto_mode 则用 localStorage 兜底 resume。
+   * 自动模式：后端 gate_auto 自动 approve 闸门；失败步骤不自动 retry（仅手动 retryFailedStep）。
    */
   async function tryAutoGateResume(
     params: Pick<StartParams, 'modelProfile' | 'llmProviderId'>,

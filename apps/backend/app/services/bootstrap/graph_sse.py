@@ -61,7 +61,7 @@ def persist(db, run_id: str, payload: dict, *, status: str | None = None, **extr
                 v = merge_gate_data_snapshot(run.gate_data, v)
             setattr(run, k, v)
         db.commit()
-        if run.status in ("awaiting_gate", "awaiting_retry") and "gate_data" in extra:
+        if run.status == "awaiting_gate" and "gate_data" in extra:
             gd = run.gate_data if isinstance(run.gate_data, dict) else {}
             if gd.get("auto_mode"):
                 from app.services.bootstrap.gate_auto import schedule_auto_resume_for_run

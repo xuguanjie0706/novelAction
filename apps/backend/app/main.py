@@ -62,6 +62,7 @@ from app.routers import bootstrap_step_regen as bootstrap_step_regen_router
 from app.routers import credits as credits_router
 from app.routers import admin_credits as admin_credits_router
 from app.routers import admin_redeem_codes as admin_redeem_codes_router
+from app.routers import admin_dashboard as admin_dashboard_router
 from app.routers import consistency_fix as consistency_fix_router
 from app.routers import jobs as jobs_router
 from app.services.llm_config import seed_llm_from_env_if_empty
@@ -221,6 +222,7 @@ app.include_router(credits_router.router, prefix="/api/v1", dependencies=[Depend
 app.include_router(admin_credits_router.router, prefix="/api/v1")
 app.include_router(admin_redeem_codes_router.router, prefix="/api/v1")
 app.include_router(admin_auth_router.router, prefix="/api/v1")
+app.include_router(admin_dashboard_router.router, prefix="/api/v1")
 app.include_router(consistency_fix_router.router, prefix="/api/v1")
 
 # projects：详情/子资源访问权由路由内部 _owned_or_404 校验。

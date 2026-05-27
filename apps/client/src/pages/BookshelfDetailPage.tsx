@@ -14,7 +14,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  ArrowLeft, BookOpen, Layers, Users, Zap, Sword, Package,
+  BookOpen, Layers, Users, Zap, Sword, Package,
   Map, BookMarked, CheckSquare, GitBranch, Loader2, AlertCircle,
   Castle, HeartPulse, Swords,
 } from 'lucide-react'
@@ -30,6 +30,7 @@ import {
 import { clearActiveBootstrapRun } from '../utils/bootstrapActiveRun'
 import type { OutlineNode } from '../types'
 import SectionContent, { type DetailData } from '../components/BookshelfDetail/SectionContent'
+import RecapPageHeader from './BookshelfDetail/RecapPageHeader'
 import { countOpeningContractEntries, resolveOpeningContract } from '../utils/openingContractDisplay'
 import { resolveEmotionArc, resolveVillainArc } from '../utils/narrativeArcDisplay'
 
@@ -319,6 +320,13 @@ export default function BookshelfDetailPage() {
     if (data) void loadRecapData({ silent: true })
   }
 
+  const openContinueBootstrap = () => {
+    if (!bootstrapResumeSnapshot?.runId) return
+    setResumeBarHidden(false)
+    setWizardRecoverRunId(bootstrapResumeSnapshot.runId)
+    setShowWizard(true)
+  }
+
   // ── 加载态 ──────────────────────────────────────────────────
   if (loading) {
     return (
@@ -374,89 +382,16 @@ export default function BookshelfDetailPage() {
         />
       )}
 
-      {/* ── 顶部导航栏（白色，与 BookshelfPage 一致）─────────── */}
-      <header style={{
-        height: 52, flexShrink: 0,
-        background: '#ffffff', borderBottom: '1px solid #e5e7eb',
-        display: 'flex', alignItems: 'center', padding: '0 20px', gap: 12,
-        boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-      }}>
-        {/* 返回小说详情（书架一级页）；书架网格另入口 */}
-        <button
-          type="button"
-          onClick={() => navigate(projectId ? `/bookshelf/${projectId}` : '/bookshelf')}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '5px 10px', borderRadius: 6,
-            background: 'transparent', border: '1px solid #e5e7eb',
-            color: '#6b7280', fontSize: 13, cursor: 'pointer',
-            transition: 'all 0.15s',
-          }}
-          onMouseEnter={e => {
-            (e.currentTarget as HTMLButtonElement).style.background = '#f9fafb'
-            ;(e.currentTarget as HTMLButtonElement).style.color = '#111827'
-          }}
-          onMouseLeave={e => {
-            (e.currentTarget as HTMLButtonElement).style.background = 'transparent'
-            ;(e.currentTarget as HTMLButtonElement).style.color = '#6b7280'
-          }}
-        >
-          <ArrowLeft size={14} />
-          小说详情
-        </button>
-        <button
-          type="button"
-          onClick={() => navigate('/bookshelf')}
-          style={{
-            padding: '5px 10px', borderRadius: 6, border: 'none', background: 'transparent',
-            color: '#9ca3af', fontSize: 12, cursor: 'pointer', textDecoration: 'underline',
-          }}
-        >
-          书架
-        </button>
-
-        {/* 分隔线 */}
-        <span style={{ color: '#d1d5db', fontSize: 18 }}>·</span>
-
-        {/* 项目名 */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <span style={{ fontSize: 15, fontWeight: 600, color: '#111827' }}>
-            {data.project.title || '（未命名项目）'}
-          </span>
-          {data.project.genre && (
-            <span style={{
-              marginLeft: 10, fontSize: 11, padding: '2px 8px',
-              borderRadius: 10, background: '#fef3c7', color: '#b45309',
-              border: '1px solid #fde68a',
-            }}>
-              {data.project.genre}
-            </span>
-          )}
-        </div>
-
-        {/* 当前分区标题 */}
-        <span style={{ fontSize: 12, color: '#9ca3af' }}>
-          {activeSec.label}
-        </span>
-
-        {/* 进入工作台 */}
-        <button
-          onClick={() => navigate(`/project/${projectId}/outline`)}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '6px 16px', borderRadius: 8,
-            background: '#C4873A', border: 'none', color: '#fff', fontSize: 13,
-            fontWeight: 600, cursor: 'pointer',
-            boxShadow: '0 2px 6px rgba(196,135,58,0.35)',
-            transition: 'background 0.15s',
-          }}
-          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#b07830' }}
-          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#C4873A' }}
-        >
-          <BookOpen size={14} />
-          进入工作台
-        </button>
-      </header>
+      <RecapPageHeader
+        title={data.project.title || ''}
+        genre={data.project.genre}
+        activeSectionLabel={activeSec.label}
+        bootstrapResume={bootstrapResumeSnapshot}
+        onContinueBootstrap={openContinueBootstrap}
+        onEnterWorkbench={() => navigate(`/project/${projectId}/outline`)}
+        onBackToDetail={() => navigate(projectId ? `/bookshelf/${projectId}` : '/bookshelf')}
+        onBackToShelf={() => navigate('/bookshelf')}
+      />
 
       <div style={{ flexShrink: 0, padding: '12px 20px 0', background: '#FAF8F4' }}>
         <ActiveBootstrapResumeBar

@@ -3,6 +3,7 @@ import {
   BarChartOutlined,
   BookOutlined,
   CheckSquareOutlined,
+  DashboardOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
   FileImageOutlined,
@@ -36,6 +37,7 @@ export default function AdminLayout() {
   } = theme.useToken()
 
   const selected = useMemo(() => {
+    if (loc.pathname.startsWith('/dashboard')) return ['/dashboard']
     if (loc.pathname.startsWith('/novels')) return ['/novels']
     if (loc.pathname.startsWith('/debriefs')) return ['/debriefs']
     if (loc.pathname.startsWith('/user-credits')) return ['/user-credits']
@@ -73,6 +75,12 @@ export default function AdminLayout() {
           mode="inline"
           selectedKeys={selected}
           items={[
+            {
+              key: '/dashboard',
+              icon: <DashboardOutlined />,
+              label: '控制台',
+              onClick: () => navigate('/dashboard'),
+            },
             {
               key: '/novels',
               icon: <BookOutlined />,

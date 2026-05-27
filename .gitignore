@@ -5,6 +5,9 @@
 .env.*
 !.env.example
 apps/backend/.env
+# 番茄作家后台凭据（本地 Cookie，勿提交）
+apps/backend/fanqie_creds.json
+fanqie_config.json
 apps/frontend/.env
 apps/client/.env
 

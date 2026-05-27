@@ -193,6 +193,7 @@ export default function ProjectsPage() {
       stats: () => toast('数据统计页正在建设中，当前先展示首页写作数据'),
       wallet: () => navigate('/wallet'),
       trash: () => toast('回收站暂无内容'),
+      fanqie: () => navigate('/fanqie'),
     }
     targetMap[target]?.()
   }

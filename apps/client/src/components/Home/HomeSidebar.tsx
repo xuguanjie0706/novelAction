@@ -7,6 +7,7 @@ import {
   Crown,
   Feather,
   FileText,
+  Flame,
   Home,
   Lightbulb,
   Link2,
@@ -33,6 +34,7 @@ const NAV_ITEMS = [
   { id: 'stats', label: '数据统计', icon: BarChart3 },
   { id: 'wallet', label: '我的钱包', icon: Coins },
   { id: 'trash', label: '回收站', icon: Trash2 },
+  { id: 'fanqie', label: '我的番茄', icon: Flame },
 ]
 
 export default function HomeSidebar({ todayWords, onNavigate, activeId = 'home' }: HomeSidebarProps) {

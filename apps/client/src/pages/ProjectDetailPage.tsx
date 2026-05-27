@@ -32,6 +32,7 @@ import type { Project } from '../types'
 import CoverModal from './ProjectDetail/CoverModal'
 import GenerateJourneyPanel from './ProjectDetail/GenerateJourneyPanel'
 import WritingConfigPanel from './ProjectDetail/WritingConfigPanel'
+import FanqiePublishPanel from './ProjectDetail/FanqiePublishPanel'
 import { generateCoverSvg, svgToDataUrl } from './ProjectDetail/CoverSvgUtils'
 
 // ── 小工具函数 ───────────────────────────────────────────────────────────────
@@ -325,6 +326,9 @@ export default function ProjectDetailPage() {
 
         {/* 写作质量门控配置 */}
         <WritingConfigPanel projectId={project.id} />
+
+        {/* 发布到番茄 */}
+        <FanqiePublishPanel project={project} />
 
         {/* 底部快速操作 */}
         <div className="mt-12 rounded-2xl border border-amber-100 bg-gradient-to-br from-amber-50 to-orange-50 p-6">

@@ -399,6 +399,7 @@ export default function BookshelfPage() {
       const p = projects[0]
       if (p) { setCurrentProject(p); navigate(`/project/${p.id}/outline`) }
     }
+    else if (target === 'fanqie') navigate('/fanqie')
     else toast('功能建设中')
   }
 

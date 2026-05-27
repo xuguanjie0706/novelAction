@@ -46,6 +46,8 @@ async def gen_villain_arc(svc: Any, project, ctx: dict) -> list[dict]:
     char_names = ctx.get("char_names", [])
     villain_timelines = ctx.get("villain_timelines", [])
     storyline_summary = ctx.get("storyline_summary", "（未设定）")
+    ladder_summary = ctx.get("antagonist_ladder_summary") or "（未设定）"
+    ladder: list[dict] = list(ctx.get("antagonist_ladder") or [])
     positioning = ctx.get("positioning") or {}
     tropes = "、".join(positioning.get("tropes", []))
 
@@ -60,18 +62,21 @@ async def gen_villain_arc(svc: Any, project, ctx: dict) -> list[dict]:
 【卷级骨架】
 {volumes_summary}
 
+【卷级对立面登记表（villain_name 必须逐卷引用，禁止另起新名）】
+{ladder_summary}
+
 【现有反派线索】
 {villain_hint}
 
-请为本书主要反派（从人物列表或骨架中识别）生成卷级独立行动线。
-反派是有自己欲望的人，不是「主角前进路上的障碍物」。
+请为本书主要反派生成卷级独立行动线。
+每卷 villain_name **必须**与「对立面登记表」中当卷 boss_name 完全一致。
 
 返回 JSON 数组（每卷一条，顺序与卷骨架一致）：
 [
   {{
     "vol_index": 0,
     "vol_title": "卷名",
-    "villain_name": "反派姓名（从人物列表选，若无则命名）",
+    "villain_name": "反派姓名（必须与对立面登记表当卷 boss_name 一致）",
     "vol_goal": "本卷反派主动想要实现什么（必须是具体目标，不是「阻止主角」）",
     "vol_obstacle": "什么阻挡了反派（外部对手/内部矛盾/资源不足）",
     "vol_key_choice": "反派本卷的关键决策（暴露性格，不只是手段）",
@@ -97,6 +102,19 @@ async def gen_villain_arc(svc: Any, project, ctx: dict) -> list[dict]:
         arc = parse_json(raw)
         if not isinstance(arc, list):
             arc = []
+        # 对齐登记表 boss 名
+        if ladder:
+            for i, row in enumerate(arc):
+                if not isinstance(row, dict):
+                    continue
+                vi = row.get("vol_index")
+                try:
+                    idx = int(vi) if vi is not None else i
+                except (TypeError, ValueError):
+                    idx = i
+                entry = next((r for r in ladder if int(r.get("vol_index", -1)) == idx), None)
+                if entry and entry.get("boss_name"):
+                    row["villain_name"] = entry["boss_name"]
     except Exception:
         arc = []
 

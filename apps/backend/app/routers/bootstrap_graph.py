@@ -323,7 +323,13 @@ async def resume_run(
     @returns {"ok": true, "run_id": "..."}
     """
     run = _get_owned_run(db, run_id, current_user.id)
-    if run.status not in ("awaiting_gate", "awaiting_retry"):
+    gd = run.gate_data if isinstance(run.gate_data, dict) else {}
+    # 闸门 UI 仍可见但 resume 因异常落 failed 时，允许在 gate 上下文恢复
+    if run.status == "failed" and req.action in ("approve", "regenerate") and gd.get("current_gate"):
+        run.status = "awaiting_gate"
+        run.error_message = None
+        db.commit()
+    elif run.status not in ("awaiting_gate", "awaiting_retry"):
         raise HTTPException(
             status_code=409,
             detail=f"Run is in status '{run.status}', expected 'awaiting_gate' or 'awaiting_retry'",

@@ -66,6 +66,14 @@ def rebuild_ctx_from_db(
         proj = db.query(Project).filter(Project.id == project_id).first()
         merge_power_into_ctx(ctx, pss, project=proj)
 
+    proj = db.query(Project).filter(Project.id == project_id).first()
+    if proj and isinstance(proj.extra, dict):
+        ladder = proj.extra.get("antagonist_ladder") or []
+        if ladder:
+            ctx["antagonist_ladder"] = ladder
+            from app.services.bootstrap.antagonist_roster import format_ladder_summary
+            ctx["antagonist_ladder_summary"] = format_ladder_summary(ladder)
+
     # ── 人物库（Step 5 产物）──────────────────────────────────────────────────
     chars = (
         db.query(Character)

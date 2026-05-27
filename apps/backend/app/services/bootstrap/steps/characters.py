@@ -6,6 +6,12 @@ from typing import Any
 
 from app.models import Character, Project
 from app.services.bootstrap.context import get_genre_kit_block
+from app.services.bootstrap.antagonist_roster import (
+    apply_ladder_fields_to_character,
+    build_characters_ladder_block,
+    ladder_entry_by_name,
+    ensure_ladder_characters,
+)
 from app.services.bootstrap.parse import parse_json, safe_int
 from app.services.bootstrap.power_registry import format_power_context_block, resolve_realm_in_registry
 from app.services.bootstrap.prompts.character_naming import character_naming_constraints_for_prompt
@@ -19,11 +25,12 @@ async def gen_characters(svc: Any, project: Project, ctx: dict):
         power_hint = "\n" + format_power_context_block(ctx)
     kit_block = get_genre_kit_block(ctx)
     naming_block = character_naming_constraints_for_prompt(ctx.get("genre"))
+    ladder_block = build_characters_ladder_block(ctx)
     prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 创意：{ctx['logline']}
 立意与类型：{ctx.get('premise', '')[:800] or '（未填写）'}
 故事核：冲突={ctx['story_core'].get('conflict','')}，主题={ctx['story_core'].get('theme','')}{power_hint}
-
+{ladder_block}
 【流派编辑手册约束（必须严格遵守）】
 - 角色配额必须符合 genre_kit 的 side_character_quota
 - 说话风格必须符合 dialogue_tone 和 forbidden_examples（严禁出现本流派禁忌的开局/对白方式）
@@ -31,10 +38,16 @@ async def gen_characters(svc: Any, project: Project, ctx: dict):
 
 {naming_block}
 
-⚠️ 你正在生成"主线核心卡司（Core Cast）"——这8人是全书贯穿的主线角色，不是全书所有人物。
-后续章节写作时会按剧情需要动态补充配角，这里只需确定主线固定角色。
+⚠️ 你正在生成「主线核心卡司 + 卷级对立面档案 + 卷一配角」。
+- 卷级 Boss 名单已由对立面登记表锁定（见上），必须为每个 Boss 各生成 1 条完整 JSON，name 不得改写。
+- 除 Boss 外，再生成主角圈核心角色（伙伴/师长/长期线人），不要把 Boss 重复算进「核心8人」。
 
-生成8个人物（至少：1主角+3核心配角+2反派+2师长/势力角色），返回JSON数组：
+生成人物，返回 JSON 数组，结构分三段（同一数组顺序输出）：
+【段1】主角 1 人 + 核心配角 3~4 人（role=protagonist/supporting，character_tier=core，**不含登记表 Boss**）
+【段2】对立面登记表每个 Boss 各 1 人（role=antagonist，character_tier=arc，name 与登记表完全一致）
+【段3】卷一 plot 配角 5 人（character_tier=plot，见文末精简字段）
+
+段1/段2 使用完整字段模板（段1 示例）：
 [
   {{
     "name": "正名（姓+名，2~4字）", "alias": ["可选外号/乳名/道号"],
@@ -69,16 +82,16 @@ async def gen_characters(svc: Any, project: Project, ctx: dict):
 ]
 role 只能是: protagonist / supporting / antagonist
 character_tier 代表该人物在全书中的叙事层级，只能是以下4个值之一：
-- core       = 核心长线：贯穿全书始终，长期驱动主线或重要支线（主角、主要反派、全书固定伙伴）
-- arc        = 弧线支柱：在某卷或某段剧情中主导走向，随该弧线完结后淡出或阵亡
+- core       = 核心长线：贯穿全书始终（主角、主要伙伴、师长；**不含卷级 arc Boss**）
+- arc        = 弧线支柱：登记表中的卷级 Boss 必须填 arc
 - plot       = 剧情推手：短期出现以推进特定情节节点，之后退场
 - background = 背景填充：丰富世界厚度与氛围，无强情节绑定
 请根据每个人物在故事中的实际定位严格判断，不要全部填 core。
-debt_to 要求：主角必须对至少1个人有欠债；主要反派必须对主角或某配角有欠债（仇怨或嫉妒型）；这些欠债要分散在不同卷引爆，制造持续的人物动力。
-arc_stages 要求：每人至少 2 个成长阶段（主角/核心反派 3-4 个）；realm 必须从境界白名单选择；chapter_range 覆盖全书跨度。
+debt_to 要求：主角必须对至少1个人有欠债；卷级 Boss 应对主角或某配角有具体仇怨/利益冲突；欠债分散在不同卷引爆。
+arc_stages 要求：每人至少 2 个成长阶段（主角 3-4 个；arc Boss 2-3 个）；realm 从境界白名单选；Boss 末阶段 realm 须等于 peak_realm。
 
 ---
-【第二部分】再追加生成5个「开局配角」（仅第一卷活跃，character_tier 固定为 "plot"）：
+【段3 · 卷一 plot 配角】再追加 5 个「开局配角」（character_tier 固定为 "plot"）：
 这些人物丰富开局前30章的世界厚度，无需长线设计，但每人在卷一必须有具体的情节功能。
 典型角色类型（按需选用）：反派爪牙/小Boss、同辈竞争者/欺凌者、商人/情报贩子、门派长老/考官、普通市民/路人甲（提供信息或见证主角爆发）。
 
@@ -132,6 +145,18 @@ arc_stages 要求：每人至少 2 个成长阶段（主角/核心反派 3-4 个
         vol1_func = (item.get("vol1_function") or "").strip()
         if vol1_func:
             char_extra["vol1_function"] = vol1_func
+        peak_realm = (item.get("peak_realm") or "").strip()
+        if peak_realm:
+            char_extra["peak_realm"] = peak_realm
+        ladder_entry = ladder_entry_by_name(ctx, item.get("name", ""))
+        if ladder_entry:
+            apply_ladder_fields_to_character(char_extra, ladder_entry)
+            if not peak_realm:
+                char_extra["peak_realm"] = ladder_entry.get("realm_at_climax")
+            if item.get("role") != "antagonist":
+                item["role"] = "antagonist"
+            if tier not in ("arc", "core"):
+                tier = "arc"
         faction_name = item.get("faction") or ""
         faction_id_val = ctx.get("faction_name_to_id", {}).get(faction_name) or None
         raw_stages = item.get("arc_stages")
@@ -175,6 +200,7 @@ arc_stages 要求：每人至少 2 个成长阶段（主角/核心反派 3-4 个
         svc.db.add(c)
         results.append(c)
 
+    results = ensure_ladder_characters(svc, project, ctx, results)
     svc.db.commit()
     ctx["char_names"] = [c.name for c in results]
     ctx["protagonist"] = next((c.name for c in results if c.role == "protagonist"), "主角")

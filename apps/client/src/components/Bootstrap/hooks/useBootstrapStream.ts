@@ -34,7 +34,7 @@ export type StepPhase = 'foundation' | 'world' | 'characters' | 'narrative' | 'b
 
 export type StepKey =
   | 'positioning' | 'project'
-  | 'power_systems' | 'factions' | 'storylines' | 'characters'
+  | 'power_systems' | 'factions' | 'storylines' | 'antagonist_ladder' | 'characters'
   | 'skills' | 'items' | 'settings'
   | 'volumes' | 'memory' | 'relations'
   | 'opening_contract' | 'consistency'
@@ -92,6 +92,7 @@ export const STEP_META: Record<StepKey, {
   power_systems:    { icon: '⚡', stepColor: '#06b6d4', phase: 'world',      stepNum: 'STEP 2',    desc: '构建力量进阶体系，决定主角成长曲线与境界门槛' },
   factions:         { icon: '🏰', stepColor: '#06b6d4', phase: 'world',      stepNum: 'STEP 3',    desc: '构建世界权力版图，设计主角需要面对的势力格局' },
   storylines:       { icon: '🔮', stepColor: '#8b5cf6', phase: 'characters', stepNum: 'STEP 4',    desc: '规划贯穿全书的叙事主轴，明确追读动力来源' },
+  antagonist_ladder:{ icon: '👹', stepColor: '#dc2626', phase: 'characters', stepNum: 'STEP 4.5',  desc: '登记每卷核心对立面（Boss 名+境界），作为人物与卷骨架的唯一来源' },
   characters:       { icon: '👤', stepColor: '#22c55e', phase: 'characters', stepNum: 'STEP 5',    desc: '创建核心人物档案，包含背景、性格、弧线与关系' },
   skills:           { icon: '⚔️', stepColor: '#ef4444', phase: 'characters', stepNum: 'STEP 6',    desc: '生成核心技能功法，分配给对应角色' },
   items:            { icon: '💎', stepColor: '#eab308', phase: 'characters', stepNum: 'STEP 7',    desc: '生成关键道具与法宝，埋下伏笔与稀缺资源节点' },
@@ -116,7 +117,7 @@ export const STEP_META: Record<StepKey, {
 
 const SEQ_STEP_KEYS: StepKey[] = [
   'positioning', 'project',
-  'power_systems', 'factions', 'storylines', 'characters',
+  'power_systems', 'factions', 'storylines', 'antagonist_ladder', 'characters',
   'skills', 'items', 'settings',
   'volumes', 'memory', 'relations',
   'opening_contract', 'consistency',

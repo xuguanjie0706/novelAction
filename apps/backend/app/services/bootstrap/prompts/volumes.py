@@ -5,6 +5,7 @@ from app.models import Project
 from app.services.bootstrap.context import get_genre_kit_block
 from app.services.bootstrap.protagonist_progression import build_protagonist_progression_prompt_block
 from app.services.bootstrap.volume_beats import VOLUME_JSON_BEAT_SCHEMA
+from app.services.bootstrap.antagonist_roster import build_antagonist_ladder_prompt_block
 from app.services.bootstrap.volume_entity_registry import build_volume_entity_prompt_block
 from app.services.outline_planning import words_to_plan
 
@@ -52,6 +53,7 @@ def build_volumes_prompt(project: Project, ctx: dict) -> tuple[str, str]:
 
     kit_block = get_genre_kit_block(ctx)
     entity_block = build_volume_entity_prompt_block(ctx)
+    roster_block = build_antagonist_ladder_prompt_block(ctx, n_volumes)
     protagonist_progression_block = build_protagonist_progression_prompt_block(ctx, n_volumes)
 
     villain_block = ""
@@ -78,7 +80,7 @@ def build_volumes_prompt(project: Project, ctx: dict) -> tuple[str, str]:
     prompt = f"""小说：《{ctx['project_title']}》主角：{ctx.get('protagonist', '主角')}
 创意：{ctx.get('logline')}
 立意与类型：{ctx.get('premise', '')[:700] or '（未填写）'}
-设定摘要：{ctx.get('settings_summary', '')}{storyline_hint}{villain_block}{positioning_block}{entity_block}{kit_block}{protag_block}
+设定摘要：{ctx.get('settings_summary', '')}{storyline_hint}{villain_block}{positioning_block}{entity_block}{roster_block}{kit_block}{protag_block}
 
 主线核心角色：{', '.join(ctx.get('char_names', []))}
 ⚠️ 节拍描述必须用到上述已命名角色/势力；可提及职能配角但核心燃点须绑定具名角色。
@@ -88,9 +90,9 @@ def build_volumes_prompt(project: Project, ctx: dict) -> tuple[str, str]:
 每卷 planned_chapters 填 15-80（标准 30 或 60）；各卷之和尽量接近 {total_chapters_hint} 章。
 {protagonist_progression_block}
 【卷级战力曲线铁律】
-- protagonist_realm_start / protagonist_realm_end 必填（本卷初→卷末主角境界，从境界阶梯精确选名）。
-- volume_boss / volume_boss_realm 必填；后卷 BOSS 境界 rank 严格高于前卷。
-- volume_boss_realm rank ≤ protagonist_realm_end rank + 2。
+- protagonist_realm_start / protagonist_realm_end 必填（可带小境，如「金丹境初期→金丹境后期」）。
+- volume_boss / volume_boss_realm 必填；大境 rank 须 ≥ 前卷；同大境须更高小境（初期<中期<后期<圆满）。
+- volume_boss_realm rank ≤ protagonist_realm_end 大境 rank + 2。
 - summary/conflict 中出现的境界须与 protagonist_realm_end / volume_boss_realm 一致。
 
 【phase 阶段（必填单值，表示整卷情绪走向，不等于高潮章号）】

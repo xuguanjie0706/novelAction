@@ -8,6 +8,7 @@ from typing import Any
 from app.models import OutlineNode, Project
 from app.services.bootstrap.prompts.volumes import build_volumes_prompt
 from app.services.bootstrap.protagonist_progression import apply_volume_protagonist_fields
+from app.services.bootstrap.antagonist_roster import bind_volume_boss_from_roster
 from app.services.bootstrap.volume_beats import apply_volume_beat_fields
 from app.services.bootstrap.volume_entity_registry import (
     format_volume_realm_fix_hint,
@@ -62,6 +63,7 @@ def _persist_volumes(svc: Any, project: Project, data: list, ctx: dict, n_volume
         if boss_path_rank:
             vol_extra["volume_boss_path_rank"] = boss_path_rank
         apply_volume_protagonist_fields(vol, vol_extra, i, ctx, n_volumes)
+        bind_volume_boss_from_roster(i, vol, vol_extra, ctx)
         highlight_text = apply_volume_beat_fields(vol, vol_extra)
         node = OutlineNode(
             project_id=project.id,

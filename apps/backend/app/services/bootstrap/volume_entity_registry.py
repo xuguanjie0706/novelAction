@@ -16,6 +16,10 @@ from app.services.bootstrap.power_registry import (
     format_dao_heart_block,
     format_path_context_block,
 )
+from app.services.bootstrap.realm_effective import (
+    effective_realm_score,
+    suggest_higher_sub_stage,
+)
 
 _ORG_SUFFIX_CHARS = frozenset("宗殿堂府家门阁派盟宫国城谷岛会帮")
 # 组织名前缀不应以叙事动词/介词开头（避免「拜入云霄剑宗」整段被吞）
@@ -87,8 +91,8 @@ def build_volume_entity_prompt_block(ctx: dict) -> str:
         second = level_names[-2] if len(level_names) >= 2 else top
         lines.append(f"【境界阶梯（低→高，rank 0→{len(level_names) - 1}）】{' → '.join(level_names)}")
         lines.append(
-            "  ⚠️ 每卷必填 volume_boss（当卷核心对立角色名）与 volume_boss_realm（必须从上方阶梯精确选名）；"
-            "volume_boss_realm 的 rank 须严格单调递增（后卷 rank > 前卷 rank）。"
+            "  ⚠️ 每卷必填 volume_boss（当卷核心对立角色名）与 volume_boss_realm（必须从上方阶梯精确选名，"
+            "可带小境如「破虚境中期」）；大境 rank 须 ≥ 前卷，同大境须更高小境（初期<中期<后期<圆满）。"
         )
         lines.append(
             f"  ⚠️ 全书终局对立面须处于「{second}」或最高档「{top}」，"
@@ -294,7 +298,7 @@ def format_volume_realm_fix_hint(issues: list[dict]) -> str:
     for item in realm_issues:
         lines.append(f"- {item.get('description', '')} → {item.get('suggestion', '')}")
     lines.append(
-        "铁律：后卷 volume_boss_realm 的 rank 必须严格大于前卷；"
+        "铁律：后卷 volume_boss_realm 大境 rank 不得低于前卷；同大境须标注更高小境；"
         "后卷 volume_boss_path_rank（道途）宜同步递增；"
         "protagonist_realm_end rank 须单调递增；"
         "volume_boss_realm rank ≤ protagonist_realm_end rank + 2；"
@@ -533,7 +537,7 @@ def lint_volume_entity_issues(
                 "auto_detected": True,
             })
 
-    # ── 3. 卷级 BOSS 境界曲线：后期卷 ≤ 前期卷 → 战力崩塌 ─────────────────
+    # ── 3. 卷级 BOSS 境界曲线：仅大境倒退或同大境小境倒退 → 报错 ─────────────
     protagonist = (ctx.get("protagonist") or "").strip()
     all_chars = (
         db.query(Character)
@@ -541,19 +545,26 @@ def lint_volume_entity_issues(
         .all()
     )
     if rank_map and level_names:
-        peak_by_vol: list[tuple[int, str, int, str]] = []  # (sort_order, name, rank, realm)
+        peak_by_vol: list[tuple[int, str, int, str]] = []  # (sort_order, name, rank, realm_label)
         for vol in volumes:
+            extra = vol.extra if isinstance(vol.extra, dict) else {}
+            boss_realm = (extra.get("volume_boss_realm") or "").strip()
             peak_name, peak_rank = _volume_peak_threat(
                 vol, all_chars, protagonist, level_names, rank_map,
             )
             if peak_rank >= 0:
-                realm_label = level_names[peak_rank] if peak_rank < len(level_names) else ""
+                realm_label = boss_realm or (
+                    level_names[peak_rank] if peak_rank < len(level_names) else ""
+                )
                 peak_by_vol.append((vol.sort_order, peak_name, peak_rank, realm_label))
 
         for i in range(1, len(peak_by_vol)):
             prev_idx, prev_nm, prev_r, prev_realm = peak_by_vol[i - 1]
             cur_idx, cur_nm, cur_r, cur_realm = peak_by_vol[i]
-            if cur_r <= prev_r:
+            prev_score = effective_realm_score(prev_r, prev_realm)
+            cur_score = effective_realm_score(cur_r, cur_realm)
+
+            if cur_r < prev_r:
                 prev_label = prev_realm or (level_names[prev_r] if prev_r < len(level_names) else "")
                 cur_label = cur_realm or (level_names[cur_r] if cur_r < len(level_names) else "")
                 issues.append({
@@ -561,13 +572,28 @@ def lint_volume_entity_issues(
                     "type": "villain_alignment",
                     "description": (
                         f"第{cur_idx + 1}卷核心对立面「{cur_nm}」（{cur_label}，rank={cur_r}）"
-                        f"境界不高于第{prev_idx + 1}卷「{prev_nm}」（{prev_label}，rank={prev_r}）"
+                        f"大境低于第{prev_idx + 1}卷「{prev_nm}」（{prev_label}，rank={prev_r}）"
                     ),
                     "suggestion": (
-                        f"将第{cur_idx + 1}卷 volume_boss「{cur_nm}」的 volume_boss_realm "
-                        f"提升至「{level_names[min(prev_r + 1, max_rank)]}」或以上"
+                        f"将第{cur_idx + 1}卷 volume_boss_realm 提升至"
+                        f"「{level_names[min(prev_r + 1, max_rank)]}」或以上"
                         if level_names and max_rank >= 0
-                        else f"提升「{cur_nm}」境界至高于前期卷 BOSS"
+                        else f"提升「{cur_nm}」大境至高于前期卷 BOSS"
+                    ),
+                    "auto_detected": True,
+                })
+            elif cur_score < prev_score - 1e-6:
+                issues.append({
+                    "severity": "medium",
+                    "type": "villain_alignment",
+                    "description": (
+                        f"第{cur_idx + 1}卷「{cur_nm}」（{cur_realm}）与同大境第{prev_idx + 1}卷"
+                        f"「{prev_nm}」（{prev_realm}）相比小境未递进"
+                    ),
+                    "suggestion": (
+                        f"将 volume_boss_realm 改为「"
+                        f"{suggest_higher_sub_stage(cur_realm or level_names[cur_r], prev_realm)}」"
+                        f"等更高小境标注"
                     ),
                     "auto_detected": True,
                 })
@@ -704,5 +730,11 @@ def lint_volume_entity_issues(
                     ),
                     "auto_detected": True,
                 })
+
+    try:
+        from app.services.bootstrap.antagonist_roster import lint_antagonist_roster_issues
+        issues.extend(lint_antagonist_roster_issues(db, project_id, ctx))
+    except Exception:
+        pass
 
     return issues

@@ -145,6 +145,10 @@ class GenerationService:
         from app.services.bootstrap.steps.storylines import gen_storylines
         return await gen_storylines(self, project, ctx)
 
+    async def _gen_antagonist_ladder(self, project: Project, ctx: dict):
+        from app.services.bootstrap.steps.antagonist_ladder import gen_antagonist_ladder
+        return await gen_antagonist_ladder(self, project, ctx)
+
     async def _gen_characters(self, project: Project, ctx: dict):
         from app.services.bootstrap.steps.characters import gen_characters
         return await gen_characters(self, project, ctx)

@@ -59,9 +59,15 @@ def build_full_ctx(db: Session, project: Any) -> dict:
         "chapter_quota_used": 0,
         # villain_arc 产物
         "villain_timelines": project_extra.get("villain_arc") or [],
+        "antagonist_ladder": project_extra.get("antagonist_ladder") or [],
+        "antagonist_ladder_summary": "",
         # opening_contract 产物
         "opening_contract": project_extra.get("opening_contract") or {},
     }
+
+    if project_extra.get("antagonist_ladder"):
+        from app.services.bootstrap.antagonist_roster import format_ladder_summary
+        ctx["antagonist_ladder_summary"] = format_ladder_summary(project_extra["antagonist_ladder"])
 
     # ── 境界体系 ──────────────────────────────────────────────────────────
     pss = (
@@ -214,6 +220,22 @@ def wipe_step(db: Session, project_id: str | UUID, step: str) -> None:
             db.rollback()
         return
 
+    if step == "antagonist_ladder":
+        try:
+            from app.models import Project as _Project
+            from sqlalchemy.orm.attributes import flag_modified
+            proj = db.query(_Project).filter(_Project.id == pid).first()
+            if proj and isinstance(proj.extra, dict):
+                extra = dict(proj.extra)
+                extra.pop("antagonist_ladder", None)
+                proj.extra = extra
+                flag_modified(proj, "extra")
+                db.commit()
+        except Exception:
+            logger.exception("wipe_step(antagonist_ladder) failed")
+            db.rollback()
+        return
+
     if step == "characters":
         try:
             ids = [r[0] for r in db.query(Character.id).filter(Character.project_id == pid).all()]
@@ -344,6 +366,7 @@ async def dispatch_regen(svc: Any, project: Any, step: str, ctx: dict) -> Any:
         "power_systems":    "_gen_power_systems",
         "factions":         "_gen_factions",
         "storylines":       "_gen_storylines",
+        "antagonist_ladder": "_gen_antagonist_ladder",
         "settings":         "_gen_settings",
         "skills":           "_gen_key_skills",
         "items":            "_gen_key_items",

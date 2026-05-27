@@ -7,7 +7,7 @@ Bootstrap LangGraph StateGraph — 支持 human-in-the-loop 闸门。
   - 本文件: State 定义 + 节点函数 + _build_graph 拓扑 + checkpoint 恢复
 
 拓扑：START → positioning → gate(interrupt) → project → power_systems → gate_power(interrupt)
-      → factions → storylines → characters → gate_chars(interrupt) → skills_items → settings
+      → factions → storylines → antagonist_ladder → characters → gate_chars(interrupt) → skills_items → settings
       → volumes → gate_vol(interrupt) → emotion_arc → villain_arc
       → memory → relations → core_mysteries → opening_contract → consistency → END
 
@@ -103,9 +103,9 @@ def restore_bootstrap_checkpoint_if_lost(
         "positioning":        ["positioning"],
         "gate_power_systems": ["positioning", "project", "power_systems"],
         "gate_characters":    ["positioning", "project", "power_systems", "factions",
-                               "storylines", "characters"],
+                               "storylines", "antagonist_ladder", "characters"],
         "gate_volumes":       ["positioning", "project", "power_systems", "factions",
-                               "storylines", "characters", "skills", "items", "settings", "volumes"],
+                               "storylines", "antagonist_ladder", "characters", "skills", "items", "settings", "volumes"],
     }
     completed = gate_to_completed.get(current_gate, ["positioning"])
 
@@ -314,6 +314,7 @@ async def node_project(state: BootstrapState, config: dict | None = None) -> dic
 async def node_power_systems(s, c=None): return await _run_step(s, c, "power_systems", "生成境界体系...", "_gen_power_systems")  # noqa: E501
 async def node_factions(s, c=None):      return await _run_step(s, c, "factions",      "生成势力体系...", "_gen_factions")       # noqa: E501
 async def node_storylines(s, c=None):    return await _run_step(s, c, "storylines",    "生成故事线...",   "_gen_storylines")     # noqa: E501
+async def node_antagonist_ladder(s, c=None): return await _run_step(s, c, "antagonist_ladder", "规划卷级对立面阶梯...", "_gen_antagonist_ladder")  # noqa: E501
 async def node_settings(s, c=None):      return await _run_step(s, c, "settings",      "生成世界观设定卡...", "_gen_settings")   # noqa: E501
 async def node_opening_contract(s, c=None): return await _run_step(s, c, "opening_contract", "规划开局追读承诺...", "_gen_opening_contract")   # noqa: E501
 async def node_core_mysteries(s, c=None):   return await _run_step(s, c, "core_mysteries",   "预分配全书核心谜题...", "_gen_core_mysteries")    # noqa: E501
@@ -340,6 +341,7 @@ def _build_graph() -> StateGraph:
         ("gate_power_systems",   node_gate_power_systems),
         ("factions",             node_factions),
         ("storylines",           node_storylines),
+        ("antagonist_ladder",    node_antagonist_ladder),
         ("characters",           node_characters),
         ("gate_characters",      node_gate_characters),
         ("skills_items",         node_skills_items),
@@ -357,7 +359,7 @@ def _build_graph() -> StateGraph:
     chain = [
         START, "positioning", "gate", "project",
         "power_systems", "gate_power_systems", "factions", "storylines",
-        "characters", "gate_characters", "skills_items", "settings",
+        "antagonist_ladder", "characters", "gate_characters", "skills_items", "settings",
         "volumes", "gate_volumes",
         "emotion_villain", "memory_relations", "core_mysteries",
         "opening_contract", "consistency", END,

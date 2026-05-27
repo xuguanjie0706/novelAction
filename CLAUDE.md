@@ -165,6 +165,7 @@ JSON 杂物字段，当前已知键：
 - `extra.core_mysteries`：Step 11.5 产物，跨卷核心谜题预分配
 - `extra.opening_contract`：Step 12 产物，开局追读承诺清单
 - `extra.consistency_issues`：Step 13 产物，一致性矛盾列表
+- `extra.power_timeline_table_v1`：卷级结构化战力时间轴快照（主角起止境界、Boss 境界与趋势）
 
 ---
 
@@ -209,7 +210,8 @@ logline
   → [gate_power 境界确认]
   → [Step 3  势力]           factions           _gen_factions
   → [Step 4  故事线]         storylines         _gen_storylines
-  → [Step 5  人物]           characters         _gen_characters
+  → [Step 4.5 卷级对立面]    antagonist_ladder  _gen_antagonist_ladder  （每卷 Boss 名+境界 roster → Project.extra）
+  → [Step 5  人物]           characters         _gen_characters         （必须为 roster 各 Boss 建档）
   → [gate_characters 人物确认]
   → [Step 6+7 技能+道具]     skills_items       _gen_key_skills ∥ _gen_key_items
   → [Step 8  设定卡]         settings           _gen_settings
@@ -266,7 +268,8 @@ logline
 | 境界体系 | `PowerSystem` + `levels[]` | Step 2 `_gen_power_systems` |
 | 势力组织 | `Faction`（含 `extra.active_period`） | Step 3 `_gen_factions` |
 | 故事线 | `StoryLine` | Step 4 `_gen_storylines` |
-| 人物 | `Character` | Step 5 `_gen_characters` |
+| 卷级对立面 roster | `Project.extra.antagonist_ladder` | Step 4.5 `_gen_antagonist_ladder` |
+| 人物 | `Character` | Step 5 `_gen_characters`（arc Boss 须对齐 roster） |
 | 核心技能/功法 | `Skill` | Step 6 `_gen_key_skills` |
 | 关键道具/法宝 | `Item` | Step 7 `_gen_key_items` |
 | 纯叙事设定 | `WorldSetting`（分类存 `extra.category`） | Step 8 `_gen_settings` |
@@ -308,6 +311,7 @@ logline
 - [x] Bootstrap 流派分流增强（`_get_genre_kit_block`；speech_kit；POV + 戏份预算）
 - [x] ReaderPromise 写章注入 + 读者模拟反馈闭环（基础链路）
 - [x] RagRetrievalLog 落库（每次检索可查 source / status / hits）
+- [x] 卷级结构化战力时间轴（`/outline/power-timeline` + 创作端「战力轴」页）
 
 ## 待完成功能
 
@@ -317,7 +321,7 @@ logline
   - `chapter_debrief` 按 `fulfilled_promise_ids` 直接按主键标记已兑现（层②）
   - `chapter_debrief` 读取 `OutlineNode.extra.promise_fulfilled` 对 open 承诺做模糊匹配兜底（层③，连通章纲展开时写入的规划信号）
   - 剩余：队列自动复盘同步提交（`apply_source=queue_auto` 尚未完整触发 auto-debrief → chapter-debrief 链路）
-- [ ] **Location 模型**（当前 Scene.location_name 文本字段，location_id 已注释预留）
+- [x] **Location 模型**（已实现：model + schema + router + `location_debrief` 入库复盘服务）
 - [ ] **人物关系图可视化**（ReactFlow）
 - [ ] **导出 TXT / EPUB**
 - [ ] **登录鉴权**（目前无 auth）
@@ -361,7 +365,7 @@ logline
 
 ---
 
-## 上帝文件登记册（治理基线，2026-05-26 更新）
+## 上帝文件登记册（治理基线，2026-05-27 更新）
 
 | 文件 | 实测行数 | 状态 |
 |---|---:|---|
@@ -375,9 +379,20 @@ logline
 | ~~`apps/backend/app/routers/outline/helpers/realm_timeline.py`~~ | ~~728~~ | ✅ 已拆为 realm_whitelist.py（204）+ realm_attribution.py（115）+ 薄壳（369） |
 | ~~`apps/backend/app/routers/ai/draft_context.py`~~ | ~~678~~ | ✅ 已拆为 draft_ctx_reader.py（116）+ draft_ctx_promise.py（139）+ 薄壳（363） |
 | ~~`apps/backend/app/services/bootstrap/graph.py`~~ | ~~649~~ | ✅ 已拆为 graph_sse.py（79）+ graph_runner.py（160）+ 薄壳（368） |
-| `apps/backend/app/services/bootstrap/context_vol_expand.py` | 624 | 🚫 超硬上限；新功能禁止增入；待拆分 |
-| `apps/backend/app/routers/chapters.py` | 606 | ⚠️ 刚超硬上限；新端点禁止增入；待拆 chapter_version_routes.py + chapter_index_routes.py |
-| `apps/backend/app/services/ai/writing_tools.py` | 603 | ⚠️ 刚超硬上限；新功能禁止增入；待拆分 |
+| `apps/backend/app/services/bootstrap/context_vol_expand.py` | 128 | ✅ 已拆分（context_vol_tier12.py / context_vol_tier345.py）；现壳 128 行 |
+| `apps/backend/app/routers/chapters.py` | 157 | ✅ 已拆分（chapter_helpers.py / chapter_version_routes.py）；现 157 行 |
+| `apps/backend/app/services/ai/writing_tools.py` | 17 | ✅ 已拆分（writing_pre_warn.py / writing_scene_plan.py / writing_reader_sim.py）；现壳 17 行 |
+| `apps/backend/app/services/bootstrap/volume_entity_registry.py` | 740 | 🚫 超硬上限（600）；禁止继续增入；待拆分 |
+| `apps/backend/app/services/bootstrap/steps/vol_chapter_plans.py` | 643 | 🚫 超硬上限（600）；禁止继续增入；待拆分 |
+| `apps/backend/app/services/ai/context_assembler.py` | 601 | 🚫 超硬上限（600）；禁止继续增入；待拆分（已存在更小粒度的 context_queries.py） |
+| `apps/client/src/components/Bootstrap/hooks/useBootstrapStream.ts` | 840 | 🚫 超硬上限（600）；禁止继续增入；优先待拆 |
+| `apps/client/src/pages/SettingsPage.tsx` | 710 | 🚫 超硬上限（600）；禁止继续增入；待拆分 |
+| `apps/client/src/pages/Outline/NodeDetailPanel.tsx` | 684 | 🚫 超硬上限（600）；禁止继续增入；待拆分 |
+| `apps/client/src/pages/RhythmMapPage.tsx` | 678 | 🚫 超硬上限（600）；禁止继续增入；待拆分 |
+| `apps/client/src/components/AI/AIPanel.tsx` | 665 | 🚫 超硬上限（600）；禁止继续增入；待拆分 |
+| `apps/client/src/components/Outline/OutlineAIPanel.tsx` | 650 | 🚫 超硬上限（600）；禁止继续增入；待拆分 |
+| `apps/client/src/components/BookshelfDetail/SectionContent.tsx` | 647 | 🚫 超硬上限（600）；禁止继续增入；待拆分 |
+| `apps/client/src/components/Bootstrap/BootstrapTimelineDetail.tsx` | 632 | 🚫 超硬上限（600）；禁止继续增入；待拆分 |
 | ~~`apps/client/src/pages/OutlinePage.tsx`~~ | — | ✅ 已迁 `pages/Outline/`（2 行 re-export；子模块均 <600） |
 | `apps/backend/app/routers/outline/helpers_core.py` | 180 | ✅ 已大幅瘦身；新路由仍进 `routers/outline/routes_*.py` |
 | ~~`apps/client/src/components/Layout/GenerationQueuePanel.tsx`~~ | ~~1890~~ | ✅ 已拆至 `Layout/GenerationQueue/`（壳 2 行；最大 runner 297 行） |

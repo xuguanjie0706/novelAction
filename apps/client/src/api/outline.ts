@@ -35,6 +35,9 @@ export const outlineApi = {
   /** 全书章序横轴 + 卷/故事线/势力/伏笔/承诺/境界甘特条 */
   storyTimeline: (pid: string) =>
     api.get(`/projects/${pid}/outline/story-timeline`),
+  /** 卷级结构化战力表（主角起止境界 + Boss 境界/趋势）。 */
+  powerTimeline: (pid: string, persist = true) =>
+    api.get(`/projects/${pid}/outline/power-timeline`, { params: { persist } }),
   create: (pid: string, data: any) => api.post(`/projects/${pid}/outline/`, data),
   update: (pid: string, id: string, data: any) => api.patch(`/projects/${pid}/outline/${id}`, data),
   delete: (pid: string, id: string) => api.delete(`/projects/${pid}/outline/${id}`),

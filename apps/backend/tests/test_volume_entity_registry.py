@@ -194,6 +194,70 @@ def test_lint_villain_realm_inversion_by_structured_fields(monkeypatch):
     assert "莫无极" in hint
 
 
+def test_lint_equal_major_rank_not_high_severity():
+    """同大境、无小境标注 → 不应报 high villain_alignment。"""
+    vol3 = SimpleNamespace(
+        title="第三卷",
+        summary="",
+        conflict="",
+        hook="",
+        sort_order=2,
+        phase="turning",
+        extra={"volume_boss": "冥皇", "volume_boss_realm": "破虚境"},
+    )
+    vol4 = SimpleNamespace(
+        title="第四卷",
+        summary="",
+        conflict="",
+        hook="",
+        sort_order=3,
+        phase="climax",
+        extra={"volume_boss": "司徒圣影", "volume_boss_realm": "破虚境"},
+    )
+
+    class FakeQuery:
+        def __init__(self, items):
+            self._items = items
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args):
+            return self
+
+        def all(self):
+            return self._items
+
+        def first(self):
+            return self._items[0] if self._items else None
+
+    class FakeDB:
+        def query(self, model):
+            name = getattr(model, "__name__", str(model))
+            if name == "OutlineNode":
+                return FakeQuery([vol3, vol4])
+            if name == "Faction":
+                return FakeQuery([])
+            if name == "Character":
+                return FakeQuery([])
+            if name == "PowerSystem":
+                return FakeQuery([])
+            return FakeQuery([])
+
+    level_names = ["凝气境", "筑基境", "灵台境", "金丹境", "命轮境", "破虚境", "归一境"]
+    ctx = {
+        "faction_names": [],
+        "power_level_names": level_names,
+        "protagonist": "主角",
+    }
+    issues = lint_volume_entity_issues(FakeDB(), "pid", ctx)
+    high_align = [
+        i for i in issues
+        if i["type"] == "villain_alignment" and i.get("severity") == "high"
+    ]
+    assert len(high_align) == 0
+
+
 def test_lint_protagonist_boss_gap():
     """Boss rank 超出主角卷末 +2 → protagonist_alignment。"""
     vol = SimpleNamespace(

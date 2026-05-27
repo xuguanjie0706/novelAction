@@ -25,6 +25,70 @@ export interface StoryTimeline {
   bars: StoryTimelineBar[]
 }
 
+export interface PowerTimelineRow {
+  volume_order: number
+  volume_id: string
+  volume_title: string
+  phase: string
+  protagonist_realm_start?: string | null
+  protagonist_rank_start?: number | null
+  protagonist_realm_end?: string | null
+  protagonist_rank_end?: number | null
+  boss_name?: string | null
+  boss_character_id?: string | null
+  boss_realm?: string | null
+  boss_major_rank?: number | null
+  boss_effective_score?: number | null
+  boss_vs_prev_major: 'first' | 'up' | 'equal' | 'down' | string
+  boss_vs_prev_effective: 'first' | 'up' | 'equal' | 'down' | string
+  boss_vs_protagonist_end_delta?: number | null
+}
+
+export interface RealmScaleLevel {
+  rank: number
+  name: string
+}
+
+export interface PowerTimelinePoint {
+  volume_order: number
+  realm_label: string
+  major_rank: number
+  effective_score?: number | null
+  point_kind: string
+  phase?: string
+  boss_name?: string | null
+}
+
+export interface PowerTimelineChart {
+  protagonist: PowerTimelinePoint[]
+  boss: PowerTimelinePoint[]
+}
+
+export interface CharacterRealmSegment {
+  volume_order: number
+  realm_label: string
+  major_rank: number
+  effective_score: number
+  slot: string
+}
+
+export interface CharacterRealmLane {
+  character_id?: string | null
+  display_name: string
+  role: string
+  character_tier: string
+  segments: CharacterRealmSegment[]
+}
+
+export interface PowerTimeline {
+  updated_at?: string | null
+  rows: PowerTimelineRow[]
+  realm_scale: RealmScaleLevel[]
+  chart: PowerTimelineChart
+  character_lanes: CharacterRealmLane[]
+  volume_count: number
+}
+
 // ── 节奏地图：追读模拟 / 钩子检测 / 故事线悬空 ──────────
 export interface ReaderSimulationResult {
   chapter_id: string

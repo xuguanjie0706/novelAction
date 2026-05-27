@@ -220,8 +220,9 @@ async def node_gate_volumes(state: BootstrapState, config: dict | None = None) -
         gate_msg = "请确认卷级骨架后继续；「重新生成」将删除已写入的卷节点后重跑。"
         if preview.get("has_realm_warnings"):
             gate_msg = (
-                "⚠️ 检测到卷级 BOSS 境界曲线异常（后期卷不高于前期卷），"
+                "⚠️ 检测到卷级 BOSS 大境曲线异常（后期卷大境低于前期卷），"
                 "建议点「重新生成此步」修正后再继续。"
+                "同大境不同小境（如破虚境中期→破虚境圆满）属于正常设计，不会阻断。"
             )
         emit(
             run_id,

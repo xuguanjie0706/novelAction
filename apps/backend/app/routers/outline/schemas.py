@@ -59,6 +59,70 @@ class StoryTimelineOut(BaseModel):
     bars: list[StoryTimelineBarOut]
 
 
+class PowerTimelineRowOut(BaseModel):
+    volume_order: int
+    volume_id: str
+    volume_title: str
+    phase: str = ""
+    protagonist_realm_start: Optional[str] = None
+    protagonist_rank_start: Optional[int] = None
+    protagonist_realm_end: Optional[str] = None
+    protagonist_rank_end: Optional[int] = None
+    boss_name: Optional[str] = None
+    boss_character_id: Optional[str] = None
+    boss_realm: Optional[str] = None
+    boss_major_rank: Optional[int] = None
+    boss_effective_score: Optional[float] = None
+    boss_vs_prev_major: str
+    boss_vs_prev_effective: str
+    boss_vs_protagonist_end_delta: Optional[int] = None
+
+
+class RealmScaleLevelOut(BaseModel):
+    rank: int
+    name: str
+
+
+class PowerTimelinePointOut(BaseModel):
+    volume_order: int
+    realm_label: str
+    major_rank: int
+    effective_score: Optional[float] = None
+    point_kind: str
+    phase: str = ""
+    boss_name: Optional[str] = None
+
+
+class PowerTimelineChartOut(BaseModel):
+    protagonist: list[PowerTimelinePointOut]
+    boss: list[PowerTimelinePointOut]
+
+
+class CharacterRealmSegmentOut(BaseModel):
+    volume_order: int
+    realm_label: str
+    major_rank: int
+    effective_score: float
+    slot: str
+
+
+class CharacterRealmLaneOut(BaseModel):
+    character_id: Optional[str] = None
+    display_name: str
+    role: str = "supporting"
+    character_tier: str = "plot"
+    segments: list[CharacterRealmSegmentOut]
+
+
+class PowerTimelineOut(BaseModel):
+    updated_at: Optional[str] = None
+    rows: list[PowerTimelineRowOut]
+    realm_scale: list[RealmScaleLevelOut] = []
+    chart: PowerTimelineChartOut = PowerTimelineChartOut(protagonist=[], boss=[])
+    character_lanes: list[CharacterRealmLaneOut] = []
+    volume_count: int = 0
+
+
 class ChapterPlansClearResult(BaseModel):
     deleted: int
 

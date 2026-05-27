@@ -225,6 +225,12 @@ async def gen_consistency_scan(svc: Any, project, ctx: dict) -> list:
     volumes_summary = ctx.get("volumes_summary", "（未设定）")
     protagonist = ctx.get("protagonist", "主角")
     villain_arc_summary = ctx.get("villain_arc_summary", "")
+    ladder_summary = ctx.get("antagonist_ladder_summary") or ""
+    if not ladder_summary:
+        from app.services.bootstrap.antagonist_roster import format_ladder_summary, load_antagonist_ladder
+        ladder = load_antagonist_ladder(project)
+        if ladder:
+            ladder_summary = format_ladder_summary(ladder)
 
     char_realm_lines = "\n".join(
         f"- {name}：境界={realm}" for name, realm in char_realms.items()
@@ -263,6 +269,9 @@ async def gen_consistency_scan(svc: Any, project, ctx: dict) -> list:
 
 【反派行动线摘要】
 {villain_arc_summary or '（未设定）'}
+
+【卷级对立面登记表】
+{ladder_summary or '（未设定）'}
 {precheck_hint}
 请对以上信息做「交叉核验」，找出所有显著矛盾或风险项，返回JSON数组：
 [
@@ -280,6 +289,7 @@ async def gen_consistency_scan(svc: Any, project, ctx: dict) -> list:
 3. 故事线类型与卷骨架冲突走向是否吻合？各故事线是否都能在卷骨架中找到推进节点？
 4. 境界体系 protagonist_start_rank 与主角人物卡 current_realm 是否对应同一境界？
 5. 反派行动线与卷骨架 phase 标记是否对齐（反派明显占优的卷是否标记了 dark_hour/turning）？
+6. 各卷 volume_boss 是否与 antagonist_ladder / 人物库 arc 反派一致？Boss 动机是否与人物卡吻合？
 如果没有发现矛盾，返回空数组 []。只返回JSON数组，不要任何解释。"""
 
     try:

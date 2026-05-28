@@ -10,9 +10,6 @@ import GenerateWizard from '../components/Bootstrap/GenerateWizard'
 import ActiveBootstrapResumeBar from '../components/Bootstrap/ActiveBootstrapResumeBar'
 import { useBootstrapResumeBanner } from '../hooks/useBootstrapResumeBanner'
 import { useHomeSidebarNavigate } from '../hooks/useHomeSidebarNavigate'
-import {
-  CreateProjectDialog,
-} from '../components/Home/HomeDashboardSections'
 import toast from 'react-hot-toast'
 import { clearActiveBootstrapRun, readActiveBootstrapRun } from '../utils/bootstrapActiveRun'
 
@@ -297,9 +294,6 @@ export default function BookshelfPage() {
   const [resumeBarHidden, setResumeBarHidden] = useState(false)
   const [resumeCancelLoading, setResumeCancelLoading] = useState(false)
   const { snapshot: bootstrapResumeSnapshot, refresh: refreshBootstrapResume } = useBootstrapResumeBanner()
-  const [showForm, setShowForm] = useState(false)
-  const [creating, setCreating] = useState(false)
-  const [form, setForm] = useState({ title: '', genre: '', logline: '', premise: '', target_words: 1200000 })
 
   useEffect(() => {
     projectsApi.list()
@@ -362,23 +356,6 @@ export default function BookshelfPage() {
     }
   }
 
-  const create = async () => {
-    if (!form.title.trim()) return toast.error('请填写小说名称')
-    setCreating(true)
-    try {
-      const res = await projectsApi.create(form)
-      setProjects(prev => [res.data, ...prev])
-      setShowForm(false)
-      setForm({ title: '', genre: '', logline: '', premise: '', target_words: 1200000 })
-      setCurrentProject(res.data)
-      navigate(`/project/${res.data.id}/outline`)
-    } catch {
-      toast.error('创建失败')
-    } finally {
-      setCreating(false)
-    }
-  }
-
   const handleSidebarNavigate = useHomeSidebarNavigate({
     projects,
     activeId: 'projects',
@@ -434,21 +411,6 @@ export default function BookshelfPage() {
           onRecoverConsumed={() => setWizardRecoverRunId(null)}
         />
       )}
-      {showForm && (
-        <CreateProjectDialog
-          form={form}
-          creating={creating}
-          onChange={setForm}
-          onCreate={create}
-          onClose={() => setShowForm(false)}
-          onUseAi={() => {
-            setShowForm(false)
-            if (!guardOpenNewBootstrapWizard()) return
-            setWizardRecoverRunId(null)
-            setShowWizard(true)
-          }}
-        />
-      )}
 
       <HomeSidebar todayWords={todayWords} onNavigate={handleSidebarNavigate} activeId="projects" />
 
@@ -481,15 +443,6 @@ export default function BookshelfPage() {
                   />
                 </div>
 
-                {/* 新建 */}
-                <button
-                  type="button"
-                  onClick={() => setShowForm(true)}
-                  className="flex h-10 items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:border-amber-300 hover:text-amber-600"
-                >
-                  <Plus size={16} />
-                  手动创建
-                </button>
                 <button
                   type="button"
                   onClick={openNewBootstrapWizard}

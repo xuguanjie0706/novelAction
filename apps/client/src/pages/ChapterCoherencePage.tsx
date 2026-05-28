@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
+import { BookOpen, CheckCircle2, History, Link2, Sparkles } from 'lucide-react'
 import { aiApi, chaptersApi, projectsApi } from '../api/client'
 import LlmAgentMenu from '../components/Layout/LlmAgentMenu'
 import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload } from '../store'
+import HomeSidebar from '../components/Home/HomeSidebar'
+import HomeTopBar from '../components/Home/HomeTopBar'
+import { useHomeSidebarNavigate } from '../hooks/useHomeSidebarNavigate'
 import type { Chapter, Project } from '../types'
 
 type ModelProfile = 'local' | 'gemini'
@@ -55,6 +59,8 @@ interface CoherenceApplyRevisionRow {
 }
 
 export default function ChapterCoherencePage() {
+  const navigate = useNavigate()
+  const setCurrentProject = useAppStore(s => s.setCurrentProject)
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedProjectId, setSelectedProjectId] = useState('')
   const [chapters, setChapters] = useState<Chapter[]>([])
@@ -115,6 +121,13 @@ export default function ChapterCoherencePage() {
   )
 
   const canCheck = selectedProjectId && selectedChapterIds.length >= 2 && !checking
+
+  const handleSidebarNavigate = useHomeSidebarNavigate({
+    projects,
+    activeId: 'coherence',
+    navigate,
+    setCurrentProject,
+  })
 
   const persistReport = async (
     result: CoherenceReport,
@@ -251,33 +264,46 @@ export default function ChapterCoherencePage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] px-5 py-6 sm:px-8">
-      <div className="mx-auto max-w-6xl space-y-5">
-        <header className="rounded-xl border border-gray-100 bg-white p-5">
+    <div className="min-h-screen bg-[#f8fafc] text-gray-950 lg:flex">
+      <HomeSidebar todayWords={0} onNavigate={handleSidebarNavigate} activeId="coherence" />
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <HomeTopBar />
+        <main className="min-w-0 flex-1 overflow-auto px-5 py-6 sm:px-8">
+          <div className="mx-auto max-w-6xl space-y-5">
+            <header className="rounded-2xl border border-amber-100 bg-white/95 p-5 shadow-[0_10px_30px_rgba(245,158,11,0.08)]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h1 className="text-xl font-bold text-gray-900">章节连贯性检测</h1>
+              <div className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+                <Link2 size={14} />
+                连贯性工作台
+              </div>
+              <h1 className="mt-2 text-xl font-bold text-gray-900">章节连贯性检测</h1>
               <p className="mt-1 text-sm text-gray-500">
                 流程：选择小说 → 勾选章节 → 检测标题匹配与剧情连贯性
               </p>
             </div>
-            <Link
-              to="/"
-              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 hover:bg-gray-50"
+            <button
+              type="button"
+              onClick={() => navigate('/')}
+              className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-amber-700 hover:bg-amber-50"
             >
               返回首页
-            </Link>
+            </button>
           </div>
-        </header>
+            </header>
 
-        <section className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
-          <div className="rounded-xl border border-gray-100 bg-white p-4">
-            <div className="text-sm font-semibold text-gray-800">1) 选择小说</div>
+            <section className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
+          <div className="rounded-2xl border border-amber-100 bg-white p-4 shadow-sm">
+            <div className="flex items-center gap-2 text-sm font-semibold text-gray-800">
+              <BookOpen size={16} className="text-amber-600" />
+              1) 选择小说
+            </div>
             <div className="mt-3">
               <select
                 value={selectedProjectId}
                 onChange={e => setSelectedProjectId(e.target.value)}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-amber-400"
+                className="w-full rounded-lg border border-amber-100 bg-amber-50/30 px-3 py-2 text-sm outline-none focus:border-amber-400"
                 disabled={loadingProjects}
               >
                 <option value="">请选择小说</option>
@@ -289,7 +315,10 @@ export default function ChapterCoherencePage() {
               </select>
             </div>
 
-            <div className="mt-4 text-sm font-semibold text-gray-800">2) 模型 / 线路</div>
+            <div className="mt-4 flex items-center gap-2 text-sm font-semibold text-gray-800">
+              <Sparkles size={16} className="text-amber-600" />
+              2) 模型 / 线路
+            </div>
             <div className="mt-2 w-full min-w-0">
               <LlmAgentMenu />
             </div>
@@ -301,14 +330,14 @@ export default function ChapterCoherencePage() {
               type="button"
               onClick={check}
               disabled={!canCheck}
-              className="mt-4 w-full rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-300"
+              className="mt-4 w-full rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(245,158,11,0.3)] disabled:cursor-not-allowed disabled:bg-gray-300 disabled:shadow-none"
             >
               {checking ? '检测中...' : `3) 开始检测（已选 ${selectedChapterIds.length} 章）`}
             </button>
           </div>
 
           <div className="space-y-5">
-            <div className="rounded-xl border border-gray-100 bg-white p-4">
+            <div className="rounded-2xl border border-amber-100 bg-white p-4 shadow-sm">
               <div className="mb-3 flex items-center justify-between">
                 <div className="text-sm font-semibold text-gray-800">章节列表（可多选）</div>
                 {selectedProject && (
@@ -317,19 +346,19 @@ export default function ChapterCoherencePage() {
               </div>
               <div className="max-h-[420px] space-y-2 overflow-auto pr-1">
                 {loadingChapters && (
-                  <div className="rounded-lg border border-dashed border-gray-200 p-4 text-sm text-gray-500">
+                  <div className="rounded-lg border border-dashed border-amber-200 p-4 text-sm text-gray-500">
                     正在加载章节...
                   </div>
                 )}
                 {!loadingChapters && chapters.length === 0 && (
-                  <div className="rounded-lg border border-dashed border-gray-200 p-4 text-sm text-gray-500">
+                  <div className="rounded-lg border border-dashed border-amber-200 p-4 text-sm text-gray-500">
                     该小说暂无章节
                   </div>
                 )}
                 {chapters.map(chapter => (
                   <label
                     key={chapter.id}
-                    className="flex cursor-pointer items-center justify-between rounded-lg border border-gray-100 px-3 py-2 hover:bg-gray-50"
+                    className="flex cursor-pointer items-center justify-between rounded-lg border border-amber-100 px-3 py-2 hover:bg-amber-50/40"
                   >
                     <div className="min-w-0 pr-3">
                       <div className="truncate text-sm font-medium text-gray-800">{chapter.title}</div>
@@ -349,9 +378,12 @@ export default function ChapterCoherencePage() {
             </div>
 
             {report && (
-              <div className="rounded-xl border border-gray-100 bg-white p-4">
+              <div className="rounded-2xl border border-amber-100 bg-white p-4 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-sm font-semibold text-gray-800">检测结果</div>
+                  <div className="flex items-center gap-2 text-sm font-semibold text-gray-800">
+                    <CheckCircle2 size={16} className="text-amber-600" />
+                    检测结果
+                  </div>
                   <button
                     type="button"
                     onClick={saveCurrentReport}
@@ -362,15 +394,15 @@ export default function ChapterCoherencePage() {
                   </button>
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                  <div className="rounded-lg bg-gray-50 p-3 text-sm">
+                  <div className="rounded-xl border border-amber-100 bg-amber-50/40 p-3 text-sm">
                     <div className="text-gray-500">标题匹配分</div>
                     <div className="mt-1 text-xl font-bold text-gray-900">{report.title_match_score ?? '-'}</div>
                   </div>
-                  <div className="rounded-lg bg-gray-50 p-3 text-sm">
+                  <div className="rounded-xl border border-amber-100 bg-amber-50/40 p-3 text-sm">
                     <div className="text-gray-500">剧情连贯分</div>
                     <div className="mt-1 text-xl font-bold text-gray-900">{report.continuity_score ?? '-'}</div>
                   </div>
-                  <div className="rounded-lg bg-gray-50 p-3 text-sm">
+                  <div className="rounded-xl border border-amber-100 bg-amber-50/40 p-3 text-sm">
                     <div className="text-gray-500">综合分</div>
                     <div className="mt-1 text-xl font-bold text-gray-900">{report.overall_score ?? '-'}</div>
                   </div>
@@ -387,7 +419,7 @@ export default function ChapterCoherencePage() {
                     <div className="mb-2 text-sm font-semibold text-gray-800">跨章节问题</div>
                     <div className="space-y-2">
                       {report.cross_chapter_issues?.map((issue, idx) => (
-                        <div key={`${issue.type}-${idx}`} className="rounded-lg border border-gray-100 p-3 text-sm">
+                        <div key={`${issue.type}-${idx}`} className="rounded-lg border border-amber-100 p-3 text-sm">
                           <div className="font-medium text-gray-800">
                             [{issue.severity}] {issue.type}
                           </div>
@@ -417,15 +449,18 @@ export default function ChapterCoherencePage() {
               </div>
             )}
 
-            <div className="rounded-xl border border-gray-100 bg-white p-4">
-              <div className="mb-2 text-sm font-semibold text-gray-800">历史记录</div>
+            <div className="rounded-2xl border border-amber-100 bg-white p-4 shadow-sm">
+              <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-800">
+                <History size={16} className="text-amber-600" />
+                历史记录
+              </div>
               {loadingHistory && (
-                <div className="rounded-lg border border-dashed border-gray-200 p-3 text-sm text-gray-500">
+                <div className="rounded-lg border border-dashed border-amber-200 p-3 text-sm text-gray-500">
                   正在加载历史记录...
                 </div>
               )}
               {!loadingHistory && history.length === 0 && (
-                <div className="rounded-lg border border-dashed border-gray-200 p-3 text-sm text-gray-500">
+                <div className="rounded-lg border border-dashed border-amber-200 p-3 text-sm text-gray-500">
                   暂无历史记录
                 </div>
               )}
@@ -433,7 +468,7 @@ export default function ChapterCoherencePage() {
                 {history.map(item => (
                   <div
                     key={item.id}
-                    className="flex gap-2 rounded-lg border border-gray-100 p-2 hover:bg-gray-50"
+                    className="flex gap-2 rounded-lg border border-amber-100 p-2 hover:bg-amber-50/40"
                   >
                     <button
                       type="button"
@@ -467,9 +502,9 @@ export default function ChapterCoherencePage() {
               </div>
             </div>
           </div>
-        </section>
+            </section>
 
-        {applyDialogOpen && (
+            {applyDialogOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
             <div
               className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl"
@@ -543,7 +578,9 @@ export default function ChapterCoherencePage() {
               </div>
             </div>
           </div>
-        )}
+            )}
+          </div>
+        </main>
       </div>
     </div>
   )

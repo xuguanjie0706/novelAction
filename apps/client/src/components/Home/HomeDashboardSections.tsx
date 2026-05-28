@@ -73,7 +73,16 @@ function wordsLabel(words: number) {
 
 export function HeroPanel({ onCreate, onContinue }: { onCreate: () => void; onContinue: () => void }) {
   return (
-    <div className="relative mt-6 overflow-hidden rounded-lg border border-amber-100 bg-[#fff7e9] p-8 shadow-sm">
+    <div
+      className="relative mt-6 overflow-hidden rounded-lg border border-amber-100 bg-[#fff7e9] p-8 shadow-sm"
+      style={{
+        backgroundImage: "url('/assets/home.png')",
+        backgroundRepeat: 'no-repeat',
+        backgroundPosition: 'right center',
+        backgroundSize: 'cover',
+      }}
+    >
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(255,247,233,0.96)_0%,rgba(255,247,233,0.94)_42%,rgba(255,247,233,0.6)_66%,rgba(255,247,233,0.2)_100%)]" />
       <div className="relative z-10 max-w-md">
         <h2 className="text-2xl font-bold text-gray-950">开始创作吧</h2>
         <p className="mt-3 text-sm text-gray-600">每一个故事都从第一章开始！</p>
@@ -83,8 +92,8 @@ export function HeroPanel({ onCreate, onContinue }: { onCreate: () => void; onCo
             onClick={onCreate}
             className="flex h-12 items-center gap-2 rounded-lg bg-amber-500 px-7 text-sm font-semibold text-white shadow-[0_12px_24px_rgba(245,158,11,0.25)] transition-colors hover:bg-amber-600"
           >
-            <Plus size={18} />
-            新建小说
+            <Sparkles size={18} />
+            AI 创建小说
           </button>
           <button
             type="button"
@@ -97,18 +106,6 @@ export function HeroPanel({ onCreate, onContinue }: { onCreate: () => void; onCo
         </div>
       </div>
 
-      <div className="pointer-events-none absolute bottom-0 right-6 hidden h-full w-[360px] sm:block">
-        <div className="absolute bottom-8 right-2 h-28 w-48 rotate-[-7deg] rounded-lg border border-amber-100 bg-white/90 shadow-lg" />
-        <div className="absolute bottom-8 right-5 h-28 w-48 rotate-[7deg] rounded-lg border border-emerald-100 bg-[#f5f6ed] shadow-md" />
-        <div className="absolute bottom-[74px] right-[118px] h-[3px] w-24 rotate-[-57deg] rounded-full bg-gray-900 shadow-sm" />
-        <div className="absolute bottom-[72px] right-[120px] h-[3px] w-7 rotate-[-57deg] rounded-full bg-amber-500" />
-        <div className="absolute right-8 top-3 h-20 w-20 rounded-full bg-[#ead9bd] shadow-lg" />
-        <div className="absolute right-12 top-7 h-12 w-12 rounded-full bg-[#8b5e34]/75" />
-        <div className="absolute right-[-4px] top-8 h-9 w-8 rounded-full border-[8px] border-[#ead9bd]" />
-        <div className="absolute bottom-20 right-[250px] h-24 w-2 rotate-[18deg] rounded-full bg-emerald-300/70" />
-        <div className="absolute bottom-[134px] right-[244px] h-6 w-3 rotate-[22deg] rounded-full bg-lime-300" />
-        <div className="absolute bottom-[118px] right-[222px] h-6 w-3 rotate-[42deg] rounded-full bg-lime-300" />
-      </div>
     </div>
   )
 }

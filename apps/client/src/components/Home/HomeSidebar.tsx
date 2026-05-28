@@ -5,15 +5,10 @@ import {
   BookOpen,
   Coins,
   Crown,
-  Feather,
-  FileText,
   Flame,
   Home,
-  Lightbulb,
   Link2,
-  PenLine,
   Trash2,
-  UserRound,
 } from 'lucide-react'
 import { HOME_WORD_GOAL } from '../../data/homeMock'
 
@@ -26,10 +21,6 @@ interface HomeSidebarProps {
 const NAV_ITEMS = [
   { id: 'home', label: '首页', icon: Home },
   { id: 'projects', label: '我的小说', icon: BookOpen },
-  { id: 'write', label: '写作', icon: PenLine },
-  { id: 'memory', label: '灵感库', icon: Lightbulb },
-  { id: 'characters', label: '角色设定', icon: UserRound },
-  { id: 'outline', label: '大纲', icon: FileText },
   { id: 'coherence', label: '连贯性测试', icon: Link2 },
   { id: 'stats', label: '数据统计', icon: BarChart3 },
   { id: 'wallet', label: '我的钱包', icon: Coins },
@@ -43,12 +34,14 @@ export default function HomeSidebar({ todayWords, onNavigate, activeId = 'home' 
   return (
     <aside className="hidden w-[272px] shrink-0 flex-col border-r border-gray-100 bg-white px-7 py-8 lg:flex">
       <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-50 text-amber-500">
-          <Feather size={25} fill="currentColor" />
-        </div>
+        <img
+          src="/assets/icon.png"
+          alt="书之幻境"
+          className="h-10 w-10 rounded-lg object-cover"
+        />
         <div>
-          <div className="text-lg font-bold leading-tight text-gray-950">小说创作</div>
-          <div className="mt-0.5 text-sm text-gray-400">写下你的故事</div>
+          <div className="text-lg font-bold leading-tight text-gray-950">书之幻境</div>
+          <div className="mt-0.5 text-sm text-gray-400">AI 驱动的小说创作平台</div>
         </div>
       </div>
 

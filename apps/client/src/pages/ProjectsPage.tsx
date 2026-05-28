@@ -4,7 +4,6 @@ import toast from 'react-hot-toast'
 import HomeSidebar from '../components/Home/HomeSidebar'
 import HomeTopBar from '../components/Home/HomeTopBar'
 import {
-  CreateProjectDialog,
   HeroPanel,
   InspirationPanel,
   QuickActionsGrid,
@@ -63,14 +62,11 @@ export default function ProjectsPage() {
   const [dashboardLoading, setDashboardLoading] = useState(true)
   const [walletBalance, setWalletBalance] = useState<number | null>(null)
   const [walletLoading, setWalletLoading] = useState(true)
-  const [creating, setCreating] = useState(false)
-  const [showForm, setShowForm] = useState(false)
   const [showWizard, setShowWizard] = useState(false)
   const [wizardRecoverRunId, setWizardRecoverRunId] = useState<string | null>(null)
   const [resumeBarHidden, setResumeBarHidden] = useState(false)
   const [resumeCancelLoading, setResumeCancelLoading] = useState(false)
   const { snapshot: bootstrapResumeSnapshot, refresh: refreshBootstrapResume } = useBootstrapResumeBanner()
-  const [form, setForm] = useState({ title: '', genre: '', logline: '', premise: '', target_words: 1200000 })
 
   // 项目列表（仅用于「继续写作」按钮 / 快捷跳转）
   useEffect(() => {
@@ -159,23 +155,6 @@ export default function ProjectsPage() {
     }
   }
 
-  const create = async () => {
-    if (!form.title.trim()) return toast.error('请填写小说名称')
-    setCreating(true)
-    try {
-      const res = await projectsApi.create(form)
-      setProjects(prev => [res.data, ...prev])
-      setShowForm(false)
-      setForm({ title: '', genre: '', logline: '', premise: '', target_words: 1200000 })
-      setCurrentProject(res.data)
-      navigate(`/project/${res.data.id}/outline`)
-    } catch {
-      toast.error('创建失败')
-    } finally {
-      setCreating(false)
-    }
-  }
-
   const openProject = (project: Project | undefined, tab: 'outline' | 'write' | 'memory' | 'characters' = 'outline') => {
     if (!project) {
       toast('这是示例内容，先新建一部小说即可开始创作')
@@ -232,21 +211,6 @@ export default function ProjectsPage() {
           onRecoverConsumed={() => setWizardRecoverRunId(null)}
         />
       )}
-      {showForm && (
-        <CreateProjectDialog
-          form={form}
-          creating={creating}
-          onChange={setForm}
-          onCreate={create}
-          onClose={() => setShowForm(false)}
-          onUseAi={() => {
-            setShowForm(false)
-            if (!guardOpenNewBootstrapWizard()) return
-            setWizardRecoverRunId(null)
-            setShowWizard(true)
-          }}
-        />
-      )}
 
       <HomeSidebar todayWords={todayWords} onNavigate={handleSidebarNavigate} />
 
@@ -279,7 +243,11 @@ export default function ProjectsPage() {
                 />
 
                 <HeroPanel
-                  onCreate={() => setShowForm(true)}
+                  onCreate={() => {
+                    if (!guardOpenNewBootstrapWizard()) return
+                    setWizardRecoverRunId(null)
+                    setShowWizard(true)
+                  }}
                   onContinue={() => openProject(firstProject, 'write')}
                 />
 

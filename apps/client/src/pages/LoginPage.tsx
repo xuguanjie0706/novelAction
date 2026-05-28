@@ -10,7 +10,7 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
-import { Eye, EyeOff } from 'lucide-react'
+import { BarChart3, BookOpen, Eye, EyeOff, Lightbulb } from 'lucide-react'
 import { authApi } from '../api/auth'
 
 /** 当前模式：登录 or 注册 */
@@ -85,198 +85,236 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0C111C] flex flex-col md:flex-row overflow-hidden">
-      {/* Left: Ancient study illustration (CSS scene) */}
-      <div className="relative md:w-[55%] h-[200px] md:h-auto bg-[#121B22] flex items-center justify-center overflow-hidden">
-        {/* Background layers for depth */}
-        <div className="absolute inset-0 bg-[radial-gradient(#3A2F2A_0.8px,transparent_1px)] bg-[length:4px_4px] opacity-30" />
+    <div className="min-h-screen bg-[#f7f5f2] text-slate-900">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col lg:flex-row">
+        <section
+          className="relative hidden lg:flex lg:w-[66%] flex-col overflow-hidden border-r border-slate-200/70 px-12 py-10"
+          style={{
+            backgroundImage: "url('/assets/bg.png')",
+            backgroundRepeat: 'no-repeat',
+            backgroundPosition: 'right 6% center',
+            backgroundSize: '48% auto',
+          }}
+        >
+          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(247,245,242,0.97)_0%,rgba(247,245,242,0.95)_46%,rgba(247,245,242,0.72)_66%,rgba(247,245,242,0.42)_100%)]" />
 
-        {/* Wooden desk surface */}
-        <div className="absolute bottom-0 left-0 right-0 h-2/5 bg-[#2C2522] shadow-[inset_0_40px_40px_-20px_#1C2526]" />
-
-        {/* Oil lamp with warm glow */}
-        <div className="absolute left-1/3 top-1/3 w-16 h-16">
-          <div className="absolute inset-0 bg-[#C9A227] rounded-full blur-2xl opacity-40 animate-[pulse_2.5s_ease-in-out_infinite]" />
-          <div className="relative w-16 h-16 flex items-end justify-center">
-            {/* Lamp base (simplified) */}
-            <div className="w-8 h-6 bg-[#5C5240] rounded-full" />
-            {/* Flame */}
-            <div className="absolute -top-3 w-3 h-5 bg-[#F5E8C7] rounded-full animate-[pulse_1.8s_ease-in-out_infinite] shadow-[0_0_12px_#C9A227]" />
-          </div>
-        </div>
-
-        {/* Scattered papers */}
-        <div className="absolute right-1/4 top-1/4 w-20 h-24 rotate-[-12deg] border border-[#3A2F2A] bg-[#F5E8C7]/10 rounded-sm shadow-inner" />
-        <div className="absolute right-1/3 bottom-1/3 w-16 h-20 rotate-[18deg] border border-[#3A2F2A] bg-[#F5E8C7]/10 rounded-sm" />
-        {/* Ink lines on paper */}
-        <div className="absolute right-[26%] top-[27%] w-12 h-[1px] bg-[#3A2F2A]/40" />
-        <div className="absolute right-[26%] top-[32%] w-10 h-[1px] bg-[#3A2F2A]/40" />
-
-        {/* Subtle bamboo curtain hint (right edge) */}
-        <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-[#1C2526]/60 to-transparent" />
-      </div>
-
-      {/* Right: Frosted form card */}
-      <div className="md:w-[45%] flex items-center justify-center px-6 py-10 md:py-0">
-        <div className="w-full max-w-[420px] bg-[#1C2526]/70 backdrop-blur-2xl border border-[#3A2F2A] rounded-2xl shadow-2xl shadow-black/40 p-10">
-          {/* Logo / Title */}
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-[#C9A227] mb-4 shadow-lg shadow-[#C9A227]/30">
-              <span className="text-2xl">📖</span>
-            </div>
-            <h1 className="text-2xl font-bold text-[#F5E8C7] tracking-wide">NovelAction</h1>
-            <p className="text-[#A8B0B8] text-sm mt-1.5">AI 驱动的古典小说创作空间</p>
-          </div>
-
-          {/* Tab 切换 */}
-          <div className="flex mb-8 bg-[#121B22] rounded-xl p-1 border border-[#3A2F2A]">
-            <button
-              type="button"
-              onClick={() => {
-                setMode('login')
-                setError(null)
-                setEmailCode('')
-                setDevCodeHint(null)
-              }}
-              className={`flex-1 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${
-                mode === 'login'
-                  ? 'bg-[#C9A227] text-[#0C111C] shadow'
-                  : 'text-[#A8B0B8] hover:text-[#F5E8C7]'
-              }`}
-            >
-              登录
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMode('register')
-                setError(null)
-                setEmailCode('')
-                setDevCodeHint(null)
-              }}
-              className={`flex-1 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${
-                mode === 'register'
-                  ? 'bg-[#C9A227] text-[#0C111C] shadow'
-                  : 'text-[#A8B0B8] hover:text-[#F5E8C7]'
-              }`}
-            >
-              注册
-            </button>
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-5">
-            {/* 用户名（仅注册） */}
-            {mode === 'register' && (
+          <div className="relative z-10">
+            <div className="mb-1 flex items-center gap-3">
+              <img
+                src="/assets/icon.png"
+                alt="书之幻境"
+                className="h-10 w-10 rounded-xl shadow-sm"
+              />
               <div>
-                <label className="block text-sm font-medium text-[#A8B0B8] mb-1.5">
-                  用户名 <span className="text-[#5C5240] font-normal">（可选）</span>
-                </label>
-                <input
-                  type="text"
-                  value={username}
-                  onChange={e => setUsername(e.target.value)}
-                  placeholder="留空则使用邮箱前缀"
-                  className="w-full bg-[#121B22] border border-[#3A2F2A] rounded-xl px-4 py-3 text-sm text-[#F5E8C7] placeholder:text-[#5C5240] focus:outline-none focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]/30 transition-all"
-                />
+                <p className="text-xl font-semibold tracking-tight">书之幻境</p>
+                <p className="text-sm text-slate-500">AI 驱动的古典小说创作空间</p>
               </div>
-            )}
+            </div>
+          </div>
 
-            {/* 邮箱 */}
-            <div>
-              <label className="block text-sm font-medium text-[#A8B0B8] mb-1.5">
-                邮箱
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="your@email.com"
-                required
-                autoComplete="email"
-                className="w-full bg-[#121B22] border border-[#3A2F2A] rounded-xl px-4 py-3 text-sm text-[#F5E8C7] placeholder:text-[#5C5240] focus:outline-none focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]/30 transition-all"
+          <div className="relative z-10 mt-20 max-w-xl">
+            <h2 className="text-5xl font-semibold leading-tight tracking-tight text-slate-900">
+              让每一个故事
+              <br />
+              都有温度与力量
+            </h2>
+            <p className="mt-6 text-lg leading-8 text-slate-500">
+              AI 驱动的古典小说创作空间，激发灵感，沉浸创作，让你的文字闪耀独特光芒。
+            </p>
+
+            <div className="mt-10 space-y-4">
+              <div className="flex items-center gap-4 px-1 py-1">
+                <span className="rounded-xl bg-amber-50 p-2 text-amber-500">
+                  <BookOpen size={20} />
+                </span>
+                <div>
+                  <p className="font-medium">智能创作</p>
+                  <p className="text-sm text-slate-500">AI 辅助构思，激发创作灵感</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-4 px-1 py-1">
+                <span className="rounded-xl bg-amber-50 p-2 text-amber-500">
+                  <Lightbulb size={20} />
+                </span>
+                <div>
+                  <p className="font-medium">沉浸体验</p>
+                  <p className="text-sm text-slate-500">专注创作，打造沉浸式写作环境</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-4 px-1 py-1">
+                <span className="rounded-xl bg-amber-50 p-2 text-amber-500">
+                  <BarChart3 size={20} />
+                </span>
+                <div>
+                  <p className="font-medium">数据统计</p>
+                  <p className="text-sm text-slate-500">多维度数据分析，见证成长轨迹</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="flex w-full items-center justify-center bg-slate-50/60 px-4 py-8 sm:px-8 lg:w-[34%] lg:px-10">
+          <div className="w-full max-w-[420px] rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-xl shadow-slate-200/50 backdrop-blur sm:p-8">
+            <div className="mb-8 text-center">
+              <div className="inline-flex items-center justify-center w-16 h-16 mb-4">
+              <img
+                src="/assets/icon.png"
+                alt="书之幻境"
+                  className="w-16 h-16 rounded-2xl shadow-md"
               />
             </div>
+              <h1 className="text-3xl font-semibold tracking-tight text-slate-900">{mode === 'login' ? '欢迎回来' : '创建账号'}</h1>
+              <p className="mt-1.5 text-sm text-slate-500">{mode === 'login' ? '登录继续创作之旅' : '注册后即可进入你的创作空间'}</p>
+            </div>
 
-            {mode === 'register' && (
-              <div>
-                <label className="block text-sm font-medium text-[#A8B0B8] mb-1.5">
-                  邮箱验证码
-                </label>
-                <div className="flex gap-2">
+            <div className="mb-6 flex rounded-2xl bg-slate-100 p-1 ring-1 ring-slate-200">
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('login')
+                  setError(null)
+                  setEmailCode('')
+                  setDevCodeHint(null)
+                }}
+                className={`flex-1 rounded-xl py-2.5 text-sm font-medium transition ${
+                  mode === 'login'
+                    ? 'bg-white text-amber-600 shadow-sm ring-1 ring-amber-200/60'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                登录
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('register')
+                  setError(null)
+                  setEmailCode('')
+                  setDevCodeHint(null)
+                }}
+                className={`flex-1 rounded-xl py-2.5 text-sm font-medium transition ${
+                  mode === 'register'
+                    ? 'bg-white text-amber-600 shadow-sm ring-1 ring-amber-200/60'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                注册
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {mode === 'register' && (
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                    用户名 <span className="font-normal text-slate-400">（可选）</span>
+                  </label>
                   <input
                     type="text"
-                    value={emailCode}
-                    onChange={e => setEmailCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    placeholder="6 位数字验证码"
-                    required={mode === 'register'}
-                    className="flex-1 bg-[#121B22] border border-[#3A2F2A] rounded-xl px-4 py-3 text-sm text-[#F5E8C7] placeholder:text-[#5C5240] focus:outline-none focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]/30 transition-all"
+                    value={username}
+                    onChange={e => setUsername(e.target.value)}
+                    placeholder="留空则使用邮箱前缀"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-amber-300 focus:ring-4 focus:ring-amber-100"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                  邮箱
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="your@email.com"
+                  required
+                  autoComplete="email"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-amber-300 focus:ring-4 focus:ring-amber-100"
+                />
+              </div>
+
+              {mode === 'register' && (
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                    邮箱验证码
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={emailCode}
+                      onChange={e => setEmailCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="6 位数字验证码"
+                      required={mode === 'register'}
+                      className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-amber-300 focus:ring-4 focus:ring-amber-100"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSendCode}
+                      disabled={sendingCode || codeCooldown > 0}
+                      className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-amber-300 hover:text-amber-600 disabled:cursor-not-allowed disabled:text-slate-400"
+                    >
+                      {sendingCode ? '发送中…' : codeCooldown > 0 ? `${codeCooldown}s` : '发送验证码'}
+                    </button>
+                  </div>
+                  {devCodeHint && (
+                    <p className="mt-1.5 text-xs text-amber-600">{devCodeHint}</p>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                  密码 {mode === 'register' && <span className="font-normal text-slate-400">（至少 6 位）</span>}
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    placeholder={mode === 'register' ? '至少 6 位' : '请输入密码'}
+                    required
+                    autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 pr-12 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-amber-300 focus:ring-4 focus:ring-amber-100"
                   />
                   <button
                     type="button"
-                    onClick={handleSendCode}
-                    disabled={sendingCode || codeCooldown > 0}
-                    className="px-3 py-2 rounded-xl border border-[#3A2F2A] text-xs text-[#F5E8C7] hover:border-[#C9A227] disabled:text-[#5C5240] disabled:border-[#3A2F2A] disabled:cursor-not-allowed transition-all"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 transition hover:text-amber-600"
+                    aria-label={showPassword ? '隐藏密码' : '显示密码'}
                   >
-                    {sendingCode ? '发送中…' : codeCooldown > 0 ? `${codeCooldown}s` : '发送验证码'}
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                   </button>
                 </div>
-                {devCodeHint && (
-                  <p className="mt-1.5 text-xs text-[#C9A227]">{devCodeHint}</p>
-                )}
               </div>
-            )}
 
-            {/* 密码 + visibility toggle (new) */}
-            <div>
-              <label className="block text-sm font-medium text-[#A8B0B8] mb-1.5">
-                密码 {mode === 'register' && <span className="text-[#5C5240] font-normal">（至少 6 位）</span>}
-              </label>
-              <div className="relative">
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder={mode === 'register' ? '至少 6 位' : '请输入密码'}
-                  required
-                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                  className="w-full bg-[#121B22] border border-[#3A2F2A] rounded-xl px-4 py-3 pr-12 text-sm text-[#F5E8C7] placeholder:text-[#5C5240] focus:outline-none focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]/30 transition-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-[#A8B0B8] hover:text-[#C9A227] transition-colors"
-                  aria-label={showPassword ? '隐藏密码' : '显示密码'}
-                >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-
-            {/* 错误提示 */}
-            {error && (
-              <div className="flex items-start gap-2 bg-[#3A2A2A]/60 border border-[#8B4A4A]/40 rounded-xl px-4 py-3 text-sm text-[#D4A5A5]">
-                <span className="mt-0.5">✕</span>
-                <p>{error}</p>
-              </div>
-            )}
-
-            {/* 提交按钮 */}
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-[#C9A227] hover:bg-[#D4AF37] active:bg-[#B8971F] disabled:bg-[#5C5240] disabled:text-[#8A7F6A] disabled:cursor-not-allowed text-[#0C111C] font-medium py-3 rounded-xl text-sm transition-all shadow-lg shadow-[#C9A227]/20 mt-2 flex items-center justify-center gap-2"
-            >
-              {loading ? (
-                <>
-                  <span className="inline-block w-4 h-4 border-2 border-[#0C111C] border-t-transparent rounded-full animate-spin" />
-                  {mode === 'login' ? '登录中…' : '注册中…'}
-                </>
-              ) : (
-                mode === 'login' ? '登录' : '注册并登录'
+              {error && (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600">
+                  {error}
+                </div>
               )}
-            </button>
-          </form>
-        </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-amber-500 py-3 text-sm font-semibold text-white shadow-md shadow-amber-200 transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:bg-amber-300"
+              >
+                {loading ? (
+                  <>
+                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    {mode === 'login' ? '登录中…' : '注册中…'}
+                  </>
+                ) : (
+                  mode === 'login' ? '登录' : '注册并登录'
+                )}
+              </button>
+
+              <div className="pt-2 text-center text-xs text-slate-400">
+                继续即表示你同意相关服务条款与隐私政策
+              </div>
+            </form>
+          </div>
+        </section>
       </div>
     </div>
   )

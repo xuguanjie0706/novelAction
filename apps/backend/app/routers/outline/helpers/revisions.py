@@ -160,6 +160,18 @@ def _create_quality_revision(
     )
 
 
+# 章纲 patch 可写字段（模型列 + extra）
+_OUTLINE_PATCH_EXTRA_KEYS = (
+    "foreshadow",
+    "end_hook",
+    "choice_cost",
+    "protagonist_want",
+    "protagonist_obstacle",
+    "protagonist_choice",
+    "villain_action",
+)
+
+
 def _outline_node_plan_fields(node: OutlineNode) -> dict:
     extra = node.extra if isinstance(node.extra, dict) else {}
     return {
@@ -168,10 +180,18 @@ def _outline_node_plan_fields(node: OutlineNode) -> dict:
         "character_change": node.conflict or "",
         "foreshadow": extra.get("foreshadow", ""),
         "end_hook": extra.get("end_hook") or node.highlight or "",
+        "choice_cost": extra.get("choice_cost", ""),
+        "protagonist_want": extra.get("protagonist_want", ""),
+        "protagonist_obstacle": extra.get("protagonist_obstacle", ""),
+        "protagonist_choice": extra.get("protagonist_choice", ""),
+        "villain_action": extra.get("villain_action", ""),
     }
 
 
 def _apply_outline_patch_to_node(node: OutlineNode, patch: dict) -> dict:
+    """将 AI/规则 patch 写入章纲节点（含 choice_cost 等因果链字段）。"""
+    from sqlalchemy.orm.attributes import flag_modified
+
     before = _outline_node_plan_fields(node)
     fields = patch.get("fields") if isinstance(patch.get("fields"), dict) else patch
     extra = node.extra if isinstance(node.extra, dict) else {}
@@ -195,14 +215,24 @@ def _apply_outline_patch_to_node(node: OutlineNode, patch: dict) -> dict:
         node.highlight = end_hook.strip()
         next_extra["end_hook"] = end_hook.strip()
 
+    for key in _OUTLINE_PATCH_EXTRA_KEYS:
+        if key in ("foreshadow", "end_hook"):
+            continue
+        val = fields.get(key)
+        if isinstance(val, str) and val.strip():
+            next_extra[key] = val.strip()
+
     node.extra = next_extra
+    flag_modified(node, "extra")
     after = _outline_node_plan_fields(node)
+    changed = [k for k in before if before.get(k) != after.get(k)]
     return {
         "chapter_number": patch.get("chapter_number"),
         "node_id": str(node.id) if node.id else None,
         "title": node.title,
         "before": before,
         "after": after,
+        "fields_changed": changed,
         "reason": patch.get("reason", ""),
     }
 

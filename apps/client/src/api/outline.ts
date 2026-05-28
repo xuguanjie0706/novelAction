@@ -63,6 +63,34 @@ export const outlineApi = {
         { params: { persist } },
       )
       .then((r) => r.data),
+  /** 勾选 linter 问题定向 AI 修复（修完自动 relint） */
+  fixLinterIssues: (
+    pid: string,
+    volumeNodeId: string,
+    data: {
+      selected_indices: number[]
+      user_prompt?: string
+      model_profile?: string
+      llm_provider_id?: string
+    },
+  ) =>
+    api
+      .post<{
+        applied: Array<{
+          issue_index: number
+          chapter_number?: number | null
+          rule_id?: string
+          fields_changed?: string[]
+          reason?: string
+          applied: boolean
+        }>
+        skipped: Array<{ issue_index: number; reason: string; suggestion?: string }>
+        message: string
+        linter_status: string
+        linter_blocked: boolean
+        linter_report: LinterVolumeReport
+      }>(`/projects/${pid}/outline/volumes/${volumeNodeId}/linter/fix`, data)
+      .then((r) => r.data),
   commitExpand: (pid: string, data: { parent_node_id: string; chapters: any[] }) =>
     api.post(`/projects/${pid}/outline/ai-expand/commit`, data),
   qualityCheck: (pid: string, data: any) =>

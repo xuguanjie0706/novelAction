@@ -400,7 +400,12 @@ class OutlineQualityMixin:
         "core_event": "新的核心事件",
         "character_change": "新的人物变化",
         "foreshadow": "新的伏笔管理",
-        "end_hook": "新的章末钩子"
+        "end_hook": "新的章末钩子",
+        "choice_cost": "本章选择的具体代价",
+        "protagonist_choice": "主角关键选择",
+        "protagonist_want": "主角欲望",
+        "protagonist_obstacle": "阻碍",
+        "villain_action": "反派行动"
       }},
       "reason": "为什么这样修"
     }}

@@ -297,3 +297,71 @@ def test_build_repair_seed():
     seed = build_repair_seed(report)
     assert seed["must_fix_chapter_numbers"] == [3]
     assert "3" in seed["issues_by_chapter"]
+
+
+def test_apply_outline_patch_writes_choice_cost():
+    from app.models import OutlineNode
+    from app.routers.outline.helpers.revisions import _apply_outline_patch_to_node
+
+    node = OutlineNode(
+        title="第7章：试炼",
+        summary="核心事件",
+        hook="开篇",
+        node_type="chapter_plan",
+        extra={"choice_cost": ""},
+    )
+    record = _apply_outline_patch_to_node(node, {
+        "chapter_number": 7,
+        "fields": {
+            "choice_cost": "为救同门，主角暴露了隐藏血脉，被执法队盯上",
+            "opening_hook": "执法队的灵识扫过藏身处，主角屏息",
+        },
+        "reason": "补写选择代价供下章承接",
+    })
+    assert "choice_cost" in record["fields_changed"]
+    assert node.extra["choice_cost"].startswith("为救同门")
+    assert node.hook.startswith("执法队")
+
+
+def test_build_linter_fix_prompt_includes_neighbor_context():
+    from app.services.outline_linter.linter_fix_service import build_linter_fix_prompt
+
+    chapters = {
+        6: {
+            "number": 6,
+            "title": "前章",
+            "opening_hook": "…",
+            "core_event": "…",
+            "character_change": "",
+            "protagonist_choice": "硬闯",
+            "choice_cost": "身份暴露",
+            "end_hook": "追兵已至",
+        },
+        7: {
+            "number": 7,
+            "title": "问题章",
+            "opening_hook": "",
+            "core_event": "试炼",
+            "character_change": "",
+            "protagonist_choice": "接受挑战",
+            "choice_cost": "",
+            "end_hook": "",
+        },
+    }
+    system, prompt = build_linter_fix_prompt(
+        project_title="测试书",
+        genre="玄幻",
+        selected_pairs=[(0, {
+            "rule_id": "CH-04",
+            "severity": "critical",
+            "message": "第7章选择代价为空",
+            "suggestion": "补写代价",
+            "chapter_number_in_volume": 7,
+        })],
+        chapters_by_number=chapters,
+    )
+    assert "总编辑" in system or "大纲" in system
+    assert "CH-04" in prompt
+    assert "身份暴露" in prompt
+    assert "choice_cost" in prompt
+

@@ -27,6 +27,11 @@ def _outline_node_to_chapter_context(node: OutlineNode) -> dict:
         "power_milestone": getattr(node, "power_milestone", None) or "",
         "foreshadow": extra.get("foreshadow", ""),
         "end_hook": extra.get("end_hook") or node.highlight or "",
+        "protagonist_want": extra.get("protagonist_want", ""),
+        "protagonist_obstacle": extra.get("protagonist_obstacle", ""),
+        "protagonist_choice": extra.get("protagonist_choice", ""),
+        "choice_cost": extra.get("choice_cost", ""),
+        "villain_action": extra.get("villain_action", ""),
         "pacing": extra.get("pacing", "medium"),
         "word_estimate": extra.get("word_estimate", TARGET_WORDS_PER_CHAPTER),
     }

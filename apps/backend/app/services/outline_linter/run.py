@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.services.bootstrap.chapter_plan_batches import normalize_volume_planned_chapters
 from app.services.outline_linter.chapter_index import build_volume_start_map
 from app.services.outline_linter.helpers import chapter_from_node
 from app.services.outline_linter.repair_hints import build_repair_seed
@@ -61,9 +62,15 @@ def run_volume_linter(
 
     snapshots = [chapter_from_node(n) for n in chapters]
     extra_vol = volume_node.extra or {}
-    planned = int(extra_vol.get("planned_chapters") or 30)
-    if planned not in (30, 60):
-        planned = 30 if len(snapshots) <= 30 else 60
+    planned = normalize_volume_planned_chapters(extra_vol.get("planned_chapters", 30))
+    raw_batch_starts = extra_vol.get("expand_batch_starts")
+    if isinstance(raw_batch_starts, list):
+        batch_boundaries = {int(x) for x in raw_batch_starts if isinstance(x, int) and x > 1}
+    elif planned > 30:
+        # 旧数据无批次元数据：沿用「第 31 章为第二批首章」假设
+        batch_boundaries = {31}
+    else:
+        batch_boundaries = set()
 
     vol_phase = volume_node.phase or (snapshots[0].phase if snapshots else "rising")
     pace_type = get_positioning_pace(project.extra if isinstance(project.extra, dict) else {})
@@ -79,6 +86,7 @@ def run_volume_linter(
         snapshots,
         volume_phase=vol_phase or "rising",
         planned_chapters=planned,
+        batch_boundary_chapters=batch_boundaries,
     ))
     report.issues.extend(lint_volume(
         snapshots,

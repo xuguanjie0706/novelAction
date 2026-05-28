@@ -17,6 +17,11 @@ from app.models import OutlineNode, Project
 from app.services.bootstrap.context_vol_expand import _build_reader_promises_block
 from app.services.bootstrap.foreshadow_sync import sync_chapter_foreshadow
 from app.services.bootstrap.parse import parse_json
+from app.services.bootstrap.chapter_plan_batches import (
+    chapter_plan_batch_ranges,
+    log_chapter_plan_batches,
+    normalize_volume_planned_chapters,
+)
 from app.services.bootstrap.steps.phase_guidance import (
     chapter_number_for_batch_item,
     get_chapter_phase_guidance,
@@ -31,27 +36,6 @@ from app.services.outline_planning import (
 from app.utils.chapter_numbering import normalize_chapter_plan_title
 
 logger = logging.getLogger(__name__)
-
-# 实测：30 章 × 15 字段 JSON ≈ 16k completion tokens（见管理后台 llm_calls）
-_EST_COMPLETION_TOKENS_PER_CHAPTER = 520
-
-
-def _chapter_plan_batch_ranges(planned: int, max_completion_tokens: int) -> list[tuple[int, int]]:
-    """按输出 token 预算切批；预算足够时整卷单次生成，避免第 31 章 SEQ-07 断档。"""
-    if planned <= 0:
-        return []
-    max_in_one_shot = max(30, max_completion_tokens // _EST_COMPLETION_TOKENS_PER_CHAPTER)
-    if planned <= max_in_one_shot:
-        return [(1, planned)]
-    chunk = 30
-    ranges: list[tuple[int, int]] = []
-    start = 1
-    while start <= planned:
-        end = min(start + chunk - 1, planned)
-        ranges.append((start, end))
-        start = end + 1
-    return ranges
-
 
 # 节奏约束函数从共享模块引入，不在此重复定义
 # 如需自定义 vol1 行为，在 phase_guidance.py 增加参数而非复制函数
@@ -75,13 +59,7 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
         return []
 
     vol1 = next((v for v in volumes if v.sort_order == 0), volumes[0])
-    planned = int((vol1.extra or {}).get("planned_chapters", 30))
-    # gen_volumes 已保证 planned 在 15-80 内；此处不再限制为 30/60，
-    # 否则与 volume.extra.planned_chapters 不符会触发 Linter VL-01 阻断。
-    if planned < 15:
-        planned = 30
-    elif planned > 80:
-        planned = 60
+    planned = normalize_volume_planned_chapters((vol1.extra or {}).get("planned_chapters", 30))
 
     logger.info(
         "vol1_chapters 开始 project=%s volume=%s planned=%d phase=%s",
@@ -169,20 +147,14 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
     all_results: list[OutlineNode] = []
 
     completion_budget = max_tokens_vol1_chapter_plans()
-    batch_ranges = _chapter_plan_batch_ranges(planned, completion_budget)
-    if len(batch_ranges) == 1:
-        logger.info(
-            "vol1_chapters 整卷单次生成：%d 章，max_tokens=%d",
-            planned,
-            completion_budget,
-        )
-    else:
-        logger.info(
-            "vol1_chapters 分批生成：%d 批 %s，max_tokens=%d/批",
-            len(batch_ranges),
-            batch_ranges,
-            completion_budget,
-        )
+    batch_ranges = chapter_plan_batch_ranges(planned, completion_budget)
+    log_chapter_plan_batches(
+        logger,
+        tag="vol1_chapters",
+        planned=planned,
+        ranges=batch_ranges,
+        max_completion_tokens=completion_budget,
+    )
 
     for batch_start, batch_end in batch_ranges:
         batch_count = batch_end - batch_start + 1

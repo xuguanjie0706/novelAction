@@ -89,6 +89,27 @@ def test_seq01_cost_not_carried():
     assert any(i.rule_id == "SEQ-01" for i in issues)
 
 
+def test_seq07_only_on_batch_boundaries():
+    """整卷单次 50 章时第 31 章不应触发 SEQ-07（仅真实分批边界才阻断）。"""
+    ch30 = _ch(30, cost="身份暴露，被迫交出令牌")
+    ch31 = _ch(31, hook="全新地图开启，主角参观坊市", summary="主角在坊市购买丹药")
+    single_batch = lint_sequence(
+        [ch30, ch31],
+        volume_phase="rising",
+        planned_chapters=50,
+        batch_boundary_chapters=set(),
+    )
+    assert not any(i.rule_id == "SEQ-07" for i in single_batch)
+
+    split_batch = lint_sequence(
+        [ch30, ch31],
+        volume_phase="rising",
+        planned_chapters=50,
+        batch_boundary_chapters={31},
+    )
+    assert any(i.rule_id == "SEQ-07" for i in split_batch)
+
+
 def test_vl01_count_mismatch():
     chapters = [_ch(i) for i in range(1, 6)]
     issues = lint_volume(

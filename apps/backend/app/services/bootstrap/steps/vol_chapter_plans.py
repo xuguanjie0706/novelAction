@@ -22,6 +22,11 @@ import logging
 from typing import Any
 
 from app.models import OutlineNode, Project
+from app.services.bootstrap.chapter_plan_batches import (
+    chapter_plan_batch_ranges,
+    log_chapter_plan_batches,
+    normalize_volume_planned_chapters,
+)
 from app.services.bootstrap.foreshadow_sync import sync_chapter_foreshadow
 from app.services.bootstrap.parse import parse_json
 from app.services.bootstrap.steps.phase_guidance import (
@@ -173,9 +178,7 @@ async def gen_vol_chapter_plans(
     open_promises = open_promises or []
     memory_chunks = memory_chunks or []
 
-    planned = (volume_node.extra or {}).get("planned_chapters", 30)
-    if planned not in (30, 60):
-        planned = 30
+    planned = normalize_volume_planned_chapters((volume_node.extra or {}).get("planned_chapters", 30))
 
     # ── 全书预算锚点（ctx 由 gen_volumes 初始化；兜底用 target_words 重算）──────
     tw = int(project.target_words or 1_200_000)
@@ -281,9 +284,15 @@ async def gen_vol_chapter_plans(
     char_name_to_id = ctx.get("char_name_to_id", {})
     storyline_ids_map = ctx.get("storyline_ids", {})
 
-    batch_ranges = [(1, min(30, planned))]
-    if planned > 30:
-        batch_ranges.append((31, planned))
+    completion_budget = max_tokens_vol_expand_chapters()
+    batch_ranges = chapter_plan_batch_ranges(planned, completion_budget)
+    log_chapter_plan_batches(
+        logger,
+        tag="vol_chapters",
+        planned=planned,
+        ranges=batch_ranges,
+        max_completion_tokens=completion_budget,
+    )
 
     for batch_start, batch_end in batch_ranges:
         batch_count = batch_end - batch_start + 1
@@ -607,7 +616,16 @@ async def gen_vol_chapter_plans(
             all_results.append(node)
 
     if all_results:
+        from sqlalchemy.orm.attributes import flag_modified
+
         from app.services.outline_linter.gate import finalize_volume_chapter_commit
+
+        vol_extra = dict(volume_node.extra or {})
+        vol_extra["expand_batch_starts"] = [
+            start for start, _ in batch_ranges if start > 1
+        ]
+        volume_node.extra = vol_extra
+        flag_modified(volume_node, "extra")
 
         finalize_volume_chapter_commit(
             svc, project, volume_node, all_results, ctx=ctx,

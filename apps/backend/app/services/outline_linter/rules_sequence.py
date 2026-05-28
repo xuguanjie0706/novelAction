@@ -11,6 +11,7 @@ def lint_sequence(
     *,
     volume_phase: str,
     planned_chapters: int,
+    batch_boundary_chapters: set[int] | None = None,
 ) -> list[LinterIssue]:
     if len(chapters) < 2:
         return []
@@ -44,22 +45,27 @@ def lint_sequence(
                     node_id=cur.id,
                 ))
 
-        if cur.chapter_number == 31 and len(prev_cost) >= 10:
+        if (
+            batch_boundary_chapters
+            and cur.chapter_number in batch_boundary_chapters
+            and len(prev_cost) >= 10
+        ):
             if not text_overlap(prev_cost, (cur.hook or "")):
                 issues.append(LinterIssue(
                     rule_id="SEQ-07",
                     severity="critical",
                     scope="sequence",
                     message=(
-                        f"第31章为分批生成时的第二批首章，开篇未承接第30章「选择代价」"
-                        f"（第30章代价：「{prev_cost}」）"
+                        f"第{cur.chapter_number}章为分批生成时的批次首章，开篇未承接"
+                        f"第{prev.chapter_number}章「选择代价」"
+                        f"（上章代价：「{prev_cost}」）"
                     ),
                     suggestion=(
-                        "第31章开篇须紧接第30章章末：写出代价的即时后果，"
+                        f"第{cur.chapter_number}章开篇须紧接上章章末：写出代价的即时后果，"
                         "避免像新卷重新起手"
                     ),
                     field="hook",
-                    chapter_number_in_volume=31,
+                    chapter_number_in_volume=cur.chapter_number,
                     node_id=cur.id,
                 ))
 

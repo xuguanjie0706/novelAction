@@ -194,11 +194,15 @@ const VolumeExpandButton: React.FC<Props> = ({
               const blocked: boolean     = Boolean(payload.linter_blocked)
               const genFailed: boolean   = Boolean(payload.generation_failed)
                 || (chapterCount === 0 && !blocked)
+              const plannedCount: number | undefined = payload.planned_chapter_count
+              const incomplete: boolean  = Boolean(payload.chapter_incomplete)
               let suffix = blocked
                 ? `，生成 ${chapterCount} 章但被 linter 阻断`
                 : genFailed
                   ? '，未生成任何章节'
-                  : `，共生成 ${chapterCount} 章`
+                  : incomplete && plannedCount
+                    ? `，共生成 ${chapterCount}/${plannedCount} 章（未完整）`
+                    : `，共生成 ${chapterCount} 章`
               if (!blocked && !genFailed && linterStatus !== 'ok' && linterIssues > 0) {
                 suffix += ` · linter ${linterStatus}（${linterIssues} 项）`
               }
@@ -208,10 +212,19 @@ const VolumeExpandButton: React.FC<Props> = ({
                 finalError =
                   (typeof payload.linter_message === 'string' && payload.linter_message.trim())
                     || '存在 critical 章纲问题，请查看下方章纲检测结果并修复后重新展开。'
+                if (chapterCount > 0) {
+                  onExpanded()
+                }
               } else if (genFailed) {
                 finalError =
                   (typeof payload.generation_error === 'string' && payload.generation_error.trim())
                     || 'AI 未返回有效章纲，请检查模型线路与 API Key 后重试。'
+              } else if (incomplete) {
+                finalDone = false
+                finalError = `章纲不完整（${chapterCount}/${plannedCount ?? '?'} 章），请重试或换更大上下文模型。`
+                if (chapterCount > 0) {
+                  onExpanded()
+                }
               } else {
                 finalDone = true
                 onExpanded()

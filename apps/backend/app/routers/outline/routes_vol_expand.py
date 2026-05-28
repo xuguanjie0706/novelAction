@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Chapter, MemoryChunk, OutlineNode, Project, ReaderPromise
 from app.services.bootstrap.context_vol_expand import build_vol_expand_ctx
+from app.services.bootstrap.chapter_plan_batches import normalize_volume_planned_chapters
 from app.services.bootstrap.retry import call_with_retry
 from app.services.bootstrap.steps.vol_chapter_plans import gen_vol_chapter_plans
 
@@ -390,11 +391,17 @@ async def expand_volume_chapters(
                 if generation_failed
                 else None
             )
+            planned_count = normalize_volume_planned_chapters(
+                (volume_node.extra or {}).get("planned_chapters", 30)
+            )
+            chapter_incomplete = 0 < len(nodes) < planned_count
             yield _sse(
                 "step_done",
                 step="expand_chapters",
                 volume_title=volume_node.title,
                 chapter_count=len(nodes),
+                planned_chapter_count=planned_count,
+                chapter_incomplete=chapter_incomplete,
                 linter_status=vol_extra.get("linter_status", "ok"),
                 linter_issue_count=linter_summary.get("issue_count", 0),
                 linter_critical_count=linter_summary.get("critical_count", 0),
@@ -406,6 +413,15 @@ async def expand_volume_chapters(
             )
             if generation_failed and gen_error:
                 yield _sse("error", step="expand_chapters", message=gen_error)
+            elif chapter_incomplete:
+                yield _sse(
+                    "error",
+                    step="expand_chapters",
+                    message=(
+                        f"章纲不完整：计划 {planned_count} 章，实际生成 {len(nodes)} 章。"
+                        "请换更大上下文模型或提高 VOL_EXPAND_CHAPTERS_MAX_TOKENS 后 force 重试。"
+                    ),
+                )
             elif blocked and block_msg:
                 yield _sse("error", step="expand_chapters", message=block_msg)
 

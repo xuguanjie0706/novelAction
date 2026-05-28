@@ -11,6 +11,7 @@ import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
 import { Eye, EyeOff } from 'lucide-react'
+import { authApi } from '../api/auth'
 
 /** 当前模式：登录 or 注册 */
 type Mode = 'login' | 'register'
@@ -23,9 +24,19 @@ export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [username, setUsername] = useState('')
+  const [emailCode, setEmailCode] = useState('')
   const [loading, setLoading] = useState(false)
+  const [sendingCode, setSendingCode] = useState(false)
+  const [codeCooldown, setCodeCooldown] = useState(0)
+  const [devCodeHint, setDevCodeHint] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showPassword, setShowPassword] = useState(false)
+
+  React.useEffect(() => {
+    if (codeCooldown <= 0) return
+    const timer = window.setTimeout(() => setCodeCooldown(prev => Math.max(prev - 1, 0)), 1000)
+    return () => window.clearTimeout(timer)
+  }, [codeCooldown])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -35,7 +46,7 @@ export default function LoginPage() {
       if (mode === 'login') {
         await login(email, password)
       } else {
-        await register(email, password, username || undefined)
+        await register(email, password, username || undefined, emailCode)
       }
       navigate('/', { replace: true })
     } catch (err: any) {
@@ -48,6 +59,28 @@ export default function LoginPage() {
       }
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleSendCode = async () => {
+    if (!email) {
+      setError('请先输入邮箱后再发送验证码')
+      return
+    }
+    setError(null)
+    setDevCodeHint(null)
+    setSendingCode(true)
+    try {
+      const res = await authApi.sendRegisterCode(email)
+      setCodeCooldown(60)
+      if (res.dev_code) {
+        setDevCodeHint(`开发环境验证码：${res.dev_code}`)
+      }
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail
+      setError(detail || err.message || '验证码发送失败，请稍后重试')
+    } finally {
+      setSendingCode(false)
     }
   }
 
@@ -99,7 +132,12 @@ export default function LoginPage() {
           <div className="flex mb-8 bg-[#121B22] rounded-xl p-1 border border-[#3A2F2A]">
             <button
               type="button"
-              onClick={() => { setMode('login'); setError(null) }}
+              onClick={() => {
+                setMode('login')
+                setError(null)
+                setEmailCode('')
+                setDevCodeHint(null)
+              }}
               className={`flex-1 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${
                 mode === 'login'
                   ? 'bg-[#C9A227] text-[#0C111C] shadow'
@@ -110,7 +148,12 @@ export default function LoginPage() {
             </button>
             <button
               type="button"
-              onClick={() => { setMode('register'); setError(null) }}
+              onClick={() => {
+                setMode('register')
+                setError(null)
+                setEmailCode('')
+                setDevCodeHint(null)
+              }}
               className={`flex-1 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${
                 mode === 'register'
                   ? 'bg-[#C9A227] text-[#0C111C] shadow'
@@ -153,6 +196,35 @@ export default function LoginPage() {
                 className="w-full bg-[#121B22] border border-[#3A2F2A] rounded-xl px-4 py-3 text-sm text-[#F5E8C7] placeholder:text-[#5C5240] focus:outline-none focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]/30 transition-all"
               />
             </div>
+
+            {mode === 'register' && (
+              <div>
+                <label className="block text-sm font-medium text-[#A8B0B8] mb-1.5">
+                  邮箱验证码
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={emailCode}
+                    onChange={e => setEmailCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="6 位数字验证码"
+                    required={mode === 'register'}
+                    className="flex-1 bg-[#121B22] border border-[#3A2F2A] rounded-xl px-4 py-3 text-sm text-[#F5E8C7] placeholder:text-[#5C5240] focus:outline-none focus:border-[#C9A227] focus:ring-1 focus:ring-[#C9A227]/30 transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSendCode}
+                    disabled={sendingCode || codeCooldown > 0}
+                    className="px-3 py-2 rounded-xl border border-[#3A2F2A] text-xs text-[#F5E8C7] hover:border-[#C9A227] disabled:text-[#5C5240] disabled:border-[#3A2F2A] disabled:cursor-not-allowed transition-all"
+                  >
+                    {sendingCode ? '发送中…' : codeCooldown > 0 ? `${codeCooldown}s` : '发送验证码'}
+                  </button>
+                </div>
+                {devCodeHint && (
+                  <p className="mt-1.5 text-xs text-[#C9A227]">{devCodeHint}</p>
+                )}
+              </div>
+            )}
 
             {/* 密码 + visibility toggle (new) */}
             <div>

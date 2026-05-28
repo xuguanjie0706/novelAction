@@ -35,7 +35,7 @@ export default function FanqieBookCard({ book, onOpen }: Props) {
       <div className="relative h-48 w-full overflow-hidden">
         {showCover ? (
           <img
-            src={book.cover}
+            src={book.cover ?? undefined}
             alt={book.book_name}
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
             onError={() => setCoverFailed(true)}

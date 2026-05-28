@@ -20,11 +20,13 @@ class UserRegisterRequest(BaseModel):
         email: 邮箱地址，唯一，作为登录凭证。
         password: 明文密码，后端即刻哈希，原文不落库。
         username: 可选显示名，留空则回退到邮箱前缀。
+        email_code: 邮箱验证码（6 位数字，一次性）。
     """
 
     email: EmailStr
     password: str
     username: Optional[str] = None
+    email_code: str
 
     @field_validator("password")
     @classmethod
@@ -33,6 +35,14 @@ class UserRegisterRequest(BaseModel):
         if len(v) < 6:
             raise ValueError("密码不能少于 6 位")
         return v
+
+    @field_validator("email_code")
+    @classmethod
+    def email_code_format(cls, v: str) -> str:
+        code = v.strip()
+        if len(code) != 6 or not code.isdigit():
+            raise ValueError("邮箱验证码必须为 6 位数字")
+        return code
 
 
 class UserLoginRequest(BaseModel):
@@ -45,6 +55,20 @@ class UserLoginRequest(BaseModel):
 
     email: EmailStr
     password: str
+
+
+class SendRegisterCodeRequest(BaseModel):
+    """发送注册验证码请求体。"""
+
+    email: EmailStr
+
+
+class SendRegisterCodeResponse(BaseModel):
+    """发送注册验证码响应体。"""
+
+    detail: str = "验证码已发送，请查收邮箱"
+    expire_minutes: int
+    dev_code: Optional[str] = None
 
 
 # ── 响应体 ───────────────────────────────────────────────────────────────────

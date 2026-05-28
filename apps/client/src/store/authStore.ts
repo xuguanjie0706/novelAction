@@ -48,7 +48,7 @@ interface AuthState {
    * @param username 可选显示名
    * @throws 注册失败时抛出 AxiosError
    */
-  register: (email: string, password: string, username?: string) => Promise<void>
+  register: (email: string, password: string, username: string | undefined, emailCode: string) => Promise<void>
 
   /**
    * 登出：清除 token 与 user，重定向由调用方处理。
@@ -96,8 +96,8 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ token: res.access_token, user: res.user })
   },
 
-  register: async (email, password, username) => {
-    const res = await authApi.register(email, password, username)
+  register: async (email, password, username, emailCode) => {
+    const res = await authApi.register(email, password, username, emailCode)
     saveToken(res.access_token)
     set({ token: res.access_token, user: res.user })
   },

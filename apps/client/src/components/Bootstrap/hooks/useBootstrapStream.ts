@@ -279,6 +279,7 @@ export function useBootstrapStream() {
       return
     }
     if (kind === 'volumes') {
+      const gd = gateData as Record<string, unknown>
       setGateStep('volumes')
       setGateMessage(
         typeof gd.has_realm_warnings === 'boolean' && gd.has_realm_warnings

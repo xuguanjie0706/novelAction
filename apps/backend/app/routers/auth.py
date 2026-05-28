@@ -15,7 +15,15 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
-from app.schemas.user import UserRegisterRequest, UserLoginRequest, TokenResponse, UserOut
+from app.schemas.user import (
+    SendRegisterCodeRequest,
+    SendRegisterCodeResponse,
+    TokenResponse,
+    UserLoginRequest,
+    UserOut,
+    UserRegisterRequest,
+)
+from app.services.email_login_code_service import create_and_send_login_code, verify_login_code
 from app.utils.auth import hash_password, verify_password, create_access_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -26,7 +34,7 @@ def register(body: UserRegisterRequest, db: Session = Depends(get_db)) -> TokenR
     """注册新账号。
 
     Args:
-        body: 包含 email / password / username 的注册请求体。
+        body: 包含 email / password / username / email_code 的注册请求体。
         db: 数据库 session（由依赖注入提供）。
 
     Returns:
@@ -40,6 +48,12 @@ def register(body: UserRegisterRequest, db: Session = Depends(get_db)) -> TokenR
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="该邮箱已被注册",
+        )
+
+    if not verify_login_code(db, body.email, body.email_code):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="邮箱验证码错误或已过期",
         )
 
     username = body.username or body.email.split("@")[0]
@@ -94,6 +108,19 @@ def login(body: UserLoginRequest, db: Session = Depends(get_db)) -> TokenRespons
 
     token = create_access_token(sub=str(user.id))
     return TokenResponse(access_token=token, user=UserOut.model_validate(user))
+
+
+@router.post("/register/code/send", response_model=SendRegisterCodeResponse)
+def send_register_code(body: SendRegisterCodeRequest, db: Session = Depends(get_db)) -> SendRegisterCodeResponse:
+    """发送邮箱注册验证码。"""
+    ok, expire_or_wait, dev_code = create_and_send_login_code(db, body.email)
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"发送过于频繁，请 {expire_or_wait} 秒后重试",
+        )
+
+    return SendRegisterCodeResponse(expire_minutes=expire_or_wait, dev_code=dev_code)
 
 
 @router.get("/me", response_model=UserOut)

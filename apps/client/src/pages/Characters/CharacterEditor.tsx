@@ -19,6 +19,7 @@ import {
   Field, TInput, TArea, CharacterTag, InfoPanel, CharacterAvatar,
   type CharacterGrowthTimelinePayload,
 } from './shared/components'
+import { DebriefRealmTimeline } from './shared/DebriefRealmTimeline'
 import { getDebriefRealmMilestones } from './shared/debriefMilestones'
 import { GrowthTrackPanel } from './GrowthTrackPanel'
 

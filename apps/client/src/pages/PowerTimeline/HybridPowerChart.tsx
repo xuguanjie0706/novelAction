@@ -132,8 +132,9 @@ export default function HybridPowerChart({ data }: Props) {
                   cy={y}
                   r={4}
                   className="fill-blue-600"
-                  title={`${p.realm_label} (${p.point_kind})`}
-                />
+                >
+                  <title>{`${p.realm_label} (${p.point_kind})`}</title>
+                </circle>
               )
             })}
             {data.chart.boss.map((p, idx) => {
@@ -141,7 +142,9 @@ export default function HybridPowerChart({ data }: Props) {
               const y = yToPx(p.effective_score ?? p.major_rank, min, max, innerH)
               return (
                 <g key={`b-${idx}`}>
-                  <circle cx={x} cy={y} r={4} className="fill-red-600" title={`${p.boss_name}: ${p.realm_label}`} />
+                  <circle cx={x} cy={y} r={4} className="fill-red-600">
+                    <title>{`${p.boss_name}: ${p.realm_label}`}</title>
+                  </circle>
                 </g>
               )
             })}

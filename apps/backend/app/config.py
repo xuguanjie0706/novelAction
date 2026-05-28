@@ -98,6 +98,15 @@ class Settings(BaseSettings):
     # JWT 认证
     JWT_SECRET_KEY: str = "jwt-secret-change-me-in-production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 默认 7 天
+    EMAIL_LOGIN_CODE_EXPIRE_MINUTES: int = 10
+    EMAIL_LOGIN_CODE_COOLDOWN_SECONDS: int = 60
+    EMAIL_LOGIN_CODE_SALT: str = "email-login-code-salt-change-me-in-production"
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 465
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_FROM_EMAIL: Optional[str] = None
+    SMTP_USE_SSL: bool = True
 
     # 管理后台账号（apps/frontend，端口 3174；与创作端账号体系完全隔离）
     # ADMIN_USERNAME/ADMIN_PASSWORD 任一为空 = 关闭管理后台登录入口（默认关闭，强制部署时显式开启）。

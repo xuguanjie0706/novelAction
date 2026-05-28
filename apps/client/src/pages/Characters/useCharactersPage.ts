@@ -37,7 +37,7 @@ export function useCharactersPage() {
       setCharacters(res.data)
       setSelected(prev => {
         if (prev?.id) {
-          const fresh = res.data.find(c => c.id === prev.id)
+          const fresh = res.data.find((c: Character) => c.id === prev.id)
           if (fresh) return fresh
         }
         return res.data.length > 0 ? res.data[0] : null

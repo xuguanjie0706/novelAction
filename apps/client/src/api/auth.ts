@@ -17,6 +17,12 @@ export interface TokenResponse {
   user: AuthUser
 }
 
+export interface SendRegisterCodeResponse {
+  detail: string
+  expire_minutes: number
+  dev_code?: string | null
+}
+
 /** 专用 axios 实例：不挂全局错误拦截，让调用方自己处理 error.response.data.detail */
 const authHttp = axios.create({
   baseURL: '/api/v1',
@@ -30,11 +36,12 @@ export const authApi = {
    * @param email 注册邮箱
    * @param password 明文密码（后端哈希，不落库原文）
    * @param username 可选显示名；留空则后端回退到邮箱前缀
+   * @param emailCode 邮箱验证码
    * @returns TokenResponse，包含 access_token 与用户信息
-   * @throws AxiosError - 400 邮箱已注册 | 422 字段校验失败
+   * @throws AxiosError - 400 邮箱已注册 | 401 验证码错误 | 422 字段校验失败
    */
-  register: async (email: string, password: string, username?: string): Promise<TokenResponse> => {
-    const res = await authHttp.post<TokenResponse>('/auth/register', { email, password, username })
+  register: async (email: string, password: string, username: string | undefined, emailCode: string): Promise<TokenResponse> => {
+    const res = await authHttp.post<TokenResponse>('/auth/register', { email, password, username, email_code: emailCode })
     return res.data
   },
 
@@ -48,6 +55,17 @@ export const authApi = {
    */
   login: async (email: string, password: string): Promise<TokenResponse> => {
     const res = await authHttp.post<TokenResponse>('/auth/login', { email, password })
+    return res.data
+  },
+
+  /**
+   * 发送邮箱注册验证码。
+   *
+   * @param email 注册邮箱
+   * @returns 发送结果；开发环境可能返回 dev_code 用于本地调试
+   */
+  sendRegisterCode: async (email: string): Promise<SendRegisterCodeResponse> => {
+    const res = await authHttp.post<SendRegisterCodeResponse>('/auth/register/code/send', { email })
     return res.data
   },
 

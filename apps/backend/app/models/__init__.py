@@ -35,6 +35,7 @@ from app.models.redeem_code import RedeemCode
 from app.models.rag_retrieval_log import RagRetrievalLog
 from app.models.memory_conflict_detect_log import MemoryConflictDetectLog
 from app.models.generation_job import GenerationJob
+from app.models.email_login_code import EmailLoginCode
 
 __all__ = [
     "Project",
@@ -74,4 +75,5 @@ __all__ = [
     "RagRetrievalLog",
     "MemoryConflictDetectLog",
     "GenerationJob",
+    "EmailLoginCode",
 ]

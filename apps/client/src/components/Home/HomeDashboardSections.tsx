@@ -1,6 +1,8 @@
 import React from 'react'
 import {
+  ArrowRight,
   BookOpen,
+  Coins,
   ChevronRight,
   Lightbulb,
   PenLine,
@@ -48,6 +50,13 @@ const quickActions = [
     description: '生成小说名字',
     icon: Wand2,
     tone: 'text-violet-500 bg-violet-50',
+  },
+  {
+    id: 'wallet',
+    label: '我的钱包',
+    description: '查看余额与明细',
+    icon: Coins,
+    tone: 'text-amber-500 bg-amber-50',
   },
   {
     id: 'timer',
@@ -325,6 +334,48 @@ export function RecommendationsPanel() {
       >
         查看更多推荐
         <ChevronRight size={16} />
+      </button>
+    </section>
+  )
+}
+
+export function WalletEntryCard({
+  balance,
+  loading = false,
+  onOpen,
+}: {
+  balance: number | null
+  loading?: boolean
+  onOpen: () => void
+}) {
+  return (
+    <section className="rounded-lg border border-amber-100 bg-[#fff7e9] p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-bold text-gray-950">我的钱包</h2>
+          <p className="mt-1 text-xs text-gray-500">积分余额与消费记录</p>
+        </div>
+        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/90 text-amber-500 shadow-sm">
+          <Coins size={18} />
+        </span>
+      </div>
+      <div className="mt-4 rounded-lg border border-amber-100/70 bg-white/80 px-4 py-3">
+        <div className="text-xs text-gray-500">当前可用积分</div>
+        {loading ? (
+          <div className="mt-2 h-8 w-24 animate-pulse rounded bg-amber-100/80" />
+        ) : (
+          <div className="mt-1 text-2xl font-bold text-gray-950 tabular-nums">
+            {(balance ?? 0).toLocaleString()}
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="mt-4 flex h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-amber-500 text-sm font-semibold text-white transition-colors hover:bg-amber-600"
+      >
+        进入钱包
+        <ArrowRight size={15} />
       </button>
     </section>
   )

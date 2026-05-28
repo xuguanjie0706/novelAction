@@ -14,14 +14,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  ArrowLeft,
   CheckCircle2,
   ChevronDown,
   Clock,
   Coins,
   Gift,
   Loader2,
-  LogOut,
   Sparkles,
   TrendingDown,
   TrendingUp,
@@ -37,7 +35,12 @@ import {
   type CreditBalance,
   type CreditTransaction,
 } from '../api/credits'
-import { useAuthStore } from '../store/authStore'
+import { projectsApi } from '../api/client'
+import type { Project } from '../types'
+import { useAppStore } from '../store'
+import HomeSidebar from '../components/Home/HomeSidebar'
+import HomeTopBar from '../components/Home/HomeTopBar'
+import { useHomeSidebarNavigate } from '../hooks/useHomeSidebarNavigate'
 
 // ─────────────────────────────────────────────────────────
 //  Constants
@@ -410,10 +413,15 @@ function TransactionHistory({ refreshKey }: { refreshKey: number }) {
  * 布局：固定顶栏 + 滚动主区（两栏：左侧余额+兑换码，右侧流水）。
  */
 export default function WalletPage() {
-  const { logout, user } = useAuthStore()
+  const { setCurrentProject } = useAppStore()
   const navigate = useNavigate()
   const [credit, setCredit] = useState<CreditBalance | null>(null)
   const [redeemKey, setRedeemKey] = useState(0)
+  const [projects, setProjects] = useState<Project[]>([])
+
+  useEffect(() => {
+    projectsApi.list().then(res => setProjects(res.data)).catch(() => setProjects([]))
+  }, [])
 
   const refreshCredit = useCallback(async () => {
     try {
@@ -433,92 +441,60 @@ export default function WalletPage() {
     setRedeemKey(k => k + 1)
   }
 
-  const handleLogout = () => {
-    logout()
-    navigate('/login', { replace: true })
-  }
-
-  const avatarLetter = user
-    ? (user.username?.[0] ?? user.email?.[0] ?? '写').toUpperCase()
-    : '写'
+  const handleSidebarNavigate = useHomeSidebarNavigate({
+    projects,
+    activeId: 'wallet',
+    navigate,
+    setCurrentProject,
+  })
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#FAF8F4]">
-      {/* ── 顶栏 ─────────────────────────────────────────── */}
-      <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-gray-100 bg-white/90 px-6 backdrop-blur-sm">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => navigate('/')}
-            className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-xs text-gray-600 transition-colors hover:bg-gray-100"
-          >
-            <ArrowLeft size={12} />
-            返回首页
-          </button>
-          <div className="flex items-center gap-2">
-            <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-amber-50">
-              <Wallet size={13} className="text-amber-500" />
+    <div className="min-h-screen bg-[#f8fafc] text-gray-950 lg:flex">
+      <HomeSidebar todayWords={0} onNavigate={handleSidebarNavigate} activeId="wallet" />
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <HomeTopBar />
+        <main className="min-w-0 flex-1 px-5 py-7 sm:px-8">
+          <div className="mx-auto max-w-[1110px]">
+            <div className="mb-6">
+              <h1 className="text-2xl font-bold tracking-normal text-gray-950 sm:text-[28px]">我的钱包</h1>
+              <p className="mt-2 text-[15px] text-gray-500">查看余额、兑换码充值与积分消耗明细</p>
             </div>
-            <span className="text-sm font-semibold text-gray-800">我的钱包</span>
-          </div>
-        </div>
 
-        {/* 用户 + 登出 */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-700">
-              {avatarLetter}
-            </div>
-            <span className="hidden text-xs text-gray-500 sm:block">
-              {user?.username || user?.email}
-            </span>
-          </div>
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-gray-400 transition-colors hover:bg-red-50 hover:text-red-500"
-          >
-            <LogOut size={13} />
-            <span className="hidden sm:inline">退出</span>
-          </button>
-        </div>
-      </header>
-
-      {/* ── 主内容区 ─────────────────────────────────────── */}
-      <main className="flex-1 mx-auto w-full max-w-5xl px-4 sm:px-6 py-8">
-        {/* 页标题 */}
-        <div className="mb-6">
-          <h1 className="text-xl font-bold text-gray-900">积分钱包</h1>
-          <p className="text-sm text-gray-400 mt-1">查看余额、兑换码充值、查看消耗明细</p>
-        </div>
-
-        {/* 两栏布局 */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
-          {/* 左栏：余额英雄区 + 兑换码 */}
-          <div className="flex flex-col gap-6 lg:col-span-2">
-            <BalanceHero credit={credit} />
-            <RedeemCard onSuccess={handleRedeemSuccess} />
-          </div>
-
-          {/* 右栏：流水历史 */}
-          <div className="lg:col-span-3">
-            <div className="rounded-2xl bg-white border border-gray-100 shadow-sm overflow-hidden">
-              {/* 卡头 */}
-              <div className="flex items-center gap-3 px-6 py-5 border-b border-gray-50">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-50">
-                  <Clock size={17} className="text-gray-400" />
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+              <section className="min-w-0 space-y-6">
+                <BalanceHero credit={credit} />
+                <div className="rounded-lg border border-gray-100 bg-white shadow-sm overflow-hidden">
+                  <div className="flex items-center gap-3 border-b border-gray-100 px-5 py-4">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-50">
+                      <Clock size={17} className="text-gray-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-800">积分明细</p>
+                      <p className="text-xs text-gray-400 mt-0.5">全部充值与消耗记录</p>
+                    </div>
+                  </div>
+                  <div className="px-4 py-2">
+                    <TransactionHistory refreshKey={redeemKey} />
+                  </div>
                 </div>
-                <div>
-                  <p className="text-sm font-semibold text-gray-800">积分明细</p>
-                  <p className="text-xs text-gray-400 mt-0.5">全部充值与消耗记录</p>
-                </div>
-              </div>
+              </section>
 
-              <div className="px-4 py-2">
-                <TransactionHistory refreshKey={redeemKey} />
-              </div>
+              <aside className="space-y-6">
+                <RedeemCard onSuccess={handleRedeemSuccess} />
+                <div className="rounded-lg border border-gray-100 bg-white p-5 shadow-sm">
+                  <h2 className="text-sm font-semibold text-gray-900">钱包说明</h2>
+                  <ul className="mt-3 space-y-2 text-xs leading-6 text-gray-500">
+                    <li>积分用于 AI 调用计费，按模型档位实时扣减。</li>
+                    <li>支持兑换码充值，成功后即时到账。</li>
+                    <li>流水记录保留充值、消耗与调账信息，便于核对成本。</li>
+                  </ul>
+                </div>
+              </aside>
             </div>
           </div>
-        </div>
-      </main>
+        </main>
+      </div>
     </div>
   )
 }

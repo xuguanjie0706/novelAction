@@ -20,6 +20,7 @@ import {
   saveFanqieConfig,
 } from '../../api/fanqieApi'
 import type { FanqieBook, FanqieConfig, FanqieConfigSummary } from '../../api/fanqieApi'
+import { useHomeSidebarNavigate } from '../../hooks/useHomeSidebarNavigate'
 import ConnectModal from './ConnectModal'
 import PlaceholderGrid from './PlaceholderGrid'
 import FanqieBookGrid from './FanqieBookGrid'
@@ -84,27 +85,12 @@ export default function FanqiePage() {
     await loadBooks()
   }
 
-  const handleSidebarNavigate = (target: string) => {
-    const first = projects[0]
-    const goProject = (tab: string) => {
-      if (!first) {
-        toast('还没有小说，先新建一部吧')
-        return
-      }
-      setCurrentProject(first)
-      navigate(`/project/${first.id}/${tab}`)
-    }
-    if (target === 'home') navigate('/')
-    else if (target === 'projects') navigate('/bookshelf')
-    else if (target === 'write') goProject('write')
-    else if (target === 'coherence') navigate('/coherence-check')
-    else if (target === 'memory') goProject('memory')
-    else if (target === 'characters') goProject('characters')
-    else if (target === 'outline') goProject('outline')
-    else if (target === 'wallet') navigate('/wallet')
-    else if (target === 'fanqie') { /* current */ }
-    else toast('功能建设中')
-  }
+  const handleSidebarNavigate = useHomeSidebarNavigate({
+    projects,
+    activeId: 'fanqie',
+    navigate,
+    setCurrentProject,
+  })
 
   const filtered = books.filter(b =>
     b.book_name.toLowerCase().includes(search.toLowerCase()) ||

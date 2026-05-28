@@ -9,6 +9,7 @@ import HomeTopBar from '../components/Home/HomeTopBar'
 import GenerateWizard from '../components/Bootstrap/GenerateWizard'
 import ActiveBootstrapResumeBar from '../components/Bootstrap/ActiveBootstrapResumeBar'
 import { useBootstrapResumeBanner } from '../hooks/useBootstrapResumeBanner'
+import { useHomeSidebarNavigate } from '../hooks/useHomeSidebarNavigate'
 import {
   CreateProjectDialog,
 } from '../components/Home/HomeDashboardSections'
@@ -378,30 +379,12 @@ export default function BookshelfPage() {
     }
   }
 
-  const handleSidebarNavigate = (target: string) => {
-    if (target === 'home') navigate('/')
-    else if (target === 'projects') { /* already here */ }
-    else if (target === 'write') {
-      const p = projects[0]
-      if (p) { setCurrentProject(p); navigate(`/project/${p.id}/write`) }
-      else toast('还没有小说，先新建一部吧')
-    }
-    else if (target === 'coherence') navigate('/coherence-check')
-    else if (target === 'memory') {
-      const p = projects[0]
-      if (p) { setCurrentProject(p); navigate(`/project/${p.id}/memory`) }
-    }
-    else if (target === 'characters') {
-      const p = projects[0]
-      if (p) { setCurrentProject(p); navigate(`/project/${p.id}/characters`) }
-    }
-    else if (target === 'outline') {
-      const p = projects[0]
-      if (p) { setCurrentProject(p); navigate(`/project/${p.id}/outline`) }
-    }
-    else if (target === 'fanqie') navigate('/fanqie')
-    else toast('功能建设中')
-  }
+  const handleSidebarNavigate = useHomeSidebarNavigate({
+    projects,
+    activeId: 'projects',
+    navigate,
+    setCurrentProject,
+  })
 
   const filtered = projects.filter(p =>
     p.title.toLowerCase().includes(search.toLowerCase()) ||

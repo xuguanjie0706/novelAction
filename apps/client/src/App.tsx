@@ -15,6 +15,7 @@ const ProjectDetailPage = lazy(() => import('./pages/ProjectDetailPage'))
 const BookshelfDetailPage = lazy(() => import('./pages/BookshelfDetailPage'))
 const ChapterCoherencePage = lazy(() => import('./pages/ChapterCoherencePage'))
 const WalletPage = lazy(() => import('./pages/WalletPage'))
+const StatsPage = lazy(() => import('./pages/StatsPage'))
 const ProjectCachedViews = lazy(() => import('./pages/ProjectCachedViews'))
 
 function withSuspense(children: React.ReactNode) {
@@ -151,6 +152,14 @@ export default function App() {
           element={
             <PrivateRoute>
               {withSuspense(<WalletPage />)}
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/stats"
+          element={
+            <PrivateRoute>
+              {withSuspense(<StatsPage />)}
             </PrivateRoute>
           }
         />

@@ -57,6 +57,7 @@ from app.routers import character_portrait as character_portrait_router
 from app.routers import auth as auth_router
 from app.routers import admin_auth as admin_auth_router
 from app.routers import dashboard as dashboard_router
+from app.routers import stats as stats_router
 from app.routers import bootstrap_graph as bootstrap_graph_router
 from app.routers import bootstrap_step_regen as bootstrap_step_regen_router
 from app.routers import credits as credits_router
@@ -251,6 +252,7 @@ app.include_router(
 )
 app.include_router(llm_public.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 app.include_router(dashboard_router.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+app.include_router(stats_router.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 
 # 项目子资源：统一挂 verify_project_access 校验归属。
 _project_scoped_dep = [Depends(verify_project_access)]

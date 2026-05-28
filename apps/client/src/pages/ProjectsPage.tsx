@@ -10,6 +10,7 @@ import {
   QuickActionsGrid,
   RecentEdits,
   RecommendationsPanel,
+  WalletEntryCard,
   WritingStatsPanel,
   type RecentEdit,
 } from '../components/Home/HomeDashboardSections'
@@ -17,11 +18,13 @@ import GenerateWizard from '../components/Bootstrap/GenerateWizard'
 import ActiveBootstrapResumeBar from '../components/Bootstrap/ActiveBootstrapResumeBar'
 import { useBootstrapResumeBanner } from '../hooks/useBootstrapResumeBanner'
 import { bootstrapRunsApi, dashboardApi, projectsApi } from '../api/client'
+import { fetchMyCredits } from '../api/credits'
 import { useAppStore } from '../store'
 import type { DashboardHome, DashboardRecentChapter, Project } from '../types'
 import { HOME_RECENT_FALLBACK } from '../data/homeMock'
 import { timeAgo } from '../utils/timeAgo'
 import { clearActiveBootstrapRun } from '../utils/bootstrapActiveRun'
+import { useHomeSidebarNavigate } from '../hooks/useHomeSidebarNavigate'
 
 // TODO(homepage-data): 后续接 AI 取名服务；当前为静态占位列表
 const mockNames = ['浮灯照长夜', '山海失序录', '裂星行者', '旧神便利店']
@@ -58,6 +61,8 @@ export default function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([])
   const [dashboard, setDashboard] = useState<DashboardHome | null>(null)
   const [dashboardLoading, setDashboardLoading] = useState(true)
+  const [walletBalance, setWalletBalance] = useState<number | null>(null)
+  const [walletLoading, setWalletLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [showWizard, setShowWizard] = useState(false)
@@ -88,6 +93,14 @@ export default function ProjectsPage() {
       .finally(() => setDashboardLoading(false))
   }
   useEffect(refreshDashboard, [])
+
+  useEffect(() => {
+    setWalletLoading(true)
+    fetchMyCredits()
+      .then(res => setWalletBalance(res.balance))
+      .catch(() => setWalletBalance(null))
+      .finally(() => setWalletLoading(false))
+  }, [])
 
   const recentEdits = useMemo<RecentEdit[]>(() => {
     if (dashboard && dashboard.recent_chapters.length > 0) {
@@ -181,22 +194,13 @@ export default function ProjectsPage() {
     openProject(firstProject, tab)
   }
 
-  const handleSidebarNavigate = (target: string) => {
-    const targetMap: Record<string, () => void> = {
-      home: () => window.scrollTo({ top: 0, behavior: 'smooth' }),
-      projects: () => navigate('/bookshelf'),
-      write: () => navigateFirstProject('write'),
-      memory: () => navigateFirstProject('memory'),
-      characters: () => navigateFirstProject('characters'),
-      outline: () => navigateFirstProject('outline'),
-      coherence: () => navigate('/coherence-check'),
-      stats: () => toast('数据统计页正在建设中，当前先展示首页写作数据'),
-      wallet: () => navigate('/wallet'),
-      trash: () => toast('回收站暂无内容'),
-      fanqie: () => navigate('/fanqie'),
-    }
-    targetMap[target]?.()
-  }
+  const handleSidebarNavigate = useHomeSidebarNavigate({
+    projects,
+    activeId: 'home',
+    onHome: () => window.scrollTo({ top: 0, behavior: 'smooth' }),
+    navigate,
+    setCurrentProject,
+  })
 
   const handleQuickAction = (actionId: string) => {
     if (actionId === 'chapter') {
@@ -210,6 +214,10 @@ export default function ProjectsPage() {
     if (actionId === 'name') {
       const nextName = mockNames[Math.floor(Math.random() * mockNames.length)]
       toast.success(`灵感书名：${nextName}`)
+      return
+    }
+    if (actionId === 'wallet') {
+      navigate('/wallet')
       return
     }
     toast('计时器功能正在建设中')
@@ -285,6 +293,11 @@ export default function ProjectsPage() {
               </section>
 
               <aside className="space-y-4">
+                <WalletEntryCard
+                  balance={walletBalance}
+                  loading={walletLoading}
+                  onOpen={() => navigate('/wallet')}
+                />
                 <WritingStatsPanel data={dashboard} loading={dashboardLoading && !dashboard} />
                 <InspirationPanel />
                 <RecommendationsPanel />

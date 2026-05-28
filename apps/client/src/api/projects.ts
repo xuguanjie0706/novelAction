@@ -80,6 +80,48 @@ export const dashboardApi = {
   home: () => api.get<DashboardHome>('/dashboard/home'),
 }
 
+/** 数据统计页全量聚合接口 */
+export const statsApi = {
+  summary: () => api.get<StatsSummary>('/stats/summary'),
+}
+
+/** 数据统计全量响应类型 */
+export interface StatsSummary {
+  // KPI
+  total_words: number
+  total_projects: number
+  total_chapters: number
+  streak_days: number
+  today_words: number
+  avg_quality_score: number
+  writing_days_30: number
+  // 趋势
+  trend_30: Array<{ date: string; weekday_label: string; words: number }>
+  // 写作习惯
+  weekday_distribution: Array<{ weekday: number; label: string; words: number; pct: number }>
+  // 作品进度
+  projects_progress: Array<{
+    id: string
+    title: string
+    genre: string
+    status: string
+    target_words: number
+    actual_words: number
+    progress_pct: number
+    chapter_count: number
+    avg_quality: number
+    updated_at: string | null
+  }>
+  status_distribution: Array<{ status: string; count: number }>
+  genre_distribution: Array<{ genre: string; count: number }>
+  // 质检
+  total_quality_debts: number
+  debt_by_severity: Record<string, number>
+  // AI 生成
+  bootstrap_count: number
+  ai_call_count_30: number
+}
+
 // ── Cover Generation ──────────────────────────────────
 export const coverApi = {
   imageProviders: () => api.get('/cover/image-providers'),

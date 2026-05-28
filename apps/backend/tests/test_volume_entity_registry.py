@@ -36,8 +36,10 @@ def test_extract_orgs_and_canonical_match():
     assert not _org_matches_canonical("冥府", ["凌云宗", "噬魂殿"])
 
 
-def test_lint_orphan_faction_and_surname(monkeypatch):
-    """模拟 DB：卷文本含未登记势力 + 主角姓与家族不符。"""
+def test_lint_orphan_faction_not_direct_issue(monkeypatch):
+    """卷文本含未登记势力名：不再直写 issue，改由 collect_faction_semantic_hints 供 AI 裁决。"""
+    from app.services.bootstrap.volume_faction_hints import collect_faction_semantic_hints
+
     vol = SimpleNamespace(
         title="第四卷",
         summary="幽姬（大魂师）率冥府进攻云霄剑宗",
@@ -103,10 +105,12 @@ def test_lint_orphan_faction_and_surname(monkeypatch):
         "char_realms": {"苏云": "魂徒", "幽姬": "大魂师"},
     }
     issues = lint_volume_entity_issues(FakeDB(), "pid", ctx)
-    types = {i["type"] for i in issues}
-    assert "faction_mismatch" in types
-    descs = " ".join(i["description"] for i in issues)
-    assert "云霄剑宗" in descs or "冥府" in descs
+    faction_issues = [i for i in issues if i.get("type") == "faction_mismatch"]
+    assert faction_issues == []
+
+    hints = collect_faction_semantic_hints(FakeDB(), "pid", ctx)
+    joined = " ".join(hints)
+    assert "云霄剑宗" in joined or "冥府" in joined
 
 
 def test_lint_villain_realm_inversion_by_structured_fields(monkeypatch):

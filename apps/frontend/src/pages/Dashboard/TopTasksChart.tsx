@@ -4,38 +4,10 @@
  * 两个小图共用一个 Card，展示「谁在消耗 Token」与「RAG 质量」两个维度。
  */
 import { Card, Progress, Typography } from 'antd'
+import { getLlmOperationShortLabel } from '../../constants/llmOperationLabels'
 import type { TopTask, RagStats } from '../../types/dashboard'
 
 const { Text } = Typography
-
-// 操作名简化映射
-const OP_ABBR: Record<string, string> = {
-  'bootstrap.positioning': 'BS 立项',
-  'bootstrap.project': 'BS 项目初始化',
-  'bootstrap.settings': 'BS 设定卡',
-  'bootstrap.power_systems': 'BS 境界体系',
-  'bootstrap.factions': 'BS 势力',
-  'bootstrap.storylines': 'BS 故事线',
-  'bootstrap.characters': 'BS 人物库',
-  'bootstrap.skills': 'BS 技能体系',
-  'bootstrap.items': 'BS 道具体系',
-  'bootstrap.volumes': 'BS 卷规划',
-  'bootstrap.memory': 'BS 记忆库',
-  'bootstrap.relations': 'BS 人物关系',
-  'bootstrap.consistency_scan': 'BS 一致性扫描',
-  quality_check: '章节质检',
-  draft_assist_stream: '章节写作',
-  expand_outline: '大纲展开',
-  auto_extract_debrief: '自动复盘',
-  extract_memory: '记忆提取',
-  suggest_stream: 'AI 建议',
-  memory_conflict_detect: '记忆冲突检测',
-  chapter_coherence_check: '连贯性检测',
-}
-
-function abbr(op: string): string {
-  return OP_ABBR[op] ?? (op.length > 16 ? op.slice(0, 16) + '…' : op)
-}
 
 function formatK(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -83,7 +55,7 @@ export default function TopTasksChart({ tasks, rag, loading }: Props) {
                     marginBottom: 2,
                   }}
                 >
-                  <Text style={{ fontSize: 12 }}>{abbr(t.task)}</Text>
+                  <Text style={{ fontSize: 12 }}>{getLlmOperationShortLabel(t.task)}</Text>
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     {formatK(t.tokens)}
                   </Text>

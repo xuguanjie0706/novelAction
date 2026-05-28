@@ -7,10 +7,15 @@
    - 技能 level_required 高于掌握者当前 realm_rank
    - 道具 first_appearance_chapter 与章纲里的 power_milestone/core_event 不一致
    - 连续卷之间 sort_order 跳号（卷间时序缺口）
-   预检结果作为 high-severity 硬伤直接写入 issues，无需 AI。
+   - 卷级结构化校验（volume_boss_realm 曲线、道途阶、终局 Boss 档位）
+   以上有 ID/数值/结构化字段依据的项直接写入 issues。
 
-2. AI 叙事层分析（同旧版5条检查 + 新增1条反派行动时间线对齐）：
-   接收预检发现的摘要作为上下文，补充结构代码检不到的语义矛盾。
+   势力名后缀启发式（易误切叙事短语）**不**直写 issues，改由
+   ``volume_faction_hints.collect_faction_semantic_hints`` 生成线索，交 AI 裁决。
+
+2. AI 叙事层分析：
+   交叉核验语义矛盾；势力/归属类以 AI 输出为准（可确认或驳回代码疑似线索）。
+   最终 ``consistency_issues = 代码硬伤 + AI 确认项``。
 """
 
 from __future__ import annotations
@@ -23,6 +28,14 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.services.bootstrap.parse import parse_json
 
 logger = logging.getLogger(__name__)
+
+# lint_volume_entity_issues 中可直写的类型（结构化字段 / 数值，非叙事启发式）
+_VOLUME_LINT_HARD_TYPES = frozenset({
+    "villain_alignment",
+    "realm_mismatch",
+    "path_alignment",
+    "protagonist_alignment",
+})
 
 
 # ── 阶段一：纯代码预检 ────────────────────────────────────────────────────────
@@ -187,11 +200,14 @@ def _structural_precheck(svc: Any, project, ctx: dict) -> list[dict]:
             })
             break  # 一条提示即可
 
-    # 5. 卷级实体：势力别名 / 反派境界曲线 / 终局 Boss 档位 ─────────────────
+    # 5. 卷级实体：反派境界曲线 / 道途阶 / 终局 Boss（结构化字段，非势力后缀启发式）
     try:
         from app.services.bootstrap.volume_entity_registry import lint_volume_entity_issues
 
-        issues.extend(lint_volume_entity_issues(db, pid, ctx))
+        vol_lint = lint_volume_entity_issues(db, pid, ctx)
+        issues.extend(
+            i for i in vol_lint if i.get("type") in _VOLUME_LINT_HARD_TYPES
+        )
     except Exception:
         logger.exception("consistency_scan 卷级实体预检跳过 project=%s", pid)
 
@@ -201,15 +217,24 @@ def _structural_precheck(svc: Any, project, ctx: dict) -> list[dict]:
 # ── 阶段二：AI 叙事层分析 ─────────────────────────────────────────────────────
 
 async def gen_consistency_scan(svc: Any, project, ctx: dict) -> list:
-    """全局一致性扫描：代码预检 + AI 叙事层分析，结果合并写入 Project.extra。"""
-    # ── 阶段一：纯代码预检 ────────────────────────────────────────────────
+    """全局一致性扫描：代码硬伤 + 势力疑似线索交 AI 裁决，合并写入 Project.extra。"""
+    # ── 阶段一：纯代码预检（硬伤直写）────────────────────────────────────────
     try:
         precheck_issues = _structural_precheck(svc, project, ctx)
     except Exception:
         logger.exception("consistency_scan 代码预检异常，跳过（项目=%s）", project.id)
         precheck_issues = []
 
-    # ── 阶段二：AI 分析 ───────────────────────────────────────────────────
+    # 势力/归属疑似：仅作 AI 线索，不进入 precheck_issues
+    faction_hints: list[str] = []
+    try:
+        from app.services.bootstrap.volume_faction_hints import collect_faction_semantic_hints
+
+        faction_hints = collect_faction_semantic_hints(svc.db, project.id, ctx)
+    except Exception:
+        logger.exception("consistency_scan 势力疑似线索收集跳过 project=%s", project.id)
+
+    # ── 阶段二：AI 分析（势力语义以 AI 输出为准）────────────────────────────
     system = (
         "你是有30年经验的网络小说总编辑，专门做稿件前置审核。"
         "只返回 JSON 数组，不要任何解释文字。"
@@ -235,11 +260,23 @@ async def gen_consistency_scan(svc: Any, project, ctx: dict) -> list:
     char_realm_lines = "\n".join(
         f"- {name}：境界={realm}" for name, realm in char_realms.items()
     )
-    precheck_hint = ""
+    hard_precheck_hint = ""
     if precheck_issues:
-        precheck_hint = (
-            "\n【代码预检已发现的硬伤（你无需重复，专注语义层矛盾）】\n"
+        hard_precheck_hint = (
+            "\n【代码已确认的硬伤（无需重复，专注其余语义矛盾）】\n"
             + "\n".join(f"  - {i['description']}" for i in precheck_issues)
+            + "\n"
+        )
+    faction_hint_block = ""
+    if faction_hints:
+        faction_hint_block = (
+            "\n【代码疑似势力/归属线索 — 须由你裁决，误判则不得写入 JSON】\n"
+            "以下由正则从卷叙述中提取，常将「虚空之门」「守门人」「血脉至上的家」等叙事短语"
+            "误识别为组织名。请结合【势力档案摘要】与【卷级骨架】全文判断：\n"
+            "  - 若为已登记势力的别名/简称 → 忽略\n"
+            "  - 若为叙事环境词（门、殿、家等普通用语）→ 忽略\n"
+            "  - 若确为未建档的关键组织（如禁契宗）→ 写入 faction_mismatch\n"
+            + "\n".join(f"  - {h}" for h in faction_hints)
             + "\n"
         )
 
@@ -272,7 +309,7 @@ async def gen_consistency_scan(svc: Any, project, ctx: dict) -> list:
 
 【卷级对立面登记表】
 {ladder_summary or '（未设定）'}
-{precheck_hint}
+{hard_precheck_hint}{faction_hint_block}
 请对以上信息做「交叉核验」，找出所有显著矛盾或风险项，返回JSON数组：
 [
   {{
@@ -283,9 +320,11 @@ async def gen_consistency_scan(svc: Any, project, ctx: dict) -> list:
   }}
 ]
 
-检查重点（只查代码检不到的语义层）：
+检查重点：
 1. 人物卡 current_realm 是否在境界体系 levels 的合法名称里？
-2. 主角和重要人物的 faction 是否与势力档案中势力名吻合（允许模糊匹配）？
+2. 势力一致性：卷骨架与人物 faction 是否与【势力档案摘要】吻合？
+   对「代码疑似势力/归属线索」逐条裁决——仅确认真问题才输出 faction_mismatch；
+   叙事短语误识别、已登记别名不得列为 issue。
 3. 故事线类型与卷骨架冲突走向是否吻合？各故事线是否都能在卷骨架中找到推进节点？
 4. 境界体系 protagonist_start_rank 与主角人物卡 current_realm 是否对应同一境界？
 5. 反派行动线与卷骨架 phase 标记是否对齐（反派明显占优的卷是否标记了 dark_hour/turning）？

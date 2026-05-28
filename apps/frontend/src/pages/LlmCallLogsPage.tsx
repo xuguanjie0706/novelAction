@@ -5,6 +5,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import { http } from '../api/http'
+import { getLlmOperationLabel, getLlmOperationShortLabel } from '../constants/llmOperationLabels'
 import type { LlmCallContextIssue, LlmCallListResponse, LlmCallRecord } from '../types/llm'
 
 const { Text, Title } = Typography
@@ -84,42 +85,6 @@ export default function LlmCallLogsPage() {
     const task = row.context?.task
     if (typeof task === 'string' && task.trim()) return task.trim()
     return ''
-  }
-
-  const operationLabel = (op?: string) => {
-    const m: Record<string, string> = {
-      'bootstrap.positioning': 'Bootstrap 立项会议：提炼题材定位与卖点承诺',
-      'bootstrap.project': 'Bootstrap 项目初始化：生成项目基础设定与核心故事',
-      'bootstrap.settings': 'Bootstrap 世界观总设：生成设定卡',
-      'bootstrap.power_systems': 'Bootstrap 力量体系：生成等级、机制与代价',
-      'bootstrap.factions': 'Bootstrap 阵营势力：生成组织关系与立场冲突',
-      'bootstrap.storylines': 'Bootstrap 故事线：生成主线/支线与推进节奏',
-      'bootstrap.characters': 'Bootstrap 人物库：生成核心角色与关系锚点',
-      'bootstrap.skills': 'Bootstrap 技能体系：生成技能结构与成长路径',
-      'bootstrap.items': 'Bootstrap 道具体系：生成资源、稀有度与用途',
-      'bootstrap.volumes': 'Bootstrap 卷章规划：生成卷级结构与章节分布',
-      'bootstrap.memory': 'Bootstrap 记忆库：生成可复用事实与约束',
-      'bootstrap.relations': 'Bootstrap 人物关系：生成人际网络与动态张力',
-      'bootstrap.consistency_scan': 'Bootstrap 一致性扫描：检测设定冲突与结构缺口',
-      'bootstrap.ch1_scenes': 'Bootstrap 第一章场景规划：生成开篇场景与节奏节点',
-      'bootstrap.vol1_chapters': 'Bootstrap 第一卷章节细化：生成首卷章节拆分与推进线',
-      bootstrap_complete_settings: 'Bootstrap 设定补全：补齐世界观结构化条目',
-      bootstrap_complete_characters: 'Bootstrap 人物补全：补齐角色画像与关系',
-      quality_check: '章节质检：检查剧情、人物一致性与设定冲突',
-      chapter_coherence_check: '多章节连贯性检测：检查标题匹配与章节衔接',
-      chapter_coherence_apply: '连贯性评测修订：按评测结论最小幅度改正文',
-      suggest_stream: 'AI 写作建议：流式生成优化建议',
-      extract_memory: '记忆提取：从章节抽取可复用记忆点',
-      expand_outline: '大纲展开：把卷/节点展开成章节计划',
-      plan_full_structure: '全量结构规划：规划卷级结构与篇幅节奏',
-      draft_assist_stream: '写作辅助：起笔/续写/重写正文',
-      auto_extract_debrief: '自动复盘：提取人物/故事线变化与章节索引',
-      memory_conflict_detect: '记忆冲突检测：扫描记忆库前后矛盾（角色/时间线/属性/伏笔）',
-    }
-    if (!op) return '未标注作用'
-    if (m[op]) return m[op]
-    if (op.startsWith('bootstrap.')) return `Bootstrap 流程任务：${op.replace('bootstrap.', '')}`
-    return `未登记作用：${op}`
   }
 
   const prettyText = (v: unknown) => {
@@ -252,8 +217,15 @@ export default function LlmCallLogsPage() {
         const op = resolveOperationKey(row)
         return (
           <Space direction="vertical" size={0}>
-            <Text strong>{op || 'unknown'}</Text>
-            <Text type="secondary">{operationLabel(op)}</Text>
+            <Tooltip title={op || undefined}>
+              <Text strong>{getLlmOperationShortLabel(op)}</Text>
+            </Tooltip>
+            <Text type="secondary">{getLlmOperationLabel(op)}</Text>
+            {op ? (
+              <Text type="secondary" copyable={{ text: op }} style={{ fontSize: 11 }}>
+                {op}
+              </Text>
+            ) : null}
           </Space>
         )
       },
@@ -435,7 +407,7 @@ export default function LlmCallLogsPage() {
             })()}
             <div>
               <Text strong>接口作用：</Text>
-              <Text>{operationLabel(resolveOperationKey(detailRow))}</Text>
+              <Text>{getLlmOperationLabel(resolveOperationKey(detailRow))}</Text>
             </div>
             <div>
               <Text strong>上下文（全量）</Text>

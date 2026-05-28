@@ -3,7 +3,7 @@
 Bootstrap Step 9 此前未注入势力/境界 canonical 列表，模型易在卷 summary 中
 自创「云霄剑宗」「冥府」等别名，与 Step 3/5 档案漂移。本模块提供：
 - build_volume_entity_prompt_block：写入 gen_volumes prompt
-- lint_volume_entity_issues：纯代码交叉核验（供 consistency_scan 预检复用）
+- lint_volume_entity_issues：结构化卷级校验（境界/道途曲线；势力后缀启发式已移至 volume_faction_hints）
 """
 
 from __future__ import annotations
@@ -449,19 +449,10 @@ def lint_volume_entity_issues(
     project_id: Any,
     ctx: dict,
 ) -> list[dict]:
-    """卷级实体交叉核验（不调用 LLM）。返回 consistency_issues 形态的 dict 列表。"""
+    """卷级结构化校验（境界/道途曲线；不调用 LLM）。势力语义见 volume_faction_hints。"""
     from app.models import Character, OutlineNode, PowerSystem
 
     issues: list[dict] = []
-    from app.models import Faction
-
-    faction_names: list[str] = list(ctx.get("faction_names") or [])
-    if not faction_names:
-        faction_names = [
-            f.name
-            for f in db.query(Faction).filter(Faction.project_id == project_id).all()
-            if f.name
-        ]
 
     level_names: list[str] = list(ctx.get("power_level_names") or [])
     if not level_names:
@@ -493,51 +484,10 @@ def lint_volume_entity_issues(
     if not volumes:
         return issues
 
-    # ── 1. 卷文本中的组织名是否在势力登记表内 ─────────────────────────────
-    orphan_orgs: set[str] = set()
-    for vol in volumes:
-        blob = " ".join(
-            filter(None, [vol.title, vol.summary, vol.conflict, vol.hook])
-        )
-        for org in _extract_orgs(blob, faction_names):
-            if not _org_matches_canonical(org, faction_names):
-                orphan_orgs.add(org)
+    # 势力/归属语义疑似项见 volume_faction_hints.collect_faction_semantic_hints，
+    # 由 consistency_scan AI 裁决；此处仅保留结构化字段校验。
 
-    for org in sorted(orphan_orgs):
-        issues.append({
-            "severity": "high",
-            "type": "faction_mismatch",
-            "description": f"卷骨架出现未登记势力「{org}」",
-            "suggestion": f"将卷描述中的「{org}」统一改为势力档案中的 canonical 名称",
-            "auto_detected": True,
-        })
-
-    # ── 2. 主角姓氏 vs 家族势力名 ───────────────────────────────────────────
-    protagonist = (ctx.get("protagonist") or "").strip()
-    protag_char = None
-    if protagonist:
-        protag_char = (
-            db.query(Character)
-            .filter(Character.project_id == project_id, Character.name == protagonist)
-            .first()
-        )
-    protag_faction = (protag_char.faction or "").strip() if protag_char else _protagonist_faction_from_ctx(ctx)
-    if protagonist and protag_faction and "家" in protag_faction:
-        surname = protagonist[0]
-        if surname and surname not in protag_faction:
-            issues.append({
-                "severity": "medium",
-                "type": "faction_mismatch",
-                "description": (
-                    f"主角「{protagonist}」姓{surname}与势力「{protag_faction}」姓氏不一致"
-                ),
-                "suggestion": (
-                    f"将主角 faction 改为与姓氏匹配之家族，或在背景中注明养子/外姓传承"
-                ),
-                "auto_detected": True,
-            })
-
-    # ── 3. 卷级 BOSS 境界曲线：仅大境倒退或同大境小境倒退 → 报错 ─────────────
+    # ── 1. 卷级 BOSS 境界曲线：仅大境倒退或同大境小境倒退 → 报错 ─────────────
     protagonist = (ctx.get("protagonist") or "").strip()
     all_chars = (
         db.query(Character)

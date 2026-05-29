@@ -571,7 +571,11 @@ bash bootstrap.sh
 docker-compose up -d
 
 # 本地裸跑：后端 + 创作端（pnpm；端口见 env.local.ports.example）
+# ./restart.sh 会在启 uvicorn 前自动执行 create_all + alembic upgrade head（同步 alembic_version）
 ./restart.sh
+
+# 仅同步数据库（不启服务）
+# cd apps/backend && python scripts/db_upgrade.py
 
 # 管理后台（另开终端，默认 http://localhost:3174）
 cd apps/frontend && pnpm run dev

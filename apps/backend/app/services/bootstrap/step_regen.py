@@ -52,6 +52,7 @@ def build_full_ctx(db: Session, project: Any) -> dict:
         "premise": project.premise or "",
         "target_words": target_words,
         "project_title": project.title or "未命名项目",
+        "genre": project.genre or "玄幻",
         "project_genre": project.genre or "",
         "positioning": project_extra.get("positioning") or {},
         "chapter_quota_total": plan["total_chapters"],
@@ -99,11 +100,11 @@ def build_full_ctx(db: Session, project: Any) -> dict:
     )
     if storylines:
         ctx["storyline_summary"] = "；".join(
-            f"{s.name}：{(s.summary or '')[:50]}" for s in storylines[:10]
+            f"{s.name}：{(s.description or '')[:50]}" for s in storylines[:10]
         )
         ctx["storyline_ids"] = {s.name: str(s.id) for s in storylines}
         ctx["relation_triggers"] = "；".join(
-            s.name for s in storylines if s.storyline_type == "romance"
+            s.name for s in storylines if s.line_type == "romance"
         ) or "（无）"
 
     # ── 人物库 ───────────────────────────────────────────────────────────

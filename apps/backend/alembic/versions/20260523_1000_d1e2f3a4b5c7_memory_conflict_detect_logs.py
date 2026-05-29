@@ -8,6 +8,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 from sqlalchemy.dialects import postgresql
 
 revision: str = "d1e2f3a4b5c7"
@@ -17,6 +18,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if inspect(bind).has_table("memory_conflict_detect_logs"):
+        return
+
     op.create_table(
         "memory_conflict_detect_logs",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 
 def format_llm_error_message(exc: BaseException) -> str:
     """把 OpenAI SDK / httpx 异常转成可操作的提示，保留原始信息便于排查。"""
@@ -32,7 +34,7 @@ def format_llm_error_message(exc: BaseException) -> str:
         return f"API Key 无效或未授权：{msg}"
     if "404" in low and "model" in low:
         return f"模型 id 不存在或网关未提供该模型：{msg}"
-    if any(code in low for code in ("502", "503", "504", "bad gateway")):
+    if "bad gateway" in low or re.search(r"\b(502|503|504)\b", low):
         return f"大模型网关暂时不可用，请稍后重试：{msg}"
     if "peer closed" in low or "incomplete chunked" in low:
         return (

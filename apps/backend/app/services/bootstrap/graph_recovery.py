@@ -40,91 +40,36 @@ def rebuild_ctx_from_db(
     Returns:
         尽量完整的 ctx 字典，缺失字段保持默认值，不会引发 KeyError。
     """
-    from app.models import Character, OutlineNode, PowerSystem, Project
-    from app.services.bootstrap.power_registry import merge_power_into_ctx
-    from app.services.outline_planning import words_to_plan
+    from app.models import Project
 
     positioning = gd.get("positioning") or {}
-    ctx: dict = {
-        "logline": logline,
-        "premise": premise,
-        "target_words": target_words,
-        "positioning": positioning,
-    }
-
     if not project_id:
-        return ctx
-
-    # ── 境界体系（Step 2 产物）────────────────────────────────────────────────
-    pss = (
-        db.query(PowerSystem)
-        .filter(PowerSystem.project_id == project_id)
-        .order_by(PowerSystem.sort_order)
-        .all()
-    )
-    if pss:
-        proj = db.query(Project).filter(Project.id == project_id).first()
-        merge_power_into_ctx(ctx, pss, project=proj)
+        return {
+            "logline": logline,
+            "premise": premise,
+            "target_words": target_words,
+            "positioning": positioning,
+        }
 
     proj = db.query(Project).filter(Project.id == project_id).first()
-    if proj and isinstance(proj.extra, dict):
-        ladder = proj.extra.get("antagonist_ladder") or []
-        if ladder:
-            ctx["antagonist_ladder"] = ladder
-            from app.services.bootstrap.antagonist_roster import format_ladder_summary
-            ctx["antagonist_ladder_summary"] = format_ladder_summary(ladder)
-
-    # ── 人物库（Step 5 产物）──────────────────────────────────────────────────
-    chars = (
-        db.query(Character)
-        .filter(Character.project_id == project_id)
-        .order_by(Character.created_at)
-        .all()
-    )
-    if chars:
-        ctx["char_names"] = [c.name for c in chars]
-        ctx["protagonist"] = next(
-            (c.name for c in chars if c.role == "protagonist"), chars[0].name
-        )
-        ctx["char_realms"] = {c.name: (c.current_realm or "未知") for c in chars}
-        ctx["char_name_to_id"] = {c.name: str(c.id) for c in chars}
-        ctx["_char_ids"] = [str(c.id) for c in chars]
-        ctx["core_char_names"] = [
-            c.name for c in chars if c.character_tier in ("core", "arc")
-        ]
-        ctx["char_profiles"] = {
-            c.name: {
-                "core_wound": (c.fear or "").strip(),
-                "current_desire": (c.motivation or "").strip(),
-                "biggest_lie": "",
-                "relationship_pressure": "",
-                "values": (c.values or "").strip(),
-                "arc": (c.arc or "").strip(),
-            }
-            for c in chars
-            if c.role == "protagonist" or c.character_tier in ("core", "arc")
+    if not proj:
+        return {
+            "logline": logline,
+            "premise": premise,
+            "target_words": target_words,
+            "positioning": positioning,
         }
-        ctx["plot_npc_summary"] = "; ".join(
-            f"{c.name}（{(c.extra or {}).get('vol1_function', '')}）"
-            for c in chars
-            if c.character_tier == "plot" and (c.extra or {}).get("vol1_function")
-        )
 
-    # ── 卷骨架（Step 9 产物）──────────────────────────────────────────────────
-    volumes = (
-        db.query(OutlineNode)
-        .filter(OutlineNode.project_id == project_id, OutlineNode.node_type == "volume")
-        .order_by(OutlineNode.sort_order)
-        .all()
+    from app.services.bootstrap.ctx_merge import merge_ctx_with_project
+
+    ctx = merge_ctx_with_project(
+        db,
+        proj,
+        {
+            "logline": logline or (proj.logline or ""),
+            "premise": premise or (proj.premise or ""),
+            "target_words": target_words,
+            "positioning": positioning or (proj.extra or {}).get("positioning") or {},
+        },
     )
-    if volumes:
-        ctx["_volume_ids"] = [str(v.id) for v in volumes]
-        ctx["volumes_summary"] = " | ".join(
-            f"{v.title}：{(v.summary or '')[:40]}" for v in volumes
-        )
-        plan = words_to_plan(target_words)
-        ctx["chapter_quota_total"] = plan["total_chapters"]
-        ctx["chapter_quota_total_volumes"] = plan["total_volumes"]
-        ctx["chapter_quota_used"] = 0  # 恢复时保守重置，续跑时会重新累积
-
     return ctx

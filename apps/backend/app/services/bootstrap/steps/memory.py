@@ -29,12 +29,14 @@ async def gen_memory(svc: Any, project: Project, ctx: dict):
         f"{n}（{ctx.get('char_realms', {}).get(n, '未知境界')}）"
         for n in ctx.get("char_names", [])[:6]
     )
-    prompt = f"""小说：《{ctx['project_title']}》主角：{ctx.get('protagonist', '主角')}
+    title = ctx.get("project_title") or project.title or "未命名"
+    settings_bits = (ctx.get("settings_summary") or "（未设定）")[:400]
+    prompt = f"""小说：《{title}》主角：{ctx.get('protagonist', '主角')}
 境界体系：{ctx.get('power_summary', '（未设定）')}
 故事线：{ctx.get('storyline_summary', '（未设定）')}
 主要人物：{char_snapshot or ctx.get('char_names', [])}
 卷级结构：{ctx.get('volumes_summary', '（未设定）')}
-设定摘要：{ctx['settings_summary'][:400]}
+设定摘要：{settings_bits}
 
 生成10条初始记忆库种子，覆盖「境界锚点、人物初始状态、故事线起点、关键设定规则、核心伏笔」五类，
 作为后续写作的防矛盾基线，返回JSON数组：

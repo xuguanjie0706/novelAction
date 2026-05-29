@@ -5,6 +5,10 @@ from typing import Optional
 class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "postgresql://novel:novel@localhost:5432/novel_db"
+    # 启动 / ./restart.sh / Docker entrypoint 是否在 create_all 后执行 alembic upgrade head
+    ALEMBIC_UPGRADE_ON_STARTUP: bool = True
+    # 无 alembic_version 但已有 projects 等表时的 stamp 对齐点（consolidate 迁移）
+    ALEMBIC_LEGACY_STAMP_REVISION: str = "p1q2r3s4t5u6"
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"

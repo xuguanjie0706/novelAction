@@ -187,6 +187,18 @@ if ! wait_for_postgres; then
   exit 1
 fi
 
+if [[ "${SKIP_ALEMBIC_UPGRADE:-0}" != "1" ]]; then
+  echo "同步数据库 schema（create_all + alembic upgrade head）..."
+  if ! (
+    cd "${ROOT}/apps/backend"
+    "${VENV_PYTHON}" scripts/db_upgrade.py
+  ); then
+    echo "错误: 数据库迁移失败。可查看上方输出，或在 apps/backend 手动执行: alembic upgrade head"
+    echo "  临时跳过迁移启动（不推荐）: SKIP_ALEMBIC_UPGRADE=1 ./restart.sh"
+    exit 1
+  fi
+fi
+
 (
   cd "${ROOT}/apps/backend"
   exec "${VENV_PYTHON}" -m uvicorn app.main:app --reload --host 127.0.0.1 --port "${NOVEL_LOCAL_BACKEND_PORT}"

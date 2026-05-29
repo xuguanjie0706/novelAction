@@ -1,5 +1,5 @@
-# startup 包：仅保留无法通过 Alembic migration 表达的运行时 DDL 和数据修复。
-# 新增业务字段请通过 alembic revision 添加 migration 文件，禁止在此包中新增 DDL。
+# startup 包：无法通过 Alembic 表达的运行时 DDL 见 legacy_ddl；业务列请写 migration。
+from .db_schema import run_pre_start_schema
 from .legacy_ddl import run_startup_ddl
 
-__all__ = ["run_startup_ddl"]
+__all__ = ["run_pre_start_schema", "run_startup_ddl"]

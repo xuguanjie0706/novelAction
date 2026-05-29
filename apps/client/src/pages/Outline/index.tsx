@@ -23,6 +23,9 @@ import VolumeQualityTab from './tabs/VolumeQualityTab'
 import RevisionsTab from './tabs/RevisionsTab'
 import VolExpandProgressPanel from '../../components/Outline/VolExpandProgressPanel'
 import { useVolExpandBridge } from './useVolExpandBridge'
+import OutlineIntuitivePane from './OutlineIntuitivePane'
+import OutlinePageToolbar from './OutlinePageToolbar'
+import { useOutlineViewMode } from './useOutlineViewMode'
 
 
 export default function OutlinePage() {
@@ -39,7 +42,6 @@ export default function OutlinePage() {
   const [showFullGenModal, setShowFullGenModal] = useState(false)
   const [showBatchModal, setShowBatchModal] = useState(false)
   const [contentTab, setContentTab] = useState<'node' | 'bookQuality' | 'volumeQuality' | 'revisions'>('node')
-
   /**
    * 展开章纲进度桥接：将 VolumeExpandButton 的 SSE 进度提升到中间区域展示。
    * 生成完成后自动切到「章纲检测」Tab。
@@ -370,6 +372,24 @@ export default function OutlinePage() {
     setIsComparing,
   )
 
+  const {
+    outlineViewMode,
+    persistViewMode,
+    volumeNodes,
+    intuitiveVolume,
+  } = useOutlineViewMode(outlineTree, selected, selectedVolumeNode, setSelected, setExpanded)
+
+  const handleIntuitiveOpenWrite = (chapterNumber: number) => {
+    if (!intuitiveVolume || !projectId) return
+    const sorted = [...(intuitiveVolume.children ?? [])].sort((a, b) => a.sort_order - b.sort_order)
+    const ch = sorted[chapterNumber - 1]
+    if (ch?.node_type === 'chapter_plan') {
+      openChapterFromNode(ch)
+    } else {
+      jumpToChapterPlan(chapterNumber)
+    }
+  }
+
   const filteredCompareChanges = (compareResult?.changes || []).filter(change => {
     if (compareFilter === 'all') return true
     if (compareFilter === 'high') return change.severity === 'high'
@@ -401,60 +421,38 @@ export default function OutlinePage() {
 
       {/* 右侧详情 + AI 面板 */}
       <div className="flex-1 overflow-auto flex flex-col">
-        <div className="shrink-0 border-b border-gray-100 bg-white px-6 pt-4">
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => setContentTab('node')}
-              className={clsx(
-                'px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors',
-                contentTab === 'node'
-                  ? 'border-amber-500 text-amber-700'
-                  : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-200',
-              )}
-            >
-              当前节点
-            </button>
-            <button
-              type="button"
-              onClick={() => setContentTab('bookQuality')}
-              className={clsx(
-                'px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors',
-                contentTab === 'bookQuality'
-                  ? 'border-indigo-500 text-indigo-700'
-                  : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-200',
-              )}
-            >
-              全书质检
-            </button>
-            <button
-              type="button"
-              onClick={() => setContentTab('volumeQuality')}
-              className={clsx(
-                'px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors',
-                contentTab === 'volumeQuality'
-                  ? 'border-cyan-500 text-cyan-700'
-                  : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-200',
-              )}
-            >
-              单卷质检
-            </button>
-            <button
-              type="button"
-              onClick={() => setContentTab('revisions')}
-              className={clsx(
-                'px-3 py-2 text-xs font-semibold border-b-2 -mb-px transition-colors',
-                contentTab === 'revisions'
-                  ? 'border-slate-500 text-slate-700'
-                  : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-200',
-              )}
-            >
-              大纲快照
-            </button>
-          </div>
-        </div>
+        <OutlinePageToolbar
+          viewMode={outlineViewMode}
+          onViewModeChange={persistViewMode}
+          contentTab={contentTab}
+          onContentTabChange={setContentTab}
+        />
 
-        {contentTab === 'bookQuality' ? (
+        {outlineViewMode === 'intuitive' ? (
+          <OutlineIntuitivePane
+            projectId={projectId}
+            intuitiveVolume={intuitiveVolume}
+            volumeNodes={volumeNodes}
+            aiBackendRoute={aiBackendRoute}
+            volExpandState={volExpandState}
+            onReload={reload}
+            onSelectVolume={v => {
+              setSelected(v)
+              setExpanded(prev => new Set([...prev, v.id]))
+            }}
+            onDismissExpand={dismissExpand}
+            onViewLinter={viewLinter}
+            forceAccept={forceAccept}
+            onOpenWrite={handleIntuitiveOpenWrite}
+            onQualityCheck={v => handleDispatchOutlineQuality('volume', v)}
+            onRequestRepair={(v, chapters) => {
+              setRepairUseLinterSeed(true)
+              setRepairLinterMustFix(chapters)
+              handleDispatchOutlineRepair('volume', v)
+            }}
+            sidebarCallbacks={sidebarCallbacks}
+          />
+        ) : contentTab === 'bookQuality' ? (
           <BookQualityTab
             displayedBookQuality={displayedBookQuality}
             bookQualityRevisions={bookQualityRevisions}

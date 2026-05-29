@@ -22,7 +22,8 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine, Base
 from app.dependencies import get_current_user, verify_project_access
-from app.startup import run_startup_ddl
+from app.startup import run_pre_start_schema, run_startup_ddl
+from app.startup.alembic_upgrade import get_alembic_current_revision, get_alembic_head_revision
 
 # ── 路由导入 ───────────────────────────────────────────────────────────────
 from app.routers import (
@@ -131,9 +132,9 @@ class ForwardedHostASGIMiddleware:
 
 
 # ── 启动期 Schema 初始化 ──────────────────────────────────────────────────
-# 新库：create_all 建表；运行时 pgvector 维度感知 + 孤儿项目归属由 run_startup_ddl 处理。
-# Schema DDL 新增请走 alembic revision，见 apps/backend/alembic/versions/。
-Base.metadata.create_all(bind=engine)
+# create_all 补 ORM 表 → Alembic upgrade head 补列/索引（见 app/startup/db_schema.py）。
+# 新增字段请写 alembic revision；禁止在 main 增加 _ensure_* DDL。
+run_pre_start_schema()
 run_startup_ddl(engine)
 seed_llm_from_env_if_empty()
 
@@ -295,5 +296,19 @@ app.mount(
 
 @app.get("/health")
 def health():
-    """服务健康检查端点。"""
-    return {"status": "ok", "version": "0.1.0"}
+    """服务健康检查端点（含 Alembic revision，便于确认库已与代码同步）。"""
+    head = get_alembic_head_revision()
+    current = get_alembic_current_revision(engine)
+    schema_ok = current == head
+    payload: dict = {
+        "status": "ok" if schema_ok else "degraded",
+        "version": "0.1.0",
+        "alembic_current": current,
+        "alembic_head": head,
+        "schema_aligned": schema_ok,
+    }
+    if not schema_ok:
+        payload["schema_hint"] = (
+            "数据库迁移落后于代码。请在 apps/backend 执行：python scripts/db_upgrade.py"
+        )
+    return payload

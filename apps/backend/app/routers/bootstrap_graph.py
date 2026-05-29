@@ -324,20 +324,31 @@ async def resume_run(
     """
     run = _get_owned_run(db, run_id, current_user.id)
     gd = run.gate_data if isinstance(run.gate_data, dict) else {}
+    step_retry_pending = gd.get("kind") == "step_retry" or run.status == "awaiting_retry"
+    if step_retry_pending and run.status != "awaiting_retry":
+        run.status = "awaiting_retry"
+        run.error_message = None
+        db.commit()
     # 闸门 UI 仍可见但 resume 因异常落 failed 时，允许在 gate 上下文恢复
     if run.status == "failed" and req.action in ("approve", "regenerate") and gd.get("current_gate"):
         run.status = "awaiting_gate"
         run.error_message = None
         db.commit()
+        step_retry_pending = False
+    elif step_retry_pending:
+        if req.action != "retry_step":
+            failed = gd.get("step") or "memory"
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"当前等待重试步骤「{failed}」，请使用 "
+                    f'action=retry_step 且 step="{failed}"，不可使用 approve'
+                ),
+            )
     elif run.status not in ("awaiting_gate", "awaiting_retry"):
         raise HTTPException(
             status_code=409,
             detail=f"Run is in status '{run.status}', expected 'awaiting_gate' or 'awaiting_retry'",
-        )
-    if run.status == "awaiting_retry" and req.action != "retry_step":
-        raise HTTPException(
-            status_code=409,
-            detail="当前等待重试失败步骤，请使用 action=retry_step",
         )
 
     _resume_fn = (

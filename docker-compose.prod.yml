@@ -37,7 +37,8 @@ services:
     depends_on:
       - postgres
       - redis
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    entrypoint: ["scripts/docker-entrypoint.sh"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
   client:
     build:

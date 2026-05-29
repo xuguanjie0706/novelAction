@@ -378,6 +378,9 @@ async def node_memory_relations(state: BootstrapState, config: dict | None = Non
     ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     from app.models import Character, Project
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
+    if project:
+        from app.services.bootstrap.ctx_merge import merge_ctx_with_project
+        ctx = sanitize_bootstrap_ctx(merge_ctx_with_project(db, project, ctx))
     char_ids = ctx.pop("_char_ids", None) or []
     if char_ids:
         chars = db.query(Character).filter(Character.id.in_(char_ids)).all()

@@ -590,16 +590,21 @@ export function useBootstrapStream() {
       }
 
       const gateData = run.gate_data ?? undefined
+      const stepRetryPending =
+        run.status === 'awaiting_retry'
+        || (gateData && typeof gateData === 'object' && (gateData as { kind?: string }).kind === 'step_retry')
       autoModeRef.current = Boolean(
-        (gateData && typeof gateData === 'object' && (gateData as { auto_mode?: boolean }).auto_mode)
-        || readBootstrapAutoMode(),
+        !stepRetryPending && (
+          (gateData && typeof gateData === 'object' && (gateData as { auto_mode?: boolean }).auto_mode)
+          || readBootstrapAutoMode()
+        ),
       )
       const hasGatePending = evs.some(e => e.event === 'gate_pending')
-      if (run.status === 'awaiting_gate' && !hasGatePending && !autoModeRef.current) {
+      if (run.status === 'awaiting_gate' && !stepRetryPending && !hasGatePending && !autoModeRef.current) {
         patchGateFromSnapshot(gateData)
       }
 
-      if (run.status === 'awaiting_gate' && autoModeRef.current) {
+      if (run.status === 'awaiting_gate' && !stepRetryPending && autoModeRef.current) {
         const lastGateEv = [...evs].reverse().find(e => e.event === 'gate_pending')
         const gst = isGatePendingStep(lastGateEv?.step)
           ? lastGateEv.step
@@ -620,16 +625,18 @@ export function useBootstrapStream() {
         }
       }
 
-      if (run.status === 'awaiting_retry') {
+      if (stepRetryPending) {
         autoModeRef.current = false
         const gd = run.gate_data as { step?: string; message?: string } | null | undefined
         const failed = toKey(gd?.step)
         const haltMsg = typeof gd?.message === 'string' ? gd.message : '步骤失败，请手动重试此步骤'
+        if (run.project_id) setProjectId(run.project_id)
         if (failed) {
           setHaltedStep(failed)
           setErrorMsg(haltMsg)
           setSteps(prev => blockStepsAfter(prev, failed))
           setPhase('generating')
+          await retryFailedStep(failed, params)
         }
         return
       }

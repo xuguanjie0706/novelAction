@@ -94,7 +94,6 @@ def restore_bootstrap_checkpoint_if_lost(
     premise = gd.get("premise") or ""
     target_words = int(gd.get("target_words") or 1_000_000)
     project_id = str(run.project_id) if run.project_id else None
-    current_gate = gd.get("current_gate") or "positioning"
 
     from app.services.bootstrap.graph_recovery import rebuild_ctx_from_db
     db = config["configurable"]["db"]
@@ -102,6 +101,11 @@ def restore_bootstrap_checkpoint_if_lost(
         rebuild_ctx_from_db(db, project_id or "", gd, logline, premise, target_words),
     )
 
+    _COMPLETED_BEFORE_MEMORY = [
+        "positioning", "project", "power_systems", "factions", "storylines",
+        "antagonist_ladder", "characters", "skills", "items", "settings", "volumes",
+        "emotion_arc", "villain_arc",
+    ]
     gate_to_completed: dict[str, list[str]] = {
         "positioning":        ["positioning"],
         "gate_power_systems": ["positioning", "project", "power_systems"],
@@ -110,15 +114,33 @@ def restore_bootstrap_checkpoint_if_lost(
         "gate_volumes":       ["positioning", "project", "power_systems", "factions",
                                "storylines", "antagonist_ladder", "characters", "skills", "items", "settings", "volumes"],
     }
-    completed = gate_to_completed.get(current_gate, ["positioning"])
-
-    gate_to_resume_node: dict[str, str] = {
-        "positioning":        positioning_node,
-        "gate_power_systems": "gate_power_systems",
-        "gate_characters":    "gate_characters",
-        "gate_volumes":       "gate_volumes",
+    _STEP_TO_NODE: dict[str, str] = {
+        "memory": "memory_relations",
+        "relations": "memory_relations",
+        "emotion_arc": "emotion_villain",
+        "villain_arc": "emotion_villain",
+        "consistency": "consistency",
+        "core_mysteries": "core_mysteries",
+        "opening_contract": "opening_contract",
     }
-    resume_node = gate_to_resume_node.get(current_gate, positioning_node)
+    if gd.get("kind") == "step_retry":
+        failed_step = str(gd.get("step") or "memory")
+        resume_node = _STEP_TO_NODE.get(failed_step, "memory_relations")
+        completed = list(_COMPLETED_BEFORE_MEMORY)
+        if failed_step == "relations":
+            completed = completed + ["memory"]
+        restore_label = f"step_retry:{failed_step}"
+    else:
+        current_gate = gd.get("current_gate") or "positioning"
+        completed = gate_to_completed.get(current_gate, ["positioning"])
+        gate_to_resume_node: dict[str, str] = {
+            "positioning":        positioning_node,
+            "gate_power_systems": "gate_power_systems",
+            "gate_characters":    "gate_characters",
+            "gate_volumes":       "gate_volumes",
+        }
+        resume_node = gate_to_resume_node.get(current_gate, positioning_node)
+        restore_label = str(current_gate)
 
     recovery: BootstrapState = {
         "run_id": run_id, "logline": logline, "premise": premise,
@@ -129,8 +151,8 @@ def restore_bootstrap_checkpoint_if_lost(
     graph.update_state(config, recovery, as_node=resume_node)
     logger.warning(
         "Restored bootstrap checkpoint for run %s from DB "
-        "(in-memory checkpointer was empty; gate=%s resume_node=%s)",
-        run_id, current_gate, resume_node,
+        "(in-memory checkpointer was empty; restore=%s resume_node=%s)",
+        run_id, restore_label, resume_node,
     )
     return True
 

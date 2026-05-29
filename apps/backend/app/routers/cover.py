@@ -23,6 +23,14 @@ from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+
+from app.dependencies import get_current_user
+from app.models.user import User
+from app.services.image_credit import (
+    charge_image_generation,
+    preflight_image_generation,
+    resolve_image_billing_user,
+)
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -114,6 +122,22 @@ def _log_kwargs(provider, payload: CoverGenerateIn):
     )
 
 
+def _charge_cover_success(
+    db: Session,
+    current_user: User,
+    *,
+    provider,
+    log_id,
+) -> None:
+    charge_image_generation(
+        resolve_image_billing_user(current_user),
+        model=provider.model_name,
+        task="cover_generation",
+        ref_id=str(log_id),
+        db=db,
+    )
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────
 
 @router.get("/cover/image-providers", response_model=List[ImageProviderBrief])
@@ -162,6 +186,7 @@ def generate_cover(
     project_id: str,
     payload: CoverGenerateIn,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     用指定的图片提供者为项目生成封面。
@@ -183,6 +208,8 @@ def generate_cover(
     )
     if not provider:
         raise HTTPException(404, "找不到该图片提供者，请确认已在管理后台启用并设置为 image 类型")
+
+    preflight_image_generation(resolve_image_billing_user(current_user), db=db)
 
     call = execute_images_generations(
         base_url=provider.base_url,
@@ -223,13 +250,14 @@ def generate_cover(
     # ── 不压缩，直接返回 ─────────────────────────────────────
     if not payload.store_compressed:
         preview_url = raw_out.image_url if raw_out.image_url else None
-        insert_cover_image_log(
+        log_id = insert_cover_image_log(
             db, project=project, provider=provider, **lk,
             status="ok", duration_ms=call.elapsed_ms, response_kind=response_kind,
             gateway_url=call.gateway_url, http_status=call.http_status,
             error_message=None, debug_bundle_rel_path=None,
             result_cover_url=preview_url,
         )
+        _charge_cover_success(db, current_user, provider=provider, log_id=log_id)
         return raw_out
 
     # ── 解码原始字节 ─────────────────────────────────────────
@@ -274,11 +302,12 @@ def generate_cover(
         raise HTTPException(502, msg) from e
 
     # ── 成功 ─────────────────────────────────────────────────
-    insert_cover_image_log(
+    log_id = insert_cover_image_log(
         db, project=project, provider=provider, **lk,
         status="ok", duration_ms=call.elapsed_ms, response_kind=response_kind,
         gateway_url=call.gateway_url, http_status=call.http_status,
         error_message=None, debug_bundle_rel_path=None,
         result_cover_url=path,
     )
+    _charge_cover_success(db, current_user, provider=provider, log_id=log_id)
     return CoverGenerateOut(cover_url=path)

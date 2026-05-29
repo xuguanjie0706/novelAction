@@ -115,13 +115,14 @@ class Settings(BaseSettings):
     ADMIN_PASSWORD: Optional[str] = None
 
     # ── 积分系统 ─────────────────────────────────────────────
-    # CREDIT_ENFORCEMENT 控制积分不足时的行为：
-    #   "off"    关闭积分检查，任何用户都可以无限调用 AI（开发 / 内部使用）
-    #   "soft"   积分不足时仍允许调用，但在响应头写入 X-Credit-Warning（默认）
-    #   "hard"   积分不足时直接返回 402 Payment Required，阻止调用
+    # CREDIT_ENFORCEMENT：
+    #   "off"    关闭积分预检（开发用）；仍会落库扣费
+    #   "soft" / "hard"  余额 ≤ 0 时 402 阻断新调用；余额 > 0 时允许（单次可透支扣费）
     CREDIT_ENFORCEMENT: str = "soft"
     # 新用户注册时赠送的积分数（0 = 不赠送）
-    CREDIT_NEW_USER_BONUS: int = 10000
+    CREDIT_NEW_USER_BONUS: int = 1000
+    # 每次图片生成（封面 / 人物立绘）固定扣除的积分数（0 = 不扣费）
+    CREDIT_IMAGE_GENERATION_COST: int = 100
 
     CORS_ORIGINS: list[str] = [
         "http://localhost:3173",

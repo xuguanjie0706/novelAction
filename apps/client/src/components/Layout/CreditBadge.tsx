@@ -26,8 +26,10 @@ const POLL_INTERVAL_MS = 60_000
 const REF_TYPE_LABEL: Record<string, string> = {
   registration_bonus: '注册赠送',
   llm_call: 'AI 调用',
+  image_generation: '图片生成',
   admin_topup: '管理员充值',
   admin_adjust: '管理员调整',
+  redeem_code: '兑换码',
 }
 
 interface Props {
@@ -44,11 +46,13 @@ export default function CreditBadge({ className }: Props) {
   // ── 余额色调 ───────────────────────────────────────────────
   const colorClass = credit === null
     ? 'text-gray-400'
-    : credit.balance < LOW_CREDIT_THRESHOLD
-      ? 'text-red-500'
-      : credit.balance < WARN_CREDIT_THRESHOLD
-        ? 'text-amber-500'
-        : 'text-emerald-600'
+    : credit.balance <= 0
+      ? 'text-red-600'
+      : credit.balance < LOW_CREDIT_THRESHOLD
+        ? 'text-red-500'
+        : credit.balance < WARN_CREDIT_THRESHOLD
+          ? 'text-amber-500'
+          : 'text-emerald-600'
 
   // ── 数据拉取 ───────────────────────────────────────────────
   const refresh = useCallback(async () => {
@@ -103,11 +107,13 @@ export default function CreditBadge({ className }: Props) {
         className={clsx(
           'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-medium',
           'bg-white/80 border transition-colors hover:bg-white',
-          credit.balance < LOW_CREDIT_THRESHOLD
-            ? 'border-red-300 hover:border-red-400'
-            : credit.balance < WARN_CREDIT_THRESHOLD
-              ? 'border-amber-300 hover:border-amber-400'
-              : 'border-gray-200 hover:border-gray-300',
+          credit.balance <= 0
+            ? 'border-red-400 hover:border-red-500'
+            : credit.balance < LOW_CREDIT_THRESHOLD
+              ? 'border-red-300 hover:border-red-400'
+              : credit.balance < WARN_CREDIT_THRESHOLD
+                ? 'border-amber-300 hover:border-amber-400'
+                : 'border-gray-200 hover:border-gray-300',
         )}
         title="查看积分详情"
       >
@@ -115,7 +121,12 @@ export default function CreditBadge({ className }: Props) {
         <span className={clsx('tabular-nums', colorClass)}>
           {credit.balance.toLocaleString()}
         </span>
-        {credit.balance < LOW_CREDIT_THRESHOLD && (
+        {credit.balance <= 0 && (
+          <span className="text-[10px] text-red-600 font-semibold">
+            {credit.balance < 0 ? '欠款' : '已用完'}
+          </span>
+        )}
+        {credit.balance > 0 && credit.balance < LOW_CREDIT_THRESHOLD && (
           <span className="text-[10px] text-red-500 font-semibold">积分不足</span>
         )}
       </button>

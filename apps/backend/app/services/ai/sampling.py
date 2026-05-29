@@ -47,28 +47,17 @@ class SamplingMixin:
         return merge_truncation_into_context(base, warnings)
 
     def _preflight_credit_check(self) -> None:
-        """积分预检：仅在 CREDIT_ENFORCEMENT=hard 且 user_id 已知时阻断调用。
+        """积分预检：余额 ≤ 0 阻断；余额 > 0 允许（含最后一次透支扣费）。
 
-        - ``off``：完全跳过，适合开发 / 内部部署。
-        - ``soft``：跳过（允许余额为 0 时调用，扣费后余额可到 0，前端显示警告）。
-        - ``hard``：余额 < 1 积分时立即抛出 402，阻止 AI 调用。
+        ``CREDIT_ENFORCEMENT=off`` 时跳过（开发模式）。
 
         Raises:
-            HTTPException 402: enforcement=hard 且余额不足时。
+            HTTPException 402: 余额 ≤ 0 时。
         """
-        enforcement = settings.CREDIT_ENFORCEMENT
+        from app.services import credit_service  # 延迟导入，避免循环依赖
+
         uid = resolve_llm_billing_user_id(getattr(self, "_user_id", None))
-        if enforcement == "off" or not uid:
-            return
-        if enforcement == "hard":
-            from app.services import credit_service  # 延迟导入，避免循环依赖
-            from fastapi import HTTPException
-            balance = credit_service.get_balance(uid, db=self._db)
-            if balance < 1:
-                raise HTTPException(
-                    status_code=402,
-                    detail=f"积分不足（当前 {balance} 积分），请充值后继续使用",
-                )
+        credit_service.preflight_billed_call(uid, db=self._db)
 
     def _is_retryable_llm_error(self, err: Exception) -> bool:
         status_code = getattr(err, "status_code", None)

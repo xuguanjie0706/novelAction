@@ -3,7 +3,7 @@
 职责：
 - Model Tier 判定：根据模型名称字符串匹配，确定计费档位（heavy / standard / light）。
 - Token → 积分换算：按档位费率 + 向上取整，保证每次 AI 调用结果为正整数积分。
-- 余额查询 / 预检：``get_balance``、``is_sufficient``。
+- 余额查询 / 预检：``get_balance``、``can_start_billed_call``、``preflight_billed_call``。
 - 扣费 / 充值 / 调账：``deduct``、``topup``、``admin_adjust``，所有写操作在同一事务内
   原子更新 ``user_credits.balance`` 并插入 ``credit_transactions`` 流水。
 - 账户初始化：``get_or_create``，首次查询时自动建账（余额=0）。
@@ -35,8 +35,10 @@ import uuid
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import SessionLocal
 from app.models.user_credit import CreditTransaction, UserCredit
 
@@ -192,20 +194,42 @@ def get_balance(user_id: UUID, *, db: Optional[Session] = None) -> int:
             db.close()
 
 
-def is_sufficient(user_id: UUID, cost: int, *, db: Optional[Session] = None) -> bool:
-    """检查余额是否足以支付 cost 积分。
+def can_start_billed_call(user_id: UUID, *, db: Optional[Session] = None) -> bool:
+    """是否可发起新的计费调用。
 
-    Args:
-        user_id: 用户 UUID。
-        cost: 预计消耗积分数。
-        db: 可选的已开启事务 Session。
-
-    Returns:
-        ``True`` 表示余额充足（或 cost ≤ 0）；``False`` 表示余额不足。
+    规则：余额 > 0 即可调用（不要求余额 ≥ 单次费用）；扣费后允许透支为负。
+    ``CREDIT_ENFORCEMENT=off`` 时恒为 True。
     """
-    if cost <= 0:
+    if settings.CREDIT_ENFORCEMENT == "off":
         return True
-    return get_balance(user_id, db=db) >= cost
+    return get_balance(user_id, db=db) > 0
+
+
+def is_sufficient(user_id: UUID, cost: int, *, db: Optional[Session] = None) -> bool:
+    """兼容旧名：等价于 :func:`can_start_billed_call`（``cost`` 参数已忽略）。"""
+    _ = cost
+    return can_start_billed_call(user_id, db=db)
+
+
+def preflight_billed_call(user_id: Optional[UUID], *, db: Session) -> None:
+    """调用前预检：余额 ≤ 0 时阻断；余额 > 0 时允许（含最后一次透支扣费）。
+
+    ``CREDIT_ENFORCEMENT=off`` 或 ``user_id`` 为空时不检查。
+
+    Raises:
+        HTTPException 402: 余额 ≤ 0，无法发起新调用。
+    """
+    if not user_id or settings.CREDIT_ENFORCEMENT == "off":
+        return
+    balance = get_balance(user_id, db=db)
+    if balance <= 0:
+        debt_hint = (
+            f"（欠款 {abs(balance)} 积分，充值后将自动抵扣）" if balance < 0 else ""
+        )
+        raise HTTPException(
+            status_code=402,
+            detail=f"积分已用完（当前 {balance} 积分）{debt_hint}，请充值后继续使用",
+        )
 
 
 def topup(
@@ -239,8 +263,15 @@ def topup(
         raise ValueError(f"topup amount must be > 0, got {amount}")
 
     credit = get_or_create(user_id, db)
+    prior_balance = credit.balance
     credit.balance += amount
     credit.total_topped_up += amount
+
+    note_final = note
+    if prior_balance < 0:
+        repaid = min(amount, -prior_balance)
+        debt_suffix = f"充值 {amount} 积分，其中 {repaid} 积分用于抵扣欠款"
+        note_final = f"{note}; {debt_suffix}" if note else debt_suffix
 
     txn = CreditTransaction(
         user_id=user_id,
@@ -248,7 +279,7 @@ def topup(
         balance_after=credit.balance,
         ref_type=ref_type,
         ref_id=ref_id,
-        note=note,
+        note=note_final,
     )
     db.add(txn)
     db.flush()
@@ -264,12 +295,14 @@ def deduct(
     completion_tokens: Optional[int] = None,
     task: Optional[str] = None,
     ref_id: Optional[str] = None,
+    ref_type: str = "llm_call",
+    note: Optional[str] = None,
     db: Session,
 ) -> Optional[CreditTransaction]:
     """从用户账户中扣除积分（AI 调用后自动调用）。
 
     若 cost ≤ 0（如 light 档位本地模型），跳过写库直接返回 None。
-    不检查余额是否足够，调用方需在此之前自行预检（``is_sufficient``）。
+    允许余额透支为负；调用方需在此之前执行 ``preflight_billed_call``（余额 > 0）。
 
     Args:
         user_id: 用户 UUID。
@@ -278,7 +311,9 @@ def deduct(
         prompt_tokens: 输入 token 数。
         completion_tokens: 输出 token 数。
         task: 任务标识（来自 llm_task_profiles）。
-        ref_id: 关联 ``llm_call_logs.id`` 字符串。
+        ref_id: 关联业务主键字符串（如 ``llm_call_logs.id``、``cover_image_call_logs.id``）。
+        ref_type: 流水来源类型（默认 ``llm_call``；图片生成为 ``image_generation``）。
+        note: 可选备注。
         db: 已开启事务的 Session，由调用方管理 commit/rollback。
 
     Returns:
@@ -288,19 +323,20 @@ def deduct(
         return None
 
     credit = get_or_create(user_id, db)
-    credit.balance = max(0, credit.balance - cost)  # 防止穿透为负
+    credit.balance -= cost
     credit.total_consumed += cost
 
     txn = CreditTransaction(
         user_id=user_id,
         delta=-cost,
         balance_after=credit.balance,
-        ref_type="llm_call",
+        ref_type=ref_type,
         ref_id=ref_id,
         model=model,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         task=task,
+        note=note,
     )
     db.add(txn)
     db.flush()

@@ -16,6 +16,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Optional
+from uuid import UUID
 
 import httpx
 from sqlalchemy.orm import Session
@@ -216,28 +217,29 @@ def insert_cover_image_log(
     error_message: Optional[str],
     debug_bundle_rel_path: Optional[str],
     result_cover_url: Optional[str] = None,
-) -> None:
-    db.add(
-        CoverImageCallLog(
-            project_id=project.id,
-            llm_provider_id=provider.id,
-            provider_name=provider.name,
-            model_name=provider.model_name,
-            prompt=prompt,
-            size=size,
-            quality=quality,
-            store_compressed=store_compressed,
-            status=status,
-            http_status=http_status,
-            error_message=error_message,
-            duration_ms=duration_ms,
-            response_kind=response_kind,
-            gateway_url=gateway_url,
-            debug_bundle_rel_path=debug_bundle_rel_path,
-            result_cover_url=result_cover_url,
-        )
+) -> UUID:
+    row = CoverImageCallLog(
+        project_id=project.id,
+        llm_provider_id=provider.id,
+        provider_name=provider.name,
+        model_name=provider.model_name,
+        prompt=prompt,
+        size=size,
+        quality=quality,
+        store_compressed=store_compressed,
+        status=status,
+        http_status=http_status,
+        error_message=error_message,
+        duration_ms=duration_ms,
+        response_kind=response_kind,
+        gateway_url=gateway_url,
+        debug_bundle_rel_path=debug_bundle_rel_path,
+        result_cover_url=result_cover_url,
     )
+    db.add(row)
+    db.flush()
     db.commit()
+    return row.id
 
 
 # ── Debug Bundle ─────────────────────────────────────────────────

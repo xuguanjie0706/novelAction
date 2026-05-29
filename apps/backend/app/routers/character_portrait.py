@@ -16,8 +16,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_current_user
 from app.models import Character
 from app.models.llm_provider import LlmProvider
+from app.models.user import User
+from app.services.image_credit import (
+    charge_image_generation,
+    preflight_image_generation,
+    resolve_image_billing_user,
+)
 from app.routers.cover import CoverGenerateOut, _raw_bytes_from_generate_out
 from app.routers.cover_gateway import (
     execute_images_generations,
@@ -97,7 +104,11 @@ def _generate_and_persist(
     prompt: str,
     size: str,
     quality: str,
+    current_user: User,
 ) -> CharacterPortraitGenerateOut:
+    billing_user_id = resolve_image_billing_user(current_user)
+    preflight_image_generation(billing_user_id, db=db)
+
     call = execute_images_generations(
         base_url=provider.base_url,
         api_key=provider.api_key or "",
@@ -146,6 +157,14 @@ def _generate_and_persist(
     db.commit()
     db.refresh(char)
 
+    charge_image_generation(
+        billing_user_id,
+        model=provider.model_name,
+        task="character_portrait",
+        ref_id=str(char.id),
+        db=db,
+    )
+
     return CharacterPortraitGenerateOut(
         character_id=char.id,
         avatar_url=avatar_url,
@@ -163,6 +182,7 @@ def generate_character_portrait(
     character_id: str,
     payload: CharacterPortraitGenerateIn,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """为单个人物生成 4 帧横排雪碧图，并写入 avatar_url 与 extra.sprite_sheet。"""
     char = (
@@ -187,6 +207,7 @@ def generate_character_portrait(
         prompt=prompt,
         size=payload.size,
         quality=payload.quality,
+        current_user=current_user,
     )
 
 
@@ -198,6 +219,7 @@ def generate_character_portraits_batch(
     project_id: str,
     payload: CharacterPortraitBatchIn,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """批量生成人物立绘（最多 20 人，逐人调用图片模型）。"""
     provider = _get_image_provider(db, payload.llm_provider_id)
@@ -253,6 +275,7 @@ def generate_character_portraits_batch(
                 prompt=prompt,
                 size=payload.size,
                 quality=payload.quality,
+                current_user=current_user,
             )
             results.append(
                 CharacterPortraitBatchItemOut(

@@ -138,6 +138,7 @@ function BalanceHero({ credit }: { credit: CreditBalance | null }) {
         {[
           { tier: '重型模型', desc: 'GPT-4 / Opus', cost: '5 / 15 积分 / 千 token' },
           { tier: '标准模型', desc: 'Sonnet / Flash', cost: '1 / 3 积分 / 千 token' },
+          { tier: '图片生成', desc: '封面 / 人物立绘', cost: '100 积分 / 次' },
         ].map(({ tier, desc, cost }) => (
           <div
             key={tier}

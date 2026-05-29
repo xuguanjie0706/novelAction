@@ -8,7 +8,8 @@
 - 余额以整数「积分」存储，避免浮点误差；换算精度在 credit_service 层处理（向上取整）。
 - ``ref_type`` 枚举值：
     - ``registration_bonus``  注册赠送
-    - ``llm_call``            AI 调用自动扣费
+    - ``llm_call``            文本 AI 调用自动扣费
+    - ``image_generation``    图片生成按次扣费（封面 / 立绘）
     - ``admin_topup``         管理员充值
     - ``admin_adjust``        管理员任意调整（可正可负，附 note）
     - ``redeem_code``         兑换码核销入账
@@ -34,7 +35,7 @@ class UserCredit(Base):
     Attributes:
         id: UUID 主键。
         user_id: 关联 users.id（唯一，一人一账户）。
-        balance: 当前可用余额（积分）；不允许为负（由 credit_service 保证）。
+        balance: 当前可用余额（积分）；计费可透支为负，充值时自动抵扣欠款。
         total_consumed: 历史累计消耗积分（只增不减）。
         total_topped_up: 历史累计充值 / 赠送积分（只增不减）。
         created_at / updated_at: UTC 时间戳。

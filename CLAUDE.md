@@ -111,6 +111,7 @@ Project
   ├── QualityDebt（质检欠债记录）
   ├── Scene（章节分场，三层调度核心；`scenes` CRUD + `ai/scene_routes` 三层写作 API）
   ├── ReaderPromise（读者承诺台账；模型 + router 已就位，写章/复盘深度闭环待完善）
+  ├── OutlineIssueLog（大纲质检问题台账；linter 落库 → 下卷生成期回灌）
   └── RagRetrievalLog（每次 RAG 检索落库，含命中条目、status、duration_ms）
 ```
 
@@ -166,6 +167,7 @@ JSON 杂物字段，当前已知键：
 - `extra.opening_contract`：Step 12 产物，开局追读承诺清单
 - `extra.consistency_issues`：Step 13 产物，一致性矛盾列表
 - `extra.power_timeline_table_v1`：卷级结构化战力时间轴快照（主角起止境界、Boss 境界与趋势）
+- `extra.enable_issue_feedback`：章纲展开是否注入历史高频 linter 问题回灌（默认 `true`；A/B 可关）
 
 ---
 
@@ -244,7 +246,7 @@ logline
 | 章纲 → 分场 | `POST .../ai/scene_routes` plan-save / draft / stitch | 写作页 `ScenePipelinePanel` |
 
 - **每次只展开一卷**；第一卷与后续卷同路径（无 Bootstrap 特例）。
-- 上下文含 Tier1–5 editorial 块 + 已写章节摘要 / 记忆 / 读者承诺；分批 1–30 / 31–60 章生成，落库后过章纲 linter（GEN-02）。
+- 上下文含 Tier1–5 editorial 块 + 已写章节摘要 / 记忆 / 读者承诺 + **历史高频问题回灌**（`outline_issue_logs` → `build_issue_feedback_block`）；分批 1–30 / 31–60 章生成，落库后过章纲 linter（GEN-02）并写入问题台账。
 - 旧路径 `POST /outline/ai-expand`（arc 预览→commit）、`ai-full-generate` 仍保留，volume 主路径以 `expand-chapters` 为准。
 
 ---
@@ -305,6 +307,7 @@ logline
 - [x] 伏笔台账双向关联（`foreshadow_sync.py`，幂等写入）
 - [x] 大纲生成防漂移（字数预算约束 + 卷间衔接强制承接）
 - [x] 章纲 linter v1.2（CH/SEQ/VL/OC/RP/CM；GEN-02 阻断；`VolumeLinterPanel`）
+- [x] **大纲问题台账 + 生成期回灌（支柱一）**（2026-05-29）：`OutlineIssueLog` + `services/outline_quality/`（`contract` / `issue_log` / `feedback_block`）；`gate.py` linter 后 `record_issue_set`；`context_vol_expand` 跨卷 `top_frequent_issues` 注入 prompt；SEQ-01 prompt 拆至 `prompts/vol_chapter_plans_prompt.py`；前端无改动
 - [x] Scene 三层调度全链路（plan-save / draft/stream / stitch）+ 前端 `ScenePipelinePanel`
 - [x] 势力境界进阶关系图（React Flow，FactionRealmFlow）
 - [x] 任务级采样配置（`llm_task_profiles.py`）

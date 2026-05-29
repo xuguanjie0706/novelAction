@@ -61,6 +61,17 @@ def finalize_volume_chapter_commit(
     )
     report.finalize_status()
 
+    # 把本次 linter 问题落入大纲问题台账（支柱一：供后续卷生成期回灌）。
+    # 失败不阻断落库；commit=False 以并入后续既有 commit。
+    try:
+        from app.services.outline_quality.contract import issue_set_from_linter_report
+        from app.services.outline_quality.issue_log import record_issue_set
+
+        issue_set = issue_set_from_linter_report(report, str(volume_node.id))
+        record_issue_set(svc.db, project.id, issue_set, commit=False)
+    except Exception:
+        logger.warning("record_issue_set 失败（不影响落库）", exc_info=True)
+
     if report_blocks_commit(report):
         from app.models import OutlineNode
         from app.services.outline_linter.user_facing import build_linter_block_payload

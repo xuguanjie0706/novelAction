@@ -99,7 +99,7 @@ def test_chunk_by_volume_splits_chapters_into_sixty_chapter_groups():
 
 def test_gemini_outline_generation_uses_stable_large_batches():
     assert _outline_batch_size("gemini") == 30
-    assert _outline_batch_size("default") == 15
+    assert _outline_batch_size("default") == 30
 
 
 def test_previous_chapters_context_keeps_recent_batch_continuity_fields():
@@ -670,6 +670,11 @@ def test_outline_node_to_chapter_context_preserves_existing_plan_fields():
         "power_milestone": "",
         "foreshadow": "埋[黑雾祭坛主人] 收[祠堂石门]",
         "end_hook": "祭坛深处传来萧家先祖的声音。",
+        "protagonist_want": "",
+        "protagonist_obstacle": "",
+        "protagonist_choice": "",
+        "choice_cost": "",
+        "villain_action": "",
         "pacing": "medium",
         "word_estimate": TARGET_WORDS_PER_CHAPTER,
     }

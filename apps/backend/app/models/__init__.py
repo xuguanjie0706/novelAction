@@ -36,6 +36,7 @@ from app.models.rag_retrieval_log import RagRetrievalLog
 from app.models.memory_conflict_detect_log import MemoryConflictDetectLog
 from app.models.generation_job import GenerationJob
 from app.models.email_login_code import EmailLoginCode
+from app.models.outline_issue_log import OutlineIssueLog
 
 __all__ = [
     "Project",
@@ -76,4 +77,5 @@ __all__ = [
     "MemoryConflictDetectLog",
     "GenerationJob",
     "EmailLoginCode",
+    "OutlineIssueLog",
 ]

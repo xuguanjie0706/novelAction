@@ -13,7 +13,11 @@ hydrate_ctx_from_project 仅做「数据库 → 基础字段」映射，用于�
 """
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.models import OutlineNode, Project
 from app.services.bootstrap.context_vol_tier12 import (
@@ -108,6 +112,24 @@ def build_vol_expand_ctx(
         project, volume_node, ctx
     )
 
+    # ── 历史高频问题回灌（支柱一：源头减少问题）─────────────────────────────────
+    # A/B 开关：project.extra.enable_issue_feedback（默认开）；失败不阻断生成。
+    enable_feedback = bool((project.extra or {}).get("enable_issue_feedback", True))
+    ctx["enable_issue_feedback"] = enable_feedback
+    issue_feedback_block = ""
+    if enable_feedback:
+        try:
+            from app.services.outline_quality.feedback_block import build_issue_feedback_block
+            from app.services.outline_quality.issue_log import top_frequent_issues
+            top_issues = top_frequent_issues(
+                db, project_id, limit=8, min_severity="high",
+                exclude_volume_node_id=volume_node.id,
+            )
+            issue_feedback_block = build_issue_feedback_block(top_issues)
+        except Exception:
+            logger.warning("issue_feedback 回灌失败（不阻断生成）", exc_info=True)
+            issue_feedback_block = ""
+
     # ── 组合 editorial_prompt_block ────────────────────────────────────────────
     genre_kit_block = (ctx.get("genre_kit_prompt") or "").strip()
     if genre_kit_block and not genre_kit_block.startswith("\n"):
@@ -120,6 +142,7 @@ def build_vol_expand_ctx(
             emotion_arc_block, villain_arc_block, core_mysteries_block,
             cast_block, relations_block, villain_block,
             storylines_block, foreshadow_block, promises_block, pacing_block,
+            issue_feedback_block,
         ]
         if b
     ]

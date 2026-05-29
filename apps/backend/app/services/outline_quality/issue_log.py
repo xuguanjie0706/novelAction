@@ -1,0 +1,140 @@
+"""大纲问题台账落库与高频统计。
+
+职责：把一次质检的 IssueSet 幂等写入 outline_issue_logs（同指纹累加 occurrence_count），
+并提供「高频问题」查询，供生成期回灌使用。
+约束：只做 DB 读写，不直连 LLM；保持 <150 行。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from sqlalchemy import case, func
+from sqlalchemy.orm import Session
+
+from app.models import OutlineIssueLog
+from app.services.outline_quality.contract import IssueSet
+
+# severity 字典序 max 会把 medium 误判为比 critical 更严重，用 rank 取 min（最严重）。
+_SEV_RANK = case(
+    (OutlineIssueLog.severity == "critical", 0),
+    (OutlineIssueLog.severity == "high", 1),
+    (OutlineIssueLog.severity == "medium", 2),
+    (OutlineIssueLog.severity == "low", 3),
+    else_=9,
+)
+_RANK_TO_SEV = {0: "critical", 1: "high", 2: "medium", 3: "low"}
+
+
+def record_issue_set(
+    db: Session,
+    project_id: Any,
+    issue_set: IssueSet,
+    *,
+    commit: bool = True,
+) -> int:
+    """把 IssueSet 幂等写入台账。
+
+    同 (project, volume, fingerprint) 已存在则更新 severity/message 并累加 occurrence_count，
+    否则插入新行。返回本次处理的问题条数。
+    """
+    if not issue_set.issues:
+        return 0
+
+    volume_node_id = issue_set.volume_node_id
+    processed = 0
+    for issue in issue_set.issues:
+        fp = issue.fingerprint
+        existing = (
+            db.query(OutlineIssueLog)
+            .filter(
+                OutlineIssueLog.project_id == project_id,
+                OutlineIssueLog.volume_node_id == volume_node_id,
+                OutlineIssueLog.fingerprint == fp,
+            )
+            .first()
+        )
+        if existing:
+            existing.occurrence_count = (existing.occurrence_count or 1) + 1
+            existing.severity = issue.severity
+            existing.message = issue.message
+            existing.suggestion = issue.suggestion or existing.suggestion
+        else:
+            db.add(
+                OutlineIssueLog(
+                    project_id=project_id,
+                    volume_node_id=volume_node_id,
+                    rule_id=issue.rule_id,
+                    dimension=issue.dimension,
+                    severity=issue.severity,
+                    source=issue.source,
+                    field=issue.field or None,
+                    chapter_number=issue.chapter_number,
+                    message=issue.message,
+                    suggestion=issue.suggestion or None,
+                    fingerprint=fp,
+                    occurrence_count=1,
+                )
+            )
+        processed += 1
+
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+    return processed
+
+
+def top_frequent_issues(
+    db: Session,
+    project_id: Any,
+    *,
+    limit: int = 8,
+    min_severity: str | None = "high",
+    exclude_volume_node_id: Any = None,
+) -> list[dict[str, Any]]:
+    """按规则聚合返回高频问题（跨卷），用于生成期回灌。
+
+    Args:
+        min_severity: 仅统计 >= 该严重度的问题；None 表示不过滤。
+        exclude_volume_node_id: 排除当前正在生成的卷，避免自我回灌。
+    """
+    severity_floor = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    allowed: set[str] | None = None
+    if min_severity:
+        floor = severity_floor.get(min_severity, 1)
+        allowed = {s for s, v in severity_floor.items() if v <= floor}
+
+    q = (
+        db.query(
+            OutlineIssueLog.rule_id,
+            OutlineIssueLog.dimension,
+            func.sum(OutlineIssueLog.occurrence_count).label("total"),
+            func.min(_SEV_RANK).label("severity_rank"),
+            func.max(OutlineIssueLog.suggestion).label("suggestion"),
+            func.max(OutlineIssueLog.field).label("field"),
+        )
+        .filter(OutlineIssueLog.project_id == project_id)
+    )
+    if allowed is not None:
+        q = q.filter(OutlineIssueLog.severity.in_(allowed))
+    if exclude_volume_node_id is not None:
+        q = q.filter(OutlineIssueLog.volume_node_id != exclude_volume_node_id)
+
+    rows = (
+        q.group_by(OutlineIssueLog.rule_id, OutlineIssueLog.dimension)
+        .order_by(func.sum(OutlineIssueLog.occurrence_count).desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "rule_id": r.rule_id,
+            "dimension": r.dimension,
+            "count": int(r.total or 0),
+            "severity": _RANK_TO_SEV.get(int(r.severity_rank), "medium"),
+            "suggestion": r.suggestion or "",
+            "field": r.field or "",
+        }
+        for r in rows
+    ]

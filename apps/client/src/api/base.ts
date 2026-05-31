@@ -4,6 +4,7 @@
  */
 import axios from 'axios'
 import toast from 'react-hot-toast'
+import { formatApiError } from '../utils/apiError'
 import {
   extractUsage,
   finishLlmCall,
@@ -68,7 +69,7 @@ api.interceptors.response.use(
         status: err.response?.status ?? 'network_error',
         responsePayload: err.response?.data,
         usage: extractUsage(err.response?.data),
-        error: err.response?.data?.detail || err.message || '请求失败',
+        error: formatApiError(err),
       })
     }
 
@@ -83,8 +84,7 @@ api.interceptors.response.use(
       return Promise.reject(err)
     }
 
-    const msg = err.response?.data?.detail || err.message || '请求失败'
-    toast.error(msg)
+    toast.error(formatApiError(err))
     return Promise.reject(err)
   }
 )

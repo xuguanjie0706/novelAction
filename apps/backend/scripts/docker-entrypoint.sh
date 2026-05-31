@@ -4,6 +4,6 @@ set -eu
 cd /app
 if [ "${SKIP_ALEMBIC_UPGRADE:-0}" != "1" ]; then
   echo "[entrypoint] running db schema sync (create_all + alembic upgrade head)..."
-  python scripts/db_upgrade.py
+  python -m app.cli.db_upgrade
 fi
 exec "$@"

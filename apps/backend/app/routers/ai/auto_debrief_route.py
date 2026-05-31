@@ -74,20 +74,15 @@ async def auto_debrief(
         ChapterDebriefCache.project_id == project_id,
         ChapterDebriefCache.chapter_id == chapter.id,
     ).first()
-    cache_hit = (
-        cached
-        and not req.force_refresh
-        and cached.content_hash == content_hash
-        and cached.model_profile == req.model_profile
-        and (cached.llm_provider_id or None) == current_llm_provider
-        and isinstance(cached.payload, dict)
-    )
-    if cache_hit:
-        payload = dict(cached.payload)
-        payload["cached"] = True
-        return payload
+    payload_ok = cached and isinstance(cached.payload, dict)
+    hash_ok = payload_ok and cached.content_hash == content_hash
 
+    # 写作页「复盘」Tab 只读预填：正文未改即可复用，不因切换模型线路而丢缓存
     if req.cache_only:
+        if hash_ok:
+            payload = dict(cached.payload)
+            payload["cached"] = True
+            return payload
         return {
             "character_updates": [],
             "storyline_updates": [],
@@ -99,6 +94,17 @@ async def auto_debrief(
             "cached": False,
             "cache_only_miss": True,
         }
+
+    cache_hit = (
+        hash_ok
+        and not req.force_refresh
+        and cached.model_profile == req.model_profile
+        and (cached.llm_provider_id or None) == current_llm_provider
+    )
+    if cache_hit:
+        payload = dict(cached.payload)
+        payload["cached"] = True
+        return payload
 
     characters = db.query(Character).filter(Character.project_id == project_id).all()
     character_states = [

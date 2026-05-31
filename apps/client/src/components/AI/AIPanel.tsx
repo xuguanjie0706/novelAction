@@ -13,7 +13,6 @@ import {
 } from '../../utils/qualityReport'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
-import type { AxiosError } from 'axios'
 
 interface Props { projectId: string }
 
@@ -42,17 +41,6 @@ function chapterPlainTextLen(ch: Chapter): number {
 function isChapterReferenceSelectable(ch: Chapter): boolean {
   if ((ch.word_count ?? 0) > 0) return true
   return chapterPlainTextLen(ch) >= 10
-}
-
-function microFixErrorMessage(err: unknown): string {
-  const ax = err as AxiosError<{ detail?: string | { message?: string; rationale?: string } }>
-  const detail = ax.response?.data?.detail
-  if (typeof detail === 'string') return detail
-  if (detail && typeof detail === 'object' && detail.message) {
-    const why = (detail.rationale || '').trim()
-    return why.length > 0 ? `${detail.message}（${why.length > 80 ? `${why.slice(0, 80)}…` : why}）` : detail.message
-  }
-  return err instanceof Error ? err.message : '快速修复失败'
 }
 
 export default function AIPanel({ projectId }: Props) {
@@ -246,8 +234,8 @@ export default function AIPanel({ projectId }: Props) {
           ? `已应用局部修改：${why.length > 100 ? `${why.slice(0, 100)}…` : why}`
           : '已根据优化建议更新正文（局部修改）',
       )
-    } catch (e) {
-      toast.error(microFixErrorMessage(e))
+    } catch {
+      /* 全局 axios 拦截器已 toast；此处静默避免重复提示 */
     } finally {
       setMicroFixing(false)
       setMicroFixingIndex(null)
@@ -461,14 +449,16 @@ export default function AIPanel({ projectId }: Props) {
             {report && (
               <>
                 <div className="text-center">
-                  <span className={clsx('text-4xl font-bold', scoreColor(report.overall_score))}>
-                    {report.overall_score.toFixed(1)}
+                  <span className={clsx('text-4xl font-bold', scoreColor(Number(report.overall_score) || 0))}>
+                    {(Number(report.overall_score) || 0).toFixed(1)}
                   </span>
                   <span className="text-gray-400 text-sm"> / 10</span>
                   <p className="text-xs text-gray-500 mt-1">{report.summary}</p>
                 </div>
                 <div className="space-y-2">
-                  {Object.entries(report.dimensions).map(([key, dim]) => (
+                  {Object.entries(report.dimensions || {}).map(([key, dim]) => {
+                    if (!dim || typeof dim !== 'object') return null
+                    return (
                     <div key={key} className="flex items-start gap-2">
                       <span className={clsx('text-xs px-2 py-0.5 rounded-full shrink-0 mt-0.5', statusBadge(dim.status))}>
                         {dim.score}
@@ -478,7 +468,8 @@ export default function AIPanel({ projectId }: Props) {
                         <div className="text-xs text-gray-500">{dim.comment}</div>
                       </div>
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
                 {reportSuggestions.length > 0 && (
                   <div>

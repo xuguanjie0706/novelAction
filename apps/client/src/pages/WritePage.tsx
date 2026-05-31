@@ -38,6 +38,32 @@ function isPlaceholderChapterPlan(node: OutlineNode, ch: Chapter | undefined): b
   return PLACEHOLDER_CHAPTER_TITLE.test(node.title)
 }
 
+/** 可写作的空白章：无正文且非大纲占位标题 */
+function isBlankWritableChapter(ch: Chapter, outlineTree: OutlineNode[]): boolean {
+  if (ch.word_count > 0) return false
+  if (!ch.outline_node_id) return true
+  const node = findNode(outlineTree, ch.outline_node_id)
+  if (!node || node.node_type !== 'chapter_plan') return true
+  return !isPlaceholderChapterPlan(node, ch)
+}
+
+function isWritableChapterEntry(ch: Chapter, outlineTree: OutlineNode[]): boolean {
+  if (!ch.outline_node_id) return true
+  const node = findNode(outlineTree, ch.outline_node_id)
+  if (!node || node.node_type !== 'chapter_plan') return true
+  return !isPlaceholderChapterPlan(node, ch)
+}
+
+/** 刷新写作页时默认章：最新空白章 → 否则最新可写章 */
+function pickDefaultActiveChapterId(chapters: Chapter[], outlineTree: OutlineNode[]): string | null {
+  if (!chapters.length) return null
+  const bySortDesc = [...chapters].sort((a, b) => b.sort_order - a.sort_order)
+  const blank = bySortDesc.find(ch => isBlankWritableChapter(ch, outlineTree))
+  if (blank) return blank.id
+  const writable = bySortDesc.find(ch => isWritableChapterEntry(ch, outlineTree))
+  return (writable ?? bySortDesc[0]).id
+}
+
 /** 根节点中卷在前、其余（含误入根的章计划）在后，避免「第 N 章」插在两卷之间 */
 function sortRootNodesForWriteSidebar(nodes: OutlineNode[]): OutlineNode[] {
   if (nodes.length <= 1) return [...nodes].sort((a, b) => a.sort_order - b.sort_order)
@@ -82,12 +108,9 @@ export default function WritePage() {
         setExpanded(new Set<string>(oRes.data.map((n: OutlineNode) => n.id)))
         setChapters(cRes.data)
         setStoryLines(slRes.data)
-        // 切换项目或刷新后：全局 store 里可能仍是上一本书的 chapter_id，写作侧栏对话会带错 id → 后端 404 / 对话失败
-        const chapterIds = new Set(cRes.data.map((c: Chapter) => c.id))
-        const currentActive = useAppStore.getState().activeChapterId
-        if (!currentActive || !chapterIds.has(currentActive)) {
-          useAppStore.getState().setActiveChapterId(cRes.data.length > 0 ? cRes.data[0].id : null)
-        }
+        // 刷新 / 切换项目：默认定位「最新空白章」；?chapter= 由下方 effect 覆盖
+        const defaultId = pickDefaultActiveChapterId(cRes.data, oRes.data)
+        useAppStore.getState().setActiveChapterId(defaultId)
         setLoadState('ready')
       })
       .catch(() => { setLoadState('error'); toast.error('数据加载失败') })
@@ -135,12 +158,8 @@ export default function WritePage() {
     const node = findNode(outlineTree, ch.outline_node_id)
     if (!node || node.node_type !== 'chapter_plan') return
     if (!isPlaceholderChapterPlan(node, ch)) return
-    const next = chapters.find(c => {
-      if (!c.outline_node_id) return true
-      const n = findNode(outlineTree, c.outline_node_id)
-      if (n?.node_type === 'chapter_plan') return !isPlaceholderChapterPlan(n, c)
-      return true
-    })
+    const sorted = [...chapters].sort((a, b) => b.sort_order - a.sort_order)
+    const next = sorted.find(c => isWritableChapterEntry(c, outlineTree))
     if (next && next.id !== activeChapterId) setActiveChapterId(next.id)
     else if (!next) setActiveChapterId(null)
   }, [activeChapterId, chapters, outlineTree, setActiveChapterId])

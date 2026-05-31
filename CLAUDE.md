@@ -575,7 +575,7 @@ docker-compose up -d
 ./restart.sh
 
 # 仅同步数据库（不启服务）
-# cd apps/backend && python scripts/db_upgrade.py
+# cd apps/backend && python -m app.cli.db_upgrade
 
 # 管理后台（另开终端，默认 http://localhost:3174）
 cd apps/frontend && pnpm run dev

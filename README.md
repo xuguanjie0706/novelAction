@@ -41,6 +41,18 @@ docker context ls
 docker-compose up -d --build
 ```
 
+生产/服务器（不挂载源码，仅用镜像内文件）：
+
+```bash
+docker-compose -f docker-compose.prod.yml up -d --build
+```
+
+若 backend 启动报 `SyntaxError: source code string cannot contain null bytes`：
+
+1. 在仓库根目录确认 `apps/backend/scripts/db_upgrade.py` 无 NUL：`python3 -c "print(open('apps/backend/scripts/db_upgrade.py','rb').read().count(b'\\x00'))"`（应为 `0`）
+2. 使用 **`python -m app.cli.db_upgrade`**（entrypoint 已切换）；勿在服务器用编辑器另存为 UTF-16
+3. 无缓存重建 backend：`docker-compose -f docker-compose.prod.yml build --no-cache backend`
+
 > 说明：部分环境只支持 `docker-compose`（连字符），不支持 `docker compose`（空格子命令）。
 > 如果你执行 `docker compose` 报错，请改用 `docker-compose`。
 

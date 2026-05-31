@@ -1,0 +1,22 @@
+# 避免把本地虚拟环境 / 缓存打进镜像（曾导致脚本异常或层膨胀）
+.venv
+venv
+__pycache__
+*.py[cod]
+*$py.class
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+.coverage
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+*.egg-info
+dist
+build
+local
+.DS_Store
+._*

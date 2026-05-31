@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI：将当前 DATABASE_URL 指向的库升到 Alembic head（与启动钩子逻辑一致）。"""
+"""兼容壳：优先使用 ``python -m app.cli.db_upgrade``（Docker entrypoint 已切换）。"""
 from __future__ import annotations
 
 import sys
@@ -9,14 +9,7 @@ _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
-from app.startup.db_schema import run_pre_start_schema  # noqa: E402
-
-
-def main() -> int:
-    rev = run_pre_start_schema()
-    print(f"OK: schema aligned (alembic revision={rev or 'skipped'})")
-    return 0
-
+from app.cli.db_upgrade import main  # noqa: E402
 
 if __name__ == "__main__":
     try:

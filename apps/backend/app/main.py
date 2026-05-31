@@ -309,6 +309,6 @@ def health():
     }
     if not schema_ok:
         payload["schema_hint"] = (
-            "数据库迁移落后于代码。请在 apps/backend 执行：python scripts/db_upgrade.py"
+            "数据库迁移落后于代码。请在 apps/backend 执行：python -m app.cli.db_upgrade"
         )
     return payload

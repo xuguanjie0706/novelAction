@@ -332,8 +332,9 @@ export function useDebriefRun({
       if (data.error || data.cache_only_miss || !data.cached) return
       applyAutoDebriefData(data, 'cache', { silent: true })
       setDebriefFromQueueSnapshot(false)
-    } catch { /* 静默：无缓存或网络失败不打扰写作流 */ }
-    finally {
+    } catch {
+      /* 静默：无缓存 / 网络失败不刷屏；用户可点「AI 分析」 */
+    } finally {
       setDebriefCacheHydrating(false)
     }
   }, [projectId, chapterId, chapterContent, applyAutoDebriefData])
@@ -402,7 +403,18 @@ export function useDebriefRun({
 
     if (characterUpdates.length === 0 && storylineUpdates.length === 0
       && !debriefNotes && !hasAssetUpdates && !hasChapterIndex && !hasReaderPromises) {
-      toast('没有需要提交的更新', { icon: 'ℹ️' })
+      const hasAiDraft = aiSuggestedCharIds.size > 0
+        || aiSuggestedSlIds.size > 0
+        || (aiSuggestedAssetUpdates && Object.values(aiSuggestedAssetUpdates).some(
+          v => Array.isArray(v) && v.length > 0,
+        ))
+        || aiChapterIndex != null
+      toast(
+        hasAiDraft
+          ? '预填数据未加载到表单，请先点「AI 分析」或刷新页面后再确认'
+          : '没有需要提交的更新，请先点「AI 分析」',
+        { icon: 'ℹ️' },
+      )
       return
     }
 
@@ -456,8 +468,8 @@ export function useDebriefRun({
       setAiNewReaderPromises([])
       setAiFulfilledPromiseTexts([])
       setDebriefNotes('')
-    } catch {
-      toast.error('复盘提交失败')
+    } catch (e) {
+      toast.error(`复盘提交失败：${formatApiError(e)}`)
     } finally {
       setDebriefSubmitting(false)
     }

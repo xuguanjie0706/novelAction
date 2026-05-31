@@ -68,7 +68,9 @@ def finalize_volume_chapter_commit(
         from app.services.outline_quality.issue_log import record_issue_set
 
         issue_set = issue_set_from_linter_report(report, str(volume_node.id))
-        record_issue_set(svc.db, project.id, issue_set, commit=False)
+        # 台账写入失败不得污染章纲落库事务；用 SAVEPOINT 隔离。
+        with svc.db.begin_nested():
+            record_issue_set(svc.db, project.id, issue_set, commit=False)
     except Exception:
         logger.warning("record_issue_set 失败（不影响落库）", exc_info=True)
 

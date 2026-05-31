@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>番茄市场视角：章节展开系统致命断裂诊断</title>
+<style>
+  :root {
+    --bg: #fafaf8; --bg-card: #fff; --bg-sec: #f5f4f0;
+    --text: #1a1a1a; --text2: #6b6b68; --text3: #9c9c98;
+    --border: rgba(0,0,0,0.08); --border2: rgba(0,0,0,0.15);
+    --red-50:#FCEBEB; --red-800:#791F1F;
+    --amber-50:#FAEEDA; --amber-800:#633806;
+    --blue-50:#E6F1FB; --blue-800:#0C447C;
+    --purple-50:#EEEDFE; --purple-800:#3C3489;
+    --pink-50:#FBEAF0; --pink-800:#72243E;
+    --teal-50:#E1F5EE; --teal-600:#0F6E56; --teal-800:#085041;
+    --coral-600:#993C1D;
+    --green-800:#27500A;
+    --font: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;
+    --mono: "SF Mono","Fira Code","JetBrains Mono",monospace;
+    --r: 10px; --rl: 14px;
+  }
+  @media(prefers-color-scheme:dark){:root{
+    --bg:#1a1a1a;--bg-card:#242424;--bg-sec:#2a2a2a;
+    --text:#e8e8e8;--text2:#a0a0a0;--text3:#707070;
+    --border:rgba(255,255,255,0.08);--border2:rgba(255,255,255,0.15);
+    --red-50:#3a1818;--red-800:#F7C1C1;
+    --amber-50:#302010;--amber-800:#FAC775;
+    --blue-50:#102030;--blue-800:#B5D4F4;
+    --purple-50:#2a2650;--purple-800:#CECBF6;
+    --pink-50:#3a1828;--pink-800:#F4C0D1;
+    --teal-50:#0a2e24;--teal-600:#5DCAA5;--teal-800:#9FE1CB;
+    --coral-600:#F0997B;--green-800:#C0DD97;
+  }}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--font);background:var(--bg);color:var(--text);line-height:1.7;-webkit-font-smoothing:antialiased}
+  .c{max-width:820px;margin:0 auto;padding:3rem 1.5rem 4rem}
+  header{text-align:center;margin-bottom:2.5rem;padding-bottom:2rem;border-bottom:1px solid var(--border)}
+  header h1{font-size:24px;font-weight:600;margin-bottom:6px;letter-spacing:-0.5px}
+  header .sub{font-size:15px;color:var(--text2)}
+  header .date{font-size:13px;color:var(--text3);margin-top:6px}
+
+  .alert-box{background:var(--red-50);border:1px solid var(--border);border-radius:var(--rl);padding:1.25rem 1.5rem;margin-bottom:2rem}
+  .alert-box h2{font-size:16px;font-weight:600;color:var(--red-800);margin-bottom:8px}
+  .alert-box p{font-size:14px;color:var(--text2);line-height:1.75}
+  .alert-box b{color:var(--text)}
+  .alert-box code{font-family:var(--mono);font-size:12px;background:var(--bg-sec);padding:1px 5px;border-radius:4px}
+
+  .flow-box{display:flex;gap:8px;align-items:stretch;margin:16px 0;flex-wrap:wrap}
+  .flow-step{flex:1;min-width:110px;background:var(--bg-sec);border-radius:var(--r);padding:10px 12px;font-size:12px;text-align:center}
+  .flow-step.ok{border-left:3px solid var(--teal-600)}
+  .flow-step.broken{border-left:3px solid #E24B4A}
+  .flow-step .fl{font-weight:500;color:var(--text)}
+  .flow-step .fs{color:var(--text3);font-size:11px;margin-top:3px}
+  .fa{display:flex;align-items:center;color:var(--text3);font-size:18px;font-weight:700}
+  .fa.x{color:#E24B4A}
+
+  .sec{margin-bottom:2.5rem}
+  .sec-title{font-size:17px;font-weight:600;margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+  .card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--rl);padding:1.25rem 1.5rem;margin-bottom:12px;transition:border-color .15s}
+  .card:hover{border-color:var(--border2)}
+  .card h3{font-size:15px;font-weight:600;margin:0 0 8px;line-height:1.55}
+  .card p{font-size:14px;line-height:1.75;color:var(--text2);margin:0 0 10px}
+  .card p:last-of-type{margin-bottom:0}
+  .card b{color:var(--text);font-weight:600}
+  .ev{font-size:12.5px;font-family:var(--mono);color:var(--text3);background:var(--bg-sec);padding:10px 14px;border-radius:var(--r);margin-top:12px;line-height:1.65;white-space:pre-wrap;word-break:break-all}
+  .sev{display:inline-block;font-size:11px;padding:2px 10px;border-radius:6px;font-weight:600;margin-right:6px;letter-spacing:.3px}
+  .s-fatal{background:var(--red-50);color:var(--red-800)}
+  .s-high{background:var(--amber-50);color:var(--amber-800)}
+  .s-med{background:var(--blue-50);color:var(--blue-800)}
+  .tag{display:inline-block;font-size:11px;padding:2px 10px;border-radius:6px;font-weight:600;margin-left:4px}
+  .tag-disc{background:var(--pink-50);color:var(--pink-800)}
+  .tag-miss{background:var(--purple-50);color:var(--purple-800)}
+  .tag-wrong{background:var(--amber-50);color:var(--amber-800)}
+
+  .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:2rem}
+  .stat{background:var(--bg-sec);border-radius:var(--r);padding:1rem 1.25rem}
+  .stat .sl{font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+  .stat .sv{font-size:22px;font-weight:600}
+  .stat .sv.red{color:var(--red-800)}
+  .stat .sv.amb{color:var(--amber-800)}
+  .stat .sv.tl{color:var(--teal-800)}
+
+  .prio{border-left:3px solid var(--border);padding-left:16px;margin-bottom:12px}
+  .prio h3{font-size:15px;font-weight:600;margin-bottom:4px}
+  .prio p{font-size:13px;color:var(--text2);line-height:1.7}
+  .prio.p0{border-color:#E24B4A}
+  .prio.p1{border-color:#D85A30}
+  .prio.p2{border-color:#BA7517}
+  .prio.p3{border-color:#1D9E75}
+
+  .prose{margin-top:2.5rem;padding-top:2rem;border-top:1px solid var(--border)}
+  .prose h2{font-size:18px;font-weight:600;margin-bottom:1rem}
+  .prose p{font-size:14px;line-height:1.8;color:var(--text2);margin-bottom:1rem}
+  .prose strong{color:var(--text)}
+
+  footer{margin-top:3rem;padding-top:1.5rem;border-top:1px solid var(--border);text-align:center;font-size:12px;color:var(--text3)}
+</style>
+</head>
+<body>
+<div class="c">
+
+<header>
+  <h1>番茄市场视角：章节展开系统诊断</h1>
+  <div class="sub">基于番茄算法逻辑、完读率 KPI、打脸节奏的专项审计</div>
+  <div class="date">novelAction &middot; 2026-05-30</div>
+</header>
+
+<!-- Stats -->
+<div class="stat-grid">
+  <div class="stat"><div class="sl">番茄产物断联</div><div class="sv red">6/6</div></div>
+  <div class="stat"><div class="sl">致命问题</div><div class="sv red">5</div></div>
+  <div class="stat"><div class="sl">严重问题</div><div class="sv amb">5</div></div>
+  <div class="stat"><div class="sl">修复优先级</div><div class="sv tl">4 阶段</div></div>
+</div>
+
+<!-- ============ 核心断裂 ============ -->
+<div class="alert-box">
+  <h2>核心断裂：番茄 Bootstrap 产物 → 章纲展开 = 完全断联</h2>
+  <p>番茄 Bootstrap（<code>graph_fanqie.py</code>）生成了 <b>6 类核心产物</b>（打脸地图、金手指、爽点节奏图、开局五章、落差工程、算法审计），全部存在 <code>Project.extra</code> 中。但章纲展开的两个核心文件（<code>vol_chapter_plans.py</code> + <code>context_vol_expand.py</code>）<b>没有读取其中任何一个</b>。代码内 grep 确认：零匹配。</p>
+</div>
+
+<div class="flow-box">
+  <div class="flow-step ok"><div class="fl">番茄 Bootstrap</div><div class="fs">打脸地图 / 金手指<br>节奏图 / 算法审计</div></div>
+  <div class="fa x">&times;</div>
+  <div class="flow-step broken"><div class="fl">章纲展开</div><div class="fs">通用四元组模板<br>零番茄数据注入</div></div>
+  <div class="fa">&rarr;</div>
+  <div class="flow-step"><div class="fl">写正文</div><div class="fs">context_assembler<br>同样无番茄数据</div></div>
+</div>
+
+<!-- ============ 完读率盲区 ============ -->
+<div class="sec">
+<div class="sec-title">一、完读率盲区 —— 番茄算法的生死线</div>
+
+<div class="card">
+  <h3><span class="sev s-fatal">致命</span><span class="tag tag-miss">缺失</span> 章纲无完读率目标——番茄的核心 KPI 被忽视</h3>
+  <p>番茄算法逻辑：<b>完读率 &gt; 收藏率 &gt; 评论率</b>。opening_5chapters 为前5章设了完读率目标（60%→50%→45%→40%→40%），但<b>第6章起完读率意识归零</b>。章纲没有 <code>completion_rate_risk</code> 或 <code>drop_risk_point</code> 字段。</p>
+  <p>番茄作者都知道：<b>第6-15章是算法推荐窗口期</b>，完读率跌破30%就从推荐池出局。系统在这个生死窗口期用的是通用「四元组」模板，跟起点长篇一个规划逻辑。</p>
+  <div class="ev">建议新增字段：
+  completion_rate_risk: "low/medium/high"
+  drop_risk_point: "本章最可能让读者退出的位置（前200字/中段过渡/结尾钩子弱）"
+  → 当 risk=high 时 linter 应阻断或强制要求补充爽点</div>
+</div>
+
+<div class="card">
+  <h3><span class="sev s-fatal">致命</span><span class="tag tag-wrong">错误</span> 章末钩子不是「文学悬念」，是「广告断点生存术」</h3>
+  <p>番茄读者每读完一章都会看到 <b>5-30秒广告</b>。end_hook 的设计目标不是「让读者觉得故事有趣」，而是<b>「让读者在看完广告后还愿意点击下一章」</b>。这需要极端具体的信息缺口或情绪峰值，不是「主角打开了一扇门」这种通用悬念。</p>
+  <p>当前 prompt 铁律第4条说「end_hook 必须具体到手法」——方向对了但力度完全不够。番茄的 end_hook 需要分类型设计：<b>悬念型</b>（「来电显示是三年前已经死去的人」）、<b>爽感期待型</b>（「系统提示：下一级奖励已解锁」）、<b>愤怒驱动型</b>（「她冷笑着把离婚协议放到桌上」）。</p>
+  <div class="ev">当前：end_hook 是通用30字描述，无类型分类
+建议新增：
+  hook_type: "suspense/satisfaction_preview/anger_driver/revelation/cliffhanger"
+  hook_ad_survival_score: 1-5（过广告存活率预估，≤2 的应 linter 预警）</div>
+</div>
+</div>
+
+<!-- ============ 爽感节奏断联 ============ -->
+<div class="sec">
+<div class="sec-title">二、爽感节奏断联 —— 番茄的核心引擎</div>
+
+<div class="card">
+  <h3><span class="sev s-fatal">致命</span><span class="tag tag-disc">断联</span> rhythm_map 前50章爽点标签完全没注入章纲</h3>
+  <p>番茄 Bootstrap 花了一整个步骤生成前50章的爽点节奏图：每章标记为 big_win / small_win / progress / transition，并自动检测「连续过渡超2章」的旱区。但章纲展开时<b>完全不读这个数据</b>。</p>
+  <p>番茄铁律：<b>连续3章没有明显爽感，读者流失率+30%</b>。节奏图已经标出了旱区预警，但章纲 AI 不知道这些预警的存在。</p>
+  <div class="ev">rhythm_map.chapter_tags:
+  [{ch:1, type:"progress"}, {ch:2, type:"small_win"}, {ch:3, type:"big_win"}, ...]
+→ 应注入章纲 prompt：「第X章必须是 big_win 类型，对应打脸对象 Y」
+→ 并在 linter 中校验：生成的章纲爽感类型是否与 rhythm_map 一致</div>
+</div>
+
+<div class="card">
+  <h3><span class="sev s-fatal">致命</span><span class="tag tag-disc">断联</span> 打脸地图与章纲的 has_face_slap 没有对齐</h3>
+  <p>face_slap_map 精确规划了5层打脸对象（从丈母娘到终极 BOSS），每层有具体的 chapter_estimate 和 slap_scene。但章纲只有一个布尔值 <code>has_face_slap: true/false</code>——<b>不知道打谁、用什么方式打、打脸画面是什么</b>。</p>
+  <p>结果：AI 随机分配 has_face_slap=true，可能第10章就打了第30章该打的人，或者全书打脸对象完全脱离打脸地图的谱系设计。</p>
+  <div class="ev">face_slap_map.targets[0]:
+  {order:1, name:"丈母娘", slap_type:"财富碾压",
+   slap_scene:"当众把支票摔在对方脸上", chapter_estimate:"第3-5章"}
+当前：has_face_slap=true（无目标、无类型、无画面）
+→ 应注入：face_slap_target="丈母娘", face_slap_type="财富碾压"</div>
+</div>
+
+<div class="card">
+  <h3><span class="sev s-high">严重</span><span class="tag tag-disc">断联</span> 金手指升级阶段与章纲 power_milestone 脱钩</h3>
+  <p>golden_finger 设计了5个精确升级阶段，每个阶段有 unlock_ability、visualization（读者脑海画面）、chapter_range。但章纲的 power_milestone 是自由文本，AI 不知道金手指应该在第几章升到第几阶段。</p>
+  <p>番茄读者追的就是<b>金手指升级→能力展示→打脸</b>这个循环。金手指升级节奏错了，整个爽感链条就断了。</p>
+  <div class="ev">golden_finger.upgrade_stages[1]:
+  {stage:2, name:"小成", unlock_ability:"单手折断对方手腕", chapter_range:"第10-20章"}
+→ 应在第10-20章的章纲中注入：本阶段金手指目标为「小成」
+→ power_milestone 应强制对齐 golden_finger.upgrade_stages</div>
+</div>
+
+<div class="card">
+  <h3><span class="sev s-high">严重</span><span class="tag tag-disc">断联</span> contrast_design 的落差感在章纲中消失</h3>
+  <p>contrast_design 规划了主角的初始状态（最惨的描述）和触发事件时机。但章纲展开时不读这个数据。前10章的每一次「打脸」都应该<b>反复强化主角的初始落差</b>——他越惨，打脸越爽。如果章纲不知道主角「惨在哪里」，就无法设计精准的反差画面。</p>
+  <div class="ev">contrast_design:
+  {initial_state_headline: "被全家唾弃的上门女婿",
+   trigger_event: "老人留下的戒指突然发光"}
+→ 应在前30章章纲中反复注入初始落差作为爽感参照系</div>
+</div>
+</div>
+
+<!-- ============ 字数与节奏 ============ -->
+<div class="sec">
+<div class="sec-title">三、字数与情绪词错配</div>
+
+<div class="card">
+  <h3><span class="sev s-high">严重</span><span class="tag tag-wrong">错误</span> 字数预算偏长——番茄最优区间是 1500-2200 字</h3>
+  <p>当前 expected_words 参考基准：opening 2000-2400，rising 2300，climax 3000-3300。这是<b>起点付费章节的字数标准</b>。番茄免费章节最优区间是 <b>1500-2200 字</b>——更短的章节意味着更高的完读率、更多的广告展示机会、更快的追读节奏。</p>
+  <p>3000字的高潮章节在番茄上完读率会显著下降——读者的注意力阈值比起点低约 30%。</p>
+  <div class="ev">当前：opening≈2000-2400, rising≈2300, climax≈3000-3300
+番茄最优：opening≈1500-1800, rising≈1800-2000, climax≈2200-2500
+差距：普遍偏长 300-800 字，高潮章偏长近 1000 字</div>
+</div>
+
+<div class="card">
+  <h3><span class="sev s-high">严重</span><span class="tag tag-wrong">错误</span> emotional_tone 用的是文学情感词，不是番茄情绪词</h3>
+  <p>当前选项：exciting/tense/sad/romantic/mysterious/funny/epic/calm。这是<b>文学评论的情绪分类</b>。番茄读者的核心情绪只有几种：<b>爽</b>（satisfaction）、<b>燃</b>（hype）、<b>酸</b>（cringe/jealousy）、<b>急</b>（urgency）。</p>
+  <p>「calm」在番茄上 = 读者退出。「sad」需要极短篇幅后立刻转「爽」。「mysterious」如果不在3段内给出线索就流失。番茄的情绪设计语言和通用网文完全不同。</p>
+  <div class="ev">建议替换为番茄情绪词汇表：
+  shuang — 爽：打脸/升级/碾压后的满足
+  ran   — 燃：热血战斗/逆转/绝地反击
+  suan  — 酸：看反派被打脸时的解气/替代满足
+  ji    — 急：信息缺口/危机悬念/下一章不看不行
+  nue   — 虐：短暂压抑，必须在本章或下章转爽
+  tian  — 甜：感情线糖分，用于调节节奏</div>
+</div>
+</div>
+
+<!-- ============ 四元组适配 ============ -->
+<div class="sec">
+<div class="sec-title">四、四元组框架的番茄适配问题</div>
+
+<div class="card">
+  <h3><span class="sev s-high">严重</span><span class="tag tag-wrong">错误</span> 「选择暴露性格」是文学批评思维，不是番茄读者心理</h3>
+  <p>四元组「欲望→障碍→选择→代价」是经典叙事理论（Save the Cat / Story Grid 体系），对长篇文学创作确实有效。但番茄读者<b>不关心主角的选择是否暴露性格</b>——他们关心的是：</p>
+  <p>1. <b>这章谁被打脸了？</b>（爽点兑现）<br>
+     2. <b>金手指有没有新效果？</b>（期待兑现）<br>
+     3. <b>下一个要打的人是谁？</b>（期待建立）<br>
+     4. <b>反派有没有跳出来？</b>（冲突维持）</p>
+  <p>四元组可以保留作为底层结构骨架，但番茄章纲需要<b>额外一层「爽感交付清单」</b>：本章交付了什么爽感？类型是什么？强度几级？</p>
+  <div class="ev">建议新增「番茄交付层」字段：
+  satisfaction_delivered: "本章交付的爽感（打脸/升级/揭秘/反转/甜宠，选一）"
+  satisfaction_intensity: 1-5（1=小爽, 5=全书级大爽点）
+  satisfaction_visual: "读者脑海画面（≤20字，必须是动作不是描述）"
+  next_anticipation: "本章建立的下一个期待（读者看完想知道什么）"</div>
+</div>
+
+<div class="card">
+  <h3><span class="sev s-med">中等</span><span class="tag tag-miss">缺失</span> 番茄没有「过渡章」的概念——每章必须有 payoff</h3>
+  <p>当前系统允许 <code>pacing: slow</code> + <code>emotional_tone: calm</code> 的组合。在番茄上这种章节 = <b>读者直接弃文</b>。番茄的铁律：<b>每章必须有至少一个 small_win</b>，哪怕是一句让读者解气的台词、一次小小的能力展示、一个让人期待的信息揭示。</p>
+  <p>rhythm_map 已经用 transition 标签标出了过渡章并自动预警，但章纲 linter 没有「禁止纯过渡章」的规则。</p>
+  <div class="ev">缺失 linter 规则：
+  FANQIE-01: 禁止连续2章 pacing=slow 且无 satisfaction_delivered
+  FANQIE-02: 禁止 emotional_tone=calm 且无 small_win/face_slap
+  FANQIE-03: 每5章必须有至少1个 big_win 级别爽点
+  FANQIE-04: 前15章（算法窗口期）每章必须有 small_win 以上爽点</div>
+</div>
+
+<div class="card">
+  <h3><span class="sev s-med">中等</span><span class="tag tag-miss">缺失</span> 缺少「读者爽感记忆衰减」模型</h3>
+  <p>番茄读者对爽感的记忆非常短——上一次大爽点3章之后就「忘了」。如果 big_win 之后连续3章没有至少 small_win 维持，读者会觉得「这书变无聊了」。当前系统没有追踪「距离上次爽感过了几章」的机制。</p>
+  <div class="ev">建议在 linter 中增加：
+  chapters_since_last_satisfaction：追踪爽感间隔
+  若间隔 ≥ 3 且非 dark_hour 阶段 → 预警
+  若间隔 ≥ 5 → 阻断（番茄生死线）</div>
+</div>
+</div>
+
+<!-- ============ 开局五章 vs 第6-30章 ============ -->
+<div class="sec">
+<div class="sec-title">五、开局五章与后续章节的断层</div>
+
+<div class="card">
+  <h3><span class="sev s-fatal">致命</span><span class="tag tag-disc">断联</span> 开局五章精确到200字级别，第6章起退化为30字摘要</h3>
+  <p>opening_5chapters 为每章设计了精确结构：前200字必须完成什么、触发段在第几字、金手指激活段、章末钩子类型。这是<b>番茄级别的精度</b>。</p>
+  <p>但从第6章起，章纲展开退回到通用的30字 core_event + 30字 opening_hook。从「200字级精度」到「30字摘要」的断崖式降级，直接导致<b>第6-15章（算法窗口期）的写作质量失控</b>。</p>
+  <div class="ev">opening_5chapters.chapter_1.structure:
+  {opening_200_words: "前200字必须完成：建立处境+核心羞辱+读者同情",
+   act_1_setup: "0-400字：主角处境+核心羞辱发生",
+   act_2_trigger: "400-800字：触发事件经过",
+   act_3_finger: "800字-结尾：金手指激活+第一感知"}
+
+vol_chapter_plans 第6章起：
+  {opening_hook: "≤30字", core_event: "≤60字"} ← 精度断崖</div>
+</div>
+</div>
+
+<!-- ============ 优先行动 ============ -->
+<div class="sec">
+<div class="sec-title">优先行动路线</div>
+
+<div class="prio p0">
+  <h3>P0 · 接通番茄数据管道（1-2天）</h3>
+  <p>在 <code>context_vol_expand.py</code> 中新增 Tier 6「番茄专属层」，从 <code>Project.extra</code> 读取 <code>face_slap_map</code> / <code>golden_finger</code> / <code>rhythm_map</code> / <code>opening_5chapters</code> / <code>contrast_design</code>，组装为 prompt 注入块。确保每章都知道：本章对应哪个打脸对象、金手指处于第几阶段、rhythm_map 标记的爽感类型是什么。</p>
+</div>
+
+<div class="prio p1">
+  <h3>P1 · 番茄化 JSON 输出模板（1天）</h3>
+  <p>新增字段：<code>satisfaction_delivered</code> / <code>satisfaction_intensity</code> / <code>face_slap_target</code> / <code>hook_type</code> / <code>hook_ad_survival_score</code> / <code>completion_rate_risk</code>。调整字数基准到番茄区间（1500-2200）。替换 emotional_tone 为番茄情绪词汇表（爽/燃/酸/急/虐/甜）。</p>
+</div>
+
+<div class="prio p2">
+  <h3>P2 · 番茄 linter 规则集（1天）</h3>
+  <p>新增 FANQIE-01（禁止纯过渡章）、FANQIE-02（爽感密度下限：每5章至少1个 big_win）、FANQIE-03（打脸地图对齐校验）、FANQIE-04（金手指阶段对齐）、FANQIE-05（rhythm_map 一致性）、FANQIE-06（前15章每章必须有 payoff）。</p>
+</div>
+
+<div class="prio p3">
+  <h3>P3 · 番茄专属系统提示词 + 第6-15章强化（半天）</h3>
+  <p>系统提示从「30年网络小说总编辑」替换为「番茄 TOP10 作者 + 运营总监」双角色。核心指令从「因果链」改为「爽感交付链」：每章必须回答「本章读者爽了吗？爽在哪里？看完广告他还会回来吗？」。第6-15章增加200字级结构指引（从 opening_5chapters 的精度标准延伸）。</p>
+</div>
+</div>
+
+<!-- ============ 总结 ============ -->
+<div class="prose">
+  <h2>诊断总结</h2>
+  <p>番茄 Bootstrap 做得很好——它理解番茄的算法逻辑、完读率 KPI、打脸节奏、金手指经济学。但这些精心设计的产物<strong>在章纲展开这一步被完全丢弃</strong>，退回到了通用网文的文学四元组模式。这不是功能缺失，是<strong>数据管道断裂</strong>——上游产出了正确的番茄规划数据，下游完全没有读取它们。</p>
+  <p>修复的核心不是重写章纲逻辑，而是<strong>接通管道</strong>：让 <code>context_vol_expand.py</code> 读取番茄产物，让 <code>vol_chapter_plans.py</code> 的 prompt 和 JSON 模板感知这些数据，让 linter 按番茄规则校验。P0 阶段的工作量预估 1-2 天，但带来的效果是系统级的——从「番茄 Bootstrap + 通用展开」变成「端到端番茄优化」。</p>
+</div>
+
+<footer>
+  novelAction 番茄章节展开诊断 &middot; 基于 graph_fanqie.py / vol_chapter_plans.py / context_vol_expand.py 的代码级交叉审计 &middot; 2026-05-30
+</footer>
+
+</div>
+</body>
+</html>

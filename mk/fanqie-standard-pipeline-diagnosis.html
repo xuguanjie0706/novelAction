@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>串行步进管线 × 番茄市场适配诊断</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #1c2333;
+    --border: #30363d; --text: #c9d1d9; --text2: #8b949e;
+    --accent: #ff6b35; --accent2: #ff9f1c; --green: #3fb950;
+    --red: #f85149; --yellow: #d29922; --blue: #58a6ff;
+    --purple: #bc8cff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text);
+    line-height: 1.7; padding: 40px 20px;
+  }
+  .container { max-width: 1100px; margin: 0 auto; }
+  h1 {
+    font-size: 2em; text-align: center; margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .subtitle { text-align: center; color: var(--text2); margin-bottom: 40px; font-size: 0.95em; }
+  .premise {
+    background: var(--surface); border: 1px solid var(--accent);
+    border-radius: 12px; padding: 24px; margin-bottom: 40px;
+  }
+  .premise h2 { color: var(--accent); font-size: 1.2em; margin-bottom: 12px; }
+  .premise p { color: var(--text2); font-size: 0.95em; }
+
+  /* ── 章节卡片 ── */
+  .section { margin-bottom: 48px; }
+  .section-header {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 20px; padding-bottom: 12px;
+    border-bottom: 2px solid var(--border);
+  }
+  .section-num {
+    background: var(--accent); color: #fff; font-weight: 700;
+    width: 36px; height: 36px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.9em; flex-shrink: 0;
+  }
+  .section-title { font-size: 1.35em; font-weight: 700; }
+
+  /* ── 问题卡 ── */
+  .issue-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px; margin-bottom: 16px;
+    border-left: 4px solid var(--red);
+  }
+  .issue-card.warn { border-left-color: var(--yellow); }
+  .issue-card.info { border-left-color: var(--blue); }
+  .issue-card h3 { font-size: 1.05em; margin-bottom: 8px; }
+  .issue-card h3 .badge {
+    font-size: 0.7em; padding: 2px 8px; border-radius: 4px;
+    vertical-align: middle; margin-left: 8px; font-weight: 600;
+  }
+  .badge-fatal { background: var(--red); color: #fff; }
+  .badge-major { background: var(--yellow); color: #000; }
+  .badge-minor { background: var(--blue); color: #fff; }
+
+  .issue-card .evidence {
+    background: var(--surface2); border-radius: 6px;
+    padding: 12px 16px; margin: 10px 0; font-size: 0.88em;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    color: var(--text2); overflow-x: auto; white-space: pre-wrap;
+    border: 1px solid var(--border);
+  }
+  .issue-card .consequence { color: var(--red); font-size: 0.9em; margin: 8px 0; }
+  .issue-card .consequence.warn-c { color: var(--yellow); }
+  .issue-card .fix {
+    background: rgba(63, 185, 80, 0.08); border: 1px solid rgba(63, 185, 80, 0.3);
+    border-radius: 6px; padding: 12px 16px; margin-top: 10px; font-size: 0.9em;
+  }
+  .fix-label { color: var(--green); font-weight: 700; margin-bottom: 4px; }
+
+  /* ── 文件定位表 ── */
+  .file-ref {
+    display: inline-block; background: var(--surface2);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 8px; font-family: monospace; font-size: 0.82em;
+    color: var(--purple); margin: 2px 0;
+  }
+
+  /* ── 对照表 ── */
+  table {
+    width: 100%; border-collapse: collapse; margin: 16px 0;
+    font-size: 0.9em;
+  }
+  th {
+    background: var(--surface2); color: var(--accent2);
+    padding: 10px 14px; text-align: left; font-weight: 600;
+    border-bottom: 2px solid var(--border);
+  }
+  td {
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:hover td { background: rgba(255, 107, 53, 0.04); }
+  .cell-bad { color: var(--red); }
+  .cell-good { color: var(--green); }
+  .cell-note { color: var(--text2); font-size: 0.85em; }
+
+  /* ── 架构图 ── */
+  .arch-diagram {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 24px; margin: 20px 0;
+    text-align: center; overflow-x: auto;
+  }
+  .arch-diagram svg { max-width: 100%; }
+
+  /* ── 总结 ── */
+  .summary-box {
+    background: linear-gradient(135deg, rgba(255,107,53,0.08), rgba(255,159,28,0.06));
+    border: 1px solid var(--accent); border-radius: 12px;
+    padding: 28px; margin-top: 40px;
+  }
+  .summary-box h2 { color: var(--accent); margin-bottom: 16px; }
+  .priority-item {
+    display: flex; gap: 12px; align-items: flex-start;
+    margin-bottom: 12px; padding: 8px 0;
+  }
+  .priority-num {
+    background: var(--accent); color: #fff; font-weight: 700;
+    width: 28px; height: 28px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.8em; flex-shrink: 0;
+  }
+  .vs-box {
+    display: grid; grid-template-columns: 1fr auto 1fr;
+    gap: 16px; align-items: stretch; margin: 16px 0;
+  }
+  .vs-side {
+    background: var(--surface); border-radius: 8px; padding: 16px;
+    border: 1px solid var(--border);
+  }
+  .vs-side.bad { border-color: var(--red); }
+  .vs-side.good { border-color: var(--green); }
+  .vs-mid { display: flex; align-items: center; font-size: 1.5em; color: var(--text2); }
+  .vs-label { font-weight: 700; margin-bottom: 8px; font-size: 0.9em; }
+  .vs-side.bad .vs-label { color: var(--red); }
+  .vs-side.good .vs-label { color: var(--green); }
+  @media (max-width: 700px) {
+    .vs-box { grid-template-columns: 1fr; }
+    .vs-mid { justify-content: center; transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>串行步进管线 × 番茄市场适配诊断</h1>
+<p class="subtitle">分析范围：graph.py Steps 0-13 + expand-chapters（标准管线） · 不含 graph_fanqie.py 专属模块<br>视角：30年番茄市场作家 + 30年免费阅读平台总编辑 · 2026-05-30</p>
+
+<div class="premise">
+  <h2>核心矛盾：一套管线服务两个市场</h2>
+  <p>当前串行步进管线从 system prompt 到 JSON 字段、从字数预算到 linter 规则，全部按<strong>起点付费阅读</strong>范式设计。番茄是免费+广告模式，算法分发决定流量，完读率决定推荐量。这不是"口味偏好"差异，而是<strong>商业模型导致的产品需求根本不同</strong>。以下逐模块诊断标准管线在番茄市场下的结构性失配。</p>
+</div>
+
+<!-- ================================================================== -->
+<!-- Section 1: System Prompt -->
+<!-- ================================================================== -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">1</div>
+    <div class="section-title">System Prompt 人设失配</div>
+  </div>
+
+  <div class="issue-card">
+    <h3>"30年网络小说总编辑" 是起点人设 <span class="badge badge-fatal">致命</span></h3>
+    <div class="evidence">// vol_chapter_plans.py:161-174
+system = (
+    "你是有30年网络小说从业经验的总编辑，深度参与过数百部上百万字长篇网文的策划。\n"
+    "你的职责：为本卷生成章级大纲，每一章都必须是可以直接开写的创作蓝图，\n"
+    "而不是模糊的情节清单。你知道：\n"
+    "  1. 章节的核心是「主角欲望→障碍→选择→代价」的因果链，不是事件流水账\n"
+    ...
+)</div>
+    <p class="consequence">番茄后果：这个 persona 产出的章纲天然倾向"文学性"——强调内心弧度、认知转变、不可逆变化。番茄读者对"character_change: 谁的认知发生了不可逆变化"的感知极弱，他们要的是「这章谁被打脸了、主角升了什么、下一章谁要倒霉」。</p>
+    <div class="fix">
+      <div class="fix-label">适配方案</div>
+      <p>当 <code>pace_type == "fast"</code>（已标注"番茄式"）时，system prompt 应切换为番茄向人设：</p>
+      <div class="evidence" style="margin-top:8px">system_fanqie = (
+    "你是番茄小说日更百万字作家，深知免费阅读算法的核心指标是完读率。\n"
+    "你的职责：为本卷生成章级大纲，每一章都必须在1800字内完成一个完整的爽感闭环。\n"
+    "你知道：\n"
+    "  1. 章节核心是「爽点触发→爽感释放→下章预期」的三拍循环，不是文学性因果链\n"
+    "  2. 完读率 > 收藏率 > 评论率，章末30字决定读者会不会翻页\n"
+    "  3. 番茄算法窗口期：前30章决定能不能进推荐池，前5章决定能不能过算法初审\n"
+    "  4. 广告插入在章与章之间，每章结尾必须是「不看下章不行」的状态\n"
+    "  5. 反派是打脸素材供应商，不是独立行动线——读者不关心反派在密室里谋划了什么\n"
+    ...
+)</div>
+    </div>
+  </div>
+
+  <div class="issue-card warn">
+    <h3>"四元组叙事引擎" 对番茄过重 <span class="badge badge-major">严重</span></h3>
+    <p>protagonist_want → protagonist_obstacle → protagonist_choice → choice_cost 是文学性叙事框架。番茄读者的阅读速度是起点的2-3倍，他们不会注意到"选择暴露了性格"或"代价喂给下一章的债务"。</p>
+    <div class="vs-box">
+      <div class="vs-side bad">
+        <div class="vs-label">当前（起点式四元组）</div>
+        <p>protagonist_want: "证明自己的炼丹实力"<br>
+        protagonist_obstacle: "内心对失败的恐惧"<br>
+        protagonist_choice: "选择用险招证明自己"<br>
+        choice_cost: "险招虽成但丹田受损"</p>
+      </div>
+      <div class="vs-mid">→</div>
+      <div class="vs-side good">
+        <div class="vs-label">番茄式三拍循环</div>
+        <p>satisfaction_setup: "丈母娘当众嘲讽主角穷"<br>
+        satisfaction_payoff: "主角当场拍出百万支票"<br>
+        next_chapter_bait: "丈母娘的闺蜜认出主角是X集团少爷"</p>
+      </div>
+    </div>
+    <div class="fix">
+      <div class="fix-label">适配方案</div>
+      <p>不废弃四元组（保持系统一致性），但在 <code>pace_type == "fast"</code> 时增加三个番茄专属字段，并在 system prompt 中强调「satisfaction_setup/payoff 是本章核心，四元组是底层结构」：</p>
+      <div class="evidence" style="margin-top:8px">// 新增字段（pace_type == "fast" 时生效）
+"satisfaction_setup": "爽点铺垫：谁看不起主角/什么困难摆在面前（≤25字）",
+"satisfaction_payoff": "爽感释放：主角如何碾压/逆转/震惊全场（≤25字）",
+"satisfaction_type": "打脸/升级/财富展示/实力碾压/真相揭露/美人倾心",
+"next_chapter_bait": "下章饵：读者看完本章后最想知道的一件事（≤20字）"</div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================== -->
+<!-- Section 2: Word Budget -->
+<!-- ================================================================== -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">2</div>
+    <div class="section-title">字数预算体系：起点标准 vs 番茄最优</div>
+  </div>
+
+  <div class="issue-card">
+    <h3>字数基线全面偏高 <span class="badge badge-fatal">致命</span></h3>
+    <p>番茄广告插在章与章之间。读者看完一章→广告→决定是否继续。章越短，单位时间内"翻页决策"越多，广告展示越多，算法越倾向推这本书。番茄头部作品章均 1500-2000 字，高潮章最多 2200 字。</p>
+
+    <table>
+      <tr>
+        <th>卷阶段 phase</th>
+        <th>当前基线 <span class="file-ref">outline_planning.py:180</span></th>
+        <th class="cell-bad">番茄实际最优</th>
+        <th>偏差</th>
+      </tr>
+      <tr><td>opening</td><td>2200</td><td class="cell-good">1500-1800</td><td class="cell-bad">+22%~+47%</td></tr>
+      <tr><td>rising</td><td>2300</td><td class="cell-good">1600-2000</td><td class="cell-bad">+15%~+44%</td></tr>
+      <tr><td>turning</td><td>2400</td><td class="cell-good">1800-2000</td><td class="cell-bad">+20%~+33%</td></tr>
+      <tr><td>dark_hour</td><td>2700</td><td class="cell-good">1800-2000</td><td class="cell-bad">+35%~+50%</td></tr>
+      <tr><td>climax</td><td>3000</td><td class="cell-good">2000-2200</td><td class="cell-bad">+36%~+50%</td></tr>
+      <tr><td>ending</td><td>2200</td><td class="cell-good">1600-1800</td><td class="cell-bad">+22%~+38%</td></tr>
+    </table>
+
+    <p class="consequence">番茄后果：章节过长→读者中途退出→完读率下降→算法减少推荐→作品沉底。番茄的 dark_hour 2700 字约等于读者流失率翻倍——免费读者对"慢节奏+长章"的容忍度极低。</p>
+    <div class="fix">
+      <div class="fix-label">适配方案</div>
+      <p>在 <code>chapter_word_budget_for_phase()</code> 中加入 <code>market_type</code> 参数（从 <code>positioning.pace_type</code> 推导）：</p>
+      <div class="evidence" style="margin-top:8px">FANQIE_BASE = {
+    "opening": 1600, "rising": 1800, "turning": 1900,
+    "dark_hour": 1900, "climax": 2100, "ending": 1700,
+}
+# pacing_mod 也缩小：fast=-100, slow=+100, climax=+200
+# 硬上限：2200（番茄高潮章绝对天花板）
+# 硬下限：1400（太短会被平台判定水章）</div>
+      <p style="margin-top:8px">同时修改 prompt 尾部的参考字数说明 <span class="file-ref">vol_chapter_plans_prompt.py:125-127</span>。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================== -->
+<!-- Section 3: Phase Guidance -->
+<!-- ================================================================== -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">3</div>
+    <div class="section-title">Phase Guidance 节奏约束：缺失算法窗口期概念</div>
+  </div>
+
+  <div class="issue-card">
+    <h3>Opening 1-5 章：文学开局 vs 算法初审 <span class="badge badge-fatal">致命</span></h3>
+    <div class="evidence">// phase_guidance.py:28-33 (当前)
+"【开局1-5章·生死钩子区】前500字必须建立主角核心压力/不公正处境；
+主角必须在本章内主动采取行动（不是被动等待）；
+每章结尾留下读者必须知道答案的具体问题，不能用「主角沉思」收尾。"</div>
+    <p class="consequence">番茄后果：这段约束的关键词是「压力」「主动行动」「具体问题」，全是文学叙事语言。番茄前5章的真实生死线：<strong>第1章前200字必须让读者判断出这是什么类型的书</strong>（算法靠此匹配读者池），<strong>第1章800字前必须触发金手指</strong>（否则读者在广告界面流失），<strong>前3章必须完成首次打脸</strong>（算法完读率基准线）。</p>
+    <div class="fix">
+      <div class="fix-label">适配方案（pace_type=="fast" 时替换）</div>
+      <div class="evidence" style="margin-top:8px">if ch_num <= 5 and pace_type == "fast":
+    return (
+        "【番茄开局1-5章·算法初审区】\n"
+        "Ch1前200字：读者必须判断出书的类型（都市逆袭/赘婿/修仙/穿越），不能用悬疑开局；\n"
+        "Ch1前800字：金手指/系统/觉醒必须已触发，读者获得爽感期待；\n"
+        "Ch1-2连续2章都要有可见的小胜利（small_win），证明金手指有用；\n"
+        "Ch3前：首次打脸必须完成（算法完读率基准线），打脸对象要有观众；\n"
+        "Ch4-5：升级第一次打脸的赌注，引入更强的对手或更大的舞台；\n"
+        "每章1500-1800字，结尾必须是『不看下章会后悔』的悬念，禁止反思/回忆结尾。"
+    )</div>
+    </div>
+  </div>
+
+  <div class="issue-card warn">
+    <h3>Opening 6-15 章：缺失「算法窗口期」概念 <span class="badge badge-major">严重</span></h3>
+    <div class="evidence">// phase_guidance.py:35-39 (当前)
+"【开局6-15章·金手指起飞区】主角开始展现核心能力，每3章至少1次具体逆转或胜利；
+引入第一条感情线/兄弟情，不能只推主线；
+开始埋本卷第一条长线伏笔，制造读者期待。"</div>
+    <p class="consequence">番茄后果：6-15章是番茄算法的「推荐定性期」——完读率在这里定型。当前约束"每3章1次逆转"太松，番茄标准是<strong>每2章必须有一次爽感释放</strong>（小打脸/小升级/小展示都算）。「埋长线伏笔」是起点思维——番茄读者不追伏笔，追的是「下一次打脸什么时候来」。</p>
+    <div class="fix">
+      <div class="fix-label">适配方案</div>
+      <div class="evidence" style="margin-top:8px">"【番茄6-15章·算法窗口期】\n"
+"爽感密度铁律：每2章必须有1次可见的爽感释放（打脸/升级/财富展示/实力震惊），\n"
+"连续2章无爽感=完读率断崖；\n"
+"金手指升级：至少在第8章和第12章各有一次明显升级（读者需要看到成长曲线）；\n"
+"打脸升级：打脸对象层级递进（同事→主管→部门经理 或 外门弟子→内门弟子→长老弟子）；\n"
+"感情线可以开始但不能喧宾夺主——番茄读者来看爽文不是来看恋爱的；\n"
+"禁止连续2章纯过渡/铺垫，每章必须有一个明确的'本章爽点'。"</div>
+    </div>
+  </div>
+
+  <div class="issue-card warn">
+    <h3>dark_hour 阶段对番茄是「毒药」<span class="badge badge-major">严重</span></h3>
+    <div class="evidence">// phase_guidance.py:84-90 (当前)
+"【至暗期·内心突破区】允许虐主，但每次外部失败必须对应主角内心的认知突破；
+节奏放缓，强调情感深度而非事件密度——每章1个情感高点比3个情节事件更重要；
+这是人物弧度最深刻的阶段：主角的「最大谎言」（错误信念）必须在本阶段被打破；"</div>
+    <p class="consequence">番茄后果：「节奏放缓」「情感深度」「最大谎言被打破」——这三句话足以杀死一本番茄书。番茄读者对虐主的容忍窗口是<strong>2章以内</strong>，第3章如果主角还没翻盘，读者就走了。「内心认知突破」在番茄是不存在的叙事——读者看不见也不关心。</p>
+    <div class="fix">
+      <div class="fix-label">适配方案</div>
+      <div class="evidence" style="margin-top:8px">if pace_type == "fast":
+    return (
+        "【番茄至暗期·快速反弹区】番茄的至暗期≠起点的至暗期！\n"
+        "虐主上限：连续虐主不超过2章，第3章必须开始反弹；\n"
+        "虐法限制：只允许外部困境（被围困/被陷害/资源被夺），禁止内心崩溃/自我怀疑；\n"
+        "暗中蓄力：虐主章内必须埋入翻盘线索（读者能看到但主角还没发现）；\n"
+        "反弹爽度加倍：至暗期后的第一次打脸必须是本书目前为止最大的——\n"
+        "压得越低弹得越高，但压的时间不能超过2章；\n"
+        "字数保持1800-2000，禁止在至暗期膨胀字数写内心戏。"
+    )</div>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================== -->
+<!-- Section 4: JSON Output Template -->
+<!-- ================================================================== -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">4</div>
+    <div class="section-title">JSON 输出模板：缺失番茄核心字段</div>
+  </div>
+
+  <div class="issue-card">
+    <h3>has_face_slap 只是布尔值——无打脸要素 <span class="badge badge-fatal">致命</span></h3>
+    <div class="evidence">// vol_chapter_plans_prompt.py:120
+"has_face_slap": false,</div>
+    <p class="consequence">番茄后果：打脸是番茄的核心叙事动力。一个布尔 true/false 完全无法指导写作——谁被打了？打脸类型是什么（武力碾压/财富震惊/身份揭露/知识碾压）？打脸场景有没有观众（有观众的打脸爽感翻倍）？这些信息缺失，写章时 AI 只知道"这章要打脸"却不知道怎么打。</p>
+    <div class="fix">
+      <div class="fix-label">适配方案（pace_type=="fast" 时替换/增强）</div>
+      <div class="evidence" style="margin-top:8px">// 替换 has_face_slap: bool → 结构化打脸字段
+"face_slap": {
+    "has_slap": true,
+    "target": "打脸对象姓名",
+    "slap_type": "武力碾压/财富展示/身份揭露/知识碾压/预言应验",
+    "audience": "在场围观者（有围观爽感翻倍）",
+    "setup_chapter": "铺垫章（哪章埋的钉子）",
+    "escalation": "比上一次打脸升级了什么"
+} // 无打脸时整个字段填 null</div>
+    </div>
+  </div>
+
+  <div class="issue-card">
+    <h3>emotional_tone 词表是文学词汇 <span class="badge badge-major">严重</span></h3>
+    <div class="evidence">// vol_chapter_plans_prompt.py:118
+"emotional_tone": "exciting/tense/sad/romantic/mysterious/funny/epic/calm"</div>
+    <p class="consequence">番茄后果：「mysterious」「calm」「sad」在番茄是无效情绪标记。番茄读者的情绪谱是：爽、更爽、期待、紧张（马上要爽了）、愤怒（替主角愤怒→等着看打脸）。「calm」章在番茄≈读者流失章。</p>
+    <div class="fix">
+      <div class="fix-label">适配方案</div>
+      <div class="evidence" style="margin-top:8px">// pace_type=="fast" 时使用番茄情绪词表
+"reader_emotion_target": "爽快/震惊/期待/愤怒替主角/紧张刺激/温馨（限1章）/得意/解气"
+// 废弃: mysterious/calm/sad/epic（番茄读者不为这些情绪付费/看广告）</div>
+    </div>
+  </div>
+
+  <div class="issue-card warn">
+    <h3>缺失「完读率风险」评估字段 <span class="badge badge-major">严重</span></h3>
+    <p>番茄的核心指标是每章完读率。当前 JSON 模板完全没有让 AI 自评"这章可能在哪里流失读者"的机制。</p>
+    <div class="fix">
+      <div class="fix-label">适配方案（pace_type=="fast" 时新增字段）</div>
+      <div class="evidence" style="margin-top:8px">"completion_risk": "本章最可能导致读者退出的位置和原因（如：中段说明文字过长/无爽点章）",
+"completion_rate_estimate": "预估完读率（0-100，opening期 ≥55 合格，rising期 ≥45 合格）"</div>
+    </div>
+  </div>
+
+  <div class="issue-card info">
+    <h3>character_change 在番茄是噪音字段 <span class="badge badge-minor">轻微</span></h3>
+    <div class="evidence">"character_change": "谁的认知/处境/关系发生了不可逆变化（≤30字，不能只写外部变化）"</div>
+    <p>番茄后果：「不能只写外部变化」这个约束在番茄是反效果的——番茄读者就是来看外部变化的。内心认知变化对完读率贡献为零。</p>
+    <div class="fix">
+      <div class="fix-label">适配方案</div>
+      <p>pace_type=="fast" 时，将 character_change 的 prompt 说明改为：<code>"power_shift": "本章权力/实力/地位格局变化（谁升了谁降了，≤30字）"</code></p>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================== -->
+<!-- Section 5: Positioning Step -->
+<!-- ================================================================== -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">5</div>
+    <div class="section-title">Step 0 定位缺失番茄关键维度</div>
+  </div>
+
+  <div class="issue-card">
+    <h3>positioning 缺少番茄算法关键字段 <span class="badge badge-major">严重</span></h3>
+    <p>Step 0 <span class="file-ref">positioning.py</span> 生成的定位产物写入 <code>Project.extra.positioning</code>，包含 face_slap_pattern / pace_type / emotional_arc / target_audience / selling_point / taboo_lines。pace_type="fast" 时已标注"番茄式"，但缺少以下番茄生死字段：</p>
+    <table>
+      <tr><th>缺失字段</th><th>为什么致命</th><th>影响范围</th></tr>
+      <tr>
+        <td><code>golden_finger_type</code></td>
+        <td>番茄书的金手指类型决定整本书的爽感模式（系统流/鉴宝流/医术流），不确定这个就无法生成合理的章纲</td>
+        <td>opening_5chapters, 全书爽感节奏</td>
+      </tr>
+      <tr>
+        <td><code>golden_finger_trigger</code></td>
+        <td>金手指在第几百字触发？番茄标准是800字前，这决定第1章结构</td>
+        <td>chapter_1 结构</td>
+      </tr>
+      <tr>
+        <td><code>slap_target_hierarchy</code></td>
+        <td>打脸对象从低到高的5层级（如：同事→科长→局长→市长→省级）。没有这个层级，打脸会重复同层不升级</td>
+        <td>全书打脸节奏</td>
+      </tr>
+      <tr>
+        <td><code>satisfaction_density</code></td>
+        <td>每N章必须有一次爽感释放的硬约束（番茄标准：每2章一次小爽、每5章一次大爽）</td>
+        <td>rhythm_map, linter</td>
+      </tr>
+      <tr>
+        <td><code>platform_tags</code></td>
+        <td>番茄算法靠标签匹配读者池，标签不准=推到错误读者=完读率崩盘</td>
+        <td>全书定位</td>
+      </tr>
+    </table>
+    <div class="fix">
+      <div class="fix-label">适配方案</div>
+      <p>当 pace_type=="fast" 时，Step 0 的 prompt 中增加上述字段的生成要求。产物写入 <code>Project.extra.positioning</code> 的同级，下游 <code>context_vol_tier12.py</code> 的 <code>_build_positioning_block</code> 读取并注入章纲 prompt。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================== -->
+<!-- Section 6: Context Assembly -->
+<!-- ================================================================== -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">6</div>
+    <div class="section-title">Context Assembly 上下文注入盲区</div>
+  </div>
+
+  <div class="issue-card warn">
+    <h3>_build_positioning_block 读取了 pace_type 但没有差异化行为 <span class="badge badge-major">严重</span></h3>
+    <div class="evidence">// context_vol_tier12.py:47
+# pace_type="fast" 描述为 "快节奏（番茄式，3-5章一爽点）"
+# 但仅作为文字描述注入 prompt，没有触发任何结构性差异</div>
+    <p class="consequence">pace_type 是一个已经存在的「番茄标识信号」，但整个 context assembly 链从未根据它做分支。它就像一个已经插好但没通电的插头。</p>
+    <div class="fix">
+      <div class="fix-label">适配方案</div>
+      <p><code>context_vol_expand.py</code> 在组装 editorial_prompt 时检测 pace_type，当为 "fast" 时：</p>
+      <ul style="margin:8px 0 0 20px; color: var(--text2);">
+        <li>注入「番茄爽感密度约束块」（每2章一小爽、每5章一大爽、连续过渡不超过1章）</li>
+        <li>注入「打脸层级递进约束块」（从 positioning 的 slap_target_hierarchy 派生）</li>
+        <li>注入「金手指升级路线图块」（从 positioning 的 golden_finger_type 派生）</li>
+        <li>将 character 上下文中的 speech_style 信息纳入（当前 char_snapshot 只含 name/tier/realm/status，遗漏了 speech_style）</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="issue-card info">
+    <h3>char_snapshot 格式过于简陋 <span class="badge badge-minor">轻微</span></h3>
+    <div class="evidence">// vol_chapter_plans.py:229-230
+char_lines.append(f"{name}({tier},{realm}{status_str})")
+char_snapshot = "、".join(char_lines)</div>
+    <p>番茄后果：番茄的角色功能性很强——反派是打脸对象、美女是感情线资源、兄弟是配合打脸的工具人。char_snapshot 不包含角色的「番茄功能定位」（打脸对象/打脸观众/感情线/势力代言人），AI 在分配每章出场角色时缺乏功能意识。</p>
+    <div class="fix">
+      <div class="fix-label">适配方案</div>
+      <p>pace_type=="fast" 时，char_snapshot 增加 <code>fanqie_role</code> 标签（打脸靶/观众/感情线/辅助）。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================== -->
+<!-- Section 7: Linter Rules -->
+<!-- ================================================================== -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">7</div>
+    <div class="section-title">Linter 规则：番茄生死线零覆盖</div>
+  </div>
+
+  <div class="issue-card">
+    <h3>无爽感密度规则 <span class="badge badge-fatal">致命</span></h3>
+    <p>当前 linter 规则清单（CH-01~CH-18, SEQ-01~SEQ-07）中，<strong>没有任何一条</strong>检测爽感间隔。番茄最致命的问题——「连续3章没有打脸/升级/展示」——完全不会被 linter 拦截。</p>
+    <div class="fix">
+      <div class="fix-label">适配方案：新增 FANQIE-* 规则（pace_type=="fast" 时启用）</div>
+      <table>
+        <tr><th>规则 ID</th><th>级别</th><th>检测逻辑</th></tr>
+        <tr>
+          <td>FQ-01</td><td class="cell-bad">blocking</td>
+          <td>连续≥3章 satisfaction_type==null 且 has_face_slap==false → 爽感断流</td>
+        </tr>
+        <tr>
+          <td>FQ-02</td><td class="cell-bad">blocking</td>
+          <td>前5章内 face_slap.has_slap 全为 false → 首次打脸过晚</td>
+        </tr>
+        <tr>
+          <td>FQ-03</td><td style="color:var(--yellow)">warning</td>
+          <td>连续≥2章 pacing=="slow" 或 emotional_tone 含 calm/sad → 节奏拖沓警告</td>
+        </tr>
+        <tr>
+          <td>FQ-04</td><td style="color:var(--yellow)">warning</td>
+          <td>expected_words > 2200 → 字数超番茄最优区间</td>
+        </tr>
+        <tr>
+          <td>FQ-05</td><td style="color:var(--yellow)">warning</td>
+          <td>face_slap.target 重复出现≥3次且 escalation 未升级 → 打脸对象卡级</td>
+        </tr>
+        <tr>
+          <td>FQ-06</td><td class="cell-bad">blocking</td>
+          <td>opening 阶段 ch1 无 satisfaction_setup → 第1章无爽感铺垫</td>
+        </tr>
+        <tr>
+          <td>FQ-07</td><td style="color:var(--yellow)">warning</td>
+          <td>completion_rate_estimate < 40 的章节超过卷总章数20% → 完读率系统性风险</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="issue-card warn">
+    <h3>SEQ-02 "主线不能连续3章独占" 对番茄过严 <span class="badge badge-major">严重</span></h3>
+    <div class="evidence">// rules_sequence.py: SEQ-02
+# 连续 >3 章只挂同一条 storyline → 警告</div>
+    <p class="consequence">番茄后果：番茄爽文的核心就是主线推进，连续5章主线打脸升级是常态。强制要求交叉故事线会打断爽感节奏，读者不关心支线。</p>
+    <div class="fix">
+      <div class="fix-label">适配方案</div>
+      <p>pace_type=="fast" 时，SEQ-02 阈值从 3 放宽到 6；或降级为 info 级别不阻断。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================== -->
+<!-- Section 8: Editorial Iron Laws -->
+<!-- ================================================================== -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">8</div>
+    <div class="section-title">编辑铁律：文学标准 vs 算法标准</div>
+  </div>
+
+  <div class="issue-card warn">
+    <h3>13条铁律缺失番茄核心约束 <span class="badge badge-major">严重</span></h3>
+    <p>当前编辑铁律 <span class="file-ref">vol_chapter_plans_prompt.py:128-149</span> 聚焦于文学性约束（因果链、伏笔回收、反派独立行动线、玄幻禁现代用语等）。番茄核心编辑约束完全缺失：</p>
+
+    <table>
+      <tr><th>缺失的番茄铁律</th><th>为什么是铁律</th></tr>
+      <tr>
+        <td>每章必须有一个明确的「本章爽点」</td>
+        <td>番茄读者容忍度极低，一章无爽=流失入口</td>
+      </tr>
+      <tr>
+        <td>打脸对象必须逐级递升</td>
+        <td>打同一级别的脸超过3次，读者审美疲劳→弃书</td>
+      </tr>
+      <tr>
+        <td>金手指/系统每N章必须展示新功能或升级</td>
+        <td>金手指是番茄的核心变量，不升级=书不进步</td>
+      </tr>
+      <tr>
+        <td>章末最后30字必须制造翻页冲动</td>
+        <td>广告在章间，最后30字=广告前最后一次说服机会</td>
+      </tr>
+      <tr>
+        <td>禁止连续2章纯铺垫/过渡</td>
+        <td>番茄不是买断制，读者随时可以走</td>
+      </tr>
+      <tr>
+        <td>反派铁律修改：反派不需要独立行动线，但必须在每次打脸时提供足够的「反差感」</td>
+        <td>当前第5条"反派独立行动线是第二引擎"在番茄不成立，反派的唯一功能是给主角当垫脚石</td>
+      </tr>
+    </table>
+
+    <div class="fix">
+      <div class="fix-label">适配方案</div>
+      <p>pace_type=="fast" 时，在 <code>build_chapter_plan_generation_tail()</code> 中替换/增补铁律条目。保持铁律总数不超过15条（太多AI会忽略）。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================== -->
+<!-- Section 9: Volumes/Steps -->
+<!-- ================================================================== -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">9</div>
+    <div class="section-title">卷骨架 Step 9 与番茄卷结构不匹配</div>
+  </div>
+
+  <div class="issue-card warn">
+    <h3>phase 标记无法表达番茄"黄金30章" <span class="badge badge-major">严重</span></h3>
+    <p>当前 phase 取值：opening / rising / turning / dark_hour / climax / ending。这是经典三幕剧衍生结构，假设读者会完整读完一本书。番茄的现实是：</p>
+    <table>
+      <tr><th>番茄阶段</th><th>读者行为</th><th>当前 phase 是否覆盖</th></tr>
+      <tr>
+        <td>算法初审期（1-5章）</td>
+        <td>完读率决定能否进推荐池</td>
+        <td class="cell-bad">被 opening 笼统覆盖，无特殊处理</td>
+      </tr>
+      <tr>
+        <td>算法窗口期（6-30章）</td>
+        <td>推荐量爬坡期，爽感密度决定斜率</td>
+        <td class="cell-bad">跨 opening 和 rising 两个 phase，缺统一约束</td>
+      </tr>
+      <tr>
+        <td>稳定推荐期（31-100章）</td>
+        <td>进入推荐池后维持完读率</td>
+        <td style="color:var(--yellow)">rising/turning 部分覆盖</td>
+      </tr>
+      <tr>
+        <td>长尾期（100+章）</td>
+        <td>老读者留存+新读者追读</td>
+        <td style="color:var(--yellow)">climax/ending 部分覆盖</td>
+      </tr>
+    </table>
+    <div class="fix">
+      <div class="fix-label">适配方案</div>
+      <p>不修改 phase enum（保持系统一致性），而是在 phase_guidance 中根据 pace_type + 绝对章号（在全书中的位置）做二次判定。如：即使某卷 phase=rising，如果该卷的全书起始章号在1-30范围内，仍注入算法窗口期约束。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================== -->
+<!-- Section 10: Architecture -->
+<!-- ================================================================== -->
+<div class="section">
+  <div class="section-header">
+    <div class="section-num">10</div>
+    <div class="section-title">架构级实施建议：最小侵入式适配</div>
+  </div>
+
+  <div class="issue-card info">
+    <h3>适配策略：pace_type 驱动的条件分支 <span class="badge badge-minor">架构</span></h3>
+    <p>核心原则：<strong>不改数据模型，不改管线拓扑，只在内容生成层做条件分支</strong>。<code>pace_type</code> 已经是 Step 0 的产物且已存入 <code>Project.extra.positioning</code>，是天然的分支信号。</p>
+
+    <div class="arch-diagram">
+      <svg viewBox="0 0 900 380" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, sans-serif">
+        <!-- 管线主轴 -->
+        <rect x="50" y="20" width="800" height="40" rx="8" fill="#161b22" stroke="#30363d"/>
+        <text x="450" y="46" text-anchor="middle" fill="#c9d1d9" font-size="14" font-weight="600">graph.py 串行步进管线（不变）</text>
+
+        <!-- 分支信号 -->
+        <rect x="350" y="80" width="200" height="36" rx="6" fill="#1c2333" stroke="#ff6b35" stroke-width="2"/>
+        <text x="450" y="103" text-anchor="middle" fill="#ff6b35" font-size="13" font-weight="700">pace_type == "fast" ?</text>
+        <line x1="450" y1="60" x2="450" y2="80" stroke="#ff6b35" stroke-width="2"/>
+
+        <!-- 左分支：标准 -->
+        <line x1="350" y1="98" x2="200" y2="150" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="4"/>
+        <text x="200" y="145" text-anchor="middle" fill="#58a6ff" font-size="11">No（起点/通用）</text>
+        <rect x="80" y="155" width="240" height="180" rx="8" fill="#161b22" stroke="#58a6ff"/>
+        <text x="200" y="178" text-anchor="middle" fill="#58a6ff" font-size="12" font-weight="600">保持现有行为</text>
+        <text x="100" y="200" fill="#8b949e" font-size="11">• 四元组叙事引擎</text>
+        <text x="100" y="220" fill="#8b949e" font-size="11">• 2200-3000 字预算</text>
+        <text x="100" y="240" fill="#8b949e" font-size="11">• 文学性 phase_guidance</text>
+        <text x="100" y="260" fill="#8b949e" font-size="11">• CH/SEQ linter 规则</text>
+        <text x="100" y="280" fill="#8b949e" font-size="11">• emotional_tone 文学词表</text>
+        <text x="100" y="300" fill="#8b949e" font-size="11">• 反派独立行动线</text>
+        <text x="100" y="320" fill="#8b949e" font-size="11">• 伏笔长线经营</text>
+
+        <!-- 右分支：番茄 -->
+        <line x1="550" y1="98" x2="700" y2="150" stroke="#ff6b35" stroke-width="1.5" stroke-dasharray="4"/>
+        <text x="700" y="145" text-anchor="middle" fill="#ff6b35" font-size="11">Yes（番茄市场）</text>
+        <rect x="580" y="155" width="270" height="210" rx="8" fill="#161b22" stroke="#ff6b35"/>
+        <text x="715" y="178" text-anchor="middle" fill="#ff6b35" font-size="12" font-weight="700">番茄适配层</text>
+        <text x="600" y="200" fill="#3fb950" font-size="11">• 三拍爽感循环（新增字段）</text>
+        <text x="600" y="220" fill="#3fb950" font-size="11">• 1500-2100 字预算</text>
+        <text x="600" y="240" fill="#3fb950" font-size="11">• 算法窗口期 phase_guidance</text>
+        <text x="600" y="260" fill="#3fb950" font-size="11">• FQ-01~07 linter 规则</text>
+        <text x="600" y="280" fill="#3fb950" font-size="11">• 番茄情绪词表</text>
+        <text x="600" y="300" fill="#3fb950" font-size="11">• 结构化打脸字段</text>
+        <text x="600" y="320" fill="#3fb950" font-size="11">• 金手指升级路线图</text>
+        <text x="600" y="340" fill="#3fb950" font-size="11">• 完读率风险评估</text>
+      </svg>
+    </div>
+
+    <div class="fix">
+      <div class="fix-label">改动清单（按文件）</div>
+      <table>
+        <tr><th>文件</th><th>改动类型</th><th>改动规模</th></tr>
+        <tr>
+          <td><span class="file-ref">positioning.py</span> + <span class="file-ref">prompts/positioning.py</span></td>
+          <td>Step 0 增加番茄字段生成</td>
+          <td>~50行</td>
+        </tr>
+        <tr>
+          <td><span class="file-ref">context_vol_tier12.py</span></td>
+          <td>_build_positioning_block 番茄分支</td>
+          <td>~40行</td>
+        </tr>
+        <tr>
+          <td><span class="file-ref">context_vol_expand.py</span></td>
+          <td>组装时注入番茄约束块</td>
+          <td>~20行</td>
+        </tr>
+        <tr>
+          <td><span class="file-ref">prompts/vol_chapter_plans_prompt.py</span></td>
+          <td>JSON模板+铁律的番茄变体</td>
+          <td>~120行（⚠️需抽新文件避免超600行）</td>
+        </tr>
+        <tr>
+          <td><span class="file-ref">vol_chapter_plans.py</span></td>
+          <td>system prompt 番茄分支 + 新字段落库</td>
+          <td>~30行（⚠️已643行，须先拆分）</td>
+        </tr>
+        <tr>
+          <td><span class="file-ref">phase_guidance.py</span></td>
+          <td>每个 phase 增加 pace_type 分支</td>
+          <td>~100行</td>
+        </tr>
+        <tr>
+          <td><span class="file-ref">outline_planning.py</span></td>
+          <td>chapter_word_budget_for_phase 番茄基线</td>
+          <td>~20行</td>
+        </tr>
+        <tr>
+          <td class="cell-good">新建 <span class="file-ref">rules_fanqie.py</span></td>
+          <td>FQ-01~07 linter 规则</td>
+          <td>~150行</td>
+        </tr>
+        <tr>
+          <td><span class="file-ref">rules_chapter.py</span></td>
+          <td>注册 FQ 规则入口</td>
+          <td>~10行</td>
+        </tr>
+      </table>
+      <p style="margin-top:12px; color: var(--text2);">总改动量：约 540 行新代码 + 若干行条件分支。<strong>不新增数据库表/列</strong>，不改 graph.py 拓扑，不改 OutlineNode 模型。所有番茄适配通过 <code>pace_type</code> 信号在「内容生成层」条件激活。</p>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================== -->
+<!-- 总结 -->
+<!-- ================================================================== -->
+<div class="summary-box">
+  <h2>实施优先级排序</h2>
+  <p style="color: var(--text2); margin-bottom: 16px;">按「对番茄完读率的影响程度」排序，非按改动难度。</p>
+
+  <div class="priority-item">
+    <div class="priority-num">1</div>
+    <div>
+      <strong>字数预算下调 + phase_guidance 番茄变体</strong><br>
+      <span style="color:var(--text2)">改2个文件，效果立竿见影。章节从2200+降到1600-1800，直接提升完读率。phase_guidance 番茄变体确保"算法初审区"和"算法窗口期"有对应的节奏约束。</span>
+    </div>
+  </div>
+
+  <div class="priority-item">
+    <div class="priority-num">2</div>
+    <div>
+      <strong>System prompt 番茄人设 + JSON 模板增加爽感字段</strong><br>
+      <span style="color:var(--text2)">system prompt 换番茄人设改变AI的「思维方式」；satisfaction_setup/payoff/type + 结构化 face_slap 字段让每章的爽感可追踪可规划。这是从"文学章纲"到"爽感工程图"的关键转变。</span>
+    </div>
+  </div>
+
+  <div class="priority-item">
+    <div class="priority-num">3</div>
+    <div>
+      <strong>FQ-* linter 规则</strong><br>
+      <span style="color:var(--text2)">有了爽感字段后，linter 才能检测爽感断流（FQ-01）、首次打脸过晚（FQ-02）、字数超标（FQ-04）。这是质量兜底的安全网。</span>
+    </div>
+  </div>
+
+  <div class="priority-item">
+    <div class="priority-num">4</div>
+    <div>
+      <strong>Step 0 定位增加番茄字段</strong><br>
+      <span style="color:var(--text2)">golden_finger_type, slap_target_hierarchy 等字段为后续全书提供结构化约束。这是长期质量的基础设施，但短期可以先人工在 positioning 里手填。</span>
+    </div>
+  </div>
+
+  <div class="priority-item">
+    <div class="priority-num">5</div>
+    <div>
+      <strong>编辑铁律番茄变体 + emotional_tone 词表替换</strong><br>
+      <span style="color:var(--text2)">属于细粒度优化。铁律变体确保AI不在番茄章纲里写"反派独立行动线"这类无效指令；情绪词表替换确保每章的情绪目标是番茄读者能感知的。</span>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:40px; padding:20px; background:var(--surface); border-radius:10px; border:1px solid var(--border);">
+  <h3 style="color:var(--accent2); margin-bottom:12px;">前置条件：vol_chapter_plans.py 必须先拆分</h3>
+  <p style="color:var(--text2); font-size:0.9em;">
+    该文件当前 643 行，已超 600 行硬上限（登记册状态：🚫）。番茄适配至少新增 30 行代码。<br>
+    <strong>必须先将 system prompt 构建、JSON 模板构建、落库逻辑拆为独立子模块</strong>，再注入番茄分支。<br>
+    建议拆分路径：<code>vol_chapter_plans.py</code>（编排壳 ~250行）+ <code>vol_chapter_system.py</code>（system prompt 构建 ~120行）+ <code>vol_chapter_persist.py</code>（落库+校正 ~200行），prompt 模板已在 <code>prompts/vol_chapter_plans_prompt.py</code>。
+  </p>
+</div>
+
+<p style="text-align:center; color:var(--text2); margin-top:40px; font-size:0.85em;">
+  诊断完成 · 基于 graph.py 标准管线代码实际分析 · 不依赖 graph_fanqie.py 专属模块
+</p>
+
+</div>
+</body>
+</html>

@@ -13,7 +13,24 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.models import OutlineIssueLog
-from app.services.outline_quality.contract import IssueSet
+from app.services.outline_quality.contract import Issue, IssueSet
+
+# severity 字典序 max 会把 medium 误判为比 critical 更严重，用 rank 取 min（最严重）。
+_SEV_RANK_ISSUE = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+
+def _worse_severity(a: str, b: str) -> str:
+    return a if _SEV_RANK_ISSUE.get(a, 9) <= _SEV_RANK_ISSUE.get(b, 9) else b
+
+
+def _apply_issue_to_row(row: OutlineIssueLog, issue: Issue) -> None:
+    """把单条 Issue 合并进台账行（累加次数、保留更严重级别）。"""
+    row.occurrence_count = (row.occurrence_count or 1) + 1
+    row.severity = _worse_severity(row.severity or "medium", issue.severity)
+    row.message = issue.message
+    if issue.suggestion:
+        row.suggestion = issue.suggestion
+
 
 # severity 字典序 max 会把 medium 误判为比 critical 更严重，用 rank 取 min（最严重）。
 _SEV_RANK = case(
@@ -42,40 +59,41 @@ def record_issue_set(
         return 0
 
     volume_node_id = issue_set.volume_node_id
+    # 同一次 flush 前 session 内未落库的新行，query 查不到；用 dict 避免重复 INSERT。
+    pending_by_fp: dict[str, OutlineIssueLog] = {}
     processed = 0
     for issue in issue_set.issues:
         fp = issue.fingerprint
-        existing = (
-            db.query(OutlineIssueLog)
-            .filter(
-                OutlineIssueLog.project_id == project_id,
-                OutlineIssueLog.volume_node_id == volume_node_id,
-                OutlineIssueLog.fingerprint == fp,
-            )
-            .first()
-        )
-        if existing:
-            existing.occurrence_count = (existing.occurrence_count or 1) + 1
-            existing.severity = issue.severity
-            existing.message = issue.message
-            existing.suggestion = issue.suggestion or existing.suggestion
-        else:
-            db.add(
-                OutlineIssueLog(
-                    project_id=project_id,
-                    volume_node_id=volume_node_id,
-                    rule_id=issue.rule_id,
-                    dimension=issue.dimension,
-                    severity=issue.severity,
-                    source=issue.source,
-                    field=issue.field or None,
-                    chapter_number=issue.chapter_number,
-                    message=issue.message,
-                    suggestion=issue.suggestion or None,
-                    fingerprint=fp,
-                    occurrence_count=1,
+        existing = pending_by_fp.get(fp)
+        if existing is None:
+            existing = (
+                db.query(OutlineIssueLog)
+                .filter(
+                    OutlineIssueLog.project_id == project_id,
+                    OutlineIssueLog.volume_node_id == volume_node_id,
+                    OutlineIssueLog.fingerprint == fp,
                 )
+                .first()
             )
+        if existing is not None:
+            _apply_issue_to_row(existing, issue)
+        else:
+            row = OutlineIssueLog(
+                project_id=project_id,
+                volume_node_id=volume_node_id,
+                rule_id=issue.rule_id,
+                dimension=issue.dimension,
+                severity=issue.severity,
+                source=issue.source,
+                field=issue.field or None,
+                chapter_number=issue.chapter_number,
+                message=issue.message,
+                suggestion=issue.suggestion or None,
+                fingerprint=fp,
+                occurrence_count=1,
+            )
+            db.add(row)
+            pending_by_fp[fp] = row
         processed += 1
 
     if commit:

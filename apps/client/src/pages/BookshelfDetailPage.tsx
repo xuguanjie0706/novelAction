@@ -503,7 +503,12 @@ export default function BookshelfDetailPage() {
 
           {/* 实际内容 */}
           <div style={{ padding: '20px 24px 40px' }}>
-            <SectionContent sectionId={selectedSection} data={data} />
+            <SectionContent
+              sectionId={selectedSection}
+              data={data}
+              projectId={projectId!}
+              onDataRefresh={() => loadRecapData({ silent: true })}
+            />
           </div>
         </main>
       </div>

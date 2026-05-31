@@ -90,6 +90,41 @@ def test_record_issue_set_inserts_new_row():
     db.commit.assert_not_called()
 
 
+def test_record_issue_set_dedupes_same_fingerprint_before_flush():
+    """同批 IssueSet 内重复指纹不得二次 INSERT（flush 前 query 看不见 pending 行）。"""
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = None
+    vol_id = str(uuid.uuid4())
+    issue_set = IssueSet(
+        volume_node_id=vol_id,
+        issues=[
+            Issue(
+                rule_id="CH-07",
+                severity="medium",
+                dimension="chapter_craft",
+                message="第7章偏短",
+                field="word_budget",
+                chapter_number=7,
+            ),
+            Issue(
+                rule_id="CH-07",
+                severity="high",
+                dimension="chapter_craft",
+                message="第7章偏短（重复）",
+                field="word_budget",
+                chapter_number=7,
+            ),
+        ],
+    )
+    count = record_issue_set(db, uuid.uuid4(), issue_set, commit=False)
+    assert count == 2
+    assert db.add.call_count == 1
+    added = db.add.call_args[0][0]
+    assert added.occurrence_count == 2
+    assert added.severity == "high"
+    db.flush.assert_called_once()
+
+
 def test_record_issue_set_increments_existing():
     db = MagicMock()
     existing = MagicMock()

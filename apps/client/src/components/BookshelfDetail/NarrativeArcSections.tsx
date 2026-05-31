@@ -2,6 +2,8 @@
  * @file 纪要页：情绪节律图（Step 9.5）与反派行动线（Step 9.8）展示。
  */
 import React from 'react'
+import type { RecapRegenStep } from '../../hooks/useRecapStepRegen'
+import RecapEmptyWithRegen from './RecapEmptyWithRegen'
 import type { EmotionArcEntry, VillainArcEntry } from '../../utils/narrativeArcDisplay'
 import {
   netBalanceColor,
@@ -71,11 +73,26 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
 interface Props {
   entries: VillainArcEntry[] | EmotionArcEntry[]
   emptyHint: string
+  regen?: {
+    projectId: string
+    step: RecapRegenStep
+    onSuccess: () => void | Promise<void>
+  }
 }
 
-export function VillainArcSection({ entries, emptyHint }: Props) {
+export function VillainArcSection({ entries, emptyHint, regen }: Props) {
   const list = entries as VillainArcEntry[]
   if (list.length === 0) {
+    if (regen) {
+      return (
+        <RecapEmptyWithRegen
+          projectId={regen.projectId}
+          step={regen.step}
+          hint={emptyHint}
+          onSuccess={regen.onSuccess}
+        />
+      )
+    }
     return <p style={S.muted}>{emptyHint}</p>
   }
 
@@ -118,9 +135,19 @@ export function VillainArcSection({ entries, emptyHint }: Props) {
   )
 }
 
-export function EmotionArcSection({ entries, emptyHint }: Props) {
+export function EmotionArcSection({ entries, emptyHint, regen }: Props) {
   const list = entries as EmotionArcEntry[]
   if (list.length === 0) {
+    if (regen) {
+      return (
+        <RecapEmptyWithRegen
+          projectId={regen.projectId}
+          step={regen.step}
+          hint={emptyHint}
+          onSuccess={regen.onSuccess}
+        />
+      )
+    }
     return <p style={S.muted}>{emptyHint}</p>
   }
 

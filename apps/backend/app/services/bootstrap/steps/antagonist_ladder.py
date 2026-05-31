@@ -13,6 +13,7 @@ from app.services.bootstrap.antagonist_roster import (
     normalize_antagonist_ladder,
 )
 from app.services.bootstrap.context import get_genre_kit_block
+from app.services.bootstrap.prompts.character_naming import character_naming_constraints_for_prompt
 from app.services.bootstrap.parse import parse_json
 from app.services.bootstrap.power_registry import format_power_context_block
 from app.services.bootstrap.protagonist_progression import build_protagonist_progression_prompt_block
@@ -36,6 +37,14 @@ async def gen_antagonist_ladder(svc: Any, project: Project, ctx: dict) -> list[d
     storyline_hint = ctx.get("storyline_summary") or "（未设定）"
     villain_tl = "；".join(ctx.get("villain_timelines") or []) or "（见势力 villain_timeline）"
 
+    story_core = ctx.get("story_core") or {}
+    naming_block = character_naming_constraints_for_prompt(
+        ctx.get("genre"),
+        project_title=ctx.get("project_title"),
+        theme=story_core.get("theme"),
+        logline=ctx.get("logline"),
+        require_name_meaning=True,
+    )
     system = (
         "你是有30年经验的网络小说结构策划，负责规划全书「卷级对立面阶梯」。"
         "只返回 JSON 数组，不要任何说明文字。"
@@ -49,6 +58,8 @@ async def gen_antagonist_ladder(svc: Any, project: Project, ctx: dict) -> list[d
 【故事线】{storyline_hint}
 【反派势力时间线线索】{villain_tl}
 
+{naming_block}
+
 任务：为全书 **{n_volumes} 卷** 各指定 1 名「当卷核心对立角色」（卷级大 Boss）。
 这是后续人物库与卷骨架的唯一 Boss 名单，禁止后续步骤另起新名。
 
@@ -56,7 +67,8 @@ async def gen_antagonist_ladder(svc: Any, project: Project, ctx: dict) -> list[d
 [
   {{
     "vol_index": 0,
-    "boss_name": "姓名（2~4字，全书唯一）",
+    "boss_name": "姓名（2~4字，全书唯一；须有寓意，禁止灵儿/婉儿式随意名）",
+    "name_meaning": "Boss 姓名寓意与卷级冲突暗线（15~40字）",
     "faction": "所属势力（须用已生成势力名）",
     "realm_at_debut": "本卷初 Boss 有效境界（可带小境，如「筑基境中期」）",
     "realm_at_climax": "卷末对决境界（可带小境，如「破虚境圆满」）",

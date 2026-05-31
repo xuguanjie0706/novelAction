@@ -47,3 +47,19 @@ def test_parse_json_repairs_suggestion_string_closed_with_bracket():
 def test_parse_json_raises_on_garbage():
     with pytest.raises(json.JSONDecodeError):
         parse_json("not json at all")
+
+
+def test_parse_json_repairs_colon_newline_before_array():
+    """写前预警 gemini 常见：\"key_skills\":\\n ["""
+    raw = """{
+  "ok": true,
+  "protagonist_fact_sheet": {
+    "realm": "聚火境",
+    "key_skills":
+ [
+      "技能A"
+    ]
+  }
+}"""
+    data = parse_json(raw)
+    assert data["protagonist_fact_sheet"]["key_skills"] == ["技能A"]

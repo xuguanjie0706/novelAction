@@ -18,14 +18,24 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
-from sqlalchemy.orm.attributes import flag_modified
+from app.services.bootstrap.narrative_arc_gen import (
+    call_json_array_with_retry,
+    persist_extra_arc,
+)
 
-from app.services.bootstrap.parse import parse_json
+logger = logging.getLogger(__name__)
 
 
-async def gen_emotion_arc(svc: Any, project, ctx: dict) -> list[dict]:
+async def gen_emotion_arc(
+    svc: Any,
+    project,
+    ctx: dict,
+    *,
+    persist: bool = True,
+) -> list[dict]:
     """为每一卷生成情绪收支预算，确保全书情绪节律有起伏有落地。
 
     Args:
@@ -82,24 +92,12 @@ async def gen_emotion_arc(svc: Any, project, ctx: dict) -> list[dict]:
 5. 全书至少1卷以 romantic 或 warm 为主色调（感情线或兄弟情收益）
 只返回JSON数组，不要解释。"""
 
-    try:
-        raw = await svc._call_with_retry(
-            system, prompt, max_tokens=2048, task="bootstrap.emotion_arc"
-        )
-        arc = parse_json(raw)
-        if not isinstance(arc, list):
-            arc = []
-    except Exception:
-        arc = []
+    arc = await call_json_array_with_retry(
+        svc, system, prompt, task="bootstrap.emotion_arc",
+    )
 
-    # 写库
-    try:
-        base = project.extra if isinstance(project.extra, dict) else {}
-        project.extra = {**base, "emotion_arc": arc}
-        flag_modified(project, "extra")
-        svc.db.commit()
-    except Exception:
-        pass
+    if persist:
+        persist_extra_arc(svc, project, "emotion_arc", arc)
 
     # ctx 摘要（供章纲 prompt 引用）
     if arc:

@@ -67,7 +67,50 @@ export function normalizePreWriteWarnResult(raw: unknown): PreWriteWarnResult {
       : undefined
   const must_events = Array.isArray(r.must_events) ? r.must_events.map(String).filter(Boolean) : []
   const hallucination_traps = Array.isArray(r.hallucination_traps) ? r.hallucination_traps.map(String).filter(Boolean) : []
-  return { ok, risk_count, risks, reminders, protagonist_fact_sheet, writing_brief, must_events, hallucination_traps }
+  const error = typeof r.error === 'string' && r.error.trim() ? r.error.trim() : undefined
+  const errorRaw = typeof r.raw === 'string' && r.raw.trim() ? r.raw.trim() : undefined
+  const storyline_pre_warns = Array.isArray(r.storyline_pre_warns) ? r.storyline_pre_warns : undefined
+  return {
+    ok,
+    risk_count,
+    risks,
+    reminders,
+    protagonist_fact_sheet,
+    writing_brief,
+    must_events,
+    hallucination_traps,
+    error,
+    raw: errorRaw,
+    storyline_pre_warns,
+  }
+}
+
+/** 仅含空字段/故事线附带的占位结果，应被历史落库记录覆盖。 */
+export function isShellPreWriteWarnResult(r: PreWriteWarnResult | null): boolean {
+  if (!r) return false
+  if (r.error) return false
+  const pfs = r.protagonist_fact_sheet
+  const hasPfs =
+    Boolean(pfs?.realm?.trim())
+    || Boolean(pfs?.location?.trim())
+    || (pfs?.key_skills?.length ?? 0) > 0
+    || (pfs?.key_items?.length ?? 0) > 0
+    || (pfs?.forbidden?.length ?? 0) > 0
+  const wb = r.writing_brief
+  const hasBrief =
+    Boolean(wb?.opening_strategy?.trim())
+    || Boolean(wb?.conflict_structure?.trim())
+    || Boolean(wb?.closing_hook?.trim())
+    || Boolean(wb?.word_rhythm?.trim())
+  const hasBody =
+    r.risks.length > 0
+    || r.reminders.length > 0
+    || (r.must_events?.length ?? 0) > 0
+    || (r.hallucination_traps?.length ?? 0) > 0
+    || hasPfs
+    || hasBrief
+  if (hasBody) return false
+  return true
 }
 
 /**

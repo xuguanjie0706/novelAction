@@ -92,7 +92,11 @@ class DebriefMixin:
             120000,
         )
 
-        naming_block = character_naming_constraints_for_prompt(genre)
+        naming_block = character_naming_constraints_for_prompt(
+            genre,
+            existing_names=[c["name"] for c in character_states if c.get("name")],
+            require_name_meaning=True,
+        )
 
         prompt = f"""章节{chapter_number}《{chapter_title}》
 
@@ -257,7 +261,8 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
   }},
   "new_characters": [
     {{
-      "name": "正名（姓+名，2~4字；禁止老铁/小X/称呼词作正名）",
+      "name": "正名（姓+名，2~4字；禁止老铁/小X/灵儿式乳名作正名）",
+      "name_meaning": "取名寓意（15~40字）",
       "alias": ["可选外号/乳名/道号"],
       "role": "supporting",
       "character_tier": "arc",

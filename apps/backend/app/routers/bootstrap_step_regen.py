@@ -154,7 +154,14 @@ async def regenerate_step(
             )
 
             count = len(result) if isinstance(result, list) else (1 if result else 0)
-            yield _sse(_emit_payload(step, "step_done", count=count))
+            if count == 0 and step in ("emotion_arc", "villain_arc"):
+                msg = (
+                    f"{step} 生成结果为空：模型未返回有效 JSON，"
+                    "或当前线路 token 不足/被拦截。请切换远程线路后重试。"
+                )
+                yield _sse(_emit_payload(step, "error", message=msg))
+            else:
+                yield _sse(_emit_payload(step, "step_done", count=count))
 
         except asyncio.TimeoutError:
             msg = f"{step} 重跑超时（7 分钟），请检查模型线路后重试"

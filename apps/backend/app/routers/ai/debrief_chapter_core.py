@@ -134,6 +134,9 @@ def apply_new_characters(
         if tier is None:
             tier = _ARC_SCOPE_TO_TIER.get(nc.arc_scope or "", "arc")
         new_char_id = uuid4()
+        char_extra: dict = {"first_appearance_chapter": chapter_num, "arc_scope": nc.arc_scope}
+        if nc.name_meaning and nc.name_meaning.strip():
+            char_extra["name_meaning"] = nc.name_meaning.strip()
         new_char = Character(
             id=new_char_id,
             project_id=project_id,
@@ -151,7 +154,7 @@ def apply_new_characters(
             current_status=normalize_character_status(nc.current_status) or "alive",
             current_location=truncate(nc.current_location, 200) if nc.current_location else None,
             author_notes=nc.author_notes,
-            extra={"first_appearance_chapter": chapter_num, "arc_scope": nc.arc_scope},
+            extra=char_extra,
         )
         db.add(new_char)
         db.flush()

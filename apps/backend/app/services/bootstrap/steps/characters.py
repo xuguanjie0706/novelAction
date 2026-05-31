@@ -24,7 +24,14 @@ async def gen_characters(svc: Any, project: Project, ctx: dict):
     if ctx.get("power_level_names") or ctx.get("power_systems_full"):
         power_hint = "\n" + format_power_context_block(ctx)
     kit_block = get_genre_kit_block(ctx)
-    naming_block = character_naming_constraints_for_prompt(ctx.get("genre"))
+    story_core = ctx.get("story_core") or {}
+    naming_block = character_naming_constraints_for_prompt(
+        ctx.get("genre"),
+        project_title=ctx.get("project_title"),
+        theme=story_core.get("theme"),
+        logline=ctx.get("logline"),
+        require_name_meaning=True,
+    )
     ladder_block = build_characters_ladder_block(ctx)
     prompt = f"""{kit_block}小说：《{ctx['project_title']}》({ctx['genre']})
 创意：{ctx['logline']}
@@ -50,7 +57,8 @@ async def gen_characters(svc: Any, project: Project, ctx: dict):
 段1/段2 使用完整字段模板（段1 示例）：
 [
   {{
-    "name": "正名（姓+名，2~4字）", "alias": ["可选外号/乳名/道号"],
+    "name": "正名（姓+名，2~4字）", "name_meaning": "取名寓意与命运暗线（15~40字）",
+    "alias": ["可选外号/乳名/道号"],
     "role": "protagonist",
     "character_tier": "core",
     "gender": "男", "age": "17", "faction": "所属势力",
@@ -98,6 +106,7 @@ arc_stages 要求：每人至少 2 个成长阶段（主角 3-4 个；arc Boss 2
 每个配角只需填写精简字段：
 {{
   "name": "正名（姓+名，2~4字）",
+  "name_meaning": "取名寓意（15~40字，须具体，禁止写「好听」）",
   "alias": ["可选外号，如乳名小柔应放此处而非 name"],
   "role": "supporting 或 antagonist",
   "character_tier": "plot",
@@ -145,6 +154,9 @@ arc_stages 要求：每人至少 2 个成长阶段（主角 3-4 个；arc Boss 2
         vol1_func = (item.get("vol1_function") or "").strip()
         if vol1_func:
             char_extra["vol1_function"] = vol1_func
+        name_meaning = (item.get("name_meaning") or "").strip()
+        if name_meaning:
+            char_extra["name_meaning"] = name_meaning
         peak_realm = (item.get("peak_realm") or "").strip()
         if peak_realm:
             char_extra["peak_realm"] = peak_realm

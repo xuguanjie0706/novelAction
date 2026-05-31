@@ -121,6 +121,8 @@ TASK_PROFILES: dict[str, dict] = {
     },
     "bootstrap.memory": {"temperature": 0.6, "top_p": 0.9},
     "bootstrap.relations": {"temperature": 0.65, "top_p": 0.9},
+    "bootstrap.emotion_arc": {"temperature": 0.45, "top_p": 0.85},
+    "bootstrap.villain_arc": {"temperature": 0.45, "top_p": 0.85},
 
     # ── 大纲规划 ────────────────────────────────────────────────
     "outline.full_structure": {"temperature": 0.55, "top_p": 0.9},
@@ -138,6 +140,12 @@ TASK_PROFILES: dict[str, dict] = {
     # ── 质检 / 一致性（要稳定 JSON 与可比较打分）────────────────
     "quality.micro_patch": {"temperature": 0.15, "top_p": 0.75},
     "quality.check": {
+        "temperature": 0.2,
+        "top_p": 0.8,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+    },
+    "quality.pre_write_warning": {
         "temperature": 0.2,
         "top_p": 0.8,
         "frequency_penalty": 0.0,

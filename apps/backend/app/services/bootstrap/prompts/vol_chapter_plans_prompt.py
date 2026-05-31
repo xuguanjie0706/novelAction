@@ -78,9 +78,61 @@ def build_chapter_plan_generation_tail(
     batch_start: int,
     batch_end: int,
     batch_count: int,
+    is_fanqie: bool = False,
 ) -> str:
-    """生成要求 + JSON 字段说明 + 编辑铁律（含强化 SEQ-01）。"""
+    """生成要求 + JSON 字段说明 + 编辑铁律（含强化 SEQ-01）。
+
+    Args:
+        is_fanqie: pace_type=="fast" 时为 True，启用番茄 JSON 字段和铁律。
+    """
     chk_from = batch_start + 1 if batch_start < batch_end else batch_end
+
+    if is_fanqie:
+        from app.services.bootstrap.prompts.vol_chapter_fanqie import (
+            fanqie_editorial_laws,
+            fanqie_emotional_tone_options,
+            fanqie_json_extra_fields,
+            fanqie_word_budget_hint,
+        )
+        emo_options = fanqie_emotional_tone_options()
+        extra_fields = fanqie_json_extra_fields()
+        word_hint = fanqie_word_budget_hint()
+        laws = fanqie_editorial_laws(chk_from, batch_end)
+    else:
+        emo_options = "exciting/tense/sad/romantic/mysterious/warm/anxious/epic"
+        extra_fields = ""
+        word_hint = (
+            "（expected_words 参考：opening/ending≈2000-2400，rising≈2300，turning≈2400，"
+            "dark_hour≈2600-2800，climax≈3000-3300；fast 节奏-200，slow/climax 节奏+200-500；"
+            "有打脸/情感高点+200。请按章节实际情况填写，不要全部填同一个数字。）\n\n"
+        )
+        laws = (
+            "# 编辑铁律（违反任何一条视为不合格输出）\n"
+            "1. protagonist_want 必须是「主动欲望」而非「被动应付」——区别：主动=「他想要X」，被动=「他被迫处理Y」\n"
+            "2. choice_cost 不能为空字符串——这是最高优先级约束。零代价的选择不是戏剧；"
+            "格式示例：「答应了陆青云的条件，但被迫交出了令牌，下章必须面对陆青云派来监视的人」\n"
+            "3. 🔴 章际因果链（SEQ-01，与 linter 同规则，本批内每一对相邻章都必须满足）：\n"
+            "   a) 第 N+1 章 opening_hook 前半句 = 第 N 章 choice_cost 的即时后果，再切入新事件；\n"
+            "   b) 第 N+1 章 opening_hook 或 core_event 须含第 N 章 choice_cost 原文中≥2连续相同汉字；\n"
+            "   c) 禁止仅靠主角姓名满足 b)；须用代价里的伤势/丹药/誓言/诅咒/关系等词组；\n"
+            f"   d) 输出前对第{chk_from}～{batch_end}章逐对自检，失败则改 opening_hook 再返回 JSON。\n"
+            "4. end_hook 必须具体到手法（「主角打开了一扇他以为已经关闭的门」比「结局悬念」合格）\n"
+            "5. villain_action 不能只写「（无）」——反派的独立行动是本书节奏的第二引擎\n"
+            "6. core_event（即 summary）必须是 protagonist_choice 的直接后果，不能为空\n"
+            "7. storyline_refs 必须交叉出现，主线不能连续 3 章独占（除非 phase=climax 的最后 5 章）\n"
+            "8. 本卷内至少 2 条贯穿伏笔线：埋入章写「埋[xxx|主题:yyy]」，推进章写「加热[xxx+手法]」，回收章写「收[xxx]」\n"
+            "9. promise_fulfilled：若本章是某条未兑现承诺的兑现章，必须填写承诺原文中的关键短语（2字以上）；"
+            "其余章节填空字符串即可，不要填占位文字如「无」「暂无」。\n"
+            "10. has_face_slap 的频率必须符合立项定位的 face_slap_pattern（不能全是 false）\n"
+            "11. 若 phase=dark_hour，至少 40% 的章节 has_emotional_beat=true，且 pacing 不得连续 3 章是 fast\n"
+            "12. involved_characters 只能使用上方已知人物名，不要发明新名字\n"
+            "13. 玄幻/仙侠：core_event/opening_hook 等字段禁止现代 STEM/商业用语"
+            "（逆向工程、解析改良、工业化、市场调研、畅销榜等），须用古风修仙表达\n"
+            "只返回 JSON 数组，不要任何解释文字。"
+        )
+
+    default_words = 1800 if is_fanqie else 2200
+
     return (
         f"\n\n# 生成要求\n"
         f"请为本卷第{batch_start}～{batch_end}章生成{batch_count}个章节计划，返回JSON数组：\n"
@@ -110,41 +162,19 @@ def build_chapter_plan_generation_tail(
         '    "supporting_spotlight": "哪个配角有独立的情节推进（不只是配合主角），填姓名+做了什么",\n'
         "\n"
         "    // ── 节奏与情感标记 ──\n"
-        '    "reader_emotion_target": "本章结束时读者的目标情绪（exciting/tense/sad/romantic/mysterious/warm/anxious/epic）",\n'
+        f'    "reader_emotion_target": "本章结束时读者的目标情绪（{emo_options}）",\n'
         '    "involved_characters": ["出场人物名（只用已知人物名）"],\n'
         '    "storyline_refs": ["推进了哪条故事线（从已有故事线选）"],\n'
         '    "storyline_beat_ref": "本章主要兑现的故事线名（与导演单一致，可空）",\n'
         '    "pacing": "fast/normal/slow/climax",\n'
-        '    "emotional_tone": "exciting/tense/sad/romantic/mysterious/funny/epic/calm",\n'
+        f'    "emotional_tone": "{emo_options}",\n'
         '    "power_milestone": "若本章有境界突破/技能习得/法宝获得则描述，否则填空",\n'
         '    "has_face_slap": false,\n'
         '    "has_emotional_beat": false,\n'
-        '    "expected_words": 2200\n'
-        "  }\n"
+        f'    "expected_words": {default_words}\n'
+        + extra_fields
+        + "  }\n"
         "]\n"
-        "（expected_words 参考：opening/ending≈2000-2400，rising≈2300，turning≈2400，"
-        "dark_hour≈2600-2800，climax≈3000-3300；fast 节奏-200，slow/climax 节奏+200-500；"
-        "有打脸/情感高点+200。请按章节实际情况填写，不要全部填同一个数字。）\n\n"
-        "# 编辑铁律（违反任何一条视为不合格输出）\n"
-        "1. protagonist_want 必须是「主动欲望」而非「被动应付」——区别：主动=「他想要X」，被动=「他被迫处理Y」\n"
-        "2. choice_cost 不能为空字符串——这是最高优先级约束。零代价的选择不是戏剧；"
-        "格式示例：「答应了陆青云的条件，但被迫交出了令牌，下章必须面对陆青云派来监视的人」\n"
-        "3. 🔴 章际因果链（SEQ-01，与 linter 同规则，本批内每一对相邻章都必须满足）：\n"
-        "   a) 第 N+1 章 opening_hook 前半句 = 第 N 章 choice_cost 的即时后果，再切入新事件；\n"
-        "   b) 第 N+1 章 opening_hook 或 core_event 须含第 N 章 choice_cost 原文中≥2连续相同汉字；\n"
-        "   c) 禁止仅靠主角姓名满足 b)；须用代价里的伤势/丹药/誓言/诅咒/关系等词组；\n"
-        f"   d) 输出前对第{chk_from}～{batch_end}章逐对自检，失败则改 opening_hook 再返回 JSON。\n"
-        "4. end_hook 必须具体到手法（「主角打开了一扇他以为已经关闭的门」比「结局悬念」合格）\n"
-        "5. villain_action 不能只写「（无）」——反派的独立行动是本书节奏的第二引擎\n"
-        "6. core_event（即 summary）必须是 protagonist_choice 的直接后果，不能为空\n"
-        "7. storyline_refs 必须交叉出现，主线不能连续 3 章独占（除非 phase=climax 的最后 5 章）\n"
-        "8. 本卷内至少 2 条贯穿伏笔线：埋入章写「埋[xxx|主题:yyy]」，推进章写「加热[xxx+手法]」，回收章写「收[xxx]」\n"
-        "9. promise_fulfilled：若本章是某条未兑现承诺的兑现章，必须填写承诺原文中的关键短语（2字以上）；"
-        "其余章节填空字符串即可，不要填占位文字如「无」「暂无」。\n"
-        "10. has_face_slap 的频率必须符合立项定位的 face_slap_pattern（不能全是 false）\n"
-        "11. 若 phase=dark_hour，至少 40% 的章节 has_emotional_beat=true，且 pacing 不得连续 3 章是 fast\n"
-        "12. involved_characters 只能使用上方已知人物名，不要发明新名字\n"
-        "13. 玄幻/仙侠：core_event/opening_hook 等字段禁止现代 STEM/商业用语"
-        "（逆向工程、解析改良、工业化、市场调研、畅销榜等），须用古风修仙表达\n"
-        "只返回 JSON 数组，不要任何解释文字。"
+        + word_hint
+        + laws
     )

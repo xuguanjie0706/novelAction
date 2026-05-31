@@ -72,6 +72,8 @@ export type PreWriteWarnResult = {
   /** 幻觉预防清单 */
   hallucination_traps?: string[]
   error?: string
+  /** 解析失败时后端附带的原始输出片段 */
+  raw?: string
   record_id?: string
   /** 故事线织网预警（门控 SSE storyline_pre_warn 聚合） */
   storyline_pre_warns?: StorylinePreWarnItem[]

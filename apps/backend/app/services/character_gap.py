@@ -21,6 +21,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.character import Character
+from app.services.bootstrap.prompts.character_naming import character_naming_constraints_for_prompt
 
 if TYPE_CHECKING:
     from app.services.ai_service import AIService
@@ -163,6 +164,11 @@ async def create_supporting_character(
     existing_names = [c.name for c in existing_characters]
     cast_summary = _build_core_cast_summary(existing_characters)
     tier = request.get("character_tier", "supporting")
+    naming_block = character_naming_constraints_for_prompt(
+        genre,
+        existing_names=existing_names,
+        require_name_meaning=True,
+    )
 
     system = "你是网络小说人物设计专家。只返回JSON对象，不要任何解释文字。"
     prompt = f"""为小说（{genre}）创建一个配角档案。
@@ -175,15 +181,17 @@ async def create_supporting_character(
 【现有主线角色（不得重名，不得设定与其冲突的成长线）】
 {cast_summary}
 
+{naming_block}
+
 【设计约束】
 - 这是配角，不是主线角色，不能抢主角风头
 - arc_scope="single_chapter" 时，动机简单、无复杂背景
-- 外貌/名字要符合 {genre} 世界观风格
-- 已有人物名（禁止重名）：{', '.join(existing_names)}
 
 返回 JSON 对象：
 {{
-  "name": "姓名",
+  "name": "姓名（姓+名，2~4字）",
+  "name_meaning": "取名寓意（15~40字）",
+  "alias": ["可选外号/乳名"],
   "role": "supporting",
   "gender": "男/女",
   "age": "年龄",
@@ -206,9 +214,21 @@ async def create_supporting_character(
     if name in existing_names:
         name = f"{name}（{tier}）"
 
+    char_extra: dict = {}
+    name_meaning = (data.get("name_meaning") or "").strip()
+    if name_meaning:
+        char_extra["name_meaning"] = name_meaning
+    raw_alias = data.get("alias")
+    alias_list = (
+        [a.strip() for a in raw_alias if isinstance(a, str) and a.strip()]
+        if isinstance(raw_alias, list)
+        else []
+    )
+
     char = Character(
         project_id=project_id,
         name=name,
+        alias=alias_list or None,
         role=data.get("role", "supporting"),
         character_tier=tier,
         gender=data.get("gender"),
@@ -219,6 +239,7 @@ async def create_supporting_character(
         motivation=data.get("motivation"),
         current_realm=data.get("current_realm"),
         author_notes=data.get("author_notes"),
+        extra=char_extra or None,
     )
     db.add(char)
     db.commit()

@@ -102,16 +102,25 @@ def restore_bootstrap_checkpoint_if_lost(
     )
 
     _COMPLETED_BEFORE_MEMORY = [
-        "positioning", "project", "power_systems", "factions", "storylines",
+        "positioning", "project",
+        "fanqie_contrast", "fanqie_golden_finger", "fanqie_face_slap",
+        "power_systems", "factions", "storylines",
         "antagonist_ladder", "characters", "skills", "items", "settings", "volumes",
         "emotion_arc", "villain_arc",
+        "fanqie_rhythm", "fanqie_audit",
     ]
     gate_to_completed: dict[str, list[str]] = {
         "positioning":        ["positioning"],
-        "gate_power_systems": ["positioning", "project", "power_systems"],
-        "gate_characters":    ["positioning", "project", "power_systems", "factions",
+        "gate_power_systems": ["positioning", "project",
+                               "fanqie_contrast", "fanqie_golden_finger", "fanqie_face_slap",
+                               "power_systems"],
+        "gate_characters":    ["positioning", "project",
+                               "fanqie_contrast", "fanqie_golden_finger", "fanqie_face_slap",
+                               "power_systems", "factions",
                                "storylines", "antagonist_ladder", "characters"],
-        "gate_volumes":       ["positioning", "project", "power_systems", "factions",
+        "gate_volumes":       ["positioning", "project",
+                               "fanqie_contrast", "fanqie_golden_finger", "fanqie_face_slap",
+                               "power_systems", "factions",
                                "storylines", "antagonist_ladder", "characters", "skills", "items", "settings", "volumes"],
     }
     _STEP_TO_NODE: dict[str, str] = {
@@ -365,11 +374,20 @@ def _build_graph() -> StateGraph:
     from app.services.bootstrap.graph_gates import (
         node_gate_characters, node_gate_power_systems, node_gate_volumes,
     )
+    from app.services.bootstrap.graph_fanqie_enhance import (
+        node_fanqie_contrast, node_fanqie_golden_finger,
+        node_fanqie_face_slap, node_fanqie_rhythm, node_fanqie_audit,
+    )
     g = StateGraph(BootstrapState)
     for name, fn in [
         ("positioning",          node_positioning),
         ("gate",                 node_gate),
         ("project",              node_project),
+        # ── 番茄增强（pace_type=fast 时执行，否则跳过）──
+        ("fanqie_contrast",      node_fanqie_contrast),
+        ("fanqie_golden_finger", node_fanqie_golden_finger),
+        ("fanqie_face_slap",     node_fanqie_face_slap),
+        # ── 标准步骤（续）──
         ("power_systems",        node_power_systems),
         ("gate_power_systems",   node_gate_power_systems),
         ("factions",             node_factions),
@@ -382,6 +400,10 @@ def _build_graph() -> StateGraph:
         ("volumes",              node_volumes),
         ("gate_volumes",         node_gate_volumes),
         ("emotion_villain",      node_emotion_villain),
+        # ── 番茄增强（卷骨架之后）──
+        ("fanqie_rhythm",        node_fanqie_rhythm),
+        ("fanqie_audit",         node_fanqie_audit),
+        # ── 标准步骤（续）──
         ("memory_relations",     node_memory_relations),
         ("core_mysteries",       node_core_mysteries),
         ("opening_contract",     node_opening_contract),
@@ -391,10 +413,17 @@ def _build_graph() -> StateGraph:
 
     chain = [
         START, "positioning", "gate", "project",
+        # 番茄增强三步（pace_type != fast 时 no-op）
+        "fanqie_contrast", "fanqie_golden_finger", "fanqie_face_slap",
+        # 标准步骤
         "power_systems", "gate_power_systems", "factions", "storylines",
         "antagonist_ladder", "characters", "gate_characters", "skills_items", "settings",
         "volumes", "gate_volumes",
-        "emotion_villain", "memory_relations", "core_mysteries",
+        "emotion_villain",
+        # 番茄增强两步（pace_type != fast 时 no-op）
+        "fanqie_rhythm", "fanqie_audit",
+        # 标准步骤（续）
+        "memory_relations", "core_mysteries",
         "opening_contract", "consistency", END,
     ]
     for a, b in zip(chain, chain[1:]):

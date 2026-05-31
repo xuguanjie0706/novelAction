@@ -16,6 +16,7 @@ from typing import Any
 
 from app.models import Character, Project
 from app.services.bootstrap.parse import parse_json
+from app.services.bootstrap.prompts.character_naming import character_naming_constraints_for_prompt
 
 _FUNCTION_TAGS = (
     "打脸靶_主要 / 打脸靶_次要 / 助力者_前期 / 助力者_后期 / "
@@ -41,6 +42,12 @@ async def gen_character_functions(svc: Any, project: Project, ctx: dict) -> list
 
     slap_targets = [t.get("name", "") for t in (fsm.get("targets") or [])[:5]]
     stages = gf.get("upgrade_stages") or []
+    naming_block = character_naming_constraints_for_prompt(
+        ctx.get("genre"),
+        project_title=ctx.get("project_title"),
+        logline=ctx.get("logline"),
+        require_name_meaning=True,
+    )
 
     prompt = f"""小说：《{ctx['project_title']}》
 类型公式：{fanqie_pos.get('genre_archetype', '')}
@@ -53,6 +60,8 @@ async def gen_character_functions(svc: Any, project: Project, ctx: dict) -> list
 功能标签参考（必须从下列中选，可组合）：
 {_FUNCTION_TAGS}
 
+{naming_block}
+
 前5章出场硬约束（必须严格遵守）：
 - 第1章：最多3个有名字的角色
 - 前3章：最多5个有名字的角色
@@ -61,7 +70,9 @@ async def gen_character_functions(svc: Any, project: Project, ctx: dict) -> list
 生成8-10个角色，返回 JSON 数组：
 [
   {{
-    "name": "角色名",
+    "name": "角色名（姓+名，2~4字，须有寓意）",
+    "name_meaning": "取名寓意（15~40字）",
+    "alias": ["可选外号/乳名"],
     "function_tag": "从上列功能标签中选最主要的一个",
     "gender": "男/女",
     "age": "年龄（数字）",
@@ -121,6 +132,7 @@ async def gen_character_functions(svc: Any, project: Project, ctx: dict) -> list
                     "relation_to_protagonist": item.get("relation_to_protagonist", ""),
                     "initial_tier": item.get("initial_tier", 1),
                     "reversal_moment": item.get("reversal_moment", ""),
+                    **({"name_meaning": item["name_meaning"]} if item.get("name_meaning") else {}),
                 },
             )
             svc.db.add(char)

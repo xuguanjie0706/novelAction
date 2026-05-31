@@ -1,9 +1,19 @@
 """写前预警 Mixin — 写章前主编级风险扫描与写作简报生成。"""
 from __future__ import annotations
 
-import json
-import re
 from typing import List
+
+from app.services.ai.pre_write_warn_parse import (
+    empty_pre_write_warning_error,
+    looks_truncated_json,
+    parse_pre_write_warning_text,
+)
+from app.services.llm_token_budgets import max_tokens_pre_write_warning
+
+_COMPACT_JSON_HINT = (
+    "【输出格式硬约束】只输出一个合法 JSON 对象，禁止 markdown 代码块外的说明；"
+    "禁止在冒号与 [ 或 { 之间换行；不要输出推理过程，直接给出完整 JSON。"
+)
 
 
 class PreWriteWarnMixin:
@@ -187,95 +197,30 @@ class PreWriteWarnMixin:
 若无风险则 risks 为空数组，ok=true；有 high/critical 风险则 ok=false。
 若未提供衔接需求分析，transition_directive 两个 needed 均填 false，instruction 填空字符串。"""
 
-        response = await self._call_ai(
-            system,
-            prompt,
-            max_tokens=2500,
-            context={"operation": "pre_write_warning", "chapter_plan": chapter_plan_summary[:80]},
-            task="quality.check",
-        )
-        try:
-            text = response.strip()
-            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-            if "```" in text:
-                fence = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
-                if fence:
-                    text = fence.group(1).strip()
-            start = text.find("{")
-            if start == -1:
-                raise ValueError("No JSON found")
-            data = json.loads(text[start:])
-            risks = [r for r in (data.get("risks") or []) if isinstance(r, dict) and r.get("description")]
-            reminders = [str(r) for r in (data.get("reminders") or []) if r]
-            has_critical = any(r.get("severity") in ("high", "critical") for r in risks)
-
-            def _str(v, fallback="") -> str:
-                return str(v).strip() if v else fallback
-
-            def _strlist(v) -> list[str]:
-                if isinstance(v, list):
-                    return [str(x).strip() for x in v if x]
-                return []
-
-            protagonist_fact_sheet = data.get("protagonist_fact_sheet") or {}
-            if not isinstance(protagonist_fact_sheet, dict):
-                protagonist_fact_sheet = {}
-
-            writing_brief_raw = data.get("writing_brief") or {}
-            if not isinstance(writing_brief_raw, dict):
-                writing_brief_raw = {}
-            writing_brief = {
-                "opening_strategy": _str(writing_brief_raw.get("opening_strategy")),
-                "conflict_structure": _str(writing_brief_raw.get("conflict_structure")),
-                "closing_hook": _str(writing_brief_raw.get("closing_hook")),
-                "word_rhythm": _str(writing_brief_raw.get("word_rhythm")),
-            }
-
-            _td_raw = data.get("transition_directive") or {}
-            if not isinstance(_td_raw, dict):
-                _td_raw = {}
-
-            def _bridge(key: str) -> dict:
-                b = _td_raw.get(key) or {}
-                if not isinstance(b, dict):
-                    b = {}
-                return {
-                    "needed": bool(b.get("needed", False)),
-                    "technique_id": _str(b.get("technique_id")),
-                    "technique_name": _str(b.get("technique_name")),
-                    "instruction": _str(b.get("instruction")),
-                }
-
-            transition_directive = {
-                "spatial_bridge": _bridge("spatial_bridge"),
-                "realm_bridge": _bridge("realm_bridge"),
-            }
-
-            return {
-                "ok": not has_critical,
-                "risk_count": len(risks),
-                "protagonist_fact_sheet": {
-                    "realm": _str(protagonist_fact_sheet.get("realm")),
-                    "location": _str(protagonist_fact_sheet.get("location")),
-                    "key_skills": _strlist(protagonist_fact_sheet.get("key_skills")),
-                    "key_items": _strlist(protagonist_fact_sheet.get("key_items")),
-                    "forbidden": _strlist(protagonist_fact_sheet.get("forbidden")),
+        max_tok = max_tokens_pre_write_warning(self.profile)
+        last_exc: Exception | None = None
+        last_response = ""
+        for attempt in range(2):
+            sys = system if attempt == 0 else f"{system}\n\n{_COMPACT_JSON_HINT}"
+            last_response = await self._call_ai(
+                sys,
+                prompt,
+                max_tokens=max_tok,
+                context={
+                    "operation": "pre_write_warning",
+                    "chapter_plan": chapter_plan_summary[:80],
+                    "attempt": attempt + 1,
                 },
-                "writing_brief": writing_brief,
-                "must_events": _strlist(data.get("must_events")),
-                "hallucination_traps": _strlist(data.get("hallucination_traps")),
-                "risks": risks[:15],
-                "reminders": reminders[:10],
-                "transition_directive": transition_directive,
-            }
-        except Exception as e:
-            _empty_bridge = {"needed": False, "technique_id": "", "technique_name": "", "instruction": ""}
-            return {
-                "ok": True, "risk_count": 0,
-                "protagonist_fact_sheet": {"realm": "", "location": "", "key_skills": [], "key_items": [], "forbidden": []},
-                "writing_brief": {"opening_strategy": "", "conflict_structure": "", "closing_hook": "", "word_rhythm": ""},
-                "must_events": [], "hallucination_traps": [],
-                "risks": [], "reminders": [],
-                "transition_directive": {"spatial_bridge": _empty_bridge, "realm_bridge": _empty_bridge},
-                "error": str(e), "raw": response[:300],
-            }
+                task="quality.pre_write_warning",
+            )
+            try:
+                if looks_truncated_json(last_response):
+                    raise ValueError("模型输出 JSON 不完整（可能顶满 max_tokens，推理占满预算）")
+                return parse_pre_write_warning_text(last_response)
+            except Exception as e:
+                last_exc = e
+                continue
+        return empty_pre_write_warning_error(
+            last_exc or RuntimeError("pre_write_warning 解析失败"),
+            last_response,
+        )

@@ -130,6 +130,12 @@ def build_vol_expand_ctx(
             logger.warning("issue_feedback 回灌失败（不阻断生成）", exc_info=True)
             issue_feedback_block = ""
 
+    # ── 番茄增强上下文（pace_type == "fast" 时注入）───────────────────────────
+    fanqie_block = ""
+    if positioning.get("pace_type") == "fast":
+        from app.services.bootstrap.context_vol_fanqie import build_fanqie_enhance_block
+        fanqie_block = build_fanqie_enhance_block(project, volume_node, ctx)
+
     # ── 组合 editorial_prompt_block ────────────────────────────────────────────
     genre_kit_block = (ctx.get("genre_kit_prompt") or "").strip()
     if genre_kit_block and not genre_kit_block.startswith("\n"):
@@ -138,6 +144,7 @@ def build_vol_expand_ctx(
     editorial_blocks = [
         b for b in [
             positioning_block, genre_kit_block, power_block, world_block,
+            fanqie_block,  # 番茄增强（落差/金手指/打脸/节奏图）
             volumes_block, prev_vol_ending_block,
             emotion_arc_block, villain_arc_block, core_mysteries_block,
             cast_block, relations_block, villain_block,

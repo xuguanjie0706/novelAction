@@ -267,6 +267,7 @@ class ChapterIndexPayload(BaseModel):
 class NewCharacterPayload(BaseModel):
     """auto_debrief 从正文识别出的新配角，由 chapter_debrief 写入 DB。"""
     name: str
+    name_meaning: Optional[str] = None
     alias: Optional[List[str]] = None
     role: str = "supporting"
     # 叙事层级：core=核心长线 / arc=弧线支柱 / plot=剧情推手 / background=背景填充

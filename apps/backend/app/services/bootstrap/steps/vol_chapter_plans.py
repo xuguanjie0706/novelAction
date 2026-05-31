@@ -158,22 +158,27 @@ async def gen_vol_chapter_plans(
         modern_guard = "\n\n" + format_modern_blacklist_for_prompt()
 
     # ── 系统提示（总编辑级别，明确身份与职责）──────────────────────────────
-    system = (
-        "你是有30年网络小说从业经验的总编辑，深度参与过数百部上百万字长篇网文的策划。\n"
-        "你的职责：为本卷生成章级大纲，每一章都必须是可以直接开写的创作蓝图，\n"
-        "而不是模糊的情节清单。你知道：\n"
-        "  1. 章节的核心是「主角欲望→障碍→选择→代价」的因果链，不是事件流水账\n"
-        "  2. 打脸节奏、感情线密度、反派行动频率必须符合立项定位\n"
-        "  3. 每章的 end_hook 决定读者是否点击下一章，废话不合格\n"
-        "  4. 伏笔台账和读者承诺是你必须在本卷解决的债务，拖欠就是违约\n"
-        "  5. 反派有自己的独立行动线，不是只在主角视角才存在\n"
-        "  6. 同一批 JSON 内：第 N+1 章 opening_hook 必须先承接第 N 章 choice_cost（与 linter SEQ-01 同规则，"
-        "须含代价原文≥2连续汉字，禁止仅靠主角名蹭字）\n"
-        "  7. 玄幻/仙侠/古风：禁用现代科技术语与商业话术（如逆向工程、解析改良、畅销榜、算法），"
-        "改用辨药、拆方、重配丹纹、坊市热销等世界观内表达\n"
-        "只返回 JSON 数组，不要任何说明文字。"
-        + modern_guard
-    )
+    is_fanqie = (ctx.get("positioning") or {}).get("pace_type") == "fast"
+    if is_fanqie:
+        from app.services.bootstrap.prompts.vol_chapter_fanqie import fanqie_system_prompt
+        system = fanqie_system_prompt(modern_guard)
+    else:
+        system = (
+            "你是有30年网络小说从业经验的总编辑，深度参与过数百部上百万字长篇网文的策划。\n"
+            "你的职责：为本卷生成章级大纲，每一章都必须是可以直接开写的创作蓝图，\n"
+            "而不是模糊的情节清单。你知道：\n"
+            "  1. 章节的核心是「主角欲望→障碍→选择→代价」的因果链，不是事件流水账\n"
+            "  2. 打脸节奏、感情线密度、反派行动频率必须符合立项定位\n"
+            "  3. 每章的 end_hook 决定读者是否点击下一章，废话不合格\n"
+            "  4. 伏笔台账和读者承诺是你必须在本卷解决的债务，拖欠就是违约\n"
+            "  5. 反派有自己的独立行动线，不是只在主角视角才存在\n"
+            "  6. 同一批 JSON 内：第 N+1 章 opening_hook 必须先承接第 N 章 choice_cost（与 linter SEQ-01 同规则，"
+            "须含代价原文≥2连续汉字，禁止仅靠主角名蹭字）\n"
+            "  7. 玄幻/仙侠/古风：禁用现代科技术语与商业话术（如逆向工程、解析改良、畅销榜、算法），"
+            "改用辨药、拆方、重配丹纹、坊市热销等世界观内表达\n"
+            "只返回 JSON 数组，不要任何说明文字。"
+            + modern_guard
+        )
 
     # ── 主角基本信息 ──────────────────────────────────────────────────────────
     protagonist = ctx.get("protagonist", "主角")
@@ -305,7 +310,9 @@ async def gen_vol_chapter_plans(
         # 按章节区间注入细分节奏约束
         phase_guidance_lines: list[str] = []
         for ch in range(batch_start, batch_end + 1):
-            g = _get_chapter_phase_guidance(ch, planned, volume_node.phase or "rising")
+            g = _get_chapter_phase_guidance(
+                ch, planned, volume_node.phase or "rising", is_fanqie=is_fanqie,
+            )
             if g and g not in phase_guidance_lines:
                 phase_guidance_lines.append(g)
         phase_block = ""
@@ -398,6 +405,7 @@ async def gen_vol_chapter_plans(
                 batch_start=batch_start,
                 batch_end=batch_end,
                 batch_count=batch_count,
+                is_fanqie=is_fanqie,
             )
         )
 
@@ -490,7 +498,8 @@ async def gen_vol_chapter_plans(
             # AI 给出的 expected_words 优先，动态预算函数做兜底
             ai_words = item.get("expected_words")
             dynamic_words = chapter_word_budget_for_phase(
-                volume_node.phase or "rising", pacing_val, has_slap, has_beat
+                volume_node.phase or "rising", pacing_val, has_slap, has_beat,
+                is_fanqie=is_fanqie,
             )
             expected_words_val = ai_words if isinstance(ai_words, int) and 1500 <= ai_words <= 4000 else dynamic_words
             node = OutlineNode(
@@ -510,23 +519,7 @@ async def gen_vol_chapter_plans(
                 storyline_ids=sl_ids,
                 expected_words=expected_words_val,
                 sort_order=ch_num - 1,
-                extra={
-                    "foreshadow": (item.get("foreshadow") or "").strip(),
-                    "promise_fulfilled": (item.get("promise_fulfilled") or "").strip(),
-                    "end_hook": end_hook_val or "",
-                    "has_face_slap": item.get("has_face_slap", False),
-                    "has_emotional_beat": item.get("has_emotional_beat", False),
-                    "protagonist_want": (item.get("protagonist_want") or "").strip(),
-                    "protagonist_obstacle": (item.get("protagonist_obstacle") or "").strip(),
-                    "protagonist_choice": (item.get("protagonist_choice") or "").strip(),
-                    "choice_cost": (item.get("choice_cost") or "").strip(),
-                    "villain_action": (item.get("villain_action") or "").strip(),
-                    "supporting_spotlight": (item.get("supporting_spotlight") or "").strip(),
-                    "reader_emotion_target": (item.get("reader_emotion_target") or "").strip(),
-                    "bootstrap_generated": False,
-                    "lazy_expanded": True,
-                    "storyline_beat_ref": (item.get("storyline_beat_ref") or "").strip(),
-                },
+                extra=_build_chapter_extra(item, is_fanqie),
             )
             svc.db.add(node)
             svc.db.flush()  # 让 node.id 可用，伏笔同步需要引用它
@@ -587,3 +580,35 @@ async def gen_vol_chapter_plans(
     ctx["chapter_quota_used"] = quota_used + len(all_results)
 
     return all_results
+
+
+def _build_chapter_extra(item: dict, is_fanqie: bool) -> dict:
+    """构建 OutlineNode.extra，番茄模式时追加爽感字段。"""
+    base = {
+        "foreshadow": (item.get("foreshadow") or "").strip(),
+        "promise_fulfilled": (item.get("promise_fulfilled") or "").strip(),
+        "end_hook": (item.get("end_hook") or "").strip(),
+        "has_face_slap": item.get("has_face_slap", False),
+        "has_emotional_beat": item.get("has_emotional_beat", False),
+        "protagonist_want": (item.get("protagonist_want") or "").strip(),
+        "protagonist_obstacle": (item.get("protagonist_obstacle") or "").strip(),
+        "protagonist_choice": (item.get("protagonist_choice") or "").strip(),
+        "choice_cost": (item.get("choice_cost") or "").strip(),
+        "villain_action": (item.get("villain_action") or "").strip(),
+        "supporting_spotlight": (item.get("supporting_spotlight") or "").strip(),
+        "reader_emotion_target": (item.get("reader_emotion_target") or "").strip(),
+        "bootstrap_generated": False,
+        "lazy_expanded": True,
+        "storyline_beat_ref": (item.get("storyline_beat_ref") or "").strip(),
+    }
+    if is_fanqie:
+        base.update({
+            "satisfaction_setup": (item.get("satisfaction_setup") or "").strip(),
+            "satisfaction_payoff": (item.get("satisfaction_payoff") or "").strip(),
+            "satisfaction_type": item.get("satisfaction_type") or None,
+            "next_chapter_bait": (item.get("next_chapter_bait") or "").strip(),
+            "face_slap_target": item.get("face_slap_target") or None,
+            "face_slap_audience": (item.get("face_slap_audience") or "").strip(),
+            "completion_risk": (item.get("completion_risk") or "").strip(),
+        })
+    return base

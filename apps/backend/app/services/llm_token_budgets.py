@@ -40,6 +40,11 @@ def max_tokens_auto_debrief(_profile: str = "default") -> int:
     return settings.GEMINI_AUTO_DEBRIEF_MAX_TOKENS
 
 
+def max_tokens_pre_write_warning(_profile: str = "gemini") -> int:
+    """写前预警主编审稿 JSON；thinking 模型需预留推理 + 可见 JSON 双份预算。"""
+    return int(settings.GEMINI_PRE_WRITE_WARNING_MAX_TOKENS)
+
+
 def max_tokens_plan_full_structure(_profile: str = "gemini") -> int:
     return settings.GEMINI_PLAN_STRUCTURE_MAX_TOKENS
 

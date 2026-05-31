@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     # 复盘（auto_debrief）max_tokens — JSON 输出包含六类资产子字段，必须足够大
     # 复盘 JSON 通常 <4k token；thinking 模型在过大 max_tokens 时极易拖至数分钟无响应
     GEMINI_AUTO_DEBRIEF_MAX_TOKENS: int = 8192
+    # 写前预警 JSON 体量大；thinking 模型会把 completion 预算耗在推理上，2500 易截断可见正文
+    GEMINI_PRE_WRITE_WARNING_MAX_TOKENS: int = 12288
 
     # ── 记忆时效衰减（RAG 重排序用）─────────────────────────────────────────
     # importance_score 随章节距离指数衰减的系数 α（越大衰减越快）。

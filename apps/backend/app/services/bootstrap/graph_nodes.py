@@ -311,7 +311,7 @@ async def node_emotion_villain(state: BootstrapState, config: dict | None = None
     """Step 9.5 + 9.8 并行：情绪节律图 + 反派行动线。
 
     两步均只依赖卷骨架（Step 9 产物），互不依赖，合并为单节点并行执行节省一次 AI 调用时间。
-    asyncio 事件循环保证 svc.db.commit() 在 await 之间不被抢占，并行写入 project.extra 安全。
+    LLM 并行、落库串行：避免并行 read-modify-write ``project.extra`` 互相覆盖。
     任一步失败不中断另一步，错误收集后统一上报。
     """
     config = _resolve_config(config)
@@ -320,6 +320,7 @@ async def node_emotion_villain(state: BootstrapState, config: dict | None = None
     svc = _make_svc(config)
     ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     from app.models import Project
+    from app.services.bootstrap.narrative_arc_gen import merge_project_extra_fields
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
 
     while True:
@@ -328,11 +329,11 @@ async def node_emotion_villain(state: BootstrapState, config: dict | None = None
         try:
             results = await asyncio.wait_for(
                 asyncio.gather(
-                    svc._gen_emotion_arc(project, ctx),
-                    svc._gen_villain_arc(project, ctx),
+                    svc._gen_emotion_arc(project, ctx, persist=False),
+                    svc._gen_villain_arc(project, ctx, persist=False),
                     return_exceptions=True,
                 ),
-                timeout=240.0,
+                timeout=360.0,
             )
         except asyncio.TimeoutError:
             msg = "情绪节律/反派行动线并行生成超时，请重试"
@@ -360,6 +361,13 @@ async def node_emotion_villain(state: BootstrapState, config: dict | None = None
 
         emotion_arc = results[0] if not isinstance(results[0], BaseException) else []
         villain_arc = results[1] if not isinstance(results[1], BaseException) else []
+        extra_patch: dict = {}
+        if emotion_arc:
+            extra_patch["emotion_arc"] = emotion_arc
+        if villain_arc:
+            extra_patch["villain_arc"] = villain_arc
+        if extra_patch:
+            merge_project_extra_fields(svc, project, extra_patch)
         emit(run_id, "step_done", db, step="emotion_arc", count=len(emotion_arc))
         emit(run_id, "step_done", db, step="villain_arc", count=len(villain_arc))
         return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": ["emotion_arc", "villain_arc"]}

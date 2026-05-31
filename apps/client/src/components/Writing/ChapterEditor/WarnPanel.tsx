@@ -140,13 +140,25 @@ export default function WarnPanel({
           <div
             className={clsx(
               'flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium',
-              warnResult.ok
-                ? 'bg-green-50 border border-green-200 text-green-700'
-                : 'bg-rose-50 border border-rose-200 text-rose-700',
+              warnResult.error
+                ? 'bg-amber-50 border border-amber-200 text-amber-800'
+                : warnResult.ok
+                  ? 'bg-green-50 border border-green-200 text-green-700'
+                  : 'bg-rose-50 border border-rose-200 text-rose-700',
             )}
           >
-            {warnResult.ok ? <ShieldCheck size={14} /> : <ShieldAlert size={14} />}
-            {warnResult.ok ? `未发现高危风险，可以动笔` : `发现 ${warnResult.risk_count} 处风险，建议先修正`}
+            {warnResult.error ? (
+              <ShieldAlert size={14} />
+            ) : warnResult.ok ? (
+              <ShieldCheck size={14} />
+            ) : (
+              <ShieldAlert size={14} />
+            )}
+            {warnResult.error
+              ? '主编审稿未完整解析，请重新检测'
+              : warnResult.ok
+                ? `未发现高危风险，可以动笔`
+                : `发现 ${warnResult.risk_count} 处风险，建议先修正`}
           </div>
 
           {/* ── 主角状态锁定 ── */}
@@ -329,6 +341,21 @@ export default function WarnPanel({
                   <span className="leading-relaxed">{r}</span>
                 </div>
               ))}
+            </div>
+          )}
+
+          {warnResult.error && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900 leading-relaxed space-y-1">
+              <p className="font-medium text-amber-800">主编审稿 JSON 解析失败</p>
+              <p className="opacity-90">{warnResult.error}</p>
+              {warnResult.raw && (
+                <pre className="mt-1 max-h-32 overflow-auto text-[9px] text-amber-800/90 whitespace-pre-wrap break-all bg-amber-100/50 rounded p-1.5">
+                  {warnResult.raw}
+                </pre>
+              )}
+              <p className="text-[10px] text-amber-700">
+                多为模型推理占满输出预算导致 JSON 被截断；请点「重新检测」（已提高 max_tokens 并自动重试）。
+              </p>
             </div>
           )}
         </>

@@ -69,6 +69,10 @@ def try_reuse_pre_write_brief_from_record(
         return None
     raw = rec.result
     warn_result = raw if isinstance(raw, dict) else {}
+    from app.services.ai.pre_write_warn_parse import has_usable_pre_write_body
+
+    if not has_usable_pre_write_body(warn_result):
+        return None
     brief = _build_pre_warn_prompt_block(warn_result).strip()
     if len(brief) < _MIN_REUSED_BRIEF_CHARS:
         return None

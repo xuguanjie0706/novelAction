@@ -161,6 +161,7 @@ def chapter_word_budget_for_phase(
     pacing: str = "normal",
     has_face_slap: bool = False,
     has_emotional_beat: bool = False,
+    is_fanqie: bool = False,
 ) -> int:
     """按叙事阶段+节奏标记计算章节预期字数。
 
@@ -168,15 +169,29 @@ def chapter_word_budget_for_phase(
     climax 章需要展开空间，dark_hour 情感章需要内心戏字数，
     opening fast 章节短促有力不拖沓。
 
+    番茄模式（is_fanqie=True）：基线全面下调至 1500-2100，硬上限 2200。
+    番茄广告插在章间，短章 = 高翻页率 = 高完读率 = 高推荐量。
+
     Args:
         phase: 卷阶段（opening/rising/turning/dark_hour/climax/ending）。
         pacing: 章节节奏（fast/normal/slow/climax）。
         has_face_slap: 本章有打脸场景，需要更多铺垫展开。
         has_emotional_beat: 本章有情感高点，需要内心戏字数。
+        is_fanqie: 番茄模式（pace_type=="fast"）。
 
     Returns:
-        预期字数，范围 [1800, 3500]。
+        预期字数。标准模式 [1800, 3500]，番茄模式 [1400, 2200]。
     """
+    if is_fanqie:
+        base = {
+            "opening": 1600, "rising": 1800, "turning": 1900,
+            "dark_hour": 1900, "climax": 2100, "ending": 1700,
+        }.get(phase, 1800)
+        pacing_mod = {"fast": -100, "slow": 100, "climax": 200, "normal": 0}.get(pacing, 0)
+        slap_mod = 100 if has_face_slap else 0
+        emotion_mod = 100 if has_emotional_beat else 0
+        return min(2200, max(1400, base + pacing_mod + slap_mod + emotion_mod))
+
     base = {
         "opening": 2200,
         "rising": 2300,

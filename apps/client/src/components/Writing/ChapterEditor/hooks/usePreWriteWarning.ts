@@ -14,7 +14,11 @@ import { aiApi } from '../../../../api/client'
 import { useAppStore, modelProfileFromRoute, llmProviderIdFromRoute } from '../../../../store'
 import type { OutlineNode } from '../../../../types'
 import type { PreWriteWarnResult, PreWriteWarnHistoryRow, StorylinePreWarnItem } from '../types'
-import { parsePreWriteWarningHistoryPayload, normalizePreWriteWarnResult } from '../utils'
+import {
+  parsePreWriteWarningHistoryPayload,
+  normalizePreWriteWarnResult,
+  isShellPreWriteWarnResult,
+} from '../utils'
 
 // GenTask 最小接口（避免循环依赖 store 完整类型）
 interface GenTaskLike {
@@ -106,9 +110,8 @@ export function usePreWriteWarning({
       if (ce.detail?.chapterId !== chapterId) return
       const items = (ce.detail?.items ?? []) as StorylinePreWarnItem[]
       setStorylinePreWarns(items)
-      setWarnResult(prev => (prev
-        ? { ...prev, storyline_pre_warns: items }
-        : { ok: true, risk_count: 0, risks: [], reminders: [], storyline_pre_warns: items }))
+      // 勿在 warnResult 为空时写入占位对象，否则会挡住历史记录自动回填完整主编审稿
+      setWarnResult(prev => (prev ? { ...prev, storyline_pre_warns: items } : null))
     }
     window.addEventListener('novelaction:storyline-pre-warn', handler)
     return () => window.removeEventListener('novelaction:storyline-pre-warn', handler)
@@ -146,15 +149,20 @@ export function usePreWriteWarning({
     refreshWarnHistoryFromServer()
   }, [gatedPreWarnDoneForChapter, refreshWarnHistoryFromServer])
 
-  /** 有历史且当前无展示结果时，默认显示最新一条 */
+  /** 有历史且当前无实质内容时，默认显示最新一条（含门控写作仅推送故事线 SSE 的场景） */
   useEffect(() => {
     if (contextTab !== 'warn') return
-    if (warnResult !== null) return
-    const first = warnHistory[0]
+    if (warnResult !== null && !isShellPreWriteWarnResult(warnResult)) return
+    const first =
+      warnHistory.find(h => !isShellPreWriteWarnResult(h.result) && !h.result?.error)
+      ?? warnHistory[0]
     if (!first?.id) return
-    setWarnResult(normalizePreWriteWarnResult(first.result))
+    setWarnResult({
+      ...normalizePreWriteWarnResult(first.result),
+      ...(storylinePreWarns.length > 0 ? { storyline_pre_warns: storylinePreWarns } : {}),
+    })
     setSelectedWarnRecordId(first.id)
-  }, [contextTab, warnHistory, warnResult])
+  }, [contextTab, warnHistory, warnResult, storylinePreWarns])
 
   // ── 操作 ─────────────────────────────────────────────────────────────────
 

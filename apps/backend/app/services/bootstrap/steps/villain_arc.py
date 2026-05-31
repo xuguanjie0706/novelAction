@@ -19,12 +19,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy.orm.attributes import flag_modified
+from app.services.bootstrap.narrative_arc_gen import (
+    call_json_array_with_retry,
+    persist_extra_arc,
+)
 
-from app.services.bootstrap.parse import parse_json
 
-
-async def gen_villain_arc(svc: Any, project, ctx: dict) -> list[dict]:
+async def gen_villain_arc(
+    svc: Any,
+    project,
+    ctx: dict,
+    *,
+    persist: bool = True,
+) -> list[dict]:
     """生成主要反派的卷级独立行动线。
 
     Args:
@@ -95,37 +102,22 @@ async def gen_villain_arc(svc: Any, project, ctx: dict) -> list[dict]:
 5. vol_cost 不能为空——反派也有代价，否则他不可信
 只返回JSON数组，不要解释。"""
 
-    try:
-        raw = await svc._call_with_retry(
-            system, prompt, max_tokens=2048, task="bootstrap.villain_arc"
-        )
-        arc = parse_json(raw)
-        if not isinstance(arc, list):
-            arc = []
-        # 对齐登记表 boss 名
-        if ladder:
-            for i, row in enumerate(arc):
-                if not isinstance(row, dict):
-                    continue
-                vi = row.get("vol_index")
-                try:
-                    idx = int(vi) if vi is not None else i
-                except (TypeError, ValueError):
-                    idx = i
-                entry = next((r for r in ladder if int(r.get("vol_index", -1)) == idx), None)
-                if entry and entry.get("boss_name"):
-                    row["villain_name"] = entry["boss_name"]
-    except Exception:
-        arc = []
+    arc = await call_json_array_with_retry(
+        svc, system, prompt, task="bootstrap.villain_arc",
+    )
+    if ladder:
+        for i, row in enumerate(arc):
+            vi = row.get("vol_index")
+            try:
+                idx = int(vi) if vi is not None else i
+            except (TypeError, ValueError):
+                idx = i
+            entry = next((r for r in ladder if int(r.get("vol_index", -1)) == idx), None)
+            if entry and entry.get("boss_name"):
+                row["villain_name"] = entry["boss_name"]
 
-    # 写库
-    try:
-        base = project.extra if isinstance(project.extra, dict) else {}
-        project.extra = {**base, "villain_arc": arc}
-        flag_modified(project, "extra")
-        svc.db.commit()
-    except Exception:
-        pass
+    if persist:
+        persist_extra_arc(svc, project, "villain_arc", arc)
 
     # ctx 摘要（供章纲 prompt + 一致性扫描引用）
     if arc:

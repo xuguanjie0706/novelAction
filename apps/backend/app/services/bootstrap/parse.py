@@ -38,6 +38,8 @@ def _repair_llm_json_typos(text: str) -> str:
     """修复 LLM 偶发的结构性笔误（在 normalize 之前执行）。"""
     # 数组最后一项字符串误以 "] 收尾（应为 "），常见于 suggestions/issues
     text = re.sub(r'([^\\])"\](\s*\n\s*\],)', r'\1"\2', text)
+    # "key":\n [ 或 "key":\n { — gemini 写前预警常见非法换行
+    text = re.sub(r":\s*\n\s*([\[\{])", r": \1", text)
     return text
 
 

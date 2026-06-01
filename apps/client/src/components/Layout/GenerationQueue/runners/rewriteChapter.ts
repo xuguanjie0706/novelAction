@@ -9,7 +9,11 @@ import { autoCommitGeneratedChapterDebrief } from '../../../../utils/generatedCh
 import { postDraftAssistAccumulatedWithPrewriteRetry } from '../../../../utils/draftPrewriteBlocked'
 import { splitStreamedDraftText, parseChapterIndexMarkdown, fallbackChapterIndexFromRawMarkdown } from '../../../../utils/draftChapterIndexSplit'
 import { useAppStore } from '../../../../store'
-import { draftAssistSideEventHandler, plainTextDraftToHtml } from '../utils/sseHelpers'
+import {
+  draftAssistSideEventHandler,
+  manuscriptSnapshotBeforeRewrite,
+  plainTextDraftToHtml,
+} from '../utils/sseHelpers'
 
 export async function runRewriteChapter(
   task: GenTask,
@@ -69,15 +73,16 @@ export async function runRewriteChapter(
 
     pushProgress({ step: 'draft', label: `✓ 《${chapter.title}》重写完成，正在保存…`, done: true, error: false })
     try {
-      if ((chapter.content || '').trim()) {
+      if ((chapter.content || '').trim() && (chapter.word_count ?? 0) > 0) {
         await chaptersApi.snapshot(projectId, chapterId, 'AI重写正文前自动备份', true)
       }
     } catch {
       /* 快照失败不阻断保存 */
     }
+    const snapshotBefore = manuscriptSnapshotBeforeRewrite(chapter.content || '')
     const updateRes = await chaptersApi.update(projectId, chapterId, {
       content: plainTextDraftToHtml(draftBody.trim()),
-      manuscript_raw_snapshot: accumulated.trim(),
+      ...(snapshotBefore ? { manuscript_raw_snapshot: snapshotBefore } : {}),
     })
     upsertChapter(updateRes.data)
     pushProgress({ step: 'save', label: '✓ 已保存叙事正文（稿末见模型调用记录）', done: true, error: false })

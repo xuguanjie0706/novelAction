@@ -13,6 +13,7 @@ import re
 from typing import List
 
 from app.services.ai.character_resolve import resolve_character_updates_from_states
+from app.services.ai.debrief_character_sync import merge_character_updates_for_debrief
 from app.services.ai.debrief_helpers import (
     _clean_fulfilled_promise_texts,
     _clean_new_reader_promises,
@@ -119,7 +120,8 @@ class DebriefMixin:
 5. 哪些伏笔被埋下、推进或回收，避免后文突然出现无前因的设定（在 chapter_index.foreshadow_updates 中用显式 "code" 字段标注全局伏笔编号，回收/推进条目必须填 code，新埋伏笔 code 可为 null 由系统分配）
 6. 哪些新道具/法宝、功法/技能、势力需要收入系统，或已有资产状态发生变化
 7. 生成章节索引（chapter_index）：完全依据上方叙事正文归纳；须与正文事实一致
-8. 本章是否出现了不在现有角色库中、且值得长期追踪的新角色（new_characters）
+8. **硬规则**：若在 chapter_index.core_events 中写了某既有角色的境界或位置变化，必须在 character_updates 中为该角色填写对应字段（character_id 从上方列表原样复制）；禁止只写进 core_events 而不写 character_updates
+9. 本章是否出现了不在现有角色库中、且值得长期追踪的新角色（new_characters）
    判断标准：正文中有名有姓、有台词或行动、且 arc_scope 为 mini_arc 或以上；纯工具性一次性路人不需要入库
 
 只提取文中明确发生的变化，不要推断或猜测。
@@ -496,6 +498,9 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                 data.get("next_chapter_directives")
             )
             char_updates = resolve_character_updates_from_states(char_updates, character_states)
+            char_updates = merge_character_updates_for_debrief(
+                char_updates, cleaned_index, character_states,
+            )
 
             return {
                 "character_updates": char_updates,

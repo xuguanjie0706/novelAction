@@ -27,7 +27,7 @@ from app.schemas import (
     ChapterVersionTimelineItemOut,
 )
 from app.schemas.character_change_log import CharacterChangeLogOut
-from app.routers.chapter_helpers import count_words
+from app.routers.chapter_helpers import count_words, chapter_has_snapshot_worthy_content
 
 version_router = APIRouter(tags=["chapter-versions"])
 
@@ -82,6 +82,8 @@ def create_snapshot(
     if not chapter:
         raise HTTPException(404, "Chapter not found")
     snap_wc = count_words(chapter.content or "")
+    if snap_wc <= 0:
+        raise HTTPException(400, "章节无正文，无法创建版本快照")
     version = ChapterVersion(
         chapter_id=chapter_id,
         content=chapter.content,

@@ -31,6 +31,7 @@ from app.models import (
     PreWriteWarningRecord,
     Project,
 )
+from app.routers.chapter_helpers import chapter_has_snapshot_worthy_content
 from app.services.ai_service import AIService
 from app.services.rag_retrieval_service import (
     client_snapshot_from_log,
@@ -528,19 +529,26 @@ def _save_chapter_content(db: Session, chapter: Chapter, plain_draft: str, attem
 
     word_count = _count_words_plain(plain_draft)
 
-    # 先快照旧内容（首轮如果有旧内容）
-    if chapter.content and chapter.content.strip():
+    # 版本历史：整次门控只在第 1 轮起笔前备份一次（改写前原稿）。
+    # 第 2/3 轮是内部质检迭代，不应各占一条用户可见的历史记录。
+    if attempt == 1 and chapter_has_snapshot_worthy_content(chapter.content):
         snap = ChapterVersion(
             chapter_id=chapter.id,
             content=chapter.content,
             word_count=_count_words_plain(_plain_text_from_html(chapter.content)),
-            note=f"质量门控第{attempt}轮起笔前自动备份",
+            note="质量门控重写前自动备份",
             is_auto=True,
         )
         db.add(snap)
 
+    prev_plain_snapshot = (
+        _plain_text_from_html(chapter.content).strip()
+        if chapter_has_snapshot_worthy_content(chapter.content)
+        else ""
+    )
+
     chapter.content = html_content
-    chapter.manuscript_raw_snapshot = plain_draft
+    chapter.manuscript_raw_snapshot = prev_plain_snapshot or None
     chapter.word_count = word_count
     chapter.status = "writing"
     chapter.gated_draft_attempts = attempt

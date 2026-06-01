@@ -3,14 +3,14 @@
  *
  * 注意：右侧上下文面板（plan/scene/debrief/chindex/warn）不在此处，交由 ContextSidePanel 负责。
  */
-import React, { useState } from 'react'
+import React from 'react'
 import clsx from 'clsx'
 import { Anchor, ChevronDown, ChevronRight, Circle, Feather, GitCompare, History, ListPlus, Minimize2, RefreshCw, Save, Sparkles, X } from 'lucide-react'
 import { ManuscriptCompareModal } from './ManuscriptCompareModal'
-import type { ManuscriptComparePlain } from './hooks/useChapterManuscript'
+import ChapterVersionComparePicker from './ChapterVersionComparePicker'
 import { EditorContent } from '@tiptap/react'
 import type { Editor } from '@tiptap/react'
-import type { ChapterIndex, Foreshadow } from '../../../types'
+import type { ChapterIndex, ChapterVersion, Foreshadow } from '../../../types'
 import { TOP_TOOL_PRIMARY_BUTTON } from './constants'
 
 export default function EditorMainArea({
@@ -19,8 +19,8 @@ export default function EditorMainArea({
   chapterGenBusy,
 
   chapterTitle,
-  hasManuscriptRawSnapshot,
-  comparePlainTexts,
+  showCompareEntry,
+  versionCompare,
   editor,
 
   showSelectionBar,
@@ -55,8 +55,31 @@ export default function EditorMainArea({
   chapterGenBusy: boolean
 
   chapterTitle: string
-  hasManuscriptRawSnapshot: boolean
-  comparePlainTexts: ManuscriptComparePlain | null
+  showCompareEntry: boolean
+  versionCompare: {
+    pickerOpen: boolean
+    setPickerOpen: (v: boolean) => void
+    compareOpen: boolean
+    setCompareOpen: (v: boolean) => void
+    versionsLoading: boolean
+    versionsList: ChapterVersion[]
+    baseId: string
+    setBaseId: (id: string) => void
+    assignBase: (id: string) => void
+    targetId: string
+    setTargetId: (id: string) => void
+    assignTarget: (id: string) => void
+    beforePlain: string
+    afterPlain: string
+    beforeLabel: string
+    afterLabel: string
+    runningCompare: boolean
+    openComparePicker: () => void | Promise<void>
+    runCompare: () => void | Promise<void>
+    canCompare: boolean
+    formatVersionLabel: (v: ChapterVersion) => string
+    currentWordCount: number | null
+  }
   editor: Editor | null
 
   showSelectionBar: boolean
@@ -87,21 +110,20 @@ export default function EditorMainArea({
   setBottomPanelOpen: React.Dispatch<React.SetStateAction<boolean>>
   currentChIndex: ChapterIndex | null
 }) {
-  const [compareOpen, setCompareOpen] = useState(false)
-  const showCompare = hasManuscriptRawSnapshot && comparePlainTexts != null
+  const vc = versionCompare
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
       {/* 正文编辑器 */}
       <div className={clsx('flex-1 overflow-auto', focusMode && 'flex justify-center')}>
         <div className={clsx(focusMode && 'w-full max-w-2xl', 'relative w-full min-h-[50vh]')}>
-          {showCompare && (
+          {showCompareEntry && (
             <div className="sticky top-2 z-30 flex justify-end pointer-events-none px-4 sm:px-10 pt-1">
               <button
                 type="button"
-                onClick={() => setCompareOpen(true)}
+                onClick={() => void vc.openComparePicker()}
                 className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-amber-200/90 bg-novel-card/95 backdrop-blur-sm px-3.5 py-1.5 text-[11px] font-medium text-amber-900 shadow-sm hover:bg-amber-50/90 transition-novel"
-                title="查看 AI 重写前后的叙事差异"
+                title="从版本历史选择两版正文进行对照"
               >
                 <GitCompare size={14} className="text-amber-600 shrink-0" />
                 对比
@@ -113,15 +135,31 @@ export default function EditorMainArea({
         </div>
       </div>
 
-      {showCompare && comparePlainTexts && (
-        <ManuscriptCompareModal
-          open={compareOpen}
-          chapterTitle={chapterTitle}
-          beforePlain={comparePlainTexts.before}
-          afterPlain={comparePlainTexts.after}
-          onClose={() => setCompareOpen(false)}
-        />
-      )}
+      <ChapterVersionComparePicker
+        open={vc.pickerOpen}
+        onClose={() => vc.setPickerOpen(false)}
+        versionsLoading={vc.versionsLoading}
+        versionsList={vc.versionsList}
+        baseId={vc.baseId}
+        targetId={vc.targetId}
+        onAssignBase={vc.assignBase}
+        onAssignTarget={vc.assignTarget}
+        onRunCompare={vc.runCompare}
+        runningCompare={vc.runningCompare}
+        canCompare={vc.canCompare}
+        formatVersionLabel={vc.formatVersionLabel}
+        currentWordCount={vc.currentWordCount}
+      />
+
+      <ManuscriptCompareModal
+        open={vc.compareOpen}
+        chapterTitle={chapterTitle}
+        beforePlain={vc.beforePlain}
+        afterPlain={vc.afterPlain}
+        beforeLabel={vc.beforeLabel}
+        afterLabel={vc.afterLabel}
+        onClose={() => vc.setCompareOpen(false)}
+      />
 
       {/* 选中文字快捷操作栏（专注模式下隐藏）*/}
       {showSelectionBar && !focusMode && (

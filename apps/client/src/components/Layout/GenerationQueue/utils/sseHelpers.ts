@@ -4,7 +4,7 @@
 import type { GenProgressItem } from '../../../../types'
 import { authQueryString } from '../../../../api/authFetch'
 import { formatRagContextProgressLabel } from '../../../../utils/draftAssistSse'
-import { htmlToPlainForSplit } from '../../../../utils/draftChapterIndexSplit'
+import { htmlToPlainForSplit, splitStreamedDraftText } from '../../../../utils/draftChapterIndexSplit'
 import { createStorylinePreWarnCollector } from '../../../../utils/storylinePreWarnEvents'
 
 /** 续写：旧叙事 plain + 本次流式全文，便于与入库正文对照 */
@@ -70,6 +70,14 @@ export function draftAssistSideEventHandler(
       })
     }
   }
+}
+
+/** 重写前将章节 HTML 转为「改写前快照」纯文本（供 manuscript_raw_snapshot 对照） */
+export function manuscriptSnapshotBeforeRewrite(chapterContentHtml: string): string | null {
+  const prev = htmlToPlainForSplit(chapterContentHtml || '').trim()
+  if (!prev) return null
+  const { body } = splitStreamedDraftText(prev)
+  return (body || prev).trim() || null
 }
 
 export function manuscriptRawSnapshotForContinue(chapterContentHtml: string, accumulatedPlain: string): string {

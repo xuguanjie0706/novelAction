@@ -10,7 +10,8 @@ import type { Chapter } from '../../../../types'
 
 interface UseChapterTiptapEditorOptions {
   chapter: Chapter
-  saveTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | undefined>
+  /** 与 autosave 共用；外部写入正文时须清空，避免旧稿覆盖新稿 */
+  saveTimerRef?: React.MutableRefObject<ReturnType<typeof setTimeout> | undefined>
   onAutoSave: (html: string) => void | Promise<void>
   onWordCountChange: (current: number) => void
 }
@@ -21,6 +22,7 @@ export function useChapterTiptapEditor({
   onAutoSave,
   onWordCountChange,
 }: UseChapterTiptapEditorOptions) {
+  const chapterContentRev = `${chapter.id}:${chapter.updated_at ?? ''}:${chapter.content ?? ''}`
   const [selectionText, setSelectionText] = useState('')
   const [showSelectionBar, setShowSelectionBar] = useState(false)
   const [editorHtmlTick, setEditorHtmlTick] = useState(0)
@@ -38,8 +40,8 @@ export function useChapterTiptapEditor({
       },
     },
     onUpdate: ({ editor: ed }) => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-      saveTimerRef.current = setTimeout(() => void onAutoSave(ed.getHTML()), 2000)
+      if (saveTimerRef?.current) clearTimeout(saveTimerRef.current)
+      if (saveTimerRef) saveTimerRef.current = setTimeout(() => void onAutoSave(ed.getHTML()), 2000)
       const current = ed.storage.characterCount?.characters() ?? 0
       onWordCountChange(current)
       setEditorHtmlTick(n => n + 1)
@@ -63,8 +65,14 @@ export function useChapterTiptapEditor({
 
   useEffect(() => {
     if (!editor) return
-    if (chapter.content !== editor.getHTML()) editor.commands.setContent(chapter.content)
-  }, [chapter.id, chapter.content, editor])
+    const incoming = chapter.content ?? ''
+    if (incoming === editor.getHTML()) return
+    if (saveTimerRef?.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = undefined
+    }
+    editor.commands.setContent(incoming, false)
+  }, [chapterContentRev, editor, saveTimerRef])
 
   const resetSelectionUi = () => {
     setSelectionText('')

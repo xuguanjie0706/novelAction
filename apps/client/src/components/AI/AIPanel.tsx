@@ -30,6 +30,9 @@ const DIMENSION_LABELS: Record<string, string> = {
   emotional_resonance: '情感共鸣',
   subscribe_intent: '追读意愿',
   storyline_progress: '故事线推进',
+  storyline_beat_match: '节拍兑现',
+  storyline_tension_fit: '张力曲线',
+  storyline_screen_balance: '戏份均衡',
   realm_check: '境界体系',
 }
 

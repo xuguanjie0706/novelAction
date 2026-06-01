@@ -27,6 +27,16 @@ from app.models import (
 )
 
 
+def chapter_content_word_count(content: str | None) -> int:
+    """章节 HTML 正文的有效字数（空段落不计）。"""
+    return count_words(content or "")
+
+
+def chapter_has_snapshot_worthy_content(content: str | None) -> bool:
+    """是否值得创建版本快照（避免 `<p></p>` 空备份覆盖真实历史）。"""
+    return chapter_content_word_count(content) > 0
+
+
 def resolve_quality_debts_detaching_chapter(db: Session, project_id: str, chapter_id: str) -> None:
     """不硬删质量债务：待处理标为已修复，并解除 chapter_id 以便删除章节行。"""
     db.query(QualityDebt).filter(

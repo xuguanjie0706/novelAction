@@ -84,7 +84,7 @@ export async function runContinueChapters(
       pushProgress({ step: phaseStep('save'), label: `正在保存叙事正文 ${stepLabel}…`, done: false, error: false })
 
       try {
-        if ((chapter.content || '').trim()) {
+        if ((chapter.content || '').trim() && (chapter.word_count ?? 0) > 0) {
           await chaptersApi.snapshot(projectId, chapterId, 'AI续写追加前自动备份', true)
         }
       } catch {

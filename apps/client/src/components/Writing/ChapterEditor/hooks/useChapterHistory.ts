@@ -6,6 +6,7 @@ import toast from 'react-hot-toast'
 import type { Editor } from '@tiptap/react'
 import { chaptersApi } from '../../../../api/client'
 import type { Chapter, ChapterVersion, ChapterVersionDetail } from '../../../../types'
+import { filterVersionsForUserCompare } from '../versionCompareFilter'
 
 interface UseChapterHistoryOptions {
   projectId: string
@@ -38,7 +39,7 @@ export function useChapterHistory({
     setHistoryPreview(null)
     try {
       const r = await chaptersApi.listVersions(projectId, chapter.id)
-      setVersionsList(r.data as ChapterVersion[])
+      setVersionsList(filterVersionsForUserCompare(r.data as ChapterVersion[]))
     } catch {
       setVersionsList([])
       toast.error('无法加载版本列表')

@@ -21,7 +21,7 @@ import { useChapterSideData } from './hooks/useChapterSideData'
 import { useChapterContextUi } from './hooks/useChapterContextUi'
 import { useWritingSession } from './hooks/useWritingSession'
 import { useChapterTiptapEditor } from './hooks/useChapterTiptapEditor'
-import { useChapterManuscript } from './hooks/useChapterManuscript'
+import { useChapterVersionCompare } from './hooks/useChapterVersionCompare'
 import { useChapterHistory } from './hooks/useChapterHistory'
 import { useChapterDraftQueue } from './hooks/useChapterDraftQueue'
 import { useQueueDebriefHydrate } from './hooks/useQueueDebriefHydrate'
@@ -62,7 +62,19 @@ export default function ChapterEditor({
   const sessionLive = useWritingSession(chapter, tiptap.editor)
   onWordCountChangeRef.current = sessionLive.onEditorWordCountChange
 
-  const manuscript = useChapterManuscript(chapter, tiptap.editor, tiptap.editorHtmlTick)
+  const versionCompare = useChapterVersionCompare({
+    projectId,
+    chapter,
+    editor: tiptap.editor,
+    upsertChapter,
+    saveTimerRef,
+    syncEditorContent: html => {
+      if (!tiptap.editor) return
+      if (html !== tiptap.editor.getHTML()) {
+        tiptap.editor.commands.setContent(html, false)
+      }
+    },
+  })
 
   const autosave = useChapterAutosave({
     projectId,
@@ -168,6 +180,7 @@ export default function ChapterEditor({
     debrief.resetDebriefState()
     queueHydrate.resetQueueHydrateRefs()
     history.resetHistoryUi()
+    versionCompare.resetCompareUi()
     warn.setWarnResult(null)
     warn.setWarnHistory([])
     warn.setSelectedWarnRecordId(null)
@@ -235,8 +248,8 @@ export default function ChapterEditor({
           focusMode={ctx.focusMode}
           chapterGenBusy={draft.chapterGenBusy}
           chapterTitle={chapter.title || `第${chapter.sort_order + 1}章`}
-          hasManuscriptRawSnapshot={manuscript.hasManuscriptRawSnapshot}
-          comparePlainTexts={manuscript.comparePlainTexts}
+          showCompareEntry={versionCompare.showCompareEntry}
+          versionCompare={versionCompare}
           editor={tiptap.editor}
           showSelectionBar={tiptap.showSelectionBar}
           selectionText={tiptap.selectionText}

@@ -226,7 +226,10 @@ export default function CluesPage() {
       let manuscript_raw_snapshot: string | undefined
       if (replaceExisting) {
         nextContent = html
-        manuscript_raw_snapshot = accumulated.trim()
+        const prevPlain = htmlToPlainForSplit(chapter.content || '').trim()
+        manuscript_raw_snapshot = prevPlain
+          ? (splitStreamedDraftText(prevPlain).body.trim() || prevPlain)
+          : undefined
       } else {
         nextContent = `${chapter.content || ''}${chapter.content ? '\n' : ''}${html}`
         manuscript_raw_snapshot = manuscriptRawSnapshotForContinue(chapter.content || '', accumulated.trim())

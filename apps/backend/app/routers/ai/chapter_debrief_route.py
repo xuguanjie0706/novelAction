@@ -39,7 +39,8 @@ from app.routers.ai.debrief_chapter_core import (
     create_undo_snapshot_if_new,
 )
 from app.routers.ai.foreshadow import sync_chapter_index_foreshadows
-from app.routers.ai.schemas import ChapterDebriefRequest
+from app.routers.ai.schemas import ChapterDebriefRequest, CharacterUpdate
+from app.services.ai.debrief_character_sync import merge_character_updates_for_debrief
 from app.routers.ai.text_utils import chapter_debrief_content_hash, plain_text, truncate
 from app.routers.outline.helpers.realm_timeline import _build_realm_rank_map
 from app.services.ai_service import AIService
@@ -176,9 +177,33 @@ def chapter_debrief(
         db.query(PowerSystem).filter(PowerSystem.project_id == project_id).all()
     )
 
+    character_states = [
+        {
+            "id": str(c.id),
+            "name": c.name,
+            "current_realm": c.current_realm or "",
+            "current_location": c.current_location or "",
+            "current_status": c.current_status or "alive",
+        }
+        for c in _project_chars
+    ]
+    chapter_index_dict = (
+        req.chapter_index.model_dump(exclude_none=True)
+        if req.chapter_index is not None
+        else None
+    )
+    merged_char_dicts = merge_character_updates_for_debrief(
+        [u.model_dump(exclude_none=True) for u in req.character_updates],
+        chapter_index_dict,
+        character_states,
+    )
+    character_updates_to_apply = [
+        CharacterUpdate(**row) for row in merged_char_dicts
+    ]
+
     # ── 各业务块并行调度 ────────────────────────────────────────────
     char_result = apply_character_updates(
-        db, project_id, req.character_updates,
+        db, project_id, character_updates_to_apply,
         req.chapter_id, chapter, name_to_rank, _project_chars,
     )
     updated_chars: List[str] = char_result["updated_chars"]

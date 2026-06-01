@@ -11,6 +11,8 @@ export interface ManuscriptCompareModalProps {
   chapterTitle: string
   beforePlain: string
   afterPlain: string
+  beforeLabel?: string
+  afterLabel?: string
   onClose: () => void
 }
 
@@ -19,6 +21,8 @@ export function ManuscriptCompareModal({
   chapterTitle,
   beforePlain,
   afterPlain,
+  beforeLabel = '基准版本',
+  afterLabel = '对照版本',
   onClose,
 }: ManuscriptCompareModalProps) {
   const rows = useMemo(() => alignChapterLines(beforePlain, afterPlain), [beforePlain, afterPlain])
@@ -54,7 +58,7 @@ export function ManuscriptCompareModal({
               </h2>
             </div>
             <p className="text-[11px] text-novel-ink-muted mt-1 leading-relaxed">
-              左侧为 AI 重写前的叙事稿，右侧为当前入库正文；稿末索引块已隐藏，便于阅读差异。
+              左侧：{beforeLabel} · 右侧：{afterLabel}。稿末索引块已隐藏，便于阅读差异。
             </p>
           </div>
           <button
@@ -69,12 +73,12 @@ export function ManuscriptCompareModal({
 
         <div className="grid grid-cols-2 gap-0 border-b border-novel-border bg-stone-50/80 text-[11px] shrink-0">
           <div className="px-4 py-2 border-r border-novel-border">
-            <span className="font-semibold text-rose-800">改写前</span>
-            <span className="text-novel-ink-faint ml-2">模型返回快照</span>
+            <span className="font-semibold text-rose-800">左侧</span>
+            <span className="text-novel-ink-faint ml-2 truncate">{beforeLabel}</span>
           </div>
           <div className="px-4 py-2">
-            <span className="font-semibold text-emerald-800">改写后</span>
-            <span className="text-novel-ink-faint ml-2">当前章节</span>
+            <span className="font-semibold text-emerald-800">右侧</span>
+            <span className="text-novel-ink-faint ml-2 truncate">{afterLabel}</span>
           </div>
         </div>
 

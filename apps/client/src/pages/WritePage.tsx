@@ -13,6 +13,7 @@ import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import type { Chapter, OutlineNode } from '../types'
 import { ChapterTreeLeadingIndicator } from '../components/Writing/FanqieSyncSlot'
+import { buildChapterByNodeId, resolveActiveChapterId } from './writeChapterUtils'
 
 function findNode(tree: OutlineNode[], id: string): OutlineNode | undefined {
   for (const n of tree) {
@@ -126,11 +127,22 @@ export default function WritePage() {
     if (exists) setActiveChapterId(cid)
   }, [searchParams, loadState, chapters, setActiveChapterId])
 
-  const chapterByNodeId = useMemo(() => {
-    const m = new Map<string, Chapter>()
-    for (const ch of chapters) if (ch.outline_node_id) m.set(ch.outline_node_id, ch)
-    return m
-  }, [chapters])
+  const chapterByNodeId = useMemo(() => buildChapterByNodeId(chapters), [chapters])
+
+  /** 同大纲重复章：若当前选中空壳，自动切到有正文的那条 */
+  useEffect(() => {
+    if (loadState !== 'ready') return
+    const resolved = resolveActiveChapterId(chapters, activeChapterId)
+    if (resolved && resolved !== activeChapterId) setActiveChapterId(resolved)
+  }, [chapters, activeChapterId, loadState, setActiveChapterId])
+
+  /** 切换章节时拉取服务器最新正文，避免 store/编辑器滞后 */
+  useEffect(() => {
+    if (!projectId || !activeChapterId || loadState !== 'ready') return
+    chaptersApi.get(projectId, activeChapterId)
+      .then(r => upsertChapter(r.data))
+      .catch(() => { /* 静默；列表数据仍可编辑 */ })
+  }, [projectId, activeChapterId, loadState, upsertChapter])
 
   const freeChapters = useMemo(() => chapters.filter(ch => !ch.outline_node_id), [chapters])
   const allPlans = useMemo(() => collectChapterPlans(outlineTree), [outlineTree])

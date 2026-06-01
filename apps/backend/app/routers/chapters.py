@@ -42,6 +42,21 @@ def list_chapters(project_id: str, db: Session = Depends(get_db)):
 @router.post("/", response_model=ChapterOut, status_code=201)
 def create_chapter(project_id: str, payload: ChapterCreate, db: Session = Depends(get_db)):
     normalize_chapter_sort_orders(db, project_id)
+
+    if payload.outline_node_id:
+        existing = (
+            db.query(Chapter)
+            .filter(
+                Chapter.project_id == project_id,
+                Chapter.outline_node_id == payload.outline_node_id,
+                Chapter.deleted_at.is_(None),
+            )
+            .order_by(Chapter.word_count.desc(), Chapter.updated_at.desc())
+            .first()
+        )
+        if existing:
+            return existing
+
     last = db.query(Chapter).filter(
         Chapter.project_id == project_id, Chapter.deleted_at.is_(None)
     ).order_by(Chapter.sort_order.desc()).first()

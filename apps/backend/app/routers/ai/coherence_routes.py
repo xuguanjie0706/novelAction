@@ -351,6 +351,7 @@ async def chapter_coherence_apply_preview(
                 "unchanged": unchanged or not revised,
                 "change_note": row.get("change_note") or "",
                 "revised_content": "" if unchanged or not revised else revised,
+                "previous_plain": plain_text(orig),
                 "previous_plain_preview": plain_text(orig)[:320],
                 "revised_plain_preview": plain_text(revised if revised else orig)[:320],
             }

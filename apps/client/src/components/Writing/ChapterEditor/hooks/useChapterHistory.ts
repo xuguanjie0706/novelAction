@@ -12,7 +12,6 @@ interface UseChapterHistoryOptions {
   chapter: Chapter
   editor: Editor | null
   upsertChapter: (ch: Chapter) => void
-  setManuscriptView: (v: 'source' | 'prose') => void
 }
 
 export function useChapterHistory({
@@ -20,7 +19,6 @@ export function useChapterHistory({
   chapter,
   editor,
   upsertChapter,
-  setManuscriptView,
 }: UseChapterHistoryOptions) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [versionsList, setVersionsList] = useState<ChapterVersion[]>([])
@@ -75,7 +73,6 @@ export function useChapterHistory({
       })
       upsertChapter(res.data)
       editor.commands.setContent(historyPreview.content)
-      setManuscriptView('source')
       toast.success('已恢复为所选历史版本')
       setHistoryOpen(false)
       setHistoryPreview(null)

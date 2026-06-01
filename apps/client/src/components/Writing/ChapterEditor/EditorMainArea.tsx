@@ -3,9 +3,11 @@
  *
  * 注意：右侧上下文面板（plan/scene/debrief/chindex/warn）不在此处，交由 ContextSidePanel 负责。
  */
-import React from 'react'
+import React, { useState } from 'react'
 import clsx from 'clsx'
-import { Anchor, ChevronDown, ChevronRight, Circle, Feather, History, ListPlus, Minimize2, RefreshCw, Save, Sparkles, X } from 'lucide-react'
+import { Anchor, ChevronDown, ChevronRight, Circle, Feather, GitCompare, History, ListPlus, Minimize2, RefreshCw, Save, Sparkles, X } from 'lucide-react'
+import { ManuscriptCompareModal } from './ManuscriptCompareModal'
+import type { ManuscriptComparePlain } from './hooks/useChapterManuscript'
 import { EditorContent } from '@tiptap/react'
 import type { Editor } from '@tiptap/react'
 import type { ChapterIndex, Foreshadow } from '../../../types'
@@ -16,11 +18,9 @@ export default function EditorMainArea({
 
   chapterGenBusy,
 
-  manuscriptView,
-  setManuscriptView,
+  chapterTitle,
   hasManuscriptRawSnapshot,
-  prosePreviewHtml,
-  rawSnapshotPreviewHtml,
+  comparePlainTexts,
   editor,
 
   showSelectionBar,
@@ -54,11 +54,9 @@ export default function EditorMainArea({
   focusMode: boolean
   chapterGenBusy: boolean
 
-  manuscriptView: 'source' | 'prose'
-  setManuscriptView: React.Dispatch<React.SetStateAction<'source' | 'prose'>>
+  chapterTitle: string
   hasManuscriptRawSnapshot: boolean
-  prosePreviewHtml: string
-  rawSnapshotPreviewHtml: string
+  comparePlainTexts: ManuscriptComparePlain | null
   editor: Editor | null
 
   showSelectionBar: boolean
@@ -89,92 +87,41 @@ export default function EditorMainArea({
   setBottomPanelOpen: React.Dispatch<React.SetStateAction<boolean>>
   currentChIndex: ChapterIndex | null
 }) {
-  const manuscriptViewToggle = (
-    <div
-      className="flex items-center rounded-full border border-novel-border overflow-hidden text-[11px] shadow-sm bg-novel-card/95 backdrop-blur-sm"
-      title={
-        hasManuscriptRawSnapshot
-          ? '正文：编辑入库叙事；原文：模型最近一次返回全文（含稿末索引），仅对照'
-          : '无 AI 快照时：原文可编辑；正文为隐藏稿末索引块的只读预览'
-      }
-    >
-      <button
-        type="button"
-        onClick={() => setManuscriptView('source')}
-        className={clsx(
-          'px-3 py-1.5 font-medium transition-novel',
-          manuscriptView === 'source' ? 'bg-novel-panel text-novel-accent' : 'text-novel-ink-muted hover:text-novel-ink',
-        )}
-      >
-        原文
-      </button>
-      <button
-        type="button"
-        onClick={() => setManuscriptView('prose')}
-        className={clsx(
-          'px-3 py-1.5 font-medium border-l border-novel-border transition-novel',
-          manuscriptView === 'prose' ? 'bg-novel-panel text-novel-accent' : 'text-novel-ink-muted hover:text-novel-ink',
-        )}
-      >
-        正文
-      </button>
-    </div>
-  )
+  const [compareOpen, setCompareOpen] = useState(false)
+  const showCompare = hasManuscriptRawSnapshot && comparePlainTexts != null
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
       {/* 正文编辑器 */}
       <div className={clsx('flex-1 overflow-auto', focusMode && 'flex justify-center')}>
         <div className={clsx(focusMode && 'w-full max-w-2xl', 'relative w-full min-h-[50vh]')}>
-          <div className="sticky top-2 z-30 flex justify-end pointer-events-none px-4 sm:px-10 pt-1">
-            <div className="pointer-events-auto">{manuscriptViewToggle}</div>
-          </div>
-
-          {manuscriptView === 'prose' && !focusMode && (
-            <div className="rounded-novel border border-dashed border-amber-200/80 bg-amber-50/40 px-3 py-2 mx-4 sm:mx-10 mb-2 text-[11px] text-amber-900/90">
-              {hasManuscriptRawSnapshot ? (
-                <>
-                  正文视图：编辑入库叙事。切换「原文」可对照模型最近一次返回全文（含{' '}
-                  <code className="text-[10px] px-1">### ch_…</code> 稿末索引）。
-                </>
-              ) : (
-                <>
-                  正文视图：只读预览叙事部分（稿末 <code className="text-[10px] px-1">### ch_…</code>{' '}
-                  索引块已隐藏）。编辑请切回「原文」。
-                </>
-              )}
+          {showCompare && (
+            <div className="sticky top-2 z-30 flex justify-end pointer-events-none px-4 sm:px-10 pt-1">
+              <button
+                type="button"
+                onClick={() => setCompareOpen(true)}
+                className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-amber-200/90 bg-novel-card/95 backdrop-blur-sm px-3.5 py-1.5 text-[11px] font-medium text-amber-900 shadow-sm hover:bg-amber-50/90 transition-novel"
+                title="查看 AI 重写前后的叙事差异"
+              >
+                <GitCompare size={14} className="text-amber-600 shrink-0" />
+                对比
+              </button>
             </div>
           )}
 
-          {manuscriptView === 'prose' && focusMode && (
-            <p className="text-[10px] text-center text-novel-ink-faint px-4 mb-2">
-              {hasManuscriptRawSnapshot ? '叙事编辑 · 切「原文」对照模型全文' : '正文预览 · 切「原文」可编辑'}
-            </p>
-          )}
-
-          {manuscriptView === 'prose' ? (
-            hasManuscriptRawSnapshot ? (
-              <EditorContent editor={editor} className="h-full" />
-            ) : (
-              <div
-                className="prose prose-lg max-w-readable w-full px-6 sm:px-10 pb-8 pt-2 mx-auto min-h-[55vh]"
-                dangerouslySetInnerHTML={{ __html: prosePreviewHtml }}
-              />
-            )
-          ) : null}
-
-          <div className={clsx(manuscriptView === 'prose' && 'hidden')}>
-            {hasManuscriptRawSnapshot ? (
-              <div
-                className="prose prose-lg max-w-readable w-full px-6 sm:px-10 pb-8 pt-2 mx-auto min-h-[55vh]"
-                dangerouslySetInnerHTML={{ __html: rawSnapshotPreviewHtml }}
-              />
-            ) : (
-              <EditorContent editor={editor} className="h-full" />
-            )}
-          </div>
+          <EditorContent editor={editor} className="h-full" />
         </div>
       </div>
+
+      {showCompare && comparePlainTexts && (
+        <ManuscriptCompareModal
+          open={compareOpen}
+          chapterTitle={chapterTitle}
+          beforePlain={comparePlainTexts.before}
+          afterPlain={comparePlainTexts.after}
+          onClose={() => setCompareOpen(false)}
+        />
+      )}
 
       {/* 选中文字快捷操作栏（专注模式下隐藏）*/}
       {showSelectionBar && !focusMode && (

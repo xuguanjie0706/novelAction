@@ -8,6 +8,10 @@ export type ChapterSnapshotDiffViewProps = {
   rightMeta: string
   leftPlain: string
   rightPlain: string
+  /** 左栏标题，默认「改正前（本快照）」 */
+  leftHeading?: string
+  /** 右栏标题，默认「改正后（当前正文）」 */
+  rightHeading?: string
 }
 
 export type AlignedDiffRow = {
@@ -88,6 +92,8 @@ export function ChapterSnapshotDiffView({
   rightMeta,
   leftPlain,
   rightPlain,
+  leftHeading = '改正前（本快照）',
+  rightHeading = '改正后（当前正文）',
 }: ChapterSnapshotDiffViewProps) {
   const rows = useMemo(() => alignChapterLines(leftPlain, rightPlain), [leftPlain, rightPlain])
   const displayRows = useMemo(
@@ -103,7 +109,7 @@ export function ChapterSnapshotDiffView({
       <Row gutter={16} style={{ marginBottom: 12 }}>
         <Col span={12}>
           <Typography.Text strong style={{ display: 'block' }}>
-            改正前（本快照） · {chapterTitle}
+            {leftHeading} · {chapterTitle}
           </Typography.Text>
           <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 4 }}>
             {leftMeta}
@@ -111,7 +117,7 @@ export function ChapterSnapshotDiffView({
         </Col>
         <Col span={12}>
           <Typography.Text strong style={{ display: 'block' }}>
-            改正后（当前正文） · {chapterTitle}
+            {rightHeading} · {chapterTitle}
           </Typography.Text>
           <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 4 }}>
             {rightMeta}

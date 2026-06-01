@@ -19,7 +19,7 @@ export function BodySnapshotsTab({
   return (
     <Card>
       <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-        此处按时间列出本书各章的「修订前快照」（连贯性评测在点「写入数据库」时会自动各落一条）。点「改正前后对照」会并排展示：左侧为该快照保存时的正文（改正前），右侧为当前章节在数据库中的正文（改正后）；若尚未写入或正文未变，两侧可能相同。
+        此处按时间列出本书各章的「修订前快照」（连贯性评测在点「写入数据库」时会自动各落一条）。点「对比」可查看改写前后全文差异；若尚未写入或正文未变，两侧可能相同。
       </Typography.Paragraph>
       <Table<ChapterVersionTimelineItem>
         rowKey="id"
@@ -64,7 +64,7 @@ export function BodySnapshotsTab({
             render: (_, row) => (
               <Space size="small">
                 <Button type="link" size="small" onClick={() => void onOpenSnapshotDiff(row)}>
-                  改正前后对照
+                  对比
                 </Button>
                 <Button type="link" size="small" onClick={() => onGoToEditor(row.chapter_id)}>
                   去编辑

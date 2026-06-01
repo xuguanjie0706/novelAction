@@ -162,6 +162,8 @@ export interface CoherenceApplyRevisionPreview {
   unchanged: boolean
   change_note: string
   revised_content: string
+  /** 改写前全文（纯文本），供「对比」弹窗 */
+  previous_plain?: string
   previous_plain_preview: string
   revised_plain_preview: string
 }

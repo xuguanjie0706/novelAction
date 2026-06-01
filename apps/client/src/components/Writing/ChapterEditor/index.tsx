@@ -100,7 +100,6 @@ export default function ChapterEditor({
     chapter,
     editor: tiptap.editor,
     upsertChapter,
-    setManuscriptView: manuscript.setManuscriptView,
   })
 
   const draft = useChapterDraftQueue({
@@ -168,7 +167,6 @@ export default function ChapterEditor({
     tiptap.resetSelectionUi()
     debrief.resetDebriefState()
     queueHydrate.resetQueueHydrateRefs()
-    manuscript.resetManuscriptViewForChapter()
     history.resetHistoryUi()
     warn.setWarnResult(null)
     warn.setWarnHistory([])
@@ -236,11 +234,9 @@ export default function ChapterEditor({
         <EditorMainArea
           focusMode={ctx.focusMode}
           chapterGenBusy={draft.chapterGenBusy}
-          manuscriptView={manuscript.manuscriptView}
-          setManuscriptView={manuscript.setManuscriptView}
+          chapterTitle={chapter.title || `第${chapter.sort_order + 1}章`}
           hasManuscriptRawSnapshot={manuscript.hasManuscriptRawSnapshot}
-          prosePreviewHtml={manuscript.prosePreviewHtml}
-          rawSnapshotPreviewHtml={manuscript.rawSnapshotPreviewHtml}
+          comparePlainTexts={manuscript.comparePlainTexts}
           editor={tiptap.editor}
           showSelectionBar={tiptap.showSelectionBar}
           selectionText={tiptap.selectionText}

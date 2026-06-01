@@ -68,6 +68,43 @@ export interface AutoDebriefResult {
   }>
   fulfilled_promise_texts?: string[]
   fulfilled_promise_ids?: string[]
+  /** 下一章 patch 指令（节奏/POV/戏份等），由 chapter-debrief 写入 OutlineNode.extra.directives_from_prev */
+  next_chapter_directives?: Array<{
+    outline_node_id?: string
+    patch?: Record<string, unknown>
+    reason?: string
+  }>
+  /** 人物语风指纹增量，由 chapter-debrief 合并进 Character.speech_kit */
+  speech_kit_updates?: Array<{
+    character_id?: string
+    character_name?: string
+    new_signature_words?: string[]
+    new_sample_dialogues?: string[]
+    evolution_note?: string
+  }>
+}
+
+/** 过滤可提交的下一章 patch 指令（手动 Tab / 队列自动复盘共用） */
+export function filterNextChapterDirectivesForCommit(
+  items?: AutoDebriefResult['next_chapter_directives'],
+) {
+  return (items || []).filter(
+    (d) => d.patch && Object.keys(d.patch).length > 0,
+  )
+}
+
+/** 过滤可提交的语风指纹增量（手动 Tab / 队列自动复盘共用） */
+export function filterSpeechKitUpdatesForCommit(
+  items?: AutoDebriefResult['speech_kit_updates'],
+) {
+  return (items || []).filter(
+    (sku) => sku.character_id?.trim()
+      && (
+        (sku.new_signature_words?.length ?? 0) > 0
+        || (sku.new_sample_dialogues?.length ?? 0) > 0
+        || sku.evolution_note?.trim()
+      ),
+  )
 }
 
 export interface GeneratedChapterDebriefStats {
@@ -80,6 +117,10 @@ export interface GeneratedChapterDebriefStats {
   chapterIndexError?: string
   promisesCreated?: number
   promisesFulfilled?: number
+  /** 写入下一章 OutlineNode 的 patch 指令条数 */
+  directivesApplied?: number
+  /** 更新语风指纹的人物数 */
+  speechKitUpdatedCount?: number
   /** 提交 chapter-debrief 前保留的 AI 提取结果（服务端提交后会删缓存，供写作页复盘 Tab 恢复黄标） */
   debriefPreview?: AutoDebriefResult
 }
@@ -162,6 +203,8 @@ export async function autoCommitGeneratedChapterDebrief(
     new_reader_promises: (data.new_reader_promises || []).filter(p => p.promise_text?.trim()),
     fulfilled_promise_texts: (data.fulfilled_promise_texts || []).filter(t => t.trim()),
     fulfilled_promise_ids: (data.fulfilled_promise_ids || []).filter(id => id.trim()),
+    next_chapter_directives: filterNextChapterDirectivesForCommit(data.next_chapter_directives),
+    speech_kit_updates: filterSpeechKitUpdatesForCommit(data.speech_kit_updates),
     notes: data.summary ? `AI生成自动复盘：${data.summary}` : undefined,
     apply_source: 'queue_auto',
     model_profile: modelProfile,
@@ -194,6 +237,8 @@ export async function autoCommitGeneratedChapterDebrief(
 
   const promisesCreated = Number(d?.promises_created ?? 0)
   const promisesFulfilled = Number(d?.promises_fulfilled ?? 0)
+  const directivesApplied = Number(d?.directives_applied ?? 0)
+  const speechKitUpdatedCount = Number(d?.speech_kit_updated_count ?? 0)
 
   return {
     characterCount: updatedChars,
@@ -205,6 +250,8 @@ export async function autoCommitGeneratedChapterDebrief(
     chapterIndexError: d?.chapter_index_error as string | undefined,
     promisesCreated,
     promisesFulfilled,
+    directivesApplied,
+    speechKitUpdatedCount,
     debriefPreview: data,
   }
 }

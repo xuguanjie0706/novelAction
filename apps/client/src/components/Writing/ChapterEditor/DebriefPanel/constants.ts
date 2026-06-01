@@ -22,6 +22,21 @@ export const ASSET_UPDATE_LABELS: Record<string, string> = {
   faction_updates: '更新势力',
 }
 
+export const DIRECTIVE_PATCH_LABEL: Record<string, string> = {
+  add_foreshadow: '伏笔建议',
+  force_pov: '强制 POV',
+  increase_screen_time_for: '增加戏份',
+  must_resolve_promise_in_next_N_chapters: 'N 章内兑现承诺',
+  adjust_pacing: '节奏',
+  reader_expectation_note: '读者期待',
+}
+
+export const PACING_LABEL: Record<string, string> = {
+  fast: '加快',
+  normal: '正常',
+  slow: '放缓',
+}
+
 export const PROMISE_TYPE_LABEL: Record<string, string> = {
   chapter_ending: '章末悬念',
   volume_ending: '卷末钩子',

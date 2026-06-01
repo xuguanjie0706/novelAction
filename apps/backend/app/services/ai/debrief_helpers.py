@@ -5,6 +5,8 @@ debrief_helpers.py — 复盘模块纯函数工具层
   _VALID_PROMISE_TYPES          → 允许的读者承诺类型枚举集合
   _clean_new_reader_promises    → 解析 auto_debrief 输出的新承诺列表
   _clean_fulfilled_promise_texts→ 解析本章已兑现承诺原文列表
+  _clean_speech_kit_updates     → 解析语风指纹增量，供 chapter-debrief 合并 Character.speech_kit
+  _clean_next_chapter_directives→ 解析下一章 patch 指令，供 chapter-debrief 写入 OutlineNode.extra
   split_foreshadow_updates      → 将 AI 输出的 foreshadow_updates 拆分为埋/收两个数组
 """
 from __future__ import annotations
@@ -62,6 +64,74 @@ def _clean_fulfilled_promise_texts(raw_list) -> list[str]:
         if text and text not in out:
             out.append(text[:500])
     return out[:12]
+
+
+def _clean_speech_kit_updates(raw_list) -> list[dict]:
+    """解析 auto_debrief 的 speech_kit_updates，供 chapter-debrief 合并 Character.speech_kit。"""
+    out: list[dict] = []
+    for sku in raw_list or []:
+        if not isinstance(sku, dict):
+            continue
+        cid = (sku.get("character_id") or "").strip()
+        if not cid:
+            continue
+        new_words = [
+            w.strip() for w in (sku.get("new_signature_words") or [])
+            if isinstance(w, str) and w.strip()
+        ]
+        new_dialogues = [
+            d.strip() for d in (sku.get("new_sample_dialogues") or [])
+            if isinstance(d, str) and d.strip()
+        ]
+        evolution = (sku.get("evolution_note") or "").strip()
+        if not new_words and not new_dialogues and not evolution:
+            continue
+        entry: dict = {"character_id": cid}
+        if sku.get("character_name"):
+            entry["character_name"] = str(sku["character_name"]).strip()[:50]
+        if new_words:
+            entry["new_signature_words"] = new_words[:8]
+        if new_dialogues:
+            entry["new_sample_dialogues"] = new_dialogues[:8]
+        if evolution:
+            entry["evolution_note"] = evolution[:200]
+        out.append(entry)
+    return out[:10]
+
+
+def _clean_next_chapter_directives(raw_list) -> list[dict]:
+    """解析 auto_debrief 的 next_chapter_directives，供 chapter-debrief 写入下一章 OutlineNode。"""
+    out: list[dict] = []
+    for d in raw_list or []:
+        if not isinstance(d, dict):
+            continue
+        patch_raw = d.get("patch")
+        if not isinstance(patch_raw, dict):
+            continue
+        patch: dict = {}
+        for k, v in patch_raw.items():
+            if v is None or v == "":
+                continue
+            if isinstance(v, list):
+                cleaned_list = [x for x in v if x is not None and str(x).strip()]
+                if cleaned_list:
+                    patch[k] = cleaned_list
+            elif isinstance(v, str):
+                if v.strip():
+                    patch[k] = v.strip()
+            else:
+                patch[k] = v
+        if not patch:
+            continue
+        entry: dict = {"patch": patch}
+        oid = (d.get("outline_node_id") or "").strip()
+        if oid:
+            entry["outline_node_id"] = oid
+        reason = (d.get("reason") or "").strip()
+        if reason:
+            entry["reason"] = reason[:300]
+        out.append(entry)
+    return out[:5]
 
 
 def split_foreshadow_updates(chapter_index: dict) -> dict:

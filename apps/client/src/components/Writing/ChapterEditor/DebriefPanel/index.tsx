@@ -12,6 +12,7 @@ import { CharUpdateSection } from './CharUpdateSection'
 import { StorylineSection } from './StorylineSection'
 import { AssetUpdatesSection } from './AssetUpdatesSection'
 import { ReaderPromisesSection } from './ReaderPromisesSection'
+import { DirectivesSpeechKitSection } from './DirectivesSpeechKitSection'
 import { useDebriefAssets } from './useDebriefAssets'
 
 export default function DebriefPanel({
@@ -35,8 +36,12 @@ export default function DebriefPanel({
   aiNewCharacters = [],
   aiNewReaderPromises = [],
   aiFulfilledPromiseTexts = [],
+  aiNextChapterDirectives = [],
+  aiSpeechKitUpdates = [],
   onRemoveNewPromise,
   onRemoveFulfilledPromise,
+  onRemoveNextChapterDirective,
+  onRemoveSpeechKitUpdate,
   aiSummary,
   onAutoDebrief,
   onSubmit,
@@ -85,6 +90,8 @@ export default function DebriefPanel({
     || totalAssetCount > 0
     || aiNewReaderPromises.length > 0
     || aiFulfilledPromiseTexts.length > 0
+    || aiNextChapterDirectives.length > 0
+    || aiSpeechKitUpdates.length > 0
 
   return (
     <div className="p-4 space-y-4">
@@ -124,6 +131,8 @@ export default function DebriefPanel({
             {aiNewCharacters.length > 0 ? `、${aiNewCharacters.length} 个新配角` : ''}
             {aiNewReaderPromises.length > 0 ? `、${aiNewReaderPromises.length} 条新承诺` : ''}
             {aiFulfilledPromiseTexts.length > 0 ? `、${aiFulfilledPromiseTexts.length} 条待兑现` : ''}
+            {aiNextChapterDirectives.length > 0 ? `、${aiNextChapterDirectives.length} 条下一章指令` : ''}
+            {aiSpeechKitUpdates.length > 0 ? `、${aiSpeechKitUpdates.length} 条语风` : ''}
             ，请检查后提交
           </p>
         </div>
@@ -187,6 +196,14 @@ export default function DebriefPanel({
         fromQueueSnapshot={fromQueueSnapshot}
         onRemoveNewPromise={onRemoveNewPromise}
         onRemoveFulfilledPromise={onRemoveFulfilledPromise}
+      />
+
+      <DirectivesSpeechKitSection
+        aiNextChapterDirectives={aiNextChapterDirectives}
+        aiSpeechKitUpdates={aiSpeechKitUpdates}
+        fromQueueSnapshot={fromQueueSnapshot}
+        onRemoveNextChapterDirective={onRemoveNextChapterDirective}
+        onRemoveSpeechKitUpdate={onRemoveSpeechKitUpdate}
       />
 
       <section>

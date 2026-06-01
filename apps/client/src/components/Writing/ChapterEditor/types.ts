@@ -131,6 +131,18 @@ export type AutoDebriefResponse = {
     audience_aware?: number
   }>
   fulfilled_promise_texts?: string[]
+  next_chapter_directives?: Array<{
+    outline_node_id?: string
+    patch?: Record<string, unknown>
+    reason?: string
+  }>
+  speech_kit_updates?: Array<{
+    character_id?: string
+    character_name?: string
+    new_signature_words?: string[]
+    new_sample_dialogues?: string[]
+    evolution_note?: string
+  }>
 }
 
 /** 复盘表单：故事线推进 + 织网 actual_beats 四字段 */
@@ -179,8 +191,12 @@ export interface DebriefPanelProps {
     audience_aware?: number
   }>
   aiFulfilledPromiseTexts?: string[]
+  aiNextChapterDirectives?: NonNullable<AutoDebriefResponse['next_chapter_directives']>
+  aiSpeechKitUpdates?: NonNullable<AutoDebriefResponse['speech_kit_updates']>
   onRemoveNewPromise?: (index: number) => void
   onRemoveFulfilledPromise?: (index: number) => void
+  onRemoveNextChapterDirective?: (index: number) => void
+  onRemoveSpeechKitUpdate?: (index: number) => void
   aiSummary?: string
   onAutoDebrief?: (forceRefresh?: boolean) => void
   onSubmit: (selectedAssetUpdates?: Record<string, unknown>) => void

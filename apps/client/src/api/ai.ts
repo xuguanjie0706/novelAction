@@ -197,6 +197,18 @@ export const aiApi = {
     }>
     fulfilled_promise_texts?: string[]
     fulfilled_promise_ids?: string[]
+    next_chapter_directives?: Array<{
+      outline_node_id?: string
+      patch?: Record<string, unknown>
+      reason?: string
+    }>
+    speech_kit_updates?: Array<{
+      character_id?: string
+      character_name?: string
+      new_signature_words?: string[]
+      new_sample_dialogues?: string[]
+      evolution_note?: string
+    }>
     model_profile?: 'local' | 'gemini'
     llm_provider_id?: string
   }) => api.post(`/projects/${pid}/ai/chapter-debrief`, data, { timeout: DEBRIEF_REQUEST_TIMEOUT_MS }),

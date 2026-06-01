@@ -16,6 +16,8 @@ from app.services.ai.character_resolve import resolve_character_updates_from_sta
 from app.services.ai.debrief_helpers import (
     _clean_fulfilled_promise_texts,
     _clean_new_reader_promises,
+    _clean_next_chapter_directives,
+    _clean_speech_kit_updates,
     split_foreshadow_updates,
 )
 from app.services.bootstrap.prompts.character_naming import character_naming_constraints_for_prompt
@@ -489,6 +491,10 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
             fulfilled_promise_texts = _clean_fulfilled_promise_texts(
                 data.get("fulfilled_promise_texts")
             )
+            speech_kit_updates = _clean_speech_kit_updates(data.get("speech_kit_updates"))
+            next_chapter_directives = _clean_next_chapter_directives(
+                data.get("next_chapter_directives")
+            )
             char_updates = resolve_character_updates_from_states(char_updates, character_states)
 
             return {
@@ -500,6 +506,8 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                 "chapter_index": cleaned_index,
                 "new_reader_promises": new_reader_promises,
                 "fulfilled_promise_texts": fulfilled_promise_texts,
+                "speech_kit_updates": speech_kit_updates,
+                "next_chapter_directives": next_chapter_directives,
                 "summary": data.get("summary", ""),
             }
         except Exception as e:
@@ -516,6 +524,8 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                 "chapter_index": {},
                 "new_reader_promises": [],
                 "fulfilled_promise_texts": [],
+                "speech_kit_updates": [],
+                "next_chapter_directives": [],
                 "summary": "",
                 "error": f"解析失败: {e}",
                 "raw": response[:300],

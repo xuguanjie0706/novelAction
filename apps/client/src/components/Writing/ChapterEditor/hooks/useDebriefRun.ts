@@ -19,6 +19,10 @@ import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload } from '../
 import type { StoryLine } from '../../../../types'
 import { isUuidLike, hasHtmlTextContent } from '../utils'
 import { formatApiError } from '../../../../utils/apiError'
+import {
+  filterNextChapterDirectivesForCommit,
+  filterSpeechKitUpdatesForCommit,
+} from '../../../../utils/generatedChapterDebrief'
 import type { AutoDebriefResponse, NewCharacterSuggestion, StorylineBeatFormFields } from '../types'
 
 interface UseDebriefRunOptions {
@@ -77,6 +81,10 @@ export interface UseDebriefRunReturn {
   setAiNewReaderPromises: React.Dispatch<React.SetStateAction<NonNullable<AutoDebriefResponse['new_reader_promises']>>>
   aiFulfilledPromiseTexts: string[]
   setAiFulfilledPromiseTexts: React.Dispatch<React.SetStateAction<string[]>>
+  aiNextChapterDirectives: NonNullable<AutoDebriefResponse['next_chapter_directives']>
+  setAiNextChapterDirectives: React.Dispatch<React.SetStateAction<NonNullable<AutoDebriefResponse['next_chapter_directives']>>>
+  aiSpeechKitUpdates: NonNullable<AutoDebriefResponse['speech_kit_updates']>
+  setAiSpeechKitUpdates: React.Dispatch<React.SetStateAction<NonNullable<AutoDebriefResponse['speech_kit_updates']>>>
 
   /**
    * 将 AI 复盘结构化输出预填到表单状态。
@@ -138,6 +146,12 @@ export function useDebriefRun({
   const [aiChapterIndex, setAiChapterIndex] = useState<AutoDebriefResponse['chapter_index'] | null>(null)
   const [aiNewReaderPromises, setAiNewReaderPromises] = useState<NonNullable<AutoDebriefResponse['new_reader_promises']>>([])
   const [aiFulfilledPromiseTexts, setAiFulfilledPromiseTexts] = useState<string[]>([])
+  const [aiNextChapterDirectives, setAiNextChapterDirectives] = useState<
+    NonNullable<AutoDebriefResponse['next_chapter_directives']>
+  >([])
+  const [aiSpeechKitUpdates, setAiSpeechKitUpdates] = useState<
+    NonNullable<AutoDebriefResponse['speech_kit_updates']>
+  >([])
 
   // ── 派生值 ────────────────────────────────────────────────────────────────
 
@@ -162,6 +176,8 @@ export function useDebriefRun({
     setAiChapterIndex(null)
     setAiNewReaderPromises([])
     setAiFulfilledPromiseTexts([])
+    setAiNextChapterDirectives([])
+    setAiSpeechKitUpdates([])
     setDebriefFromQueueSnapshot(false)
   }, [])
 
@@ -223,6 +239,8 @@ export function useDebriefRun({
     setAiNewCharacters(validNewChars)
     setAiNewReaderPromises((data.new_reader_promises || []).filter(p => p.promise_text?.trim()))
     setAiFulfilledPromiseTexts((data.fulfilled_promise_texts || []).filter(t => t.trim()))
+    setAiNextChapterDirectives(filterNextChapterDirectivesForCommit(data.next_chapter_directives))
+    setAiSpeechKitUpdates(filterSpeechKitUpdatesForCommit(data.speech_kit_updates))
 
     const total = suggestedCharIds.size + suggestedSlIds.size
     const assetCount = data.asset_updates
@@ -231,14 +249,20 @@ export function useDebriefRun({
         0,
       )
       : 0
+    const directiveCount = filterNextChapterDirectivesForCommit(data.next_chapter_directives).length
+    const speechKitCount = filterSpeechKitUpdatesForCommit(data.speech_kit_updates).length
     const promiseCount = (data.new_reader_promises?.length ?? 0) + (data.fulfilled_promise_texts?.length ?? 0)
-    if (total > 0 || assetCount > 0 || validNewChars.length > 0 || promiseCount > 0) {
+    if (total > 0 || assetCount > 0 || validNewChars.length > 0 || promiseCount > 0
+      || directiveCount > 0 || speechKitCount > 0) {
       if (!opts?.silent) {
         if (source === 'cache') {
           toast('已复用本章复盘结果', { icon: 'ℹ️' })
         } else {
           const promiseHint = promiseCount > 0 ? `、${promiseCount} 条读者承诺` : ''
-          toast.success(`AI 自动提取了 ${suggestedCharIds.size} 个人物变化、${suggestedSlIds.size} 条故事线更新、${assetCount} 条资产变化${promiseHint}，请确认后提交`)
+          const loopHint = (directiveCount > 0 || speechKitCount > 0)
+            ? `、${directiveCount} 条下一章指令${speechKitCount > 0 ? ` / ${speechKitCount} 条语风` : ''}`
+            : ''
+          toast.success(`AI 自动提取了 ${suggestedCharIds.size} 个人物变化、${suggestedSlIds.size} 条故事线更新、${assetCount} 条资产变化${promiseHint}${loopHint}，请确认后提交`)
         }
         onNavigateToDebriefTab()
       }
@@ -400,15 +424,23 @@ export function useDebriefRun({
       ),
     )
     const hasReaderPromises = aiNewReaderPromises.length > 0 || aiFulfilledPromiseTexts.length > 0
+    // state 在 applyAutoDebriefData 时已经过 filter 存入，这里再过一遍是防御性兜底：
+    // 防止外部通过 setAiNextChapterDirectives / setAiSpeechKitUpdates 直接写入未净化的数据
+    const nextChapterDirectives = filterNextChapterDirectivesForCommit(aiNextChapterDirectives)
+    const speechKitUpdates = filterSpeechKitUpdatesForCommit(aiSpeechKitUpdates)
+    const hasContinuationLoop = nextChapterDirectives.length > 0 || speechKitUpdates.length > 0
 
     if (characterUpdates.length === 0 && storylineUpdates.length === 0
-      && !debriefNotes && !hasAssetUpdates && !hasChapterIndex && !hasReaderPromises) {
+      && !debriefNotes && !hasAssetUpdates && !hasChapterIndex && !hasReaderPromises
+      && !hasContinuationLoop) {
       const hasAiDraft = aiSuggestedCharIds.size > 0
         || aiSuggestedSlIds.size > 0
         || (aiSuggestedAssetUpdates && Object.values(aiSuggestedAssetUpdates).some(
           v => Array.isArray(v) && v.length > 0,
         ))
         || aiChapterIndex != null
+        || aiNextChapterDirectives.length > 0
+        || aiSpeechKitUpdates.length > 0
       toast(
         hasAiDraft
           ? '预填数据未加载到表单，请先点「AI 分析」或刷新页面后再确认'
@@ -430,6 +462,8 @@ export function useDebriefRun({
         chapter_index: aiChapterIndex || undefined,
         new_reader_promises: aiNewReaderPromises.length > 0 ? aiNewReaderPromises : undefined,
         fulfilled_promise_texts: aiFulfilledPromiseTexts.length > 0 ? aiFulfilledPromiseTexts : undefined,
+        next_chapter_directives: nextChapterDirectives.length > 0 ? nextChapterDirectives : undefined,
+        speech_kit_updates: speechKitUpdates.length > 0 ? speechKitUpdates : undefined,
         notes: debriefNotes || undefined,
         apply_source: 'manual_tab',
         model_profile: modelProfileFromRoute(route),
@@ -439,14 +473,19 @@ export function useDebriefRun({
         message?: string
         promises_created?: number
         promises_fulfilled?: number
+        directives_applied?: number
+        speech_kit_updated_count?: number
         storyline_drift_report?: { debts_created?: number; corrections?: unknown[] }
       }
       const pc = Number(body.promises_created ?? 0)
       const pf = Number(body.promises_fulfilled ?? 0)
+      const da = Number(body.directives_applied ?? 0)
+      const sk = Number(body.speech_kit_updated_count ?? 0)
       const promiseToast = (pc > 0 || pf > 0) ? `（承诺 +${pc} / 兑现 ${pf}）` : ''
+      const loopToast = (da > 0 || sk > 0) ? `（下一章指令 ${da} / 语风 ${sk}）` : ''
       const driftDebts = Number(body.storyline_drift_report?.debts_created ?? 0)
       const driftToast = driftDebts > 0 ? `；织网漂移已记 ${driftDebts} 条质检债` : ''
-      toast.success(`${body.message ?? '复盘已提交'}${promiseToast}${driftToast}`)
+      toast.success(`${body.message ?? '复盘已提交'}${promiseToast}${loopToast}${driftToast}`)
       setDebriefHistoryTick(t => t + 1)
 
       const [refreshedStorylines, refreshedMemories, refreshedCharsRes] = await Promise.all([
@@ -467,6 +506,8 @@ export function useDebriefRun({
       setAiNewCharacters([])
       setAiNewReaderPromises([])
       setAiFulfilledPromiseTexts([])
+      setAiNextChapterDirectives([])
+      setAiSpeechKitUpdates([])
       setDebriefNotes('')
     } catch (e) {
       toast.error(`复盘提交失败：${formatApiError(e)}`)
@@ -500,6 +541,10 @@ export function useDebriefRun({
     setAiNewReaderPromises,
     aiFulfilledPromiseTexts,
     setAiFulfilledPromiseTexts,
+    aiNextChapterDirectives,
+    setAiNextChapterDirectives,
+    aiSpeechKitUpdates,
+    setAiSpeechKitUpdates,
     applyAutoDebriefData,
     runAutoDebrief,
     loadDebriefTabCache,

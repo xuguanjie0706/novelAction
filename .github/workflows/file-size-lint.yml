@@ -55,3 +55,7 @@ jobs:
       - name: Run file size lint (enforce hard limit)
         # 再以严格模式检查，超硬上限则 fail
         run: python scripts/check_file_sizes.py --root .
+
+      - name: Check backend Python sources for NUL / UTF-16 pollution
+        run: python scripts/sanitize_py_sources.py --check
+        working-directory: apps/backend

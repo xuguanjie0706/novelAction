@@ -49,9 +49,10 @@ docker-compose -f docker-compose.prod.yml up -d --build
 
 若 backend 启动报 `SyntaxError: source code string cannot contain null bytes`：
 
-1. 在仓库根目录确认 `apps/backend/scripts/db_upgrade.py` 无 NUL：`python3 -c "print(open('apps/backend/scripts/db_upgrade.py','rb').read().count(b'\\x00'))"`（应为 `0`）
-2. 使用 **`python -m app.cli.db_upgrade`**（entrypoint 已切换）；勿在服务器用编辑器另存为 UTF-16
-3. 无缓存重建 backend：`docker-compose -f docker-compose.prod.yml build --no-cache backend`
+1. 在服务器仓库内扫描：`cd apps/backend && python3 scripts/sanitize_py_sources.py --check`
+2. 一键修复后重建：`python3 scripts/sanitize_py_sources.py && cd ../.. && docker-compose -f docker-compose.prod.yml build --no-cache backend`
+3. 勿在服务器用编辑器「另存为 UTF-16」；Git 检出已用 `.gitattributes` 强制 `*.py` 为 LF
+4. 镜像构建阶段会自动跑 `sanitize_py_sources.py` + `compileall`，污染文件会在 **build** 阶段失败而非容器重启循环
 
 > 说明：部分环境只支持 `docker-compose`（连字符），不支持 `docker compose`（空格子命令）。
 > 如果你执行 `docker compose` 报错，请改用 `docker-compose`。

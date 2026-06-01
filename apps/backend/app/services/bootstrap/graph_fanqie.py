@@ -16,8 +16,8 @@ graph_fanqie.py — 番茄小说专属 Bootstrap LangGraph
   → signal_audit              # Phase H: 算法双校验
   → END
 
-复用：BootstrapState / emit / _push / subscribe / unsubscribe / _persist / MemorySaver
-      来自 graph.py；不重复定义。
+复用：BootstrapState / emit / _push / subscribe / unsubscribe / _persist 来自 graph.py；
+      checkpointer 与主图共用 AsyncPostgresSaver（graph.init_bootstrap_graph 内编译 fanqie_graph）。
 
 代码红线：本文件 < 300 行。
 """
@@ -35,7 +35,6 @@ from app.models.bootstrap_run import BootstrapRun
 from app.services.bootstrap.graph_ctx import sanitize_bootstrap_ctx
 from app.services.bootstrap.graph import (
     BootstrapState,
-    _checkpointer,
     _make_svc,
     _persist,
     _resolve_config,
@@ -45,7 +44,7 @@ from app.services.bootstrap.graph import (
     unsubscribe,
     _push,
     _handle_run_error,
-    restore_bootstrap_checkpoint_if_lost,
+    get_fanqie_graph,
 )
 from app.services.bootstrap.steps.project import gen_project
 
@@ -266,7 +265,7 @@ async def node_audit(s, c=None):
 # 构建 Fanqie StateGraph
 # ──────────────────────────────────────────────────────
 
-def _build_fanqie_graph() -> StateGraph:
+def _build_fanqie_graph(checkpointer) -> StateGraph:
     g = StateGraph(BootstrapState)
     for name, fn in [
         ("fanqie_positioning", node_fanqie_positioning),
@@ -293,12 +292,9 @@ def _build_fanqie_graph() -> StateGraph:
         g.add_edge(a, b)
 
     return g.compile(
-        checkpointer=_checkpointer,
+        checkpointer=checkpointer,
         interrupt_before=["gate"],
     )
-
-
-fanqie_graph = _build_fanqie_graph()
 
 
 # ──────────────────────────────────────────────────────
@@ -309,7 +305,8 @@ async def run_bootstrap_fanqie(
     run_id: str, *, logline: str, premise: str, target_words: int,
     model_profile: str, llm_provider_id, user_id,
 ) -> None:
-    """番茄模式后台任务入口；与 run_bootstrap 接口一致，仅图实例不同。"""
+    """番茄模式后台任务入口；与 run_bootstrap 接口一致，仅图拓扑不同。"""
+    fanqie_graph = get_fanqie_graph()
     db = SessionLocal()
     try:
         run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
@@ -351,7 +348,7 @@ async def resume_bootstrap_fanqie(
     run_id: str, resume_payload: dict, *,
     model_profile: str, llm_provider_id, user_id,
 ) -> None:
-    """从 checkpoint 继续番茄图执行。"""
+    """从 AsyncPostgresSaver checkpoint 继续番茄图执行。"""
     from app.services.bootstrap.gate_auto import resume_lock
 
     async with resume_lock(run_id):
@@ -367,6 +364,7 @@ async def _resume_bootstrap_fanqie_impl(
     run_id: str, resume_payload: dict, *,
     model_profile: str, llm_provider_id, user_id,
 ) -> None:
+    fanqie_graph = get_fanqie_graph()
     db = SessionLocal()
     try:
         run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
@@ -379,14 +377,6 @@ async def _resume_bootstrap_fanqie_impl(
             "llm_provider_id": llm_provider_id,
             "user_id": user_id,
         }}
-        if run:
-            restore_bootstrap_checkpoint_if_lost(
-                fanqie_graph,
-                run_id=run_id,
-                run=run,
-                config=config,
-                positioning_node="fanqie_positioning",
-            )
         await fanqie_graph.ainvoke(Command(resume=dict(resume_payload)), config=config)
     except asyncio.CancelledError:
         emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")

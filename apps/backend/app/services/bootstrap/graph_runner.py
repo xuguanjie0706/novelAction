@@ -3,7 +3,7 @@ graph_runner.py — Bootstrap 后台任务入口（run / resume）
 
 职责：
 - run_bootstrap: 首次启动图执行至 gate interrupt 暂停
-- resume_bootstrap: 从 MemorySaver checkpoint 继续
+- resume_bootstrap: 从 AsyncPostgresSaver checkpoint 继续（checkpoint 持久化到 PG，重启安全）
 - _handle_run_error: 更新 DB 状态为 failed
 
 不含图定义、节点函数或 SSE 注册表（见 graph.py / graph_sse.py）。
@@ -27,20 +27,10 @@ async def run_bootstrap(
 ) -> None:
     """后台任务：执行图至 gate interrupt 暂停；resume 由 resume_bootstrap() 继续。
 
-    注意：当前使用进程内 MemorySaver 作为 checkpointer，重启进程后 checkpoint 清空。
-    多 worker 部署时需切换为 PostgresSaver。
+    Checkpoint 由 AsyncPostgresSaver 持久化到 PostgreSQL，重启 / 多 worker 均安全。
     """
-    from app.services.bootstrap.graph import bootstrap_graph, BootstrapState
-
-    import os
-    _worker_count = int(os.environ.get("WEB_CONCURRENCY", 1))
-    if _worker_count > 1:
-        logger.warning(
-            "Bootstrap run %s: 检测到 WEB_CONCURRENCY=%d（多 worker），"
-            "当前 MemorySaver 为进程内单例，resume 在跨 worker 时会 checkpoint miss；"
-            "生产部署请切换 PostgresSaver（见 graph.py _checkpointer）",
-            run_id, _worker_count,
-        )
+    from app.services.bootstrap.graph import get_bootstrap_graph, BootstrapState
+    bootstrap_graph = get_bootstrap_graph()
     db = SessionLocal()
     try:
         run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
@@ -85,7 +75,7 @@ async def resume_bootstrap(
     llm_provider_id,
     user_id,
 ) -> None:
-    """从 MemorySaver checkpoint 继续，以 Command(resume=...) 传入用户决策。"""
+    """从 AsyncPostgresSaver checkpoint 继续，以 Command(resume=...) 传入用户决策。"""
     from app.services.bootstrap.gate_auto import resume_lock
 
     async with resume_lock(run_id):
@@ -102,11 +92,8 @@ async def _resume_bootstrap_impl(
     model_profile: str, llm_provider_id, user_id,
 ) -> None:
     from langgraph.types import Command
-
-    from app.services.bootstrap.graph import (
-        bootstrap_graph,
-        restore_bootstrap_checkpoint_if_lost,
-    )
+    from app.services.bootstrap.graph import get_bootstrap_graph
+    bootstrap_graph = get_bootstrap_graph()
 
     db = SessionLocal()
     try:
@@ -120,10 +107,7 @@ async def _resume_bootstrap_impl(
             "llm_provider_id": llm_provider_id,
             "user_id": user_id,
         }}
-        if run:
-            restore_bootstrap_checkpoint_if_lost(
-                bootstrap_graph, run_id=run_id, run=run, config=config,
-            )
+        # AsyncPostgresSaver 持久化到 PG，无需手动 restore checkpoint
         await bootstrap_graph.ainvoke(
             Command(resume=dict(resume_payload)),
             config=config,

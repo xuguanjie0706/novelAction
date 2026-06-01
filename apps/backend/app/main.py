@@ -185,6 +185,11 @@ async def _on_startup() -> None:
     from app.services.draft_graph.worker import recover_stale_jobs
     asyncio.create_task(recover_stale_jobs(), name="draft-job-recovery")
 
+    # Bootstrap checkpointer：AsyncPostgresSaver（持久化到同一 PG，重启/多 worker 安全）
+    from app.services.bootstrap.graph import init_bootstrap_graph
+    from app.config import settings as _settings
+    await init_bootstrap_graph(_settings.DATABASE_URL)
+
     from app.startup.logging_config import ensure_app_logging
 
     ensure_app_logging()
@@ -202,6 +207,13 @@ async def _on_startup() -> None:
             log.info("封面存储：腾讯云 COS 桶（COVER_STORAGE_BACKEND=cos）")
         except ValueError as e:
             log.error("封面 COS 配置不完整：%s", e)
+
+
+@app.on_event("shutdown")
+async def _on_shutdown() -> None:
+    """关闭 Bootstrap AsyncPostgresSaver 连接池。"""
+    from app.services.bootstrap.graph import close_bootstrap_graph
+    await close_bootstrap_graph()
 
 
 # ── 中间件注册 ────────────────────────────────────────────────────────────

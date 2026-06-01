@@ -4,14 +4,16 @@ Bootstrap LangGraph StateGraph — 支持 human-in-the-loop 闸门。
 拆分结构：
   - graph_sse.py: SSE 事件推送与持久化（subscribe / unsubscribe / emit / push / persist）
   - graph_runner.py: 后台任务入口（run_bootstrap / resume_bootstrap）
-  - 本文件: State 定义 + 节点函数 + _build_graph 拓扑 + checkpoint 恢复
+  - 本文件: State 定义 + 节点函数 + _build_graph 拓扑 + checkpointer 初始化
 
 拓扑：START → positioning → gate(interrupt) → project → power_systems → gate_power(interrupt)
       → factions → storylines → antagonist_ladder → characters → gate_chars(interrupt) → skills_items → settings
       → volumes → gate_vol(interrupt) → emotion_arc → villain_arc
       → memory → relations → core_mysteries → opening_contract → consistency → END
 
-Checkpointing：进程内 MemorySaver（thread_id=run_id）；多 worker 需换 PostgresSaver。
+Checkpointing：AsyncPostgresSaver（psycopg3 异步连接池，thread_id=run_id）。
+由 main.py _on_startup 调用 init_bootstrap_graph() 完成初始化，checkpoint 持久化到
+同一 PostgreSQL 实例，重启 / 多 worker 均可安全 resume，无需 restore_bootstrap_checkpoint_if_lost。
 """
 from __future__ import annotations
 
@@ -22,7 +24,6 @@ from typing import Annotated, Any, Optional
 from typing_extensions import TypedDict
 
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.config import get_config
 from langgraph.types import interrupt, Command
 
@@ -40,9 +41,73 @@ from app.services.bootstrap.graph_runner import (  # noqa: F401
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────
-# 全局 Checkpointer（进程内单例；thread_id = run_id）
+# 全局 bootstrap_graph（由 init_bootstrap_graph 在 startup 完成初始化）
 # ──────────────────────────────────────────────────────
-_checkpointer = MemorySaver()
+bootstrap_graph = None  # type: ignore[assignment]
+fanqie_graph = None     # type: ignore[assignment]
+_pg_pool = None         # AsyncConnectionPool，供优雅关闭使用
+
+
+def get_bootstrap_graph():
+    """返回已初始化的 bootstrap_graph；startup 前调用则抛 RuntimeError。"""
+    if bootstrap_graph is None:
+        raise RuntimeError(
+            "bootstrap_graph 尚未初始化，请确认 init_bootstrap_graph() 已在 startup 中被 await。"
+        )
+    return bootstrap_graph
+
+
+def get_fanqie_graph():
+    """返回已初始化的 fanqie_graph（番茄专属拓扑，与主图共用 AsyncPostgresSaver）。"""
+    if fanqie_graph is None:
+        raise RuntimeError(
+            "fanqie_graph 尚未初始化，请确认 init_bootstrap_graph() 已在 startup 中被 await。"
+        )
+    return fanqie_graph
+
+
+async def init_bootstrap_graph(pg_conn_string: str) -> None:
+    """在 FastAPI startup 中调用：创建 psycopg3 异步连接池 + AsyncPostgresSaver，
+    建立 checkpoint 表（幂等），编译并注册全局 bootstrap_graph。
+
+    Args:
+        pg_conn_string: PostgreSQL DSN，例如 "postgresql://user:pw@host:5432/db"。
+                        psycopg3 直接接受标准 DSN，无需 +psycopg 前缀。
+    """
+    global bootstrap_graph, fanqie_graph, _pg_pool
+
+    from psycopg_pool import AsyncConnectionPool
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    from app.services.bootstrap.graph_fanqie import _build_fanqie_graph
+
+    # autocommit=True 是 LangGraph checkpointer 的强制要求
+    _pg_pool = AsyncConnectionPool(
+        conninfo=pg_conn_string,
+        open=False,
+        kwargs={"autocommit": True, "prepare_threshold": 0},
+    )
+    await _pg_pool.open()
+
+    checkpointer = AsyncPostgresSaver(_pg_pool)
+    # 幂等建表（langgraph_checkpoints 等），首次部署或重启均安全
+    await checkpointer.setup()
+
+    bootstrap_graph = _build_graph(checkpointer)
+    fanqie_graph = _build_fanqie_graph(checkpointer)
+    logger.info(
+        "bootstrap_graph / fanqie_graph 初始化完成（AsyncPostgresSaver，pg_pool 已就绪）"
+    )
+
+
+async def close_bootstrap_graph() -> None:
+    """在 FastAPI shutdown 中调用，优雅关闭连接池。"""
+    global bootstrap_graph, fanqie_graph, _pg_pool
+    if _pg_pool is not None:
+        await _pg_pool.close()
+        _pg_pool = None
+    bootstrap_graph = None
+    fanqie_graph = None
+    logger.info("bootstrap_graph pg_pool 已关闭")
 
 
 # ──────────────────────────────────────────────────────
@@ -82,88 +147,14 @@ def restore_bootstrap_checkpoint_if_lost(
     graph, *, run_id: str, run: BootstrapRun, config: dict,
     positioning_node: str = "positioning",
 ) -> bool:
-    """MemorySaver 随进程重启清空；awaiting_gate 的 resume 需从 DB 还原 checkpoint。"""
-    snap = graph.get_state(config)
-    values = (snap.values or {}) if snap else {}
-    if values.get("run_id"):
-        return False
+    """已废弃：AsyncPostgresSaver 持久化到 PG，checkpoint 不会随进程重启丢失，无需手动恢复。
+    保留函数签名以避免旧调用点 ImportError；直接返回 False（表示无需恢复）。
 
-    gd = run.gate_data if isinstance(run.gate_data, dict) else {}
-    positioning = gd.get("positioning") or {}
-    logline = run.logline or gd.get("logline") or ""
-    premise = gd.get("premise") or ""
-    target_words = int(gd.get("target_words") or 1_000_000)
-    project_id = str(run.project_id) if run.project_id else None
-
-    from app.services.bootstrap.graph_recovery import rebuild_ctx_from_db
-    db = config["configurable"]["db"]
-    ctx = sanitize_bootstrap_ctx(
-        rebuild_ctx_from_db(db, project_id or "", gd, logline, premise, target_words),
-    )
-
-    _COMPLETED_BEFORE_MEMORY = [
-        "positioning", "project",
-        "fanqie_contrast", "fanqie_golden_finger", "fanqie_face_slap",
-        "power_systems", "factions", "storylines",
-        "antagonist_ladder", "characters", "skills", "items", "settings", "volumes",
-        "emotion_arc", "villain_arc",
-        "fanqie_rhythm", "fanqie_audit",
-    ]
-    gate_to_completed: dict[str, list[str]] = {
-        "positioning":        ["positioning"],
-        "gate_power_systems": ["positioning", "project",
-                               "fanqie_contrast", "fanqie_golden_finger", "fanqie_face_slap",
-                               "power_systems"],
-        "gate_characters":    ["positioning", "project",
-                               "fanqie_contrast", "fanqie_golden_finger", "fanqie_face_slap",
-                               "power_systems", "factions",
-                               "storylines", "antagonist_ladder", "characters"],
-        "gate_volumes":       ["positioning", "project",
-                               "fanqie_contrast", "fanqie_golden_finger", "fanqie_face_slap",
-                               "power_systems", "factions",
-                               "storylines", "antagonist_ladder", "characters", "skills", "items", "settings", "volumes"],
-    }
-    _STEP_TO_NODE: dict[str, str] = {
-        "memory": "memory_relations",
-        "relations": "memory_relations",
-        "emotion_arc": "emotion_villain",
-        "villain_arc": "emotion_villain",
-        "consistency": "consistency",
-        "core_mysteries": "core_mysteries",
-        "opening_contract": "opening_contract",
-    }
-    if gd.get("kind") == "step_retry":
-        failed_step = str(gd.get("step") or "memory")
-        resume_node = _STEP_TO_NODE.get(failed_step, "memory_relations")
-        completed = list(_COMPLETED_BEFORE_MEMORY)
-        if failed_step == "relations":
-            completed = completed + ["memory"]
-        restore_label = f"step_retry:{failed_step}"
-    else:
-        current_gate = gd.get("current_gate") or "positioning"
-        completed = gate_to_completed.get(current_gate, ["positioning"])
-        gate_to_resume_node: dict[str, str] = {
-            "positioning":        positioning_node,
-            "gate_power_systems": "gate_power_systems",
-            "gate_characters":    "gate_characters",
-            "gate_volumes":       "gate_volumes",
-        }
-        resume_node = gate_to_resume_node.get(current_gate, positioning_node)
-        restore_label = str(current_gate)
-
-    recovery: BootstrapState = {
-        "run_id": run_id, "logline": logline, "premise": premise,
-        "target_words": target_words, "positioning": positioning,
-        "project_id": project_id, "ctx": ctx,
-        "completed_steps": completed, "errors": [],
-    }
-    graph.update_state(config, recovery, as_node=resume_node)
-    logger.warning(
-        "Restored bootstrap checkpoint for run %s from DB "
-        "(in-memory checkpointer was empty; restore=%s resume_node=%s)",
-        run_id, restore_label, resume_node,
-    )
-    return True
+    .. deprecated::
+        切换到 AsyncPostgresSaver 后此函数为空壳，graph_runner.py 已不再调用。
+    """
+    logger.debug("restore_bootstrap_checkpoint_if_lost called but skipped (AsyncPostgresSaver active)")
+    return False
 
 
 def _make_svc(config: dict | None):
@@ -366,7 +357,7 @@ async def node_core_mysteries(s, c=None):   return await _run_step(s, c, "core_m
 # 构建 StateGraph
 # ──────────────────────────────────────────────────────
 
-def _build_graph() -> StateGraph:
+def _build_graph(checkpointer) -> StateGraph:
     from app.services.bootstrap.graph_nodes import (
         node_characters, node_skills_items, node_volumes,
         node_consistency, node_emotion_villain, node_memory_relations,
@@ -430,9 +421,6 @@ def _build_graph() -> StateGraph:
         g.add_edge(a, b)
 
     return g.compile(
-        checkpointer=_checkpointer,
+        checkpointer=checkpointer,
         interrupt_before=["gate"],
     )
-
-
-bootstrap_graph = _build_graph()

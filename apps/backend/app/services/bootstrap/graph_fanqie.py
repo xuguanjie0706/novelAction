@@ -304,6 +304,7 @@ def _build_fanqie_graph(checkpointer) -> StateGraph:
 async def run_bootstrap_fanqie(
     run_id: str, *, logline: str, premise: str, target_words: int,
     model_profile: str, llm_provider_id, user_id,
+    writing_style: str = "standard",
 ) -> None:
     """番茄模式后台任务入口；与 run_bootstrap 接口一致，仅图拓扑不同。"""
     fanqie_graph = get_fanqie_graph()
@@ -316,7 +317,7 @@ async def run_bootstrap_fanqie(
         initial: BootstrapState = {
             "run_id": run_id, "logline": logline, "premise": premise,
             "target_words": target_words, "positioning": {}, "project_id": None,
-            "ctx": {}, "completed_steps": [], "errors": [],
+            "ctx": {"writing_style": writing_style}, "completed_steps": [], "errors": [],
         }
         config = {"configurable": {
             "thread_id": run_id, "db": db,

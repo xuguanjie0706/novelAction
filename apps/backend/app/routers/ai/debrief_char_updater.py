@@ -209,6 +209,34 @@ def apply_character_updates(
             _loc_name = char.current_location.strip()
             if _loc_name:
                 new_location_entries.append({"name": _loc_name, "char_name": char.name})
+                # 逐章地点台账（与 debrief_realm_milestones 同模式）：
+                # 记录每次复盘时的"章末位置 + 移动原因"，供写章时回溯上一章位置、
+                # 校验跨章位置跳转是否合理（防空间漂移）。只在位置真正变化时落账。
+                _loc_changed = (_before_location or "").strip() != _loc_name
+                if _loc_changed:
+                    _loc_chap_num = display_chapter_number(chapter.title, chapter.sort_order)
+                    _loc_extra = dict(char.extra) if isinstance(char.extra, dict) else {}
+                    _loc_hist = [
+                        h for h in (_loc_extra.get("location_milestones") or [])
+                        if isinstance(h, dict)
+                    ]
+                    # 同章重复复盘去重（保留本次）
+                    _loc_hist = [
+                        h for h in _loc_hist
+                        if int(h.get("chapter_number") or -1) != _loc_chap_num
+                    ]
+                    _loc_hist.append({
+                        "chapter_number": _loc_chap_num,
+                        "chapter_id": str(chapter_id),
+                        "chapter_title": (chapter.title or "")[:300],
+                        "location": _loc_name,
+                        "from_location": (_before_location or "").strip()[:200] or None,
+                        "reason": (cu.location_change_reason or "").strip()[:500] or None,
+                        "source": "chapter_debrief",
+                    })
+                    _loc_hist.sort(key=lambda h: int(h.get("chapter_number") or 0))
+                    _loc_extra["location_milestones"] = _loc_hist
+                    char.extra = _loc_extra
 
         if cu.current_status is not None:
             normalized_status = normalize_character_status(cu.current_status)

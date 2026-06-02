@@ -93,6 +93,7 @@ export type AutoDebriefResponse = {
     character_name?: string
     current_realm?: string
     current_location?: string
+    location_change_reason?: string
     current_status?: string
     add_skill_name?: string
     add_skill_mastery?: string
@@ -166,6 +167,7 @@ export interface DebriefPanelProps {
   charUpdates: Record<string, {
     current_realm?: string
     current_location?: string
+    location_change_reason?: string
     current_status?: string
     add_skill_name?: string
     add_skill_mastery?: string

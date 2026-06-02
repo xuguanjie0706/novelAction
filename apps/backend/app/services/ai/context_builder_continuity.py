@@ -74,6 +74,19 @@ def build_continuity_context(
             parts.append(f"境界序号={c.realm_rank}")
         if c.current_location:
             parts.append(f"当前位置={c.current_location}")
+        # 近期行踪（地点逐章台账末1-2条）：让写章 AI 知道角色"从哪来、为何在此"，
+        # 跨章位置跳转若无对应移动记录即为漂移，须在正文交代过程。
+        _loc_extra = c.extra if isinstance(c.extra, dict) else {}
+        _loc_hist = [h for h in (_loc_extra.get("location_milestones") or []) if isinstance(h, dict)]
+        if _loc_hist:
+            _tail = _loc_hist[-2:]
+            _trail = "；".join(
+                f"第{h.get('chapter_number')}章→{h.get('location')}"
+                + (f"（{truncate(h.get('reason'), 40)}）" if h.get("reason") else "")
+                for h in _tail
+            )
+            if _trail:
+                parts.append(f"近期行踪[{_trail}]")
         if c.current_status and c.current_status != "alive":
             parts.append(f"状态={c.current_status}")
         char_lines.append("、".join(parts))
@@ -181,6 +194,7 @@ def build_continuity_context(
         "人物境界、位置、状态不得倒退或跳变，除非本章明确写出代价、原因和过渡。",
         "不得让角色掌握前文未获得的情报；新情报必须通过看见、听见、推理或前文伏笔获得。",
         "不得无提示跳过上一章钩子的直接反应。",
+        "空间连续性：角色本章位置须承接上方「当前位置/近期行踪」；若位置发生变化，必须在正文交代移动过程与原因（耗时、方式、动机），且符合时间线与常理，禁止无交代的瞬移漂移。",
     ]
 
     sections = [

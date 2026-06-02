@@ -95,6 +95,8 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
   const [llmOverview, setLlmOverview]   = useState<LlmOverview | null>(null)
   const [llmLoading, setLlmLoading]     = useState(false)
   const [autoMode, setAutoMode]         = useState(() => readBootstrapAutoMode())
+  // 写作风格档位：plain 白话直白 / standard 默认 / dense 老白文
+  const [writingStyle, setWritingStyle] = useState<'plain' | 'standard' | 'dense'>('standard')
   const [waitSec, setWaitSec]           = useState(0)
   /** resume 请求进行中（gate 面板按钮禁用态） */
   const [resumeLoading, setResumeLoading] = useState(false)
@@ -227,6 +229,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
       modelProfile: modelProfileFromRoute(aiBackendRoute),
       llmProviderId: llmProviderIdFromRoute(aiBackendRoute),
       autoMode,
+      writingStyle,
     })
   }
 
@@ -556,6 +559,35 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                   ))}
                 </div>
               )}
+            </div>
+
+            {/* 写作风格档位：决定全书设定与正文的直白程度 */}
+            <div>
+              <div className="mb-2 text-sm font-medium text-gray-700">写作风格</div>
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  { value: 'plain', label: '白话直白', desc: '句子短、随手解释新词，小白友好' },
+                  { value: 'standard', label: '标准', desc: '默认平衡' },
+                  { value: 'dense', label: '老白文', desc: '信息密、文采足' },
+                ] as const).map(opt => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setWritingStyle(opt.value)}
+                    className={clsx(
+                      'rounded-xl border py-2.5 px-1 text-center transition-all',
+                      writingStyle === opt.value
+                        ? 'border-amber-400 bg-amber-50 ring-1 ring-amber-300'
+                        : 'border-gray-100 hover:border-gray-200 bg-white'
+                    )}
+                  >
+                    <div className={clsx('text-sm font-semibold', writingStyle === opt.value ? 'text-amber-700' : 'text-gray-700')}>
+                      {opt.label}
+                    </div>
+                    <div className="text-[10px] text-gray-400 mt-0.5 leading-tight">{opt.desc}</div>
+                  </button>
+                ))}
+              </div>
             </div>
 
             <button

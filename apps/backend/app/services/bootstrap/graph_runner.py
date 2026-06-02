@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 async def run_bootstrap(
     run_id: str, *, logline: str, premise: str, target_words: int,
     model_profile: str, llm_provider_id, user_id,
+    writing_style: str = "standard",
 ) -> None:
     """后台任务：执行图至 gate interrupt 暂停；resume 由 resume_bootstrap() 继续。
 
@@ -40,7 +41,7 @@ async def run_bootstrap(
         initial: BootstrapState = {
             "run_id": run_id, "logline": logline, "premise": premise,
             "target_words": target_words, "positioning": {}, "project_id": None,
-            "ctx": {}, "completed_steps": [], "errors": [],
+            "ctx": {"writing_style": writing_style}, "completed_steps": [], "errors": [],
         }
         config = {"configurable": {
             "thread_id": run_id, "db": db,

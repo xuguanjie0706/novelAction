@@ -83,6 +83,8 @@ export interface StartParams {
   llmProviderId?: string | null
   /** 为 true 时跳过闸门人工确认（后端自动 approve）；步骤失败不自动重试 */
   autoMode?: boolean
+  /** 写作风格档位：plain 白话直白 / standard 默认 / dense 老白文。默认 standard。 */
+  writingStyle?: 'plain' | 'standard' | 'dense'
 }
 
 export const STEP_META: Record<StepKey, {
@@ -492,6 +494,7 @@ export function useBootstrapStream() {
           ...body,
           mode: apiMode,
           auto_mode: Boolean(params.autoMode),
+          writing_style: params.writingStyle ?? 'standard',
         }),
       })
       if (!runRes.ok) throw new Error(await runRes.text().catch(() => `创建失败 (${runRes.status})`))

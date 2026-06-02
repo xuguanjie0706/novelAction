@@ -47,6 +47,7 @@ type CharUpdates = Record<string, {
   current_realm?: string
   realm_rank?: number
   current_location?: string
+  location_change_reason?: string
   current_status?: string
   add_skill_name?: string
   add_skill_mastery?: string
@@ -376,6 +377,7 @@ export function useDebriefRun({
         if (upd.current_realm) entry.current_realm = upd.current_realm
         if (upd.realm_rank != null) entry.realm_rank = upd.realm_rank
         if (upd.current_location) entry.current_location = upd.current_location
+        if (upd.location_change_reason) entry.location_change_reason = upd.location_change_reason
         if (upd.current_status) entry.current_status = upd.current_status
         if (upd.add_skill_name) {
           entry.add_skill = {

@@ -13,7 +13,7 @@ import re
 import zipfile
 from dataclasses import dataclass, field
 
-from app.models import Chapter, Project
+from app.models import Chapter, OutlineNode, Project
 from app.utils.chapter_manuscript import (
     html_to_plain_for_revision,
     split_plain_manuscript_and_index_block,
@@ -231,6 +231,98 @@ def build_zip_package(project: Project, chapters: list[Chapter]) -> bytes:
             seq += 1
 
     return buf.getvalue()
+
+
+# ── 大纲导出 ──────────────────────────────────────────────────────────────────
+
+# 节点类型 → 中文标签（用于无标题节点的兜底前缀）
+_NODE_TYPE_LABEL: dict[str, str] = {
+    "volume": "卷",
+    "arc": "篇章",
+    "chapter_plan": "章节",
+}
+
+
+def _outline_node_block(node: OutlineNode, depth: int) -> list[str]:
+    """
+    将单个大纲节点渲染为若干文本行（不含子节点）。
+
+    按层级缩进，标题前用 Markdown 风格的 # 标记层级，
+    随后按存在与否追加摘要 / 钩子 / 燃点 / 冲突 / 实力里程碑等字段。
+
+    Args:
+        node: 大纲节点 ORM 实例。
+        depth: 当前层级深度（0=卷），决定标题井号数量与正文缩进。
+
+    Returns:
+        文本行列表。
+    """
+    lines: list[str] = []
+    label = _NODE_TYPE_LABEL.get(node.node_type or "", "")
+    title = (node.title or "").strip() or (label or "未命名")
+    heading = "#" * min(depth + 1, 6)
+    lines.append(f"{heading} {title}")
+
+    indent = "    " * depth
+    fields: list[tuple[str, str | None]] = [
+        ("摘要", node.summary),
+        ("冲突", node.conflict),
+        ("钩子", node.hook),
+        ("燃点", node.highlight),
+        ("实力里程碑", node.power_milestone),
+    ]
+    for fname, val in fields:
+        text = (val or "").strip() if val else ""
+        if text:
+            lines.append(f"{indent}- {fname}：{text}")
+    return lines
+
+
+def build_outline_txt(project: Project, nodes: list[OutlineNode]) -> str:
+    """
+    生成全书大纲文本（Markdown 风格，树形缩进）。
+
+    从扁平节点列表按 parent_id 重建树，按 sort_order 排序，
+    自上而下输出 卷 → 篇章 → 章节计划 的层级结构及各节点字段。
+
+    Args:
+        project: 项目实例，提供书名/题材/简介。
+        nodes: 项目全部大纲节点（任意顺序）。
+
+    Returns:
+        UTF-8 字符串，可直接写文件或作为下载响应体。
+    """
+    lines: list[str] = []
+
+    # ── 书头 ──
+    lines.append(f"《{project.title or '未命名'}》大纲")
+    if project.genre:
+        lines.append(f"题材：{project.genre}")
+    if project.logline:
+        lines.append(f"简介：{project.logline}")
+    lines.append("=" * 40)
+    lines.append("")
+
+    # ── 重建树 ──
+    children_map: dict[str | None, list[OutlineNode]] = {}
+    for n in nodes:
+        pid = str(n.parent_id) if n.parent_id else None
+        children_map.setdefault(pid, []).append(n)
+    for bucket in children_map.values():
+        bucket.sort(key=lambda x: (x.sort_order or 0))
+
+    def walk(parent_key: str | None, depth: int) -> None:
+        for node in children_map.get(parent_key, []):
+            lines.extend(_outline_node_block(node, depth))
+            lines.append("")
+            walk(str(node.id), depth + 1)
+
+    walk(None, 0)
+
+    if len(lines) <= 5:
+        lines.append("（暂无大纲内容）")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 # ── 合规预检 ──────────────────────────────────────────────────────────────────

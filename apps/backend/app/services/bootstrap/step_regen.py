@@ -55,6 +55,8 @@ def build_full_ctx(db: Session, project: Any) -> dict:
         "genre": project.genre or "玄幻",
         "project_genre": project.genre or "",
         "positioning": project_extra.get("positioning") or {},
+        # 写作风格档位：单步重跑设定时仍按建书时选定的档位生成（否则 plain 书会退回 standard）
+        "writing_style": project_extra.get("writing_style") or "standard",
         "chapter_quota_total": plan["total_chapters"],
         "chapter_quota_total_volumes": plan["total_volumes"],
         "chapter_quota_used": 0,

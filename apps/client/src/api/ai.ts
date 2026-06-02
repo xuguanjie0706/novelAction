@@ -139,6 +139,7 @@ export const aiApi = {
       current_realm?: string
       realm_rank?: number
       current_location?: string
+      location_change_reason?: string
       current_status?: string
       add_skill?: { skill_id?: string; skill_name: string; mastery?: string }
       add_item?: { item_id?: string; item_name: string; acquired_chapter?: number }

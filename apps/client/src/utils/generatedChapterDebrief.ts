@@ -29,6 +29,7 @@ export interface AutoDebriefResult {
     current_realm?: string
     realm_rank?: number
     current_location?: string
+    location_change_reason?: string
     current_status?: string
     add_skill_name?: string
     add_skill_mastery?: string
@@ -152,6 +153,7 @@ export async function autoCommitGeneratedChapterDebrief(
       if (update.current_realm) entry.current_realm = update.current_realm
       if (update.realm_rank != null) entry.realm_rank = update.realm_rank
       if (update.current_location) entry.current_location = update.current_location
+      if (update.location_change_reason) entry.location_change_reason = update.location_change_reason
       if (update.current_status) entry.current_status = update.current_status
       if (update.add_skill_name) {
         entry.add_skill = {

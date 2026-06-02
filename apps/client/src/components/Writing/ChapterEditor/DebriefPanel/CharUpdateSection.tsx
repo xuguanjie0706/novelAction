@@ -123,6 +123,20 @@ export function CharUpdateSection({
                   />
                 </div>
               </div>
+              {upd.current_location && (
+                <div>
+                  <label className="text-[9px] text-novel-ink-faint block mb-0.5">
+                    移动原因（防漂移台账：为何从「{c.current_location || '原位置'}」到此，须合时间线与常理）
+                  </label>
+                  <input
+                    type="text"
+                    value={upd.location_change_reason || ''}
+                    onChange={e => onUpdateChar(c.id, 'location_change_reason', e.target.value)}
+                    placeholder="如：乘传送阵自青云宗赴北漠，耗时三日"
+                    className="w-full text-[11px] border border-novel-border rounded px-2 py-1 bg-white text-novel-ink placeholder:text-novel-ink-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-novel-accent"
+                  />
+                </div>
+              )}
             </div>
           )
         })}

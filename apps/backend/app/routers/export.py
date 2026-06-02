@@ -7,6 +7,7 @@ export.py — 导出 & 投稿包路由。
   GET  /projects/{pid}/export/preview          合规预检（字数统计，毫秒响应）
   POST /projects/{pid}/export/scan-violations  AI 违禁词预审（按章节分批扫描）
   GET  /projects/{pid}/export/txt              下载 TXT 全文
+  GET  /projects/{pid}/export/outline          下载 TXT 大纲
   GET  /projects/{pid}/export/package          下载 ZIP 投稿包
 """
 from __future__ import annotations
@@ -21,10 +22,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Chapter, Project
+from app.models import Chapter, OutlineNode, Project
 from app.services.ai_service import AIService
 from app.services.export_service import (
     PLATFORM_RULES,
+    build_outline_txt,
     build_txt,
     build_zip_package,
     check_compliance,
@@ -242,6 +244,41 @@ def export_txt(
 
     txt = build_txt(project, chapters)
     safe_name = _safe_filename(f"{project.title or 'novel'}.txt")
+
+    return Response(
+        content=txt.encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; {safe_name}",
+        },
+    )
+
+
+@router.get("/projects/{project_id}/export/outline")
+def export_outline(
+    project_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    下载全书大纲 TXT（Markdown 风格，卷 → 篇章 → 章节计划树形）。
+
+    输出项目全部 OutlineNode，按层级与 sort_order 组织，
+    含各节点摘要/钩子/燃点/冲突/实力里程碑等字段。
+    Content-Disposition 使用 RFC 5987 编码书名，兼容中文文件名。
+    """
+    project = _get_project_or_404(db, project_id)
+    nodes = (
+        db.query(OutlineNode)
+        .filter(OutlineNode.project_id == project_id)
+        .order_by(OutlineNode.sort_order.asc())
+        .all()
+    )
+
+    if not nodes:
+        raise HTTPException(400, "暂无大纲内容，无法导出")
+
+    txt = build_outline_txt(project, nodes)
+    safe_name = _safe_filename(f"{project.title or 'novel'}_大纲.txt")
 
     return Response(
         content=txt.encode("utf-8"),

@@ -119,9 +119,22 @@ def _persist_project(svc: Any, data: dict, ctx: dict) -> Project:
     if isinstance(story_core, dict) and positioning:
         story_core["positioning"] = positioning
 
+    # 写作风格档位（作者建书时选择，全书贯彻）：plain / standard / dense
+    writing_style = str(ctx.get("writing_style") or "standard").strip().lower()
+    if writing_style not in ("plain", "standard", "dense"):
+        writing_style = "standard"
+
     # extra：聚合所有结构化产物
     extra: dict = {}
-    if positioning:
+    # 写作风格落库：顶层 extra.writing_style（可发现），同时注入 positioning（下游 draft
+    # 路径已统一传 Project.extra.positioning，无需额外 plumbing 即可在正文写作期读到）。
+    extra["writing_style"] = writing_style
+    if isinstance(positioning, dict) and (positioning or writing_style != "standard"):
+        # positioning 即便为空，只要选了非默认风格档，也要落 extra.positioning，
+        # 否则下游 draft 路径（统一读 extra.positioning）取不到 writing_style，plain 书会退回 standard 写法。
+        positioning.setdefault("writing_style", writing_style)
+        extra["positioning"] = positioning
+    elif positioning:
         extra["positioning"] = positioning
     if candidates:
         extra["title_candidates"] = candidates

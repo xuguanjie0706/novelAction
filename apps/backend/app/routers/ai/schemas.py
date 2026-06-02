@@ -134,6 +134,7 @@ class CharacterUpdate(BaseModel):
     current_realm: Optional[str] = None
     realm_rank: Optional[int] = None
     current_location: Optional[str] = None
+    location_change_reason: Optional[str] = None  # 本章位置发生变化时的移动原因/经过（防漂移台账用）
     current_status: Optional[str] = None
     add_skill: Optional[dict] = None      # {"skill_id": "...", "skill_name": "...", "mastery": "初学"}
     add_item: Optional[dict] = None       # {"item_id": "...", "item_name": "...", "acquired_chapter": 5}

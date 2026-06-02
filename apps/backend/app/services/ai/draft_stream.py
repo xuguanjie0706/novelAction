@@ -198,9 +198,25 @@ class DraftStreamMixin:
             if parts:
                 positioning_brief = "【作品基本面（必须每章贯彻）】\n" + "\n".join(parts)
 
+        # ── 写作风格档位（作者建书时选定，全书贯彻；存于 Project.extra.positioning.writing_style）──
+        # plain=白话直白（降低阅读门槛，小白友好）/ standard=默认 / dense=老白文。
+        writing_style = "standard"
+        if positioning and isinstance(positioning, dict):
+            _ws = str(positioning.get("writing_style") or "").strip().lower()
+            if _ws in ("plain", "standard", "dense"):
+                writing_style = _ws
+
         # ── system 瘦身：只保留身份 + 核心原则；硬约束（钩子/严禁/截图/POV/quota）下沉到 ──
         # ── user prompt 末尾的「写作前最后重读」块，紧贴生成指令，遵从率显著高于堆在 system 顶部 ──
-        system = """你是拥有30年经验的网络小说作家，文笔老练，深谙追读节奏。
+        # 身份句随风格档位切换：plain 强调"一看就懂"，dense 保持"文笔老练"。
+        if writing_style == "plain":
+            _identity = (
+                "你是擅长写「节奏明快、一看就懂」爽文的网络小说作家，深谙追读节奏。"
+                "你的读者多为只在手机上快速浏览的小白读者，最讨厌看不懂、要回翻。"
+            )
+        else:
+            _identity = "你是拥有30年经验的网络小说作家，文笔老练，深谙追读节奏。"
+        system = _identity + """
 你的任务是根据章节计划与故事背景，输出一段高质量的本章正文。
 
 【核心写作原则】
@@ -210,12 +226,32 @@ class DraftStreamMixin:
 4. 上一章结尾、本章实力里程碑、情感基调要有分量地接续
 5. 直接给出正文：不要解释、不要旁白、不要"好的"之类的废话；不要追加任何索引/总结/元信息块；不要 AI 自指词"""
 
+        # ── 风格档位简报：plain 注入助读约束，dense 强化密度，standard 不注入（行为不变）──
+        readability_brief = ""
+        if writing_style == "plain":
+            readability_brief = (
+                "【白话直白模式（必须每章贯彻，优先级高于文采追求）】\n"
+                "- 句子短：尽量一句一个意思，单句一般不超过 40 字；少用层层嵌套的长定语。\n"
+                "- 新名词随手解释：境界、功法、势力、专有名词首次出现时，就近用一句大白话点明它是什么、有多强。\n"
+                "- 因果讲清楚：关键转折给读者一句「为什么会这样」的交代，不要靠读者自己脑补。\n"
+                "- 允许适度复述：可以用一两句简短回顾前情，帮读者跟上，不必怕重复。\n"
+                "- 一次只抛一个新设定：同一段里不要同时塞多个新概念、新人物、新地名。\n"
+                "- 用词口语化：少用生僻字和古奥词藻，优先选读者一眼认得的常用词。"
+            )
+        elif writing_style == "dense":
+            readability_brief = (
+                "【老白文模式】\n"
+                "- 保持较高的信息密度与文采，允许凝练老练的句式与较强的留白。"
+            )
+
         genre_gr = genre_guardrail_text(genre)
         if genre_gr.strip():
             system = system + "\n\n" + genre_gr
 
         if positioning_brief:
             system = system + "\n\n" + positioning_brief
+        if readability_brief:
+            system = system + "\n\n" + readability_brief
         if phase_brief:
             system = system + "\n\n" + phase_brief
         if prev_directives.strip():
@@ -276,6 +312,15 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
             "\n\n▍配角配额：本章在场命名角色 ≤ 主1 + 核心配角3 + 反派2 + 师长2；"
             "多余角色合并或用无名路人（如「一名弟子」「路人」）处理。"
         )
+        # 白话直白模式：放松上方「严禁清单」里会误伤可读性的几条（晚出现的指令优先级更高）。
+        # 这些规则本是为老白文的密度服务，但对小白读者恰恰是助读手段，故在 plain 档显式松绑。
+        if writing_style == "plain":
+            final_reminder += (
+                "\n\n▍白话直白模式补充（覆盖上方「严禁清单」的对应条目）\n"
+                "- 允许适度使用承接连接词（于是 / 然后 / 接着）让因果与时间顺序更清楚，只是不要通篇流水账。\n"
+                "- 允许用解释性叙述帮读者理解设定与因果（可连续多句），把事情讲明白优先于「让事件自己说话」。\n"
+                "- 仍然保留：单段心理独白不超过 200 字；不堆砌抒情排比开篇；章末仍要留钩子。"
+            )
         # 境界锁定块追加到最后（紧贴生成指令，召回率最高）
         if realm_lock_block:
             final_reminder += realm_lock_block

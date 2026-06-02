@@ -90,6 +90,13 @@ class StartRequest(BaseModel):
     llm_provider_id: Optional[UUID] = None
     mode: Literal["sequential", "fanqie"] = "sequential"
     auto_mode: bool = False
+    # 写作风格档位（作者建书时一次性选择，全书贯彻）：
+    # - ``plain``    白话直白：句子短、新名词就近解释、放松密度约束，降低阅读门槛（小白友好）
+    # - ``standard`` 默认：保持现状，行为完全不变
+    # - ``dense``    老白文：保持/强化信息密度与文采
+    # 落到 Project.extra.writing_style + Project.extra.positioning.writing_style，
+    # 由设定生成（power_systems/factions/settings）与正文写作（draft_assist_stream）读取。
+    writing_style: Literal["plain", "standard", "dense"] = "standard"
 
 
 class ResumeRequest(BaseModel):
@@ -181,6 +188,7 @@ async def create_run(
             model_profile=req.model_profile,
             llm_provider_id=req.llm_provider_id,
             user_id=current_user.id,
+            writing_style=req.writing_style,
         ),
         name=f"bootstrap-{req.mode}-{run_id[:8]}",
     )

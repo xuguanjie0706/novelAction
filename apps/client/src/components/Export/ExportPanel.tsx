@@ -14,6 +14,7 @@ import {
   X,
   Download,
   FileText,
+  ListTree,
   Package,
   AlertTriangle,
   CheckCircle2,
@@ -162,7 +163,7 @@ export default function ExportPanel({ projectId, onClose }: ExportPanelProps) {
   const [scanning, setScanning]           = useState(false)
   const [scanResult, setScanResult]       = useState<ViolationScanOut | null>(null)
 
-  const [downloading, setDownloading]     = useState<'txt' | 'zip' | null>(null)
+  const [downloading, setDownloading]     = useState<'txt' | 'zip' | 'outline' | null>(null)
 
   // ── 拉取合规预检 ──────────────────────────────────────────────────────────
   const fetchPreview = useCallback(async (p: string) => {
@@ -218,8 +219,8 @@ export default function ExportPanel({ projectId, onClose }: ExportPanelProps) {
   }
 
   // ── 下载 ──────────────────────────────────────────────────────────────────
-  const download = async (type: 'txt' | 'package') => {
-    setDownloading(type === 'txt' ? 'txt' : 'zip')
+  const download = async (type: 'txt' | 'package' | 'outline') => {
+    setDownloading(type === 'package' ? 'zip' : type)
     try {
       const url = `/api/v1/projects/${projectId}/export/${type}`
       const token = localStorage.getItem('novelAction:auth-token')
@@ -233,7 +234,10 @@ export default function ExportPanel({ projectId, onClose }: ExportPanelProps) {
       const blob = await res.blob()
       const disp = res.headers.get('Content-Disposition') || ''
       // 从 filename*=UTF-8''xxx 或 filename="xxx" 提取文件名
-      let filename = type === 'txt' ? 'novel.txt' : 'novel_投稿包.zip'
+      let filename =
+        type === 'txt' ? 'novel.txt'
+        : type === 'outline' ? 'novel_大纲.txt'
+        : 'novel_投稿包.zip'
       const m = disp.match(/filename\*=UTF-8''([^;]+)/) ?? disp.match(/filename="([^"]+)"/)
       if (m) filename = decodeURIComponent(m[1])
 
@@ -411,6 +415,18 @@ export default function ExportPanel({ projectId, onClose }: ExportPanelProps) {
 
         {/* 底部下载按钮 */}
         <div className="flex items-center gap-3 px-6 py-4 border-t border-gray-100 bg-gray-50 shrink-0">
+          <button
+            type="button"
+            onClick={() => download('outline')}
+            disabled={downloading !== null || !preview}
+            title="导出卷 → 篇章 → 章节计划的全书大纲"
+            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-white border border-gray-200 hover:border-amber-300 text-gray-700 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {downloading === 'outline'
+              ? <Loader2 size={14} className="animate-spin" />
+              : <ListTree size={14} />}
+            下载大纲
+          </button>
           <button
             type="button"
             onClick={() => download('txt')}

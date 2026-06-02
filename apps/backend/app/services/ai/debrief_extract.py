@@ -120,7 +120,7 @@ class DebriefMixin:
 5. 哪些伏笔被埋下、推进或回收，避免后文突然出现无前因的设定（在 chapter_index.foreshadow_updates 中用显式 "code" 字段标注全局伏笔编号，回收/推进条目必须填 code，新埋伏笔 code 可为 null 由系统分配）
 6. 哪些新道具/法宝、功法/技能、势力需要收入系统，或已有资产状态发生变化
 7. 生成章节索引（chapter_index）：完全依据上方叙事正文归纳；须与正文事实一致
-8. **硬规则**：若在 chapter_index.core_events 中写了某既有角色的境界或位置变化，必须在 character_updates 中为该角色填写对应字段（character_id 从上方列表原样复制）；禁止只写进 core_events 而不写 character_updates
+8. **硬规则**：若在 chapter_index.core_events 中写了某既有角色的境界或位置变化，必须在 character_updates 中为该角色填写对应字段（character_id 从上方列表原样复制）；禁止只写进 core_events 而不写 character_updates。位置变化时必须同时填写 location_change_reason（移动原因/经过，须依据正文、符合时间线与常理）
 9. 本章是否出现了不在现有角色库中、且值得长期追踪的新角色（new_characters）
    判断标准：正文中有名有姓、有台词或行动、且 arc_scope 为 mini_arc 或以上；纯工具性一次性路人不需要入库
 
@@ -149,6 +149,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
       "current_realm": "新境界名称（如有变化，须与境界体系设定完全一致）",
       "realm_rank": null,
       "current_location": "新位置（如有变化）",
+      "location_change_reason": "若位置发生变化，简述移动原因/经过（如有变化必填，须依据正文事实，符合时间线与常理，如「乘传送阵自青云宗赴北漠」）；位置无变化则省略",
       "current_status": "新状态（仅允许 alive/dead/missing/sealed/transformed 之一）",
       "add_skill_name": "习得的技能名（如有）",
       "add_skill_mastery": "掌握程度，如：初学/熟练/精通"

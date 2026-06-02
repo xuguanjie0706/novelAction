@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 from app.models.memory import MemoryChunk
 from app.models.project import Project
 from app.services.memory_conflict_detect_log import persist_memory_conflict_detect_log
+from app.services.llm_token_budgets import min_completion_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +238,7 @@ severity 取值：high（明确矛盾）/ medium（疑似矛盾需人工确认�
         response = await ai_service._call_ai(
             system_prompt,
             user_prompt,
-            max_tokens=2048,
+            max_tokens=min_completion_tokens(),
             context={"operation": "memory_conflict_detect", "project_id": pid},
             task="memory.conflict_detect",
         )

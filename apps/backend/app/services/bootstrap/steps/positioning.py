@@ -23,6 +23,7 @@ import logging
 from typing import Any
 
 from app.schemas.bootstrap_positioning import (
+from app.services.llm_token_budgets import max_tokens_bootstrap_completion
     detect_trope_conflicts,
     try_validate_candidate,
     try_validate_positioning,
@@ -57,7 +58,7 @@ async def _call_once(svc: Any, ctx: dict) -> dict | None:
         prompt = build_unified_prompt(ctx) + fix_block
         try:
             raw = await svc._call_with_retry(
-                UNIFIED_SYSTEM, prompt, max_tokens=4096, task="bootstrap.positioning",
+                UNIFIED_SYSTEM, prompt, max_tokens=max_tokens_bootstrap_completion(), task="bootstrap.positioning",
             )
             data = parse_json(raw)
         except Exception as exc:

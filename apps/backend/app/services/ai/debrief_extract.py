@@ -37,6 +37,7 @@ class DebriefMixin:
         storylines: List[dict],          # [{"id":…,"name":…,"line_type":…,"status":…,"core_conflict":…}]
         open_promises: List[dict] = [],  # [{"id":…,"promise_text":…,"promise_type":…,"source_chapter_number":…,"priority":…}]
         genre: str | None = None,
+        writing_style: str = "standard",
     ) -> dict:
         """
         AI 读取章节正文，对照人物当前状态和故事线，
@@ -88,6 +89,14 @@ class DebriefMixin:
             "storyline_updates.beat、chapter_index 全部文案（含 story_day）、asset_updates 与 new_characters 中的描述字段、summary 等。"
             "不得用英文撰写剧情摘要、伏笔说明或章末钩子；专有名词（人名、功法、法宝、地名）与正文用字保持一致。"
         )
+        # 白话直白（番茄纯爽文）：复盘生成的 next_chapter_directives 必须与"直白"目标同向，
+        # 否则会反向把下一章 prompt 拉回老白文（directives 在写章时是最高优先级注入）。
+        if str(writing_style or "standard").strip().lower() == "plain":
+            system += (
+                "本作为「白话直白/番茄纯爽文」：next_chapter_directives 的 patch 与 reason "
+                "只能围绕情节、爽点、钩子、节奏、伏笔回收给建议；"
+                "严禁出现「增强文采 / 提升留白 / 减少解释 / 用词更凝练 / 提高文学性」一类与直白目标相悖的指令。"
+            )
 
         narrative_body = self._clip_context(
             (chapter_content or "").strip(),

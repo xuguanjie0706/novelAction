@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.models.character import Character
 from app.services.bootstrap.prompts.character_naming import character_naming_constraints_for_prompt
+from app.services.llm_token_budgets import min_completion_tokens
 
 if TYPE_CHECKING:
     from app.services.ai_service import AIService
@@ -128,7 +129,7 @@ async def character_gap_check(
 ]
 只返回JSON数组，不要任何说明文字。"""
 
-    raw = await ai_svc._call_ai(system, prompt, max_tokens=600)
+    raw = await ai_svc._call_ai(system, prompt, max_tokens=min_completion_tokens())
     result = _parse_json_safe(raw)
     if not isinstance(result, list):
         return []
@@ -204,7 +205,7 @@ async def create_supporting_character(
 }}
 只返回JSON对象，不要任何说明文字。"""
 
-    raw = await ai_svc._call_ai(system, prompt, max_tokens=500)
+    raw = await ai_svc._call_ai(system, prompt, max_tokens=min_completion_tokens())
     data = _parse_json_safe(raw)
     if not isinstance(data, dict) or not data.get("name"):
         return None

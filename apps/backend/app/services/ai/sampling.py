@@ -17,6 +17,7 @@ from app.config import settings
 from app.services.llm_config import normalize_openai_base_url, resolve_gemini_connection
 from app.services.llm_task_profiles import resolve_task_profile
 from app.services.llm_token_budgets import (
+    ensure_min_completion_tokens,
     max_tokens_auto_debrief,
     max_tokens_chapter_quality_check,
     max_tokens_coherence_apply,
@@ -28,6 +29,7 @@ from app.services.llm_token_budgets import (
     max_tokens_plan_full_structure,
     max_tokens_quality_micro_patch,
     max_tokens_suggest_stream,
+    min_completion_tokens,
 )
 from app.services.llm_billing_context import resolve_llm_billing_user_id
 from app.services.llm_call_log import log_llm_call, merge_truncation_into_context
@@ -112,7 +114,7 @@ class SamplingMixin:
         self,
         system: str,
         prompt: str,
-        max_tokens: int = 2048,
+        max_tokens: int | None = None,
         context: Optional[dict] = None,
         *,
         task: Optional[str] = None,
@@ -131,6 +133,9 @@ class SamplingMixin:
         Returns:
             模型返回的纯文本内容（不含 ``<think>``）。
         """
+        max_tokens = ensure_min_completion_tokens(
+            max_tokens if max_tokens is not None else min_completion_tokens()
+        )
         self._preflight_credit_check()
         client = self._get_client()
         start = time.perf_counter()
@@ -229,13 +234,16 @@ class SamplingMixin:
         self,
         system: str,
         prompt: str,
-        max_tokens: int = 2048,
+        max_tokens: int | None = None,
         context: Optional[dict] = None,
         *,
         task: Optional[str] = None,
         sampling: Optional[dict] = None,
     ) -> AsyncGenerator[str, None]:
         """流式 LLM 调用。参数语义与 :meth:`_call_ai` 一致。"""
+        max_tokens = ensure_min_completion_tokens(
+            max_tokens if max_tokens is not None else min_completion_tokens()
+        )
         self._preflight_credit_check()
         client = self._get_client()
         start = time.perf_counter()

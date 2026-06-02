@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.services.llm_token_budgets import min_completion_tokens
 from app.models import (
     Chapter,
     ChapterAnalysisRecord,
@@ -149,7 +150,7 @@ async def reader_simulation(
     raw = await ai._call_ai(
         system=system_prompt,
         prompt=user_prompt,
-        max_tokens=512,
+        max_tokens=min_completion_tokens(),
         task="quality.check",  # 稳定 JSON，用低温度档位
     )
 
@@ -252,7 +253,7 @@ async def hook_check(
     raw = await ai._call_ai(
         system=system_prompt,
         prompt=user_prompt,
-        max_tokens=600,
+        max_tokens=min_completion_tokens(),
         task="quality.check",
     )
 

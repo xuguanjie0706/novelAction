@@ -214,7 +214,7 @@ class GenerationService:
         system: str,
         prompt: str,
         max_retries: int = 2,
-        max_tokens: int = 2048,
+        max_tokens: int | None = None,
         *,
         task: Optional[str] = None,
     ) -> str:

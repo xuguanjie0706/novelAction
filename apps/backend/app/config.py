@@ -27,6 +27,8 @@ class Settings(BaseSettings):
 
     # chat.completions max_tokens — 勿超过所用模型/网关的实际上限（见各云厂商文档）
     # 本系统统一使用远程大上下文模型（Gemini / Claude / GPT-4o 等）。
+    # 全局 completion 下限：所有 max_tokens 请求不得低于此值（见 llm_token_budgets / sampling）
+    LLM_COMPLETION_MIN_TOKENS: int = 10000
     GEMINI_SINGLE_SHOT_MAX_TOKENS: int = 65536
     GEMINI_SETTING_COMPLETION_MAX_TOKENS: int = 32768
     # Bootstrap 串行各步大块 JSON max_tokens
@@ -40,8 +42,8 @@ class Settings(BaseSettings):
     GEMINI_COHERENCE_APPLY_MAX_TOKENS: int = 65536
     GEMINI_DRAFT_STREAM_MAX_TOKENS: int = 16384
     GEMINI_PLAN_STRUCTURE_MAX_TOKENS: int = 32768
-    GEMINI_SUGGEST_STREAM_MAX_TOKENS: int = 8192
-    GEMINI_EXTRACT_MEMORY_MAX_TOKENS: int = 8192
+    GEMINI_SUGGEST_STREAM_MAX_TOKENS: int = 10000
+    GEMINI_EXTRACT_MEMORY_MAX_TOKENS: int = 10000
     # 按卷懒展开章纲：30章×15字段的完整 JSON 输出，单批需要 8000-16000 token；
     # 60章分两批但每批同样需要充足空间；可在 .env 中按模型实际上限调高
     VOL_EXPAND_CHAPTERS_MAX_TOKENS: int = 65536

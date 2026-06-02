@@ -218,6 +218,12 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
     return '当前：远程（未配置）'
   }, [aiBackendRoute, llmOverview])
 
+  /** 切换生成方案；番茄线默认白话直白，与后端 fanqie→plain 兜底一致。 */
+  function selectMode(next: Mode) {
+    setMode(next)
+    if (next === 'fanqie') setWritingStyle('plain')
+  }
+
   // ── 开始生成 ─────────────────────────────────────────────────
   function handleStart() {
     if (!logline.trim()) return
@@ -479,7 +485,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
               <label className="text-sm font-medium text-gray-700 block mb-2">生成方案</label>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <button
-                  onClick={() => setMode('sequential')}
+                  onClick={() => selectMode('sequential')}
                   className={clsx(
                     'p-3 rounded-xl border-2 text-left transition-all',
                     mode === 'sequential' ? 'border-amber-400 bg-amber-50' : 'border-gray-100 hover:border-gray-200'
@@ -496,7 +502,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                   </div>
                 </button>
                 <button
-                  onClick={() => setMode('fanqie')}
+                  onClick={() => selectMode('fanqie')}
                   className={clsx(
                     'p-3 rounded-xl border-2 text-left transition-all',
                     mode === 'fanqie'

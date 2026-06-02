@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+from app.services.llm_token_budgets import min_completion_tokens
 
 
 class OutlineChecksMixin:
@@ -99,7 +100,7 @@ class OutlineChecksMixin:
         response = await self._call_ai(
             system,
             prompt,
-            max_tokens=2000,
+            max_tokens=min_completion_tokens(),
             context={"operation": "outline_check_causality"},
             task="quality.causality_check",
         )
@@ -185,7 +186,7 @@ class OutlineChecksMixin:
         response = await self._call_ai(
             system,
             prompt,
-            max_tokens=2000,
+            max_tokens=min_completion_tokens(),
             context={"operation": "outline_check_character_arc"},
             task="quality.character_arc_check",
         )
@@ -266,7 +267,7 @@ class OutlineChecksMixin:
         response = await self._call_ai(
             system,
             prompt,
-            max_tokens=2000,
+            max_tokens=min_completion_tokens(),
             context={"operation": "outline_check_foreshadow_audit"},
             task="quality.foreshadow_audit",
         )

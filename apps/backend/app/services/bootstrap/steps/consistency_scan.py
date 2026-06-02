@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.services.bootstrap.parse import parse_json
+from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +334,7 @@ async def gen_consistency_scan(svc: Any, project, ctx: dict) -> list:
 
     try:
         raw = await svc._call_with_retry(
-            system, prompt, max_tokens=2048, task="bootstrap.consistency_scan"
+            system, prompt, max_tokens=max_tokens_bootstrap_completion(), task="bootstrap.consistency_scan"
         )
         ai_issues = parse_json(raw)
         if not isinstance(ai_issues, list):

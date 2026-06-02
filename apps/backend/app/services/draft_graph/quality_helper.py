@@ -17,7 +17,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func as sqlfunc
 
 from app.database import SessionLocal
-from app.models import Chapter, Character, MemoryChunk, StoryLine, WorldSetting
+from app.models import Chapter, Character, MemoryChunk, Project, StoryLine, WorldSetting
+from app.utils.writing_style import resolve_project_writing_style
 
 if TYPE_CHECKING:
     from app.services.ai_service import AIService
@@ -97,6 +98,9 @@ async def run_quality_check(
         check_types=check_types,
         character_states=character_states,
         storylines_context=storylines_context,
+        writing_style=resolve_project_writing_style(
+            db.query(Project).filter(Project.id == project_id).first()
+        ),
     )
 
     # ── 写回 Chapter 质检元信息 ────────────────────────────────────────────

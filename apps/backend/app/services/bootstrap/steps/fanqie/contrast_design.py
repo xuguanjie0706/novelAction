@@ -14,6 +14,7 @@ from typing import Any
 
 from app.models import Project
 from app.services.bootstrap.parse import parse_json
+from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
 
 async def gen_contrast_design(svc: Any, project: Project, ctx: dict) -> dict:
@@ -61,7 +62,7 @@ async def gen_contrast_design(svc: Any, project: Project, ctx: dict) -> dict:
         fix = f"\n【请修正：{last_err}】" if last_err else ""
         raw = await svc._call_with_retry(
             system, prompt + fix,
-            max_tokens=1024,
+            max_tokens=max_tokens_bootstrap_completion(),
             task="bootstrap.positioning",
         )
         try:

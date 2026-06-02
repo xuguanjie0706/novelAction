@@ -79,7 +79,7 @@ pass=true 仅当 issues 为空。最多 5 条 issues。只返回 JSON。"""
         raw = await svc._call_with_retry(
             system,
             prompt,
-            max_tokens=1024,
+            max_tokens=max_tokens_bootstrap_completion(),
             task="quality.check",
         )
         data = parse_json(raw)

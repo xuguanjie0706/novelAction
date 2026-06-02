@@ -6,6 +6,7 @@ import logging
 from typing import List, Optional
 
 from app.services.bootstrap.parse import parse_json
+from app.services.llm_token_budgets import min_completion_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,17 @@ class ScenePlanMixin:
             "每章 4-8 场，字数总和接近 word_target。"
             "每场必须有明确的 POV（禁止全知），在场角色不得超过 genre_kit quota。"
         )
+        # 白话直白（番茄纯爽文）：分场也要为直白正文服务。writing_style 已由 project 步骤
+        # 注入 positioning，无需额外参数即可识别。
+        _ws = ""
+        if isinstance(positioning, dict):
+            _ws = str(positioning.get("writing_style") or "").strip().lower()
+        if _ws == "plain":
+            system += (
+                "本作为「白话直白/番茄纯爽文」：每场聚焦单一目标与单一冲突，"
+                "goal/conflict/turn/hook 用大白话写清楚；hook 偏强冲突直给，"
+                "避免含蓄留白；不要把多个新设定/新人物挤进同一场。"
+            )
 
         kit_block = ""
         if genre:
@@ -175,7 +187,7 @@ class ScenePlanMixin:
         raw = await self._call_ai(
             system,
             prompt,
-            max_tokens=2000,
+            max_tokens=min_completion_tokens(),
             task="draft.scene_plan",
         )
         try:

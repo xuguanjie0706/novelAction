@@ -28,6 +28,7 @@ from openai import AsyncOpenAI
 from app.models.location import Location
 from app.services.bootstrap.parse import parse_json
 from app.services.llm_config import normalize_openai_base_url, resolve_gemini_connection
+from app.services.llm_token_budgets import min_completion_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -275,7 +276,7 @@ async def _call_ai_for_locations(
             model=model_name,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,   # 地点描述需要稳定
-            max_tokens=1500,
+            max_tokens=min_completion_tokens(),
         )
         raw_text = (resp.choices[0].message.content or "").strip()
         parsed = parse_json(raw_text)

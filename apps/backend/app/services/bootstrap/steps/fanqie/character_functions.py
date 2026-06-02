@@ -17,6 +17,7 @@ from typing import Any
 from app.models import Character, Project
 from app.services.bootstrap.parse import parse_json
 from app.services.bootstrap.prompts.character_naming import character_naming_constraints_for_prompt
+from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
 _FUNCTION_TAGS = (
     "打脸靶_主要 / 打脸靶_次要 / 助力者_前期 / 助力者_后期 / "
@@ -97,7 +98,7 @@ async def gen_character_functions(svc: Any, project: Project, ctx: dict) -> list
         fix = f"\n【请修正：{last_err}】" if last_err else ""
         raw = await svc._call_with_retry(
             system, prompt + fix,
-            max_tokens=2048,
+            max_tokens=max_tokens_bootstrap_completion(),
             task="bootstrap.characters",
         )
         try:

@@ -14,6 +14,7 @@ from typing import Any
 from app.models import Character, Faction, Skill
 from app.services.ai_service import AIService
 from app.services.bootstrap.parse import parse_json
+from app.services.llm_token_budgets import min_completion_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -266,7 +267,7 @@ async def _call_ai_patches(
     system: str,
     prompt: str,
 ) -> list[dict]:
-    raw = await ai_svc._call_ai(system, prompt, max_tokens=2048, task="quality.check")
+    raw = await ai_svc._call_ai(system, prompt, max_tokens=min_completion_tokens(), task="quality.check")
     parsed = parse_json(raw)
     return parsed if isinstance(parsed, list) else []
 

@@ -24,6 +24,7 @@ from app.models import Chapter, MemoryChunk, OutlineNode, Project, ReaderPromise
 from app.services.bootstrap.context_vol_expand import build_vol_expand_ctx
 from app.services.bootstrap.chapter_plan_batches import normalize_volume_planned_chapters
 from app.services.bootstrap.retry import call_with_retry
+from app.services.llm_token_budgets import max_tokens_vol_expand_chapters
 from app.services.bootstrap.steps.vol_chapter_plans import gen_vol_chapter_plans
 
 router = APIRouter()
@@ -73,14 +74,14 @@ class _BootstrapSvc:
         prompt: str,
         *,
         task: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
     ) -> str:
         """委托给 bootstrap retry 模块的外层重试逻辑。"""
         return await call_with_retry(
             self._ai,
             system,
             prompt,
-            max_tokens=max_tokens,
+            max_tokens=max_tokens or max_tokens_vol_expand_chapters(),
             task=task,
         )
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from app.services.llm_token_budgets import min_completion_tokens
 
 
 class ReaderPsychologyMixin:
@@ -93,7 +94,7 @@ class ReaderPsychologyMixin:
         response = await self._call_ai(
             system,
             prompt,
-            max_tokens=1800,
+            max_tokens=min_completion_tokens(),
             context={"operation": "reader_psychology_sim", "chapter": current_chapter_number},
             task="quality.check",
         )

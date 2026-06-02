@@ -33,8 +33,10 @@ from app.services.bootstrap.prompts.vol_chapter_plans_prompt import (
     build_chapter_plan_generation_tail,
     fmt_storyline_names_block,
     fmt_written_summaries,
+    plain_chapter_plan_addendum,
 )
 from app.utils.chapter_numbering import normalize_chapter_plan_title
+from app.utils.writing_style import resolve_project_writing_style
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +181,10 @@ async def gen_vol_chapter_plans(
             "只返回 JSON 数组，不要任何说明文字。"
             + modern_guard
         )
+
+    # 白话直白（番茄纯爽文）：章纲层即要求稀疏、单事件、直给钩子（prompt 见 prompts 模块）
+    if resolve_project_writing_style(project) == "plain":
+        system += plain_chapter_plan_addendum()
 
     # ── 主角基本信息 ──────────────────────────────────────────────────────────
     protagonist = ctx.get("protagonist", "主角")

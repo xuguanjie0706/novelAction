@@ -304,9 +304,16 @@ def _build_fanqie_graph(checkpointer) -> StateGraph:
 async def run_bootstrap_fanqie(
     run_id: str, *, logline: str, premise: str, target_words: int,
     model_profile: str, llm_provider_id, user_id,
-    writing_style: str = "standard",
+    writing_style: str = "plain",
 ) -> None:
-    """番茄模式后台任务入口；与 run_bootstrap 接口一致，仅图拓扑不同。"""
+    """番茄模式后台任务入口；与 run_bootstrap 接口一致，仅图拓扑不同。
+
+    番茄定位 ⇒ 纯爽文 ⇒ 正文必须直白易懂，故 writing_style 默认 ``plain``
+    （而非通用线的 ``standard``）：番茄书天然面向手机端小白读者，直白是产品
+    底线而非可选项。作者若显式传入其它档位（standard/dense）则尊重其选择。
+    下游正文写作（draft_stream）统一读 Project.extra.positioning.writing_style，
+    project 步骤已负责把此值落库，无需额外 plumbing。
+    """
     fanqie_graph = get_fanqie_graph()
     db = SessionLocal()
     try:
@@ -314,10 +321,14 @@ async def run_bootstrap_fanqie(
         if run:
             run.status = "running"
             db.commit()
+        # 防御：空串 / None / 非法值统一回落到 plain（番茄线的直白底线）
+        _ws = str(writing_style or "").strip().lower()
+        if _ws not in ("plain", "standard", "dense"):
+            _ws = "plain"
         initial: BootstrapState = {
             "run_id": run_id, "logline": logline, "premise": premise,
             "target_words": target_words, "positioning": {}, "project_id": None,
-            "ctx": {"writing_style": writing_style}, "completed_steps": [], "errors": [],
+            "ctx": {"writing_style": _ws}, "completed_steps": [], "errors": [],
         }
         config = {"configurable": {
             "thread_id": run_id, "db": db,

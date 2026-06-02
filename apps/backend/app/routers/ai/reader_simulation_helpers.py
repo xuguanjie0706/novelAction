@@ -21,6 +21,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models import Chapter, ChapterAnalysisRecord, ChapterIndex, Project, ReaderPromise
+from app.services.llm_token_budgets import min_completion_tokens
 from app.routers.ai.reader_simulation_schemas import (
     ChapterAnalysisResult,
     ChapterAnalysisStats,
@@ -258,7 +259,7 @@ matched_promise_texts 无匹配则为空数组；suggestions 最多3条。"""
     raw = await ai._call_ai(
         system=system_prompt,
         prompt=user_prompt,
-        max_tokens=900,
+        max_tokens=min_completion_tokens(),
         task="quality.check",  # 稳定 JSON，低温度档位
     )
 

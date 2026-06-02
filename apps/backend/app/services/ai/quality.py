@@ -55,6 +55,7 @@ class QualityMixin:
         continuity_context: str = "",
         chapter_index_context: str = "",
         plot_dossier_context: str = "",
+        writing_style: str = "standard",
     ) -> dict:
         large_context = self._large_context_enabled()
         memory_count = 120
@@ -169,6 +170,27 @@ class QualityMixin:
             _extra_constraints += (
                 "\n- realm_check < 6 时，issues 中必须加一条 type=\"realm_violation\" 的 warning，"
                 "明确指出是哪个角色、在哪个场景、用了什么超出境界的能力"
+            )
+
+        # ── 白话直白（番茄纯爽文）质检标准自适应 ──────────────────────
+        # 设计动机：plain 书的"直白复述、口语化、把因果讲明白"是产品要求而非缺陷。
+        # 若仍按通用文笔标准评分，会把直白判为低分 → 复盘据此生成"增强文采"指令 →
+        # 下一章被拉回老白文，形成跨章拉锯。故 plain 时改判据并新增可读性维度。
+        _ws = str(writing_style or "standard").strip().lower()
+        if _ws == "plain":
+            _extra_dim_doc += (
+                '\n    "readability": {{"score": 9, "status": "pass",'
+                ' "comment": "小白读者一眼能否看懂？句子是否够短、新名词有无随手解释、'
+                '因果是否讲清楚、有无需要回翻的绕句或生僻词？（0-10，越直白越高分）"}},'
+            )
+            _extra_constraints += (
+                "\n- 【本作为「白话直白/番茄纯爽文」，评分须切换标准】："
+                "直白复述、口语化用词、把设定与因果讲明白、关键词（金手指名/境界/数值）"
+                "反复出现，均为优点，严禁因此扣分或写成 issue；"
+                "只有当出现绕句、嵌套长定语、生僻字古词、需读者回翻才懂时，才算可读性问题。"
+                "\n- readability < 6 时，issues 中必须加一条 type=\"hard_to_read\" 的 warning，"
+                "指出哪一句太绕/太文，并给出更直白的改法；"
+                "suggestions 中**禁止**出现「增强文采 / 提升留白 / 减少解释 / 用词更凝练」类与直白目标相悖的建议。"
             )
 
         prompt = f"""请对以下章节进行质检，返回 JSON 格式。

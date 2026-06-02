@@ -35,6 +35,7 @@ from app.routers.ai.context import (
 from app.routers.ai.quality_debt import sync_quality_debts
 from app.services.bootstrap.power_registry import build_draft_power_context_from_db
 from app.services.ai_service import AIService
+from app.utils.writing_style import resolve_project_writing_style
 
 
 async def _run_quality_check_inline(
@@ -170,6 +171,7 @@ async def _run_quality_check_inline(
         continuity_context=continuity_ctx,
         chapter_index_context=chapter_index_ctx,
         plot_dossier_context=plot_dossier_ctx,
+        writing_style=resolve_project_writing_style(project),
     )
 
     # 写库（复用 quality_routes 逻辑）

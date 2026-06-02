@@ -31,6 +31,7 @@ from app.services.ai.promise_debrief import enrich_with_promise_ids
 from app.services.ai_service import AIService
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 from app.utils.chapter_numbering import display_chapter_number
+from app.utils.writing_style import resolve_project_writing_style
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -172,6 +173,7 @@ async def auto_debrief(
         storylines=storylines_data,
         open_promises=open_promises_data,
         genre=project_genre,
+        writing_style=resolve_project_writing_style(project),
     )
     if isinstance(result, dict) and not result.get("error"):
         fpt = result.get("fulfilled_promise_texts") or []

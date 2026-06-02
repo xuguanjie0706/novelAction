@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Optional
 
 from app.services.ai_service import AIService
+from app.services.llm_token_budgets import min_completion_tokens
 
 
 async def call_with_retry(
@@ -21,7 +22,7 @@ async def call_with_retry(
     system: str,
     prompt: str,
     *,
-    max_tokens: int = 2048,
+    max_tokens: int | None = None,
     task: Optional[str] = None,
 ) -> str:
     """调用 AI，单次执行；失败立即抛错（不再做外层退避重试）。
@@ -31,6 +32,6 @@ async def call_with_retry(
     return await ai._call_ai(
         system,
         prompt,
-        max_tokens=max_tokens,
+        max_tokens=max_tokens if max_tokens is not None else min_completion_tokens(),
         task=task,
     )

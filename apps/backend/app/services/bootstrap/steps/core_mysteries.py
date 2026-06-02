@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.services.bootstrap.parse import parse_json
+from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ async def gen_core_mysteries(svc: Any, project, ctx: dict) -> list[dict]:
 
     try:
         raw = await svc._call_with_retry(
-            system, prompt, max_tokens=3000, task="bootstrap.core_mysteries"
+            system, prompt, max_tokens=max_tokens_bootstrap_completion(), task="bootstrap.core_mysteries"
         )
         mysteries = parse_json(raw)
         if not isinstance(mysteries, list):

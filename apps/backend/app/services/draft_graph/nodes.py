@@ -26,6 +26,7 @@ from langgraph.types import interrupt
 from app.database import SessionLocal
 from app.models import Chapter, Character, Project, StoryLine
 from app.utils.chapter_numbering import display_chapter_number
+from app.utils.writing_style import resolve_project_writing_style
 from app.models.generation_job import GenerationJob
 from app.models.scene import Scene
 from app.routers.ai.draft_routes import _build_draft_context
@@ -531,6 +532,7 @@ async def debrief(state: ChapterDraftState) -> dict:
             character_states=character_states,
             storylines=storylines_data,
             genre=project_genre,
+            writing_style=resolve_project_writing_style(project),
         )
         db.commit()
     except Exception as exc:

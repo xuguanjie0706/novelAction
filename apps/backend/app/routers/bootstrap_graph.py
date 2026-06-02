@@ -179,6 +179,12 @@ async def create_run(
 
     # 按 mode 分发到对应的后台任务
     _run_fn = run_bootstrap_fanqie if req.mode == "fanqie" else run_bootstrap
+    # 番茄线写作风格默认直白：schema 默认 standard 是为通用线服务的，但番茄=纯爽文
+    # =直白底线。故 fanqie 模式下把未显式改动的 standard 提升为 plain；显式选 dense
+    # （老白文）的作者意图仍尊重，不强改。
+    _effective_ws = req.writing_style
+    if req.mode == "fanqie" and _effective_ws == "standard":
+        _effective_ws = "plain"
     task = asyncio.create_task(
         _run_fn(
             run_id,
@@ -188,7 +194,7 @@ async def create_run(
             model_profile=req.model_profile,
             llm_provider_id=req.llm_provider_id,
             user_id=current_user.id,
-            writing_style=req.writing_style,
+            writing_style=_effective_ws,
         ),
         name=f"bootstrap-{req.mode}-{run_id[:8]}",
     )

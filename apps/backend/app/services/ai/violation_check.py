@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Optional
+from app.services.llm_token_budgets import min_completion_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ class ViolationCheckMixin:
             raw = await self._call_ai(
                 _SYSTEM,
                 prompt,
-                max_tokens=1500,
+                max_tokens=min_completion_tokens(),
                 task="quality.check",   # 低温度档，要求 JSON 稳定
                 context={"operation": "violation_scan", "platform": platform},
             )

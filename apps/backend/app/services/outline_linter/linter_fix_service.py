@@ -18,6 +18,7 @@ from app.services.outline_linter.gate import report_blocks_commit
 from app.services.outline_linter.run import persist_linter_report, run_volume_linter
 from app.services.outline_linter.rules_sequence import lint_semantic_duplicates
 from app.services.outline_linter.helpers import chapter_from_node
+from app.services.llm_token_budgets import min_completion_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +165,7 @@ async def generate_linter_fix_patches(
         response = await ai._call_ai(
             system,
             prompt,
-            max_tokens=4096,
+            max_tokens=min_completion_tokens(),
             context={"operation": "linter_fix", "issue_count": len(selected_pairs)},
             task="outline.repair",
         )

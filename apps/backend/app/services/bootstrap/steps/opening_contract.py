@@ -10,6 +10,7 @@ from app.services.bootstrap.parse import parse_json
 from app.services.bootstrap.prompts.opening_contract import build_opening_contract_prompt
 from app.services.bootstrap.reader_promise_seed import seed_reader_promises
 from app.services.xuanhuan_lexicon import (
+from app.services.llm_token_budgets import max_tokens_bootstrap_completion
     is_xuanhuan_like_genre,
     sanitize_xuanhuan_text,
 )
@@ -34,7 +35,7 @@ async def gen_opening_contract(svc: Any, project: Project, ctx: dict) -> dict:
 
     try:
         raw = await svc._call_with_retry(
-            system, prompt, max_tokens=2048, task="bootstrap.opening_contract"
+            system, prompt, max_tokens=max_tokens_bootstrap_completion(), task="bootstrap.opening_contract"
         )
         contract = parse_json(raw)
         if not isinstance(contract, dict):

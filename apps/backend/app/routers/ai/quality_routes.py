@@ -34,6 +34,7 @@ from app.routers.ai.quality_debt import sync_quality_debts
 from app.routers.ai.schemas import QualityCheckRequest
 from app.routers.ai.text_utils import plain_text
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
+from app.utils.writing_style import resolve_project_writing_style
 
 router = APIRouter()
 
@@ -176,6 +177,7 @@ async def quality_check(
         continuity_context=continuity_context,
         chapter_index_context=chapter_index_context,
         plot_dossier_context=plot_dossier_context,
+        writing_style=resolve_project_writing_style(project),
     )
 
     chapter.last_quality_score = result.get("overall_score")

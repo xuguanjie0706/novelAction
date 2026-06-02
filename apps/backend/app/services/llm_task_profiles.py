@@ -76,6 +76,18 @@ TASK_PROFILES: dict[str, dict] = {
         "frequency_penalty": 0.3,
         "presence_penalty": 0.25,
     },
+    # ── 白话直白档（番茄纯爽文）────────────────────────────────────
+    # 设计动机：plain 书追求"一看就懂"，与 draft.chapter 的"文采变化"取向冲突。
+    #   · 低 temperature/top_p → 抑制生僻词与绕句，措辞回归大白话；
+    #   · 近零 presence/frequency_penalty → 不惩罚重复，允许金手指名/境界/数值
+    #     反复砸（番茄读者要的是重复强化，不是同义词替换）。
+    # 所有 phase 共用此单档：plain 书"直白优先于阶段文采差异"，不再按开局/高潮分叉。
+    "draft.plain": {
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "frequency_penalty": 0.1,
+        "presence_penalty": 0.0,
+    },
     "suggest.stream": {
         # 写作建议：偏自由，但不要走偏
         "temperature": 0.8,
@@ -202,11 +214,19 @@ def resolve_task_profile(task: Optional[str]) -> dict:
     return {k: v for k, v in profile.items() if v is not None}
 
 
-def phase_to_draft_task(phase: Optional[str]) -> str:
+def phase_to_draft_task(phase: Optional[str], writing_style: Optional[str] = None) -> str:
     """卷阶段（phase）→ 章节起草任务名映射。
 
     阶段命名见 OutlineNode.phase 注释；未匹配则走通用 draft.chapter。
+
+    Args:
+        phase: 卷阶段标记（opening/rising/turning/dark_hour/climax/ending）。
+        writing_style: 写作风格档位（plain/standard/dense）。``plain`` 时**优先级
+            高于 phase**，统一返回低温的 ``draft.plain``——直白书要的是稳定的大白话，
+            而非按阶段切换的文采差异。standard/dense 维持原有按 phase 分档逻辑。
     """
+    if writing_style and str(writing_style).strip().lower() == "plain":
+        return "draft.plain"
     if not phase:
         return "draft.chapter"
     p = str(phase).strip().lower()

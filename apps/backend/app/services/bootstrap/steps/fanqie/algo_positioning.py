@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.bootstrap.parse import parse_json
+from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
 # 番茄主流类型公式（供 AI 选择，避免生成不上架的边缘题材）
 _FANQIE_ARCHETYPES = (
@@ -66,7 +67,7 @@ async def gen_algo_positioning(svc: Any, ctx: dict) -> dict:
         )
         raw = await svc._call_with_retry(
             system, prompt + fix,
-            max_tokens=1024,
+            max_tokens=max_tokens_bootstrap_completion(),
             task="bootstrap.positioning",
         )
         try:

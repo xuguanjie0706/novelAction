@@ -11,6 +11,7 @@ from typing import Any
 
 from app.models import Project
 from app.services.bootstrap.parse import parse_json
+from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
 _FINGER_TYPES = (
     "系统面板（属性/技能/任务）/ 空间戒指（储物/种植/炼丹）/ "
@@ -79,7 +80,7 @@ async def gen_golden_finger(svc: Any, project: Project, ctx: dict) -> dict:
         fix = f"\n【请修正：{last_err}】" if last_err else ""
         raw = await svc._call_with_retry(
             system, prompt + fix,
-            max_tokens=1536,
+            max_tokens=max_tokens_bootstrap_completion(),
             task="bootstrap.positioning",
         )
         try:

@@ -1,7 +1,7 @@
 """
 graph_fanqie.py — 番茄小说专属 Bootstrap LangGraph
 
-拓扑（9阶段18步）：
+拓扑（番茄专线，无开局五章步）：
   START
   → fanqie_positioning        # Phase A: 算法立项（类型选型/爽感宣言/竞品差异）
   → gate                      # 立项确认闸门（与通用流程共用 gate 节点）
@@ -11,9 +11,9 @@ graph_fanqie.py — 番茄小说专属 Bootstrap LangGraph
   → face_slap_map             # Phase D: 打脸地图（对象谱系/首次打脸/类型多样性）
   → power_ladder              # Phase E: 权力阶梯（最小化世界观）
   → character_functions       # Phase E: 人物功能表 + 登场序列
-  → opening_5chapters         # Phase F: 开局五章工程（算法生死线）
-  → rhythm_map                # Phase G: 爽点节奏图 + 剧情储量池
-  → signal_audit              # Phase H: 算法双校验
+  → volumes                   # 全书卷级骨架（卷纲，复用 Step 9）
+  → rhythm_map                # Phase F: 爽点节奏图 + 剧情储量池
+  → signal_audit              # Phase G: 算法双校验
   → END
 
 复用：BootstrapState / emit / _push / subscribe / unsubscribe / _persist 来自 graph.py；
@@ -233,9 +233,13 @@ async def node_characters(s, c=None):
     from app.services.bootstrap.steps.fanqie.character_functions import gen_character_functions
     return await _fanqie_step(s, c, "characters", "生成人物功能表 + 登场序列...", gen_character_functions)
 
-async def node_opening(s, c=None):
-    from app.services.bootstrap.steps.fanqie.opening_5chapters import gen_opening_5chapters
-    return await _fanqie_step(s, c, "opening_5chapters", "规划开局五章（算法生死线）...", gen_opening_5chapters)
+
+async def node_volumes(s, c=None):
+    """全书卷级骨架（复用 Step 9 gen_volumes），与通用线同一套卷纲字段。"""
+    from app.services.bootstrap.steps.volumes import gen_volumes
+
+    return await _fanqie_step(s, c, "volumes", "规划全书卷级骨架（卷纲）...", gen_volumes)
+
 
 async def node_rhythm(s, c=None):
     from app.services.bootstrap.steps.fanqie.rhythm_map import gen_rhythm_map
@@ -251,6 +255,16 @@ async def node_audit(s, c=None):
     config = _resolve_config(c)
     db = config["configurable"]["db"]
     run_id = s["run_id"]
+    project_id = s.get("project_id")
+    if project_id:
+        from app.models import Project
+        from app.services.bootstrap.fanqie_normalize import converge_fanqie_project
+
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if project:
+            merged_ctx = dict(s.get("ctx") or {})
+            merged_ctx.update(patch.get("ctx") or {})
+            converge_fanqie_project(db, project, merged_ctx)
     emit(
         run_id,
         "complete",
@@ -276,7 +290,7 @@ def _build_fanqie_graph(checkpointer) -> StateGraph:
         ("face_slap_map",      node_face_slap),
         ("power_ladder",       node_power_ladder),
         ("characters",         node_characters),
-        ("opening_5chapters",  node_opening),
+        ("volumes",            node_volumes),
         ("rhythm_map",         node_rhythm),
         ("signal_audit",       node_audit),
     ]:
@@ -285,7 +299,7 @@ def _build_fanqie_graph(checkpointer) -> StateGraph:
     chain = [
         START, "fanqie_positioning", "gate", "project",
         "contrast_design", "golden_finger", "face_slap_map",
-        "power_ladder", "characters", "opening_5chapters",
+        "power_ladder", "characters", "volumes",
         "rhythm_map", "signal_audit", END,
     ]
     for a, b in zip(chain, chain[1:]):

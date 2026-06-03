@@ -9,6 +9,12 @@
 from __future__ import annotations
 
 from app.models import OutlineNode, Project
+from app.services.bootstrap.chapter_plan_batches import normalize_volume_planned_chapters
+
+
+def _volume_planned_chapters(volume_node: OutlineNode) -> int:
+    """与 vol_chapter_plans / routes_vol_expand 一致：读卷 extra.planned_chapters。"""
+    return normalize_volume_planned_chapters((volume_node.extra or {}).get("planned_chapters"))
 
 
 def build_fanqie_enhance_block(
@@ -101,7 +107,7 @@ def build_fanqie_enhance_block(
             if isinstance(t, dict) and isinstance(t.get("ch"), int)
         ]
         # 只展示与本卷相关的标签（±10章缓冲）
-        planned = volume_node.chapter_count or 30
+        planned = _volume_planned_chapters(volume_node)
         vol_end_ch = vol_start_ch + planned
         vol_tags = [
             t for t in relevant_tags
@@ -155,7 +161,7 @@ def build_fanqie_enhance_block(
 
 
 def _estimate_volume_start_chapter(project: Project, vol_sort_order: int) -> int:
-    """估算指定卷在全书中的起始章号（基于前序卷的 chapter_count）。"""
+    """估算指定卷在全书中的起始章号（累加前序卷的 planned_chapters）。"""
     if vol_sort_order <= 0:
         return 1
     from sqlalchemy.orm import object_session
@@ -163,9 +169,8 @@ def _estimate_volume_start_chapter(project: Project, vol_sort_order: int) -> int
     if not db:
         return vol_sort_order * 30 + 1  # 粗估
 
-    from app.models import OutlineNode
     prev_volumes = (
-        db.query(OutlineNode.chapter_count)
+        db.query(OutlineNode)
         .filter(
             OutlineNode.project_id == project.id,
             OutlineNode.node_type == "volume",
@@ -174,5 +179,5 @@ def _estimate_volume_start_chapter(project: Project, vol_sort_order: int) -> int
         .order_by(OutlineNode.sort_order)
         .all()
     )
-    total = sum((row[0] or 30) for row in prev_volumes)
+    total = sum(_volume_planned_chapters(v) for v in prev_volumes)
     return total + 1

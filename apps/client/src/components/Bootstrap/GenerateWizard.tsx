@@ -517,7 +517,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                     )}
                   </div>
                   <div className="text-xs text-gray-500 leading-relaxed">
-                    金手指 + 打脸地图 + 开局五章算法工程，把番茄平台逻辑硬编码进生成管道。
+                    金手指 + 打脸地图 + 爽点节奏图，卷纲在 Bootstrap、章纲进工作台按需展开。
                   </div>
                 </button>
               </div>

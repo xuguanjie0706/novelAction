@@ -32,13 +32,15 @@ async def gen_signal_audit(svc: Any, project: Project, ctx: dict) -> dict:
     contrast = ctx.get("contrast_design") or {}
     gf = ctx.get("golden_finger") or {}
     fsm = ctx.get("face_slap_map") or {}
-    op5 = ctx.get("opening_5chapters") or {}
     rm = ctx.get("rhythm_map") or {}
 
-    ch1 = op5.get("chapter_1", {})
-    ch1_struct = ch1.get("structure", {})
     first_slap_ch = fsm.get("first_slap_chapter", 99)
     trigger_est = contrast.get("trigger_word_estimate", "")
+    opening_hook = (
+        (contrast.get("initial_state_headline") or "").strip()
+        or (fanqie_pos.get("algo_hook") or "").strip()
+        or "（未设定）"
+    )
     dry_spells = rm.get("auto_dry_spells") or rm.get("dry_spell_warnings") or []
     tags_sample = (rm.get("chapter_tags") or [])[:10]
 
@@ -48,8 +50,8 @@ async def gen_signal_audit(svc: Any, project: Project, ctx: dict) -> dict:
 核心爽感：{fanqie_pos.get('core_satisfaction', '')}
 算法钩子：{fanqie_pos.get('algo_hook', '')}
 
-第1章前200字规划：{ch1_struct.get('opening_200_words', '（未设定）')}
-第1章首句：{op5.get('first_sentence', '（未设定）')}
+开局处境/钩子：{opening_hook[:120]}
+金手指：{gf.get('finger_name', '（未设定）')}
 金手指触发时机：{trigger_est or '（未设定）'}
 首次打脸章节：第{first_slap_ch}章
 连续过渡警告：{dry_spells or '（无警告）'}

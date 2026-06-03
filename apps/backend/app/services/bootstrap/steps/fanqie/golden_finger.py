@@ -26,7 +26,7 @@ async def gen_golden_finger(svc: Any, project: Project, ctx: dict) -> dict:
     设计金手指：类型选择 + 爽感可视化 + 阶段成长路线图。
 
     产物写入 Project.extra['golden_finger'] 并缓存到 ctx。
-    后续 power_ladder / character_functions / opening_5chapters 均依赖此产物。
+    后续 power_ladder / character_functions / rhythm_map 均依赖此产物。
 
     @returns golden_finger dict
     """

@@ -169,8 +169,9 @@ def chapter_word_budget_for_phase(
     climax 章需要展开空间，dark_hour 情感章需要内心戏字数，
     opening fast 章节短促有力不拖沓。
 
-    番茄模式（is_fanqie=True）：基线全面下调至 1500-2100，硬上限 2200。
-    番茄广告插在章间，短章 = 高翻页率 = 高完读率 = 高推荐量。
+    番茄模式（is_fanqie=True）：基线设为 2000-2600，硬上限 2800、下限 1900。
+    番茄仍偏好短章（高翻页率 = 高完读率），但原 1500 级基线偏短，叠加 plain
+    直白风格后正文常掉到 1100-1300，故整体上调一档：开局 ~2000、其余 2200-2500。
 
     Args:
         phase: 卷阶段（opening/rising/turning/dark_hour/climax/ending）。
@@ -180,17 +181,17 @@ def chapter_word_budget_for_phase(
         is_fanqie: 番茄模式（pace_type=="fast"）。
 
     Returns:
-        预期字数。标准模式 [1800, 3500]，番茄模式 [1400, 2200]。
+        预期字数。标准模式 [1800, 3500]，番茄模式 [1900, 2800]。
     """
     if is_fanqie:
         base = {
-            "opening": 1600, "rising": 1800, "turning": 1900,
-            "dark_hour": 1900, "climax": 2100, "ending": 1700,
-        }.get(phase, 1800)
-        pacing_mod = {"fast": -100, "slow": 100, "climax": 200, "normal": 0}.get(pacing, 0)
-        slap_mod = 100 if has_face_slap else 0
-        emotion_mod = 100 if has_emotional_beat else 0
-        return min(2200, max(1400, base + pacing_mod + slap_mod + emotion_mod))
+            "opening": 2000, "rising": 2300, "turning": 2400,
+            "dark_hour": 2400, "climax": 2600, "ending": 2200,
+        }.get(phase, 2300)
+        pacing_mod = {"fast": -100, "slow": 150, "climax": 200, "normal": 0}.get(pacing, 0)
+        slap_mod = 150 if has_face_slap else 0
+        emotion_mod = 150 if has_emotional_beat else 0
+        return min(2800, max(1900, base + pacing_mod + slap_mod + emotion_mod))
 
     base = {
         "opening": 2200,

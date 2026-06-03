@@ -85,6 +85,10 @@ async def gen_vol_chapter_plans(
     open_promises: list[dict] | None = None,
     memory_chunks: list[str] | None = None,
     editorial_prompt_block: str = "",
+    *,
+    chapter_from: int = 1,
+    chapter_to: int | None = None,
+    seed_nodes: list[OutlineNode] | None = None,
 ) -> list[OutlineNode]:
     """为任意卷生成章级大纲节点（chapter_plan）并写库。
 
@@ -99,6 +103,9 @@ async def gen_vol_chapter_plans(
         memory_chunks:         项目 MemoryChunk 内容列表（最近 N 条，作为世界状态锚点）。
         editorial_prompt_block: 来自 build_vol_expand_ctx 的富上下文 prompt 块（包含
                                Tier1-5 全部内容）。若为空则退化到轻量模式。
+        chapter_from:         本卷从第几章开始生成（补全/番茄开局物化后为 6）。
+        chapter_to:           本卷生成到第几章（默认 planned_chapters）。
+        seed_nodes:           已存在的 chapter_plan（物化的开局章等），用于批间衔接。
 
     Returns:
         已落库的 OutlineNode 列表（chapter_plan 类型），按 sort_order 升序。
@@ -141,6 +148,10 @@ async def gen_vol_chapter_plans(
     memory_chunks = memory_chunks or []
 
     planned = normalize_volume_planned_chapters((volume_node.extra or {}).get("planned_chapters", 30))
+    chapter_to = chapter_to if chapter_to is not None else planned
+    chapter_from = max(1, min(chapter_from, planned))
+    chapter_to = max(chapter_from, min(chapter_to, planned))
+    seed_count = len(seed_nodes or [])
 
     # ── 全书预算锚点（ctx 由 gen_volumes 初始化；兜底用 target_words 重算）──────
     tw = int(project.target_words or 1_200_000)
@@ -252,13 +263,18 @@ async def gen_vol_chapter_plans(
     # ── 已写上下文 ────────────────────────────────────────────────────────────
     written_block = fmt_written_summaries(written_summaries)
 
-    all_results: list[OutlineNode] = []
+    all_results: list[OutlineNode] = list(seed_nodes or [])
     batch_errors: list[str] = ctx.setdefault("vol_chapter_batch_errors", [])
     char_name_to_id = ctx.get("char_name_to_id", {})
     storyline_ids_map = ctx.get("storyline_ids", {})
 
     completion_budget = max_tokens_vol_expand_chapters()
     batch_ranges = chapter_plan_batch_ranges(planned, completion_budget)
+    batch_ranges = [
+        (max(batch_start, chapter_from), min(batch_end, chapter_to))
+        for batch_start, batch_end in batch_ranges
+        if batch_end >= chapter_from and batch_start <= chapter_to
+    ]
     log_chapter_plan_batches(
         logger,
         tag="vol_chapters",
@@ -583,7 +599,7 @@ async def gen_vol_chapter_plans(
         )
 
     # 全书配额计数器累加（供后续卷展开时读取，防止漂移）
-    ctx["chapter_quota_used"] = quota_used + len(all_results)
+    ctx["chapter_quota_used"] = quota_used + max(0, len(all_results) - seed_count)
 
     return all_results
 

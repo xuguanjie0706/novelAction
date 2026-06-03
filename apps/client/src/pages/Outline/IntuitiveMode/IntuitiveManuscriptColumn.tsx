@@ -14,6 +14,7 @@ import type { IntuitiveVolumeBundle } from './intuitiveTypes'
 interface Props {
   bundle: IntuitiveVolumeBundle
   projectId: string
+  projectExtra?: Record<string, unknown>
   aiBackendRoute: string
   activeChapter: number | null
   onChapterSelect: (n: number) => void
@@ -28,6 +29,7 @@ interface Props {
 export default function IntuitiveManuscriptColumn({
   bundle,
   projectId,
+  projectExtra,
   activeChapter,
   onChapterSelect,
   onOpenWrite,
@@ -76,6 +78,7 @@ export default function IntuitiveManuscriptColumn({
           <VolumeExpandButton
             volumeNode={volume}
             projectId={projectId}
+            projectExtra={projectExtra}
             aiBackendRoute={aiBackendRoute}
             onExpanded={onReload}
             onExpandStart={onVolExpandStart}

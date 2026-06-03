@@ -203,6 +203,40 @@ JSON 杂物字段，当前已知键：
 
 ---
 
+## 写作风格档位（writing_style，2026-06）
+
+> 设计动机：番茄纯爽文要求正文「一看就懂」，与系统默认的「文笔老练/让事件自己说话」取向冲突。
+> 故引入全书级写作风格档，**贯穿立项→采样→正文→质检→复盘→上游章纲/卷骨架**一条同向链路，
+> 消除「正文写直白、质检按文笔扣分、复盘又把文风拉回」的跨环拉锯。
+
+三档：`plain`（白话直白/小白友好）/ `standard`（默认）/ `dense`（老白文）。
+
+- **落库**：`Project.extra.writing_style` + `Project.extra.positioning.writing_style`（双写，下游统一读 positioning）；建书时由 `GenerateWizard` 选择，bootstrap `steps/project.py` 落库。
+- **番茄线默认 plain**：`graph_fanqie.py` 入口默认 `plain`；`routers/bootstrap_graph.py` 在 `mode=fanqie` 时把未改动的 `standard` 提升为 `plain`（显式选 `dense` 仍尊重）。
+- **统一读取**：`app/utils/writing_style.py`（`resolve_project_writing_style` / `writing_style_from_extra`）——顶层 + positioning 双兜底，禁止各处现读。
+- **链路落点**：
+  - 正文：`draft_stream.py` plain 时整段分叉 system 核心原则 / 严禁清单 / 截图时刻为番茄版（非「先禁后松绑」）。
+  - 采样：`llm_task_profiles.draft.plain`（低温 0.7 / 近零 penalty，允许金手指/境界/数值反复砸）；`phase_to_draft_task(phase, writing_style)` plain 时优先返回 `draft.plain`。
+  - 质检：`quality.py` plain 新增 `readability` 维度，直白/口语/解释清楚不扣分，禁止「增强文采」类 suggestions。
+  - 复盘：`debrief_extract.py` plain 时 `next_chapter_directives` 禁止「增强文采/留白」类指令（directives 是写章最高优先级注入）。
+  - 上游：`steps/vol_chapter_plans.py`（章纲，prompt 见 `prompts/vol_chapter_plans_prompt.plain_chapter_plan_addendum`）+ `steps/volumes.py`（卷骨架燃点/高潮）+ `writing_scene_plan.py`（分场，从 positioning 识别）均加 plain 约束，从源头让蓝图稀疏直白。
+
+## 番茄专线（graph_fanqie，diverge upstream / converge downstream）
+
+番茄书走独立 LangGraph（`graph_fanqie.py`），但**产物归一化进通用线**，不维护平行栈：
+
+```
+START → fanqie_positioning → gate → project
+  → contrast_design → golden_finger → face_slap_map
+  → power_ladder → characters
+  → volumes        # 复用通用 Step 9 gen_volumes 出卷骨架（不再走 opening_5chapters）
+  → rhythm_map → signal_audit → END
+```
+
+- **收敛**：`signal_audit` 末调 `fanqie_normalize.converge_fanqie_project`，把番茄规划产物写成与通用线相同的 `OutlineNode/PowerSystem` 列与 extra 契约；规划层保留 `Project.extra['fanqie_*']`。
+- **章纲展开**：`routes_vol_expand` 升级为「未满卷增量补全 / 满卷 force 重做」，`fanqie_volume_expand.prepare_volume_chapter_expand` 解析补全区间 + seed_nodes，`gen_vol_chapter_plans` 新增 `chapter_from/chapter_to/seed_nodes`。
+- **已弃用**：`steps/fanqie/opening_5chapters.py` 移出 graph chain，仅存量 `extra.opening_5chapters` 物化 1–5 章时兼容（文件头已标注）。
+
 ## 一句话生成（Bootstrap）
 
 唯一流程：**串行步进（Sequential）**，LangGraph 编排，入口 `POST /api/v1/bootstrap/runs`。
@@ -396,7 +430,7 @@ logline
 | `apps/backend/app/services/ai/writing_tools.py` | 17 | ✅ 已拆分（writing_pre_warn.py / writing_scene_plan.py / writing_reader_sim.py）；现壳 17 行 |
 | `apps/backend/app/services/bootstrap/volume_entity_registry.py` | 740 | 🚫 超硬上限（600）；禁止继续增入；待拆分 |
 | `apps/backend/app/services/bootstrap/steps/vol_chapter_plans.py` | 643 | 🚫 超硬上限（600）；禁止继续增入；待拆分 |
-| `apps/backend/app/services/ai/context_assembler.py` | 601 | 🚫 超硬上限（600）；禁止继续增入；待拆分（已存在更小粒度的 context_queries.py） |
+| `apps/backend/app/services/ai/context_assembler.py` | 565 | ✅ 已拆 `draft_ctx_bridge.py` + `context_assembler_helpers.py`；禁止再内联 bridge/style 逻辑 |
 | `apps/client/src/components/Bootstrap/hooks/useBootstrapStream.ts` | 840 | 🚫 超硬上限（600）；禁止继续增入；优先待拆 |
 | `apps/client/src/pages/SettingsPage.tsx` | 710 | 🚫 超硬上限（600）；禁止继续增入；待拆分 |
 | `apps/client/src/pages/Outline/NodeDetailPanel.tsx` | 684 | 🚫 超硬上限（600）；禁止继续增入；待拆分 |

@@ -254,6 +254,9 @@ def chapter_debrief(
     chapter_index_saved = False
     chapter_index_error: Optional[str] = None
     synced_foreshadows = {"created": 0, "updated": 0, "resolved": 0}
+    nk_in_world: list = []
+    nk_protagonist: list = []
+    nk_core_events: list = []
     if req.chapter_index:
         try:
             with db.begin_nested():
@@ -264,6 +267,9 @@ def chapter_debrief(
                 ).first()
                 data = req.chapter_index.model_dump()
                 data.pop("foreshadow_updates", None)
+                nk_in_world = list(data.pop("in_world_named_terms", None) or [])
+                nk_protagonist = list(data.pop("protagonist_known_terms", None) or [])
+                nk_core_events = list(data.get("core_events") or [])
                 data["hook_strength"] = hook_strength
                 data["chapter_number"] = display_chapter_number(chapter.title, chapter.sort_order)
                 if data.get("story_day"):
@@ -284,6 +290,21 @@ def chapter_debrief(
                 )
         except SQLAlchemyError as exc:
             chapter_index_error = exc.__class__.__name__
+
+    if chapter_index_saved:
+        project_row = db.query(Project).filter(Project.id == project_id).first()
+        if project_row:
+            from app.services.ai.narrative_knowledge import (
+                merge_narrative_knowledge_from_debrief,
+            )
+
+            merge_narrative_knowledge_from_debrief(
+                project_row,
+                chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
+                in_world_named_terms=nk_in_world,
+                protagonist_known_terms=nk_protagonist,
+                core_events=nk_core_events,
+            )
 
     added_new_characters = apply_new_characters(
         db, project_id, req.new_characters, req.chapter_id, chapter,

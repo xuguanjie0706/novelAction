@@ -1,20 +1,13 @@
-"""Bootstrap Fanqie Steps 11-14：开局五章工程。
+"""【已移出 Bootstrap】开局五章工程 — 仅保留供存量数据兼容。
 
-这是番茄 Bootstrap 中优先级最高的模块——算法生死线。
-前五章是独立的「算法产品」，不是「章节序列的前五章」，评估标准完全不同：
-
-  Ch1 完读率目标 > 60%
-  Ch2 完读率目标 > 50%
-  Ch3 完读率目标 > 45%（首次打脸必须在此章或之前）
-  Ch4-5 完读率目标 > 40%
-
-产物写入 Project.extra['opening_5chapters']，同时创建前5章的 OutlineNode（chapter_plan）。
+2026-06：番茄 Bootstrap 不再调用本步骤；第 1 章起章纲在大纲页「展开章纲」时与全书一致由 AI 生成。
+若 Project.extra 仍含 opening_5chapters，expand-chapters 可物化 1–5 章（见 fanqie_volume_expand）。
 """
 from __future__ import annotations
 
 from typing import Any
 
-from app.models import OutlineNode, Project
+from app.models import Project
 from app.services.bootstrap.parse import parse_json
 from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
@@ -134,8 +127,10 @@ async def gen_opening_5chapters(svc: Any, project: Project, ctx: dict) -> dict:
         project.extra = extra
         svc.db.commit()
 
-        # 创建前5章 OutlineNode（chapter_plan）——找或创建第一卷节点
-        _ensure_chapter_plans(svc.db, project, data)
+        from app.services.bootstrap.fanqie_normalize import ensure_fanqie_opening_volume
+
+        # 番茄契约：Bootstrap 只落卷纲 + extra.opening_5chapters；章纲在「展开章纲」时物化
+        ensure_fanqie_opening_volume(svc.db, project, {**ctx, "opening_5chapters": data})
 
         from app.services.bootstrap.reader_promise_seed import seed_reader_promises
 
@@ -192,70 +187,3 @@ def _trigger_word(contrast: dict) -> str:
     m = re.search(r"\d+", est)
     return m.group() if m else "800"
 
-
-def _ensure_chapter_plans(db, project: Project, data: dict) -> None:
-    """在第一卷下创建前5章的 chapter_plan OutlineNode（已存在则跳过）。"""
-    # 找第一卷节点
-    vol1 = (
-        db.query(OutlineNode)
-        .filter(
-            OutlineNode.project_id == project.id,
-            OutlineNode.node_type == "volume",
-        )
-        .order_by(OutlineNode.sort_order)
-        .first()
-    )
-    if not vol1:
-        vol1 = OutlineNode(
-            project_id=project.id,
-            node_type="volume",
-            title="第一卷",
-            sort_order=1,
-            phase="opening",
-        )
-        db.add(vol1)
-        db.flush()
-
-    # 检查已有 chapter_plan
-    existing = (
-        db.query(OutlineNode)
-        .filter(
-            OutlineNode.project_id == project.id,
-            OutlineNode.parent_id == vol1.id,
-            OutlineNode.node_type == "chapter_plan",
-        )
-        .count()
-    )
-    if existing >= 5:
-        return
-
-    chapter_data = {
-        1: data.get("chapter_1", {}),
-        2: data.get("chapter_2", {}),
-        3: data.get("chapter_3", {}),
-        4: data.get("chapter_4", {}),
-        5: data.get("chapter_5", {}),
-    }
-    for ch_num, ch in chapter_data.items():
-        if not ch:
-            continue
-        node = OutlineNode(
-            project_id=project.id,
-            parent_id=vol1.id,
-            node_type="chapter_plan",
-            title=ch.get("title") or f"第{ch_num}章",
-            summary=(
-                ch.get("core_event")
-                or (ch.get("structure") or {}).get("act_1_setup")
-                or ""
-            )[:200],
-            sort_order=ch_num,
-            phase="opening",
-            extra={
-                "fanqie_chapter": ch,
-                "completion_rate_target": ch.get("completion_rate_target"),
-                "ending_hook": ch.get("ending_hook"),
-            },
-        )
-        db.add(node)
-    db.commit()

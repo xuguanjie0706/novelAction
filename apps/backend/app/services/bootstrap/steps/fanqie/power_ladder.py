@@ -5,7 +5,7 @@
 - 禁止复杂地理/文化描写（浪费字数）
 - 必须明确财富和武力的「外在可视化」方式——读者要能「看到」权力差距
 
-产物主要供 character_functions 和 opening_5chapters 使用。
+产物主要供 character_functions 与卷纲展开使用。
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ async def gen_power_ladder(svc: Any, project: Project, ctx: dict) -> dict:
     生成权力阶梯：社会/武力/财富层级 + 外在可视化方式。
 
     产物写入 Project.extra['power_ladder'] 并缓存到 ctx。
-    不创建 PowerSystem 记录（番茄模式下以 extra 存储为主）。
+    同时写入 Project.extra；Bootstrap 收敛阶段会同步到 PowerSystem 表。
 
     @returns power_ladder dict
     """

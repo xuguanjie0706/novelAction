@@ -4,7 +4,8 @@
 --------
 - 每次调用只展开**一个**卷，不批量。
 - 注入三类已写上下文（章节摘要 / 未兑现承诺 / 记忆片段），让 AI 感知当前故事状态。
-- 幂等保护：若目标卷已有 chapter_plan 子节点且未传 force=true，返回 409。
+- 未满卷：已有部分 chapter_plan 时自动从下一章补全至 planned_chapters。
+- 已满卷：未传 force=true 时返回 409；force 时删旧重生成。
 - SSE 事件序列：step_start → step_done / error → end。
 """
 
@@ -260,8 +261,8 @@ async def expand_volume_chapters(
 
     流程：
     1. 验证 volume_node 存在且 node_type == "volume"。
-    2. 幂等检查：已有 chapter_plan 子节点且 force=False → 409。
-    3. force=True 时先删除旧 chapter_plan 子节点。
+    2. prepare_volume_chapter_expand：解析补全区间；已满卷且 force=False → 409。
+    3. force=True 时先删除旧 chapter_plan，再按番茄契约物化开局章。
     4. 查询已写章节摘要、未兑现承诺、记忆片段，构建上下文。
     5. 调用 gen_vol_chapter_plans，写库。
     6. SSE 推送 step_start / step_done / error / end。
@@ -297,38 +298,31 @@ async def expand_volume_chapters(
     if volume_node.node_type != "volume":
         raise HTTPException(422, f"节点类型必须为 volume，当前为 {volume_node.node_type!r}")
 
-    # 幂等检查
-    existing = (
-        db.query(OutlineNode)
-        .filter(
-            OutlineNode.parent_id == volume_node_id,
-            OutlineNode.node_type == "chapter_plan",
-        )
-        .count()
+    ctx, editorial_prompt_block = build_vol_expand_ctx(db, project, volume_node)
+    from app.services.bootstrap.fanqie_volume_expand import prepare_volume_chapter_expand
+
+    expand_plan = prepare_volume_chapter_expand(
+        db, project, volume_node, ctx, force=req.force,
     )
-    if existing > 0 and not req.force:
+    if expand_plan is None:
+        existing = (
+            db.query(OutlineNode)
+            .filter(
+                OutlineNode.parent_id == volume_node_id,
+                OutlineNode.node_type == "chapter_plan",
+            )
+            .count()
+        )
         raise HTTPException(
             409,
-            f"该卷已有 {existing} 个章节计划。若要重新生成，请传 force=true。",
+            f"该卷章纲已满（{existing} 章）。若要整卷重做，请使用「重新生成」并确认覆盖。",
         )
-    if existing > 0 and req.force:
-        # 删除旧节点再重新生成
-        db.query(OutlineNode).filter(
-            OutlineNode.parent_id == volume_node_id,
-            OutlineNode.node_type == "chapter_plan",
-        ).delete(synchronize_session=False)
-        db.commit()
+    chapter_from, chapter_to, seed_nodes = expand_plan
 
     async def stream() -> AsyncIterator[str]:
         yield _sse("step_start", step="expand_chapters", volume_title=volume_node.title)
 
         try:
-            # ── 构建总编辑级富上下文 ──────────────────────────────────────
-            # build_vol_expand_ctx 一次性查询所有需要的数据库表，返回：
-            # - ctx: 含 char_profiles / storyline_ids / positioning 等30+字段
-            # - editorial_prompt_block: 立项定位/卡司档案/关系台账/伏笔台账等结构化块
-            ctx, editorial_prompt_block = build_vol_expand_ctx(db, project, volume_node)
-
             # ── 查询动态上下文（已写章节摘要、记忆片段）─────────────────
             written_summaries = _get_written_summaries(
                 db, project_id, req.written_context_limit
@@ -343,6 +337,9 @@ async def expand_volume_chapters(
                 promise_count=len(open_promises),
                 memory_count=len(memory_chunks),
                 editorial_blocks=editorial_prompt_block.count("\n【"),
+                expand_from=chapter_from,
+                expand_to=chapter_to,
+                seed_chapter_count=len(seed_nodes),
             )
 
             # ── 初始化 AI + svc 薄壳 ──────────────────────────────────────
@@ -365,6 +362,9 @@ async def expand_volume_chapters(
                 open_promises=open_promises,
                 memory_chunks=memory_chunks,
                 editorial_prompt_block=editorial_prompt_block,
+                chapter_from=chapter_from,
+                chapter_to=chapter_to,
+                seed_nodes=seed_nodes,
             )
 
             db.refresh(volume_node)

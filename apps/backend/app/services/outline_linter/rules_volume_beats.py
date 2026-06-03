@@ -66,6 +66,24 @@ def lint_volume_beats(
             suggestion="在 Bootstrap 卷闸门或卷编辑中补全 beat_highlights",
         ))
 
+    # VB-08：燃点类型过度单一（≥3 条但去重后 ≤1 种）——「整卷清一色打脸」信号
+    valid_beats = [
+        b for b in highlights
+        if isinstance(b, dict) and (b.get("description") or "").strip()
+    ]
+    if len(valid_beats) >= 3:
+        beat_types = {(b.get("beat_type") or "").strip() for b in valid_beats}
+        beat_types.discard("")
+        if len(beat_types) <= 1:
+            only = next(iter(beat_types), "face_slap")
+            issues.append(LinterIssue(
+                rule_id="VB-08",
+                severity="medium",
+                scope="volume",
+                message=f"卷级燃点类型单一（{len(valid_beats)} 条均为 {only}），缺乏爽感多样性",
+                suggestion="混入 reveal/power_up/relationship_turn 等不同类型，避免整卷清一色打脸",
+            ))
+
     for i, b in enumerate(highlights, 1):
         if not isinstance(b, dict):
             continue

@@ -93,6 +93,8 @@ def format_character_block(char: Character) -> str:
     if char.current_status and char.current_status != "alive":
         parts.append(f"状态:{char.current_status}")
     parts.append(f"）性格:{(char.personality or '')[:60]}")
+    if char.speech_style:
+        parts.append(f"语风:{truncate(char.speech_style, 100)}")
 
     # --- 以下为新增/补全字段 ---
     if char.appearance:

@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import re
+
 from app.services.outline_linter.helpers import (
     ChapterSnapshot,
     is_placeholder,
     is_vague_end_hook,
+    text_overlap,
 )
+
+_TITLE_PREFIX_RE = re.compile(r"^\s*第\s*\d+\s*章\s*[:：]?\s*")
 from app.services.outline_linter.schemas import LinterIssue
 from app.services.outline_planning import chapter_word_budget_for_phase
 
@@ -179,5 +184,27 @@ def _lint_one(ch: ChapterSnapshot) -> list[LinterIssue]:
             field="power_milestone",
             suggestion="写清具体境界名、技能名或战力变化",
         ))
+
+    # CH-19：标题与本章核心事件零字面呼应 —— 标题党/偏题信号（如标题写「坊市冲突」但本章全在别处）。
+    # 保守判定：仅当标题正文与本章实体内容无任何 2-gram 公共子串时告警（medium 不阻断）。
+    title_text = _TITLE_PREFIX_RE.sub("", (ch.title or "").strip()).strip()
+    if len(title_text) >= 2:
+        body = " ".join([
+            summary,
+            hook,
+            end_hook,
+            (ch.conflict or ""),
+            choice,
+            ch.ex_str("protagonist_want"),
+            ch.ex_str("core_event"),
+            (ch.power_milestone or ""),
+        ]).strip()
+        if body and not text_overlap(title_text, body, min_len=2):
+            out.append(_issue(
+                ch, "CH-19", "medium",
+                f"第{n}章标题「{title_text}」与本章核心事件无任何字面呼应，疑似标题党/偏题",
+                field="title",
+                suggestion="标题须点明本章实际发生的主场景/转折，不要以未在本章发生的场景或地点命名",
+            ))
 
     return out

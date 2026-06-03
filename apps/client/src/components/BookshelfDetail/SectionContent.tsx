@@ -14,8 +14,11 @@ import type {
 } from '../../types'
 import { VolumeDirectorCard } from '../Outline/VolumeDirectorView'
 import OpeningContractSection from './OpeningContractSection'
+import FanqieSection from './FanqieSection'
+import RecapEmptyWithRegen from './RecapEmptyWithRegen'
 import { EmotionArcSection, VillainArcSection } from './NarrativeArcSections'
 import { resolveEmotionArc, resolveVillainArc } from '../../utils/narrativeArcDisplay'
+import { wordsToPlan } from '../../utils/outlinePlanning'
 
 // ── 数据 bundle ───────────────────────────────────────────────
 
@@ -437,13 +440,47 @@ function SettingsSection({ data }: { data: DetailData }) {
 
 // ── 区域渲染：卷级结构 ────────────────────────────────────────
 
-function VolumesSection({ data }: { data: DetailData }) {
+function VolumesSection({
+  data,
+  projectId,
+  onDataRefresh,
+}: {
+  data: DetailData
+  projectId?: string
+  onDataRefresh?: () => void
+}) {
   const hasProtagonistRealm = data.volumes.some(
     v => Boolean(v.extra?.protagonist_realm_start || v.extra?.protagonist_realm_end),
   )
+  const expectedVolumes = wordsToPlan(data.project.target_words ?? 0).total_volumes
+  const volumeCountShort = data.volumes.length > 0 && data.volumes.length < expectedVolumes
+  const regen =
+    projectId && onDataRefresh
+      ? { projectId, step: 'volumes' as const, onSuccess: onDataRefresh }
+      : undefined
   return (
     <>
-      {data.volumes.length === 0 && <p style={S.muted}>暂无卷级数据</p>}
+      {data.volumes.length === 0 && (
+        <>
+          <p style={S.muted}>暂无卷级卷纲（番茄模式需在 Bootstrap 中生成「卷级骨架」步骤）</p>
+          {regen && (
+            <RecapEmptyWithRegen
+              projectId={regen.projectId}
+              step={regen.step}
+              hint="将按目标字数规划多卷卷纲（每卷摘要、阶段、燃点、计划章数）"
+              onSuccess={regen.onSuccess}
+            />
+          )}
+        </>
+      )}
+      {volumeCountShort && regen && (
+        <RecapEmptyWithRegen
+          projectId={regen.projectId}
+          step={regen.step}
+          hint={`当前仅有 ${data.volumes.length} 卷，按目标字数约需 ${expectedVolumes} 卷。点此生成完整多卷卷纲（会替换现有卷节点及其下章纲）。`}
+          onSuccess={regen.onSuccess}
+        />
+      )}
       {data.volumes.length > 0 && !hasProtagonistRealm && (
         <p style={{ ...S.muted, marginBottom: 12, padding: '10px 12px', background: '#fffbeb', borderRadius: 8, border: '1px solid #fde68a' }}>
           本卷尚未写入主角境界区间。请刷新页面（系统会按境界体系自动补全）；若仍为空，请确认已生成「境界体系」后重新运行 Bootstrap Step 9。
@@ -535,7 +572,9 @@ export default function SectionContent({ sectionId, data, projectId, onDataRefre
     case 'skills':       return <SkillsSection data={data} />
     case 'items':        return <ItemsSection data={data} />
     case 'settings':     return <SettingsSection data={data} />
-    case 'volumes':      return <VolumesSection data={data} />
+    case 'volumes':      return (
+      <VolumesSection data={data} projectId={projectId} onDataRefresh={onDataRefresh} />
+    )
     case 'emotion_arc':  return (
       <EmotionArcSection
         entries={resolveEmotionArc(data.project.extra)}
@@ -554,6 +593,7 @@ export default function SectionContent({ sectionId, data, projectId, onDataRefre
       <OpeningContractSection data={data} projectId={projectId} onDataRefresh={onDataRefresh} />
     )
     case 'consistency':  return <ConsistencySection data={data} />
+    case 'fanqie':       return <FanqieSection data={data} />
     default:             return <p style={S.muted}>选择左侧区域查看内容</p>
   }
 }

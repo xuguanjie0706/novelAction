@@ -43,6 +43,49 @@ def test_apply_volume_beat_fields_sets_highlight():
     assert extra["volume_climax"]["chapter_hint"] == 28
 
 
+def test_align_redistributes_degenerate_all_last_chapter():
+    """LLM 把所有节拍填成卷末同一章（60 章卷全填 60）应被确定性重排。"""
+    vol = {
+        "planned_chapters": 60,
+        "beat_highlights": [
+            {"chapter_hint": 60, "beat_type": "face_slap", "description": "重力天梯反超陆雷"},
+            {"chapter_hint": 60, "beat_type": "face_slap", "description": "禁地反杀陆雷突破"},
+            {"chapter_hint": 60, "beat_type": "face_slap", "description": "内门选拔击败天骄"},
+        ],
+        "volume_climax": {"chapter_hint": 60, "description": "宗门大比越级斩杀陆苍"},
+        "emotional_turning_point": {"chapter_hint": 60, "description": "禁地共患难情定姬如雪"},
+    }
+    extra: dict = {"planned_chapters": 60}
+    apply_volume_beat_fields(vol, extra)
+    bh = [b["chapter_hint"] for b in extra["beat_highlights"]]
+    cl = extra["volume_climax"]["chapter_hint"]
+    tn = extra["emotional_turning_point"]["chapter_hint"]
+    assert len(set(bh)) == 3 and bh == sorted(bh)
+    assert all(b < cl for b in bh)
+    assert min(bh[i + 1] - bh[i] for i in range(len(bh) - 1)) >= 3
+    assert 0.6 * 60 <= cl <= 60
+    assert 0.3 * 60 <= tn < cl
+
+
+def test_align_preserves_good_distribution():
+    """已分布良好的章号应原样保留。"""
+    vol = {
+        "planned_chapters": 30,
+        "beat_highlights": [
+            {"chapter_hint": 7, "beat_type": "power_up", "description": "a"},
+            {"chapter_hint": 14, "beat_type": "face_slap", "description": "b"},
+            {"chapter_hint": 21, "beat_type": "reveal", "description": "c"},
+        ],
+        "volume_climax": {"chapter_hint": 27, "description": "x"},
+        "emotional_turning_point": {"chapter_hint": 16, "description": "y"},
+    }
+    extra: dict = {"planned_chapters": 30}
+    apply_volume_beat_fields(vol, extra)
+    assert [b["chapter_hint"] for b in extra["beat_highlights"]] == [7, 14, 21]
+    assert extra["volume_climax"]["chapter_hint"] == 27
+    assert extra["emotional_turning_point"]["chapter_hint"] == 16
+
+
 def test_expand_block_lists_batch_beats():
     class Vol:
         summary = "林凡逆袭"
@@ -76,6 +119,30 @@ def test_draft_block_near_beat_chapter():
     block = build_volume_beat_draft_block(Vol(), 8)
     assert "击败陆青云" in block
     assert build_volume_beat_draft_block(Vol(), 3) == ""
+
+
+def test_linter_vb08_monotone_beat_types():
+    """≥3 条燃点全为同一类型应触发 VB-08（爽感单一）。"""
+    extra = {
+        "planned_chapters": 60,
+        "beat_highlights": [
+            {"chapter_hint": 11, "beat_type": "face_slap", "description": "重力天梯反超陆雷"},
+            {"chapter_hint": 34, "beat_type": "face_slap", "description": "禁地反杀陆雷夺草"},
+            {"chapter_hint": 50, "beat_type": "face_slap", "description": "内门选拔击败天骄"},
+        ],
+        "volume_climax": {"chapter_hint": 53, "description": "宗门大比越级斩杀陆苍"},
+    }
+    chapters = [
+        ChapterSnapshot(
+            id=f"c{n}", sort_order=n - 1, title=f"第{n}章", summary="x", hook="",
+            highlight="", conflict="", pacing="normal", phase="rising",
+            expected_words=2300, storyline_ids=[], involved_character_ids=[],
+            power_milestone=None, extra={},
+        )
+        for n in (11, 34, 50, 53)
+    ]
+    issues = lint_volume_beats(chapters, extra, planned_chapters=60)
+    assert "VB-08" in [i.rule_id for i in issues]
 
 
 def test_linter_vb03_missing_overlap():

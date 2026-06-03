@@ -21,6 +21,7 @@ import { authFetch } from '../../api/authFetch'
 import { modelProfileFromRoute, llmProviderIdFromRoute } from '../../store'
 import type { OutlineNode } from '../../types'
 import ConfirmActionModal from './ConfirmActionModal'
+import { volumeExpandUiState } from './volumeExpandState'
 
 // ── 公共类型（由父层复用） ────────────────────────────────────────────────────
 
@@ -51,6 +52,8 @@ interface Props {
   volumeNode: OutlineNode
   /** 项目 UUID */
   projectId: string
+  /** 用于判断番茄模式与 planned_chapters 默认值 */
+  projectExtra?: Record<string, unknown>
   /**
    * 全局 AI 线路字符串（来自 useAppStore.aiBackendRoute）。
    * 格式：`local` | `remote` | `remote:<uuid>`
@@ -97,17 +100,17 @@ const EVENT_LABEL: Record<string, string> = {
 const VolumeExpandButton: React.FC<Props> = ({
   volumeNode,
   projectId,
+  projectExtra,
   aiBackendRoute,
   onExpanded,
   onExpandStart,
   onExpandProgress,
   onExpandEnd,
 }) => {
-  // ── 衍生数据 ───────────────────────────────────────────────────────────────
-  const chapterPlanCount = (volumeNode.children ?? []).filter(
-    (c) => c.node_type === 'chapter_plan'
-  ).length
-  const hasChapterPlans = chapterPlanCount > 0
+  const { chapterPlanCount, planned, isEmpty, isComplete, isPartial } = volumeExpandUiState(
+    volumeNode,
+    projectExtra,
+  )
 
   // ── 本地状态（仅按钮 UI 需要） ─────────────────────────────────────────────
   const [running, setRunning] = useState(false)
@@ -158,7 +161,9 @@ const VolumeExpandButton: React.FC<Props> = ({
       if (!resp.ok) {
         const text = await resp.text()
         let msg = `请求失败 ${resp.status}: ${text}`
-        if (resp.status === 409) msg = `该卷已有章节计划（${chapterPlanCount} 章）。如需重新生成，请点击"重新生成"。`
+        if (resp.status === 409) {
+          msg = `该卷章纲已满（${chapterPlanCount}/${planned} 章）。如需整卷重做，请使用「重新生成」。`
+        }
         if (resp.status === 401) msg = '登录已过期，请重新登录后再试。'
         onExpandEnd?.(volumeNode, { done: false, error: msg, chapterCount: 0, linterBlocked: false })
         setRunning(false)
@@ -269,7 +274,23 @@ const VolumeExpandButton: React.FC<Props> = ({
       className="inline-flex items-center gap-1 shrink-0"
       onClick={(e) => e.stopPropagation()}
     >
-      {hasChapterPlans ? (
+      {isPartial && (
+        <button
+          type="button"
+          title={`补全第 ${chapterPlanCount + 1}–${planned} 章章纲（保留已有 ${chapterPlanCount} 章）`}
+          disabled={running}
+          onClick={() => handleExpand(false)}
+          className={clsx(
+            'flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded',
+            'bg-amber-50 text-amber-600 hover:bg-amber-100 transition-colors font-medium',
+            running && 'opacity-60 cursor-not-allowed',
+          )}
+        >
+          {running ? <Loader2 size={9} className="animate-spin" /> : <BookOpen size={9} />}
+          {running ? '生成中' : `补全章纲 (${chapterPlanCount}/${planned})`}
+        </button>
+      )}
+      {isComplete ? (
         <span className="flex items-center gap-1">
           <span className="text-[10px] text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full font-medium">
             ✓ {chapterPlanCount}章
@@ -289,7 +310,7 @@ const VolumeExpandButton: React.FC<Props> = ({
             onClick={() => setRegenConfirmOpen(true)}
             className={clsx(
               'p-0.5 rounded text-gray-300 hover:text-amber-500 hover:bg-amber-50 transition-colors',
-              running && 'opacity-50 cursor-not-allowed'
+              running && 'opacity-50 cursor-not-allowed',
             )}
           >
             {running
@@ -297,15 +318,16 @@ const VolumeExpandButton: React.FC<Props> = ({
               : <RefreshCw size={10} />}
           </button>
         </span>
-      ) : (
+      ) : null}
+      {isEmpty && (
         <button
-          title="展开本卷章节计划"
+          title="展开本卷章节计划（番茄会先物化开局 1–5 章，再 AI 生成其余章）"
           disabled={running}
           onClick={() => handleExpand(false)}
           className={clsx(
             'flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded',
             'bg-amber-50 text-amber-600 hover:bg-amber-100 transition-colors font-medium',
-            running && 'opacity-60 cursor-not-allowed'
+            running && 'opacity-60 cursor-not-allowed',
           )}
         >
           {running ? <Loader2 size={9} className="animate-spin" /> : <BookOpen size={9} />}
@@ -319,9 +341,9 @@ const VolumeExpandButton: React.FC<Props> = ({
       onClose={() => setRegenConfirmOpen(false)}
       onConfirm={() => void handleExpand(true)}
       title="重新生成章纲"
-      subtitle={`将重新生成「${volumeTitle}」的全部 ${chapterPlanCount} 章章纲。`}
+      subtitle={`将重新生成「${volumeTitle}」的全部章纲（计划约 ${planned} 章）。`}
       bullets={[
-        '现有章节计划会被 AI 覆盖',
+        '现有章节计划会被删除后重建（番茄开局 1–5 章仍从规划产物物化）',
         '已写正文不会删除，但章纲绑定可能变化',
       ]}
       confirmLabel="确认重新生成"

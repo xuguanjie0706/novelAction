@@ -226,7 +226,8 @@ class QualityMixin:
     "outline_alignment": {{"score": 8, "status": "pass", "comment": "本章内容与大纲节点目标的匹配度"}},
     "face_slap_payoff": {{"score": 8, "status": "pass", "comment": "本章是否兑现之前积累的打脸/爽感期待？憋了几章的情绪有没有具体释放？（0-10）"}},
     "emotional_resonance": {{"score": 7, "status": "pass", "comment": "读者是否会为主角揪心/爽/心疼/愤怒？情感有没有被具体调动？（0-10）"}},
-    "subscribe_intent": {{"score": 8, "status": "pass", "comment": "章末付费订阅下一章的意愿估分——读完最后一句会不会忍不住翻页？7分以上合格（0-10）"}}{_extra_dim_doc}
+    "subscribe_intent": {{"score": 8, "status": "pass", "comment": "章末付费订阅下一章的意愿估分——读完最后一句会不会忍不住翻页？7分以上合格（0-10）"}},
+    "craft_discipline": {{"score": 8, "status": "pass", "comment": "反AI味三连（三项全过才高分，0-10）：①无铺垫反转——是否出现突然反转/巧合救场/反派降智/主角无由顿悟/金手指临时扩权来脱困，其因由在本章或上下文不可追溯；②上帝视角——是否全知/段内串视角，或叙述了当前视角人物不可能知道的信息、直接写他人内心；③凭空新增设定——是否使用了未登记于上方设定/力量体系、且事先无任何铺垫的新元素（'其实早有准备/碰巧带着/原来一直都会'）"}}{_extra_dim_doc}
   }},
   "issues": [{{"type": "warning", "description": "具体问题描述，如：林默在第X章记录位置为青云城，本章却出现在远水城"}}],
   "suggestions": ["具体可操作的修改建议"],
@@ -236,7 +237,8 @@ class QualityMixin:
 
 评分额外约束：
 - face_slap_payoff < 6 时，suggestions 必须包含一条"本章如何增加打脸兑现感"的具体操作
-- subscribe_intent < 7 时，issues 中必须加一条 type="low_hook" 的 warning，说明章末钩子哪里不够抓人{_extra_constraints}
+- subscribe_intent < 7 时，issues 中必须加一条 type="low_hook" 的 warning，说明章末钩子哪里不够抓人
+- craft_discipline < 7 时，须按命中项分别向 issues 追加 warning（可多条）：①视角越界→type="pov_violation"，指出哪一段越界、本应是谁的有限视角；②无铺垫反转→type="unmotivated_twist"，指出哪个转折缺铺垫、缺哪条前置信息；③凭空新增设定→type="ungrounded_setting"，指出哪个设定未登记/未铺垫。每条均须给出具体定位（哪句/哪段）与最小改法{_extra_constraints}
 - 评分时先用编辑视角检查技术质量，再切换成「下班后刷手机的28岁读者」视角问：这章会让他熬夜追下一章吗？"""
 
         try:

@@ -10,7 +10,7 @@ import {
 } from '../store'
 
 /** 纪要页支持补跑的 Bootstrap 步骤（与后端 _SUPPORTED_STEPS 子集对齐） */
-export type RecapRegenStep = 'emotion_arc' | 'villain_arc' | 'opening_contract'
+export type RecapRegenStep = 'emotion_arc' | 'villain_arc' | 'opening_contract' | 'volumes'
 
 export interface RecapRegenResult {
   count: number

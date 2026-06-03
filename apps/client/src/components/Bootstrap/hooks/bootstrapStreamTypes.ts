@@ -35,7 +35,7 @@ export type StepKey =
   | 'all' | 'saving'
   // 番茄专属步骤
   | 'contrast_design' | 'golden_finger' | 'face_slap_map'
-  | 'power_ladder' | 'opening_5chapters' | 'rhythm_map' | 'signal_audit'
+  | 'power_ladder' | 'rhythm_map' | 'signal_audit'
 
 /** SSE linter_issues_top 单项（章纲阻断时附带） */
 export interface LinterIssuePreview {
@@ -103,9 +103,8 @@ export const STEP_META: Record<StepKey, {
   golden_finger:     { icon: '✋', stepColor: '#eab308', phase: 'foundation', stepNum: 'FQ-2', desc: '设计金手指工程（类型/可视化/成长路线图），核心爽感引擎' },
   face_slap_map:     { icon: '👋', stepColor: '#ef4444', phase: 'world',      stepNum: 'FQ-3', desc: '规划打脸地图（5个对象，首次打脸≤第5章，类型多样性）' },
   power_ladder:      { icon: '🪜', stepColor: '#06b6d4', phase: 'world',      stepNum: 'FQ-4', desc: '构建权力阶梯（5阶社会结构），最小化世界观设计' },
-  opening_5chapters: { icon: '🚀', stepColor: '#f59e0b', phase: 'blueprint',  stepNum: 'FQ-5', desc: '开局五章工程（算法生死线）：Ch1完读率>60%精确结构规划' },
-  rhythm_map:        { icon: '🎵', stepColor: '#8b5cf6', phase: 'blueprint',  stepNum: 'FQ-6', desc: '爽点节奏图（前50章打标）+ 剧情储量池（3-5个备用支线弧）' },
-  signal_audit:      { icon: '✅', stepColor: '#22c55e', phase: 'qa',         stepNum: 'FQ-7', desc: '番茄算法双校验：类型信号强度 + 爽感密度审计' },
+  rhythm_map:        { icon: '🎵', stepColor: '#8b5cf6', phase: 'blueprint',  stepNum: 'FQ-5', desc: '爽点节奏图（前50章打标）+ 剧情储量池（3-5个备用支线弧）' },
+  signal_audit:      { icon: '✅', stepColor: '#22c55e', phase: 'qa',         stepNum: 'FQ-6', desc: '番茄算法双校验：类型信号强度 + 爽感密度审计' },
 }
 
 export const SEQ_STEP_KEYS: StepKey[] = [
@@ -120,8 +119,8 @@ export const SEQ_STEP_KEYS: StepKey[] = [
 export const FANQIE_STEP_KEYS: StepKey[] = [
   'positioning', 'project',
   'contrast_design', 'golden_finger', 'face_slap_map',
-  'power_ladder', 'characters',
-  'opening_5chapters', 'rhythm_map', 'signal_audit',
+  'power_ladder', 'characters', 'volumes',
+  'rhythm_map', 'signal_audit',
 ]
 
 export function getStepKeys(mode: StartParams['mode']): StepKey[] {

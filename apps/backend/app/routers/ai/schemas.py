@@ -263,6 +263,10 @@ class ChapterIndexPayload(BaseModel):
     ending_hook: Optional[str] = None
     hook_strength: int = 1
     continuity_notes: List[dict | str] = []
+    #: 正文中已被角色当面说出或场面公认的名词（写入 Project.extra 认知台账）
+    in_world_named_terms: List[str] = Field(default_factory=list)
+    #: 主角已理解/确认的设定专名（可进内心独白，未必全场皆知）
+    protagonist_known_terms: List[str] = Field(default_factory=list)
 
 
 class NewCharacterPayload(BaseModel):

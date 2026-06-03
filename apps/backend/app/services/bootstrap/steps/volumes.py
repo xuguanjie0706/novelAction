@@ -17,6 +17,7 @@ from app.services.bootstrap.volume_entity_registry import (
 from app.services.bootstrap.parse import parse_json
 from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 from app.services.outline_planning import words_to_plan
+from app.utils.writing_style import resolve_project_writing_style
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,15 @@ async def gen_volumes(
     ``inject_realm_fix_hint=True`` 注入修正提示后再手动重试。
     """
     system, prompt_base = build_volumes_prompt(project, ctx)
+    # 白话直白（番茄纯爽文）：番茄线已改走本通用 Step 9 出卷骨架，卷级燃点/高潮描述
+    # 也要为直白正文服务，避免在卷纲层就写得文绉绉，与章纲/正文的 plain 约束对齐。
+    if resolve_project_writing_style(project) == "plain":
+        system += (
+            "\n\n【白话直白模式（番茄纯爽文，卷骨架层）】"
+            "beat_highlights 燃点与 volume_climax 高潮一律用大白话直给——"
+            "写清楚「谁、和谁、为什么冲突、爽在哪」，禁止含蓄留白或意境化辞藻；"
+            "卷阶段节奏服务于一章一爽点的直白展开。"
+        )
     tw = int(project.target_words or 1_200_000)
     plan = words_to_plan(tw)
     n_volumes = plan["total_volumes"]

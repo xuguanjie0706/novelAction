@@ -128,7 +128,8 @@ class DebriefMixin:
 4. 哪些信息来源需要记录，避免后文凭空知道信息
 5. 哪些伏笔被埋下、推进或回收，避免后文突然出现无前因的设定（在 chapter_index.foreshadow_updates 中用显式 "code" 字段标注全局伏笔编号，回收/推进条目必须填 code，新埋伏笔 code 可为 null 由系统分配）
 6. 哪些新道具/法宝、功法/技能、势力需要收入系统，或已有资产状态发生变化
-7. 生成章节索引（chapter_index）：完全依据上方叙事正文归纳；须与正文事实一致
+7. 生成章节索引（chapter_index）：完全依据上方叙事正文归纳；须与正文事实一致；
+   in_world_named_terms 仅填正文中已被角色当面说出或场面公认的名词，禁止把旁白科普式专名当作「已公开」
 8. **硬规则**：若在 chapter_index.core_events 中写了某既有角色的境界或位置变化，必须在 character_updates 中为该角色填写对应字段（character_id 从上方列表原样复制）；禁止只写进 core_events 而不写 character_updates。位置变化时必须同时填写 location_change_reason（移动原因/经过，须依据正文、符合时间线与常理）
 9. 本章是否出现了不在现有角色库中、且值得长期追踪的新角色（new_characters）
    判断标准：正文中有名有姓、有台词或行动、且 arc_scope 为 mini_arc 或以上；纯工具性一次性路人不需要入库
@@ -320,7 +321,9 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
     ],
     "ending_hook": "章末钩子描述",
     "hook_strength": 1,
-    "continuity_notes": [{{"severity": "low/medium/high", "note": "生成或正文中发现的连续性风险"}}]
+    "continuity_notes": [{{"severity": "low/medium/high", "note": "生成或正文中发现的连续性风险"}}],
+    "in_world_named_terms": ["正文中已被在场角色当面说出、或场面公认可讨论的设定专名；无则 []"],
+    "protagonist_known_terms": ["主角本章已确认理解的设定专名（可进内心独白）；无则 []"]
   }},
   "highlight_quote": "本章最有截图/转发价值的1句原文；全章无亮句则填空字符串",
   "subscribe_intent_score": 8,
@@ -480,6 +483,16 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
                 "continuity_notes": [
                     item for item in (chapter_index.get("continuity_notes") or [])[:10]
                     if isinstance(item, (str, dict)) and item
+                ],
+                "in_world_named_terms": [
+                    str(item).strip()
+                    for item in (chapter_index.get("in_world_named_terms") or [])[:12]
+                    if isinstance(item, str) and str(item).strip()
+                ],
+                "protagonist_known_terms": [
+                    str(item).strip()
+                    for item in (chapter_index.get("protagonist_known_terms") or [])[:12]
+                    if isinstance(item, str) and str(item).strip()
                 ],
             }
             # 提取 new_characters，过滤无效项；兼容 AI 把多人写进单个 description 字段的错误格式

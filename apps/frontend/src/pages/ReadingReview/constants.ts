@@ -9,6 +9,7 @@ export const CHECK_TYPES = [
   'face_slap_payoff',
   'emotional_resonance',
   'subscribe_intent',
+  'craft_discipline',
 ] as const
 
 export const CHECK_LABELS: Record<string, string> = {
@@ -21,6 +22,7 @@ export const CHECK_LABELS: Record<string, string> = {
   face_slap_payoff: '打脸兑现',
   emotional_resonance: '情感共鸣',
   subscribe_intent: '追读意愿',
+  craft_discipline: '反AI味(视角/铺垫/设定)',
 }
 
 export const SCORE_COLORS = [

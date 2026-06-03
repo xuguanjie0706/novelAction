@@ -63,7 +63,7 @@ def build_carryover_seq_block(
     if batch_start > 1 and last_batch_tail_cost.strip():
         tail = last_batch_tail_cost.strip()[:140]
         cross_batch = (
-            f"\n5. 跨批首章：本批第{batch_start}章 opening_hook 前 20 字内必须承接"
+            f"\n6. 跨批首章：本批第{batch_start}章 opening_hook 前 20 字内必须承接"
             f"上一批末章代价「{tail}」中的词组（≥2 连续汉字与原文相同），"
             f"不得另起新地图/新反派开场。\n"
         )
@@ -76,6 +76,9 @@ def build_carryover_seq_block(
         "至少一段连续 2 个汉字（子串匹配，与 linter 相同）。\n"
         f"3. {protag_note}\n"
         "4. 禁止「上章代价写满、下章开篇换镜头零重叠」——代价不是摘要装饰，是下一章第一句的燃料。\n"
+        "5. 禁止情节倒带：若上章 end_hook 已完成「觉醒/黑火涌出/口头休妻/击杀」等节拍，"
+        "下章 opening_hook 不得再写「觉醒剧痛/经脉重组/再度觉醒」等把同一节拍当本章起点；"
+        "下章开篇须承接 end_hook 的**下一瞬间**（未决动作/对峙升级），新冲突写入 core_event。\n"
         f"{cross_batch}"
         "【生成后自检（每一对相邻章都要过）】\n"
         f"  从第{max(batch_start, 2)}章到第{batch_end}章：opening_hook 是否与上一章 choice_cost 有≥2字相同？\n"
@@ -156,7 +159,8 @@ def build_chapter_plan_generation_tail(
         "[\n"
         "  {\n"
         f'    "chapter_number": {batch_start},\n'
-        '    "title": "第X章：章节标题（有画面感，≤12字，必须制造期待）",\n'
+        '    "title": "第X章：章节标题（≤12字，有画面感且制造期待——但必须点明本章 core_event 真实发生的主场景/转折，'
+        '严禁标题党：不得以本章未实际发生的场景、地点或冲突命名，标题关键词应能在 core_event 中找到对应）",\n'
         "\n"
         "    // ── 欲望-障碍-选择-代价四元组（章节叙事引擎，必须严密因果）──\n"
         '    "protagonist_want": "主角这一章主动想要什么（必须是主动欲望，不是被动应付）",\n'

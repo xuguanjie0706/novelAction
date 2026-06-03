@@ -108,6 +108,94 @@ def normalize_turning_point(raw: Any, planned_chapters: int) -> dict | None:
     return {"chapter_hint": hint, "description": desc}
 
 
+def _redistribute_needed(hints: list[int], planned: int) -> bool:
+    """判断 LLM 给出的燃点章号是否退化（需确定性重排）。
+
+    退化形态：只有 ≤1 条无需处理；出现重复章号；越界；过度聚集
+    （跨度 < 卷长 25%）；或相邻间隔 < 2 章。
+    """
+    if len(hints) <= 1:
+        return False
+    if len(set(hints)) < len(hints):
+        return True
+    s = sorted(hints)
+    if s[0] < 1 or s[-1] > planned:
+        return True
+    if (s[-1] - s[0]) < max(3, int(planned * 0.25)):
+        return True
+    return any(s[i + 1] - s[i] < 2 for i in range(len(s) - 1))
+
+
+def _even_anchors(n: int, lo: int, hi: int) -> list[int]:
+    """在 [lo, hi] 内取 n 个均匀锚点（升序）。"""
+    if n <= 0:
+        return []
+    if hi < lo:
+        hi = lo
+    if n == 1:
+        return [int(round((lo + hi) / 2))]
+    step = (hi - lo) / (n - 1)
+    return [int(round(lo + step * i)) for i in range(n)]
+
+
+def align_volume_timeline(
+    beats: list[dict],
+    climax: dict | None,
+    turning: dict | None,
+    planned: int,
+) -> None:
+    """就地校正卷级时间轴，保证任意小说都得到合理章序分布。
+
+    设计动机：LLM 常把全部节拍 chapter_hint 填成卷末同一章（如全 60 章），
+    导致燃点/高潮/转折挤在一处、章纲展开无锚点。本函数做确定性兜底——
+    不依赖模型自觉：
+
+    1. 卷末高潮锚定在卷长 80%~90% 处；模型给的若不在 [60%,100%] 区间则改写。
+    2. 燃点分布在卷长 18% 到「高潮前一拍」之间；若退化（重复/聚集/越界）则按
+       均匀锚点重排，保留模型给出的相对先后；分布良好时仅保证全部早于高潮。
+    3. 情感转折居中（默认 50%）且严格早于高潮。
+    """
+    planned = max(_safe_int(planned, 30), 6)
+
+    # 1) 高潮锚定卷末
+    climax_target = max(3, int(round(planned * 0.86)))
+    if isinstance(climax, dict):
+        ch = _safe_int(climax.get("chapter_hint"), 0)
+        if not (planned * 0.6 <= ch <= planned):
+            ch = climax_target
+        climax["chapter_hint"] = max(1, min(ch, planned))
+    climax_ch = climax["chapter_hint"] if isinstance(climax, dict) else planned
+
+    # 2) 燃点分布
+    n = len(beats)
+    lo = max(2, int(round(planned * 0.18)))
+    hi = min(planned - 1, max(lo + max(n - 1, 0) * 2, climax_ch - 2))
+    if n:
+        given = [_safe_int(b.get("chapter_hint"), 0) for b in beats]
+        # 保留模型给出的相对先后（无效章号排到最后）
+        order = sorted(
+            range(n),
+            key=lambda i: (given[i] if given[i] > 0 else planned + i, i),
+        )
+        if _redistribute_needed(given, planned) or max(given) >= climax_ch:
+            anchors = _even_anchors(n, lo, hi)
+            for rank, idx in enumerate(order):
+                a = anchors[rank]
+                beats[idx]["chapter_hint"] = a
+                beats[idx]["chapter_span"] = str(a)
+        else:
+            for b in beats:
+                if _safe_int(b.get("chapter_hint"), 0) >= climax_ch:
+                    b["chapter_hint"] = max(1, climax_ch - 1)
+
+    # 3) 情感转折居中且早于高潮
+    if isinstance(turning, dict):
+        t = _safe_int(turning.get("chapter_hint"), 0)
+        if not (planned * 0.3 <= t < climax_ch):
+            t = min(max(int(round(planned * 0.5)), lo + 1), max(climax_ch - 1, 1))
+        turning["chapter_hint"] = max(1, t)
+
+
 def normalize_must_payoffs(raw: Any) -> list[str]:
     if not isinstance(raw, list):
         return []
@@ -120,14 +208,16 @@ def apply_volume_beat_fields(vol: dict, vol_extra: dict) -> str | None:
     planned = _safe_int(planned, 30)
 
     beats = normalize_beat_highlights(vol.get("beat_highlights"), planned)
+    climax = normalize_climax_dict(vol.get("volume_climax"), planned)
+    turning = normalize_turning_point(vol.get("emotional_turning_point"), planned)
+
+    # 确定性兜底：保证章号分布合理（修复 LLM 把节拍全填卷末同一章的退化）
+    align_volume_timeline(beats, climax, turning, planned)
+
     if beats:
         vol_extra["beat_highlights"] = beats
-
-    climax = normalize_climax_dict(vol.get("volume_climax"), planned)
     if climax:
         vol_extra["volume_climax"] = climax
-
-    turning = normalize_turning_point(vol.get("emotional_turning_point"), planned)
     if turning:
         vol_extra["emotional_turning_point"] = turning
 
@@ -382,27 +472,55 @@ VOLUME_JSON_BEAT_SCHEMA = """
 - pacing_skeleton：50 字内说明快/慢/打脸/情感章段分布（须写清大致章号）
 
 每项必须引用已有人物名/势力/卷 conflict，禁止「展示实力」「悬念丛生」等空话。
-燃点 chapter_hint 须落在 1～planned_chapters 内，且彼此间隔 ≥3 章（避免连续两章同类型爆点）。
 
-字段示例（合并进每卷对象）：
+【章号分布铁律（按卷长 planned_chapters 折算，禁止全部填卷末同一章）】
+- 第 1 个燃点落在卷前 20%～30%；其余燃点依次向后均匀铺开，彼此间隔 ≥3 章。
+- 所有燃点都必须早于 volume_climax；不得与高潮同章。
+- volume_climax 落在卷长 80%～90%（如 30 章卷≈26、60 章卷≈53）。
+- emotional_turning_point 落在卷长 45%～60% 且严格早于高潮。
+
+【爽感类型多样性铁律（禁止整卷清一色打脸）】
+- beat_type 至少出现 2 种不同类型；同一卷 face_slap 最多 2 个；相邻两个燃点不得同类型。
+- 可选类型：face_slap 打脸 / reveal 揭秘 / power_up 实力跃迁 / relationship_turn 关系逆转
+  / betrayal 背叛决裂 / sacrifice 牺牲至暗 / victory 阶段胜利 / emotional_peak 情感高点。
+- 善用轮换：扮猪吃虎→夺宝/传承→反杀复仇→扬名/收服→美人侧目，而非反复「比试赢一个人」。
+
+【payoff_of 铁律】须引用本卷 conflict 或前序具体事件（谁、第几章、做了什么），
+禁止「承接X对主角的Y」式套话模板。
+
+字段示例（合并进每卷对象；示例为 30 章卷，章号须随实际卷长缩放）：
   "summary": "本卷核心剧情，120字内（须含主角当卷目标与主要对手）",
   "beat_highlights": [
     {{
-      "chapter_hint": 8,
-      "chapter_span": "7-9",
+      "chapter_hint": 7,
+      "chapter_span": "6-8",
+      "beat_type": "power_up",
+      "description": "主角在后山禁地以小博大，借雷灵草线索险渡突破，露出第一手底牌",
+      "payoff_of": "承接第3章被陆苍断了修炼资源、被断言此生止步炼气"
+    }},
+    {{
+      "chapter_hint": 14,
+      "chapter_span": "13-15",
       "beat_type": "face_slap",
-      "description": "主角在宗门大比当众击败陆青云，夺回信物（具体场面）",
-      "payoff_of": "承接卷 conflict 中的退婚羞辱"
+      "description": "宗门大比当众反超陆雷夺魁，狠打陆苍一脉的脸",
+      "payoff_of": "承接第7章陆雷因误判主角实力而设下的杀局"
+    }},
+    {{
+      "chapter_hint": 21,
+      "chapter_span": "20-22",
+      "beat_type": "reveal",
+      "description": "姬如雪护法时主角无意暴露魔道气息，引出师门来历之谜",
+      "payoff_of": "承接第1章随身玉佩的异常波动伏笔"
     }}
   ],
   "volume_climax": {{
-    "chapter_hint": 28,
-    "description": "主角与 volume_boss 的当面对决，揭开血指印真相（卷内总清算）"
+    "chapter_hint": 27,
+    "description": "陆苍勾结外敌设局围杀，主角当众揭其通敌、越级斩杀，掌控话语权（卷内总清算）"
   }},
   "emotional_turning_point": {{
-    "chapter_hint": 18,
-    "description": "主角接受师父已死的真相，从复仇转为守护（可选，opening 卷可简写）"
+    "chapter_hint": 16,
+    "description": "禁地共患难后主角冰冷的心被姬如雪的信任融化，立誓变强护人（可选，opening 卷可简写）"
   }},
-  "must_payoff_before_vol_end": ["回收第5章埋下的长老密室阵图线索"],
-  "pacing_skeleton": "1-5密钩/6-12第一次燃/13-20加压/21-27高潮/28-30留种"
+  "must_payoff_before_vol_end": ["回收第3章陆苍暗下的钝骨散毒素", "兑现第14章对陆苍一脉的当众羞辱"],
+  "pacing_skeleton": "1-5密钩铺屈辱/6-8首突破/9-15首打脸/16-22加压揭谜/23-27高潮总清算/28-30留种"
 """

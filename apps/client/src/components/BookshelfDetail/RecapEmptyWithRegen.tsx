@@ -10,6 +10,7 @@ const STEP_LABEL: Record<RecapRegenStep, string> = {
   emotion_arc: '情绪节律',
   villain_arc: '反派行动线',
   opening_contract: '开局承诺',
+  volumes: '全书卷纲',
 }
 
 interface Props {

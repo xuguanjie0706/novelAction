@@ -401,6 +401,11 @@ async def dispatch_regen(svc: Any, project: Any, step: str, ctx: dict) -> Any:
         return rels or []
 
     if step == "volumes":
+        extra = project.extra if isinstance(getattr(project, "extra", None), dict) else {}
+        if extra.get("fanqie_positioning") or extra.get("power_ladder"):
+            from app.services.bootstrap.fanqie_ctx import merge_fanqie_extra_into_ctx
+
+            merge_fanqie_extra_into_ctx(project, ctx)
         nodes = await svc._gen_volumes(project, ctx, inject_realm_fix_hint=True)
         if isinstance(nodes, list):
             ctx["_volume_ids"] = [str(n.id) for n in nodes]

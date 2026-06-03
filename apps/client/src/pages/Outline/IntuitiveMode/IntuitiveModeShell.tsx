@@ -15,6 +15,7 @@ interface Props {
   volume: OutlineNode
   projectId: string
   aiBackendRoute: string
+  projectExtra?: Record<string, unknown>
   onReload: () => void
   volExpandState: VolExpandState | null
   onDismissExpand: () => void
@@ -32,6 +33,7 @@ interface Props {
 export default function IntuitiveModeShell({
   volume,
   projectId,
+  projectExtra,
   aiBackendRoute,
   onReload,
   volExpandState,
@@ -94,6 +96,7 @@ export default function IntuitiveModeShell({
         <IntuitiveManuscriptColumn
           bundle={bundle}
           projectId={projectId}
+          projectExtra={projectExtra}
           aiBackendRoute={aiBackendRoute}
           onReload={onReload}
           activeChapter={activeChapter}

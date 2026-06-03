@@ -13,6 +13,7 @@ interface Props {
   intuitiveVolume: OutlineNode | null
   volumeNodes: OutlineNode[]
   aiBackendRoute: string
+  projectExtra?: Record<string, unknown>
   volExpandState: VolExpandState | null
   onReload: () => void
   onSelectVolume: (v: OutlineNode) => void
@@ -34,6 +35,7 @@ export default function OutlineIntuitivePane({
   intuitiveVolume,
   volumeNodes,
   aiBackendRoute,
+  projectExtra,
   volExpandState,
   onReload,
   onSelectVolume,
@@ -58,6 +60,7 @@ export default function OutlineIntuitivePane({
     <IntuitiveModeShell
       volume={intuitiveVolume}
       projectId={projectId}
+      projectExtra={projectExtra}
       aiBackendRoute={aiBackendRoute}
       onReload={onReload}
       volExpandState={volExpandState}

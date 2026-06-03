@@ -24,7 +24,7 @@ async def gen_rhythm_map(svc: Any, project: Project, ctx: dict) -> dict:
     fanqie_pos = ctx.get("fanqie_positioning") or {}
     fsm = ctx.get("face_slap_map") or {}
     gf = ctx.get("golden_finger") or {}
-    op5 = ctx.get("opening_5chapters") or {}
+    contrast = ctx.get("contrast_design") or {}
 
     slap_rhythm = fsm.get("slap_rhythm", "每3章一小打，每10章一大打")
     stages = gf.get("upgrade_stages") or []
@@ -34,7 +34,7 @@ async def gen_rhythm_map(svc: Any, project: Project, ctx: dict) -> dict:
 核心爽感：{fanqie_pos.get('core_satisfaction', '')}
 打脸节奏：{slap_rhythm}
 金手指阶段：{len(stages)}个升级阶段
-第1-5章已规划：{_fmt_op5(op5)}
+开局约束：触发约{contrast.get('trigger_word_estimate', '800字内')}；首次打脸≤第{fsm.get('first_slap_chapter', 3)}章
 打脸升级路径：{fsm.get('escalation_path', '')}
 
 番茄留存铁律：连续3章没有明显爽感，读者流失率+30%。
@@ -113,19 +113,13 @@ async def gen_rhythm_map(svc: Any, project: Project, ctx: dict) -> dict:
         svc.db.commit()
 
         ctx["rhythm_map"] = data
+
+        from app.services.bootstrap.fanqie_normalize import converge_fanqie_project
+
+        converge_fanqie_project(svc.db, project, ctx)
         return data
 
     return {}
-
-
-def _fmt_op5(op5: dict) -> str:
-    parts = []
-    for i in range(1, 6):
-        ch = op5.get(f"chapter_{i}", {})
-        if ch:
-            event = ch.get("core_event") or "（已规划）"
-            parts.append(f"第{i}章：{event[:20]}")
-    return "；".join(parts) or "（前5章未规划）"
 
 
 def _detect_dry_spells(tags: list) -> list[str]:

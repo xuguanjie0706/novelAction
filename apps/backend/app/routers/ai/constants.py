@@ -18,6 +18,10 @@ _QUALITY_DEBT_TYPES = {
     "storyline_crossover",
     "storyline_screen_time",
     "storyline_neglect",
+    # 反 AI 味三连（craft_discipline 维度命中项）
+    "pov_violation",
+    "unmotivated_twist",
+    "ungrounded_setting",
 }
 _QUALITY_DEBT_SEVERITIES = {"critical", "high", "medium"}
 

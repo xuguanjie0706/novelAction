@@ -145,6 +145,44 @@ const SECTIONS: SectionCfg[] = [
   },
 ]
 
+/**
+ * 番茄书：判定是否为番茄专线项目（pace_type=fast 或 extra 含 fanqie_* 产物）。
+ * 番茄线产物存于 Project.extra（face_slap_map / golden_finger / rhythm_map / fanqie_positioning）。
+ */
+function isFanqieProject(extra: Record<string, any> | null | undefined): boolean {
+  const e = extra || {}
+  if (e.fanqie_positioning || e.fanqie_opening_volume) return true
+  const pos = e.positioning || {}
+  return pos.pace_type === 'fast'
+}
+
+/** 番茄书隐藏的通用栏目：纯爽文单主线推进，不需要多故事线/厚设定/卷级情绪与反派建模。 */
+const HIDDEN_FOR_FANQIE = new Set(['storylines', 'settings', 'emotion_arc', 'villain_arc'])
+
+/** 番茄专属栏目：聚合打脸地图 / 金手指 / 爽点节奏（番茄写手最常翻的三样）。 */
+const FANQIE_SECTION: SectionCfg = {
+  id: 'fanqie',
+  label: '爽点节奏',
+  icon: <Swords size={16} />,
+  color: '#f43f5e',
+  countFn: d => {
+    const e = d.project.extra || {}
+    const tags = (e.rhythm_map?.chapter_tags || []).length
+    const slaps = (e.face_slap_map?.slap_targets || e.face_slap_map?.targets || []).length
+    const stages = (e.golden_finger?.upgrade_stages || []).length
+    return tags + slaps + stages
+  },
+}
+
+/** 按是否番茄书计算可见栏目：番茄隐藏无用 tab，并在卷级骨架后插入「爽点节奏」。 */
+function resolveVisibleSections(extra: Record<string, any> | null | undefined): SectionCfg[] {
+  if (!isFanqieProject(extra)) return SECTIONS
+  const kept = SECTIONS.filter(s => !HIDDEN_FOR_FANQIE.has(s.id))
+  const idx = kept.findIndex(s => s.id === 'volumes')
+  const at = idx >= 0 ? idx + 1 : kept.length
+  return [...kept.slice(0, at), FANQIE_SECTION, ...kept.slice(at)]
+}
+
 // ── 子组件：左侧导航项 ────────────────────────────────────────
 
 interface NavItemProps {
@@ -366,7 +404,8 @@ export default function BookshelfDetailPage() {
     )
   }
 
-  const activeSec = SECTIONS.find(s => s.id === selectedSection) ?? SECTIONS[0]
+  const visibleSections = resolveVisibleSections(data.project.extra)
+  const activeSec = visibleSections.find(s => s.id === selectedSection) ?? visibleSections[0]
 
   return (
     <div style={{
@@ -428,7 +467,7 @@ export default function BookshelfDetailPage() {
             生成纪要
           </div>
 
-          {SECTIONS.map(sec => (
+          {visibleSections.map(sec => (
             <NavItem
               key={sec.id}
               cfg={sec}

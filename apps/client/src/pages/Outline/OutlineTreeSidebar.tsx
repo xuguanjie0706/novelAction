@@ -18,6 +18,7 @@ export interface OutlineTreeSidebarProps {
   expanded: Set<string>
   selected: OutlineNode | null
   aiBackendRoute: string
+  projectExtra?: Record<string, unknown>
   onToggleExpand: (id: string) => void
   onSelect: (node: OutlineNode) => void
   onOpenChapter: (node: OutlineNode) => void
@@ -40,6 +41,7 @@ export default function OutlineTreeSidebar({
   expanded,
   selected,
   aiBackendRoute,
+  projectExtra,
   onToggleExpand,
   onSelect,
   onOpenChapter,
@@ -84,6 +86,7 @@ export default function OutlineTreeSidebar({
             <VolumeExpandButton
               volumeNode={node}
               projectId={projectId}
+              projectExtra={projectExtra}
               aiBackendRoute={aiBackendRoute}
               onExpanded={onReload}
               onExpandStart={onVolExpandStart}

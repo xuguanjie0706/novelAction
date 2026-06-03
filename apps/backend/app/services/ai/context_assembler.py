@@ -52,6 +52,11 @@ from app.services.ai.context_queries import (
     query_relationships_block,
     query_relevant_settings_block,
 )
+from app.services.ai.context_assembler_helpers import (
+    build_volume_progress,
+    fmt_outline_foreshadows,
+)
+from app.services.ai.draft_ctx_bridge import resolve_draft_bridge_context
 from app.services.ai.storyline_weave_engine import query_storyline_weave_context_block
 
 logger = logging.getLogger(__name__)
@@ -190,6 +195,9 @@ async def assemble_full(
     continuity_context = build_continuity_context(
         db=db, project_id=project_id, chapter=chapter, outline_node=outline_node,
     )
+    draft_bridge_context = resolve_draft_bridge_context(
+        db, project_id, chapter, project, outline_node, prev_chapter, prev_tail,
+    )
     chapter_index_context = build_chapter_index_context(
         db=db, project_id=project_id, chapter=chapter,
     )
@@ -201,7 +209,7 @@ async def assemble_full(
     )
 
     # 卷内进度感
-    _vol_progress = _build_volume_progress(db, project_id, outline_node)
+    _vol_progress = build_volume_progress(db, project_id, outline_node)
     if _vol_progress:
         writing_brief_context = writing_brief_context + _vol_progress
 
@@ -306,22 +314,6 @@ async def assemble_full(
             pov_character_name = outline_node.pov_character.name
         character_screen_time = outline_node.character_screen_time or {}
 
-    def _fmt_foreshadows(node) -> str:
-        if not node:
-            return ""
-        def _desc(items):
-            return "；".join(
-                d for f in (items or [])[:3]
-                if (d := (f.get("description", "") if isinstance(f, dict) else str(f)))
-            )
-        laid_s, res_s = _desc(node.foreshadows_laid), _desc(node.foreshadows_resolved)
-        parts = []
-        if laid_s:
-            parts.append(f"埋[{laid_s}]")
-        if res_s:
-            parts.append(f"收[{res_s}]")
-        return "  ".join(parts) or (node.extra or {}).get("foreshadow", "")
-
     story_day_str = (outline_node.extra or {}).get("story_day", "") if outline_node else ""
     word_target_val = _resolve_word_target(outline_node)
 
@@ -338,7 +330,7 @@ async def assemble_full(
         outline_summary=outline_node.summary or "" if outline_node else "",
         outline_conflict=outline_node.conflict or "" if outline_node else "",
         outline_highlight=outline_node.highlight or "" if outline_node else "",
-        outline_foreshadow=_fmt_foreshadows(outline_node),
+        outline_foreshadow=fmt_outline_foreshadows(outline_node),
         outline_power_milestone=outline_node.power_milestone or "" if outline_node else "",
         outline_emotional_tone=outline_node.emotional_tone or "" if outline_node else "",
         story_day=story_day_str,
@@ -366,6 +358,7 @@ async def assemble_full(
         prev_directives=prev_directives_str,
         realm_snapshot=realm_snapshot_value,
         power_systems_context=power_systems_context,
+        draft_bridge_context=draft_bridge_context,
         rag_retrieval_log_id=str(_rag_log.id),
         rag_retrieval_snapshot=rag_retrieval_snapshot,
     )
@@ -570,34 +563,3 @@ def _build_manifest_names(
                     break
 
     return names[:12]
-
-
-def _build_volume_progress(
-    db: Session,
-    project_id: str,
-    outline_node: OutlineNode | None,
-) -> str:
-    """构建卷内章节进度提示。"""
-    if not outline_node or not outline_node.parent_id:
-        return ""
-    try:
-        count = (
-            db.query(OutlineNode)
-            .filter(
-                OutlineNode.project_id == project_id,
-                OutlineNode.parent_id == outline_node.parent_id,
-                OutlineNode.node_type == "chapter_plan",
-            )
-            .count()
-        )
-        if count > 0:
-            idx = (outline_node.sort_order or 0) + 1
-            denom = max(count, idx)
-            return (
-                f"\n【卷内章节进度】本卷第 {idx}/{denom} 章"
-                f"（{round(idx / denom * 100)}%）"
-                f" — 节奏应与当前位置匹配，勿过早/过晚高潮"
-            )
-    except Exception:
-        pass
-    return ""

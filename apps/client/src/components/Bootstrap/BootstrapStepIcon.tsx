@@ -28,9 +28,8 @@ const ICON_COORDS: Record<StepKey, { col: number; row: number }> = {
   golden_finger: { col: 4, row: 3 },
   face_slap_map: { col: 0, row: 4 },
   power_ladder: { col: 1, row: 4 },
-  opening_5chapters: { col: 2, row: 4 },
-  rhythm_map: { col: 3, row: 4 },
-  signal_audit: { col: 4, row: 4 },
+  rhythm_map: { col: 2, row: 4 },
+  signal_audit: { col: 3, row: 4 },
 }
 
 interface Props {

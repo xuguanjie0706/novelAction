@@ -408,6 +408,7 @@ export default function OutlinePage() {
         expanded={expanded}
         selected={selected}
         aiBackendRoute={aiBackendRoute}
+        projectExtra={currentProject?.extra as Record<string, unknown> | undefined}
         onToggleExpand={toggleExpand}
         onSelect={setSelected}
         onOpenChapter={openChapterFromNode}
@@ -434,6 +435,7 @@ export default function OutlinePage() {
             intuitiveVolume={intuitiveVolume}
             volumeNodes={volumeNodes}
             aiBackendRoute={aiBackendRoute}
+            projectExtra={currentProject?.extra as Record<string, unknown> | undefined}
             volExpandState={volExpandState}
             onReload={reload}
             onSelectVolume={v => {

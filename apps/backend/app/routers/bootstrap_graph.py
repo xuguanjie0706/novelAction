@@ -35,7 +35,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -53,6 +53,11 @@ from app.services.bootstrap.graph_fanqie import (
     resume_bootstrap_fanqie,
     run_bootstrap_fanqie,
 )
+from app.services.bootstrap.graph_fanfic import (
+    resume_bootstrap_fanfic,
+    run_bootstrap_fanfic,
+)
+from app.schemas.bootstrap_fanfic_positioning import try_validate_fanfic_positioning
 from app.schemas.bootstrap_fanqie_positioning import try_validate_fanqie_positioning
 from app.schemas.bootstrap_positioning import try_validate_positioning
 
@@ -76,19 +81,34 @@ def _track_task(run_id: str, task: asyncio.Task) -> None:
 # Pydantic schemas
 # ──────────────────────────────────────────────────────
 
+class FanficStartMeta(BaseModel):
+    """同人·番茄建书必填：作者自填原著梗概（系统不爬取版权原文）。"""
+    source_work_title: str = Field(..., min_length=1)
+    canon_synopsis: str = Field(..., min_length=80)
+    fanfic_trope: Literal["transmigration", "rebirth", "au"]
+    focal_characters: str = ""
+
+    @field_validator("source_work_title", "canon_synopsis", "focal_characters", mode="before")
+    @classmethod
+    def _strip(cls, v: object) -> str:
+        return str(v or "").strip()
+
+
 class StartRequest(BaseModel):
     """POST /bootstrap/runs 请求体。
 
     mode 说明：
     - ``sequential``：通用串行流程（默认），适合起点/晋江向或自定义题材
     - ``fanqie``：番茄专属流程，把平台算法逻辑硬编码进生成管道（金手指优先/打脸地图/开局五章工程）
+    - ``fanfic``：同人·番茄，必填原著名与梗概，支持穿书/重生/AU
     """
     logline: str
     premise: Optional[str] = ""
     target_words: int = 1_200_000
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
-    mode: Literal["sequential", "fanqie"] = "sequential"
+    mode: Literal["sequential", "fanqie", "fanfic"] = "sequential"
+    fanfic_meta: Optional[FanficStartMeta] = None
     auto_mode: bool = False
     # 写作风格档位（作者建书时一次性选择，全书贯彻）：
     # - ``plain``    白话直白：句子短、新名词就近解释、放松密度约束，降低阅读门槛（小白友好）
@@ -161,6 +181,15 @@ async def create_run(
     """
     from app.services.bootstrap.gate_auto import merge_gate_data_with_auto_mode
 
+    if req.mode == "fanfic":
+        if req.fanfic_meta is None:
+            raise HTTPException(
+                status_code=422,
+                detail="同人模式须提供 fanfic_meta（原著名、梗概、同人类型）",
+            )
+        if len(req.fanfic_meta.canon_synopsis) < 80:
+            raise HTTPException(status_code=422, detail="原著梗概至少 80 字")
+
     run = BootstrapRun(
         user_id=current_user.id,
         logline=req.logline,
@@ -177,25 +206,28 @@ async def create_run(
     db.refresh(run)
     run_id = str(run.id)
 
-    # 按 mode 分发到对应的后台任务
-    _run_fn = run_bootstrap_fanqie if req.mode == "fanqie" else run_bootstrap
-    # 番茄线写作风格默认直白：schema 默认 standard 是为通用线服务的，但番茄=纯爽文
-    # =直白底线。故 fanqie 模式下把未显式改动的 standard 提升为 plain；显式选 dense
-    # （老白文）的作者意图仍尊重，不强改。
+    if req.mode == "fanfic":
+        _run_fn = run_bootstrap_fanfic
+    elif req.mode == "fanqie":
+        _run_fn = run_bootstrap_fanqie
+    else:
+        _run_fn = run_bootstrap
     _effective_ws = req.writing_style
-    if req.mode == "fanqie" and _effective_ws == "standard":
+    if req.mode in ("fanqie", "fanfic") and _effective_ws == "standard":
         _effective_ws = "plain"
+    _run_kwargs: dict = {
+        "logline": req.logline,
+        "premise": req.premise or "",
+        "target_words": req.target_words,
+        "model_profile": req.model_profile,
+        "llm_provider_id": req.llm_provider_id,
+        "user_id": current_user.id,
+        "writing_style": _effective_ws,
+    }
+    if req.mode == "fanfic" and req.fanfic_meta:
+        _run_kwargs["fanfic_meta"] = req.fanfic_meta.model_dump()
     task = asyncio.create_task(
-        _run_fn(
-            run_id,
-            logline=req.logline,
-            premise=req.premise or "",
-            target_words=req.target_words,
-            model_profile=req.model_profile,
-            llm_provider_id=req.llm_provider_id,
-            user_id=current_user.id,
-            writing_style=_effective_ws,
-        ),
+        _run_fn(run_id, **_run_kwargs),
         name=f"bootstrap-{req.mode}-{run_id[:8]}",
     )
     _track_task(run_id, task)
@@ -365,9 +397,12 @@ async def resume_run(
             detail=f"Run is in status '{run.status}', expected 'awaiting_gate' or 'awaiting_retry'",
         )
 
-    _resume_fn = (
-        resume_bootstrap_fanqie if run.mode == "fanqie" else resume_bootstrap
-    )
+    if run.mode == "fanfic":
+        _resume_fn = resume_bootstrap_fanfic
+    elif run.mode == "fanqie":
+        _resume_fn = resume_bootstrap_fanqie
+    else:
+        _resume_fn = resume_bootstrap
     task = asyncio.create_task(
         _resume_fn(
             run_id,
@@ -439,7 +474,9 @@ def _build_resume_payload(run: BootstrapRun, req: ResumeRequest) -> dict:
         raw = req.positioning if req.positioning is not None else gd.get("positioning")
         if not isinstance(raw, dict) or not raw:
             raise HTTPException(status_code=422, detail="缺少有效的 positioning，无法通过立项闸门")
-        if run.mode == "fanqie":
+        if run.mode == "fanfic":
+            normalized, err = try_validate_fanfic_positioning(raw)
+        elif run.mode == "fanqie":
             normalized, err = try_validate_fanqie_positioning(raw)
         else:
             normalized, err = try_validate_positioning(raw)

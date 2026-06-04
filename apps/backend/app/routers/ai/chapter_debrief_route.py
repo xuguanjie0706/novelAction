@@ -385,6 +385,19 @@ def chapter_debrief(
         hint = hint[:500] if hint else exc.__class__.__name__
         raise HTTPException(400, f"章节复盘提交失败：{hint}") from exc
 
+    # 方向2（境界滞后根因修复）：复盘 LLM 抽取之外，用本章章纲 power_milestone 的
+    # 「计划境界 floor」确定性兜底推进主角境界（只升不降）。即使 LLM 漏抽境界，记录也会
+    # 跟上计划，下一章 draft/质检不再读到滞后值。
+    try:
+        from app.routers.ai.realm_plan_floor import persist_planned_realm_floor
+        _floor_project = db.query(Project).filter(Project.id == chapter.project_id).first()
+        if _floor_project is not None:
+            _floor_res = persist_planned_realm_floor(db, _floor_project, chapter)
+            if _floor_res and _floor_res.get("memory_chunks"):
+                _new_memory_chunks.extend(_floor_res["memory_chunks"])
+    except Exception:
+        logger.exception("realm_plan_floor 兜底推进失败 chapter=%s", req.chapter_id)
+
     for mc in _new_memory_chunks:
         embed_text = f"{mc.title or ''}\n{mc.content}".strip()
         embed_chunk_async(mc.id, embed_text, SessionLocal)

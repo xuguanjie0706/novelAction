@@ -237,6 +237,23 @@ START → fanqie_positioning → gate → project
 - **章纲展开**：`routes_vol_expand` 升级为「未满卷增量补全 / 满卷 force 重做」，`fanqie_volume_expand.prepare_volume_chapter_expand` 解析补全区间 + seed_nodes，`gen_vol_chapter_plans` 新增 `chapter_from/chapter_to/seed_nodes`。
 - **已弃用**：`steps/fanqie/opening_5chapters.py` 移出 graph chain，仅存量 `extra.opening_5chapters` 物化 1–5 章时兼容（文件头已标注）。
 
+## 同人·番茄专线（graph_fanfic，2026-06）
+
+第三种 Bootstrap 模式 `mode=fanfic`：建书必填 **原著名 + 原著梗概**（作者自填，系统不爬取版权原文）；首版同人类型：**穿书 / 重生 / AU平行**。
+
+```
+START → fanfic_positioning → gate → project
+  → canon_pack → deviation_contract → entry_hook
+  → golden_finger → face_slap_map → canon_power
+  → canon_characters → volumes → rhythm_map → canon_audit → END
+```
+
+- **入口**：`POST /api/v1/bootstrap/runs`，`fanfic_meta`（`source_work_title` / `canon_synopsis` / `fanfic_trope` / 可选 `focal_characters`）。
+- **规划 extra**：`fanfic_positioning`、`fanfic_canon`、`fanfic_deviation`、`fanfic_entry`、`fanfic_audit`；复用 `golden_finger` / `face_slap_map` / `power_ladder` / `rhythm_map`。
+- **收敛**：`fanfic_normalize.converge_fanfic_project`（卷导演单 + 境界表 + `opening_contract` 回填，同番茄）。
+- **写作期**：`pace_type=fast` + `context_vol_fanfic.build_fanfic_canon_block`；正文 `draft_continuity_bridge` 注入原著/OOC 硬约束（零增量 LLM）。
+- **检测**：`is_fanfic_project` / `is_tomato_pace_project`（章纲番茄铁律覆盖同人书）。
+
 ## 一句话生成（Bootstrap）
 
 唯一流程：**串行步进（Sequential）**，LangGraph 编排，入口 `POST /api/v1/bootstrap/runs`。

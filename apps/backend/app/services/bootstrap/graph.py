@@ -66,6 +66,15 @@ def get_fanqie_graph():
     return fanqie_graph
 
 
+def get_fanfic_graph():
+    """返回已初始化的 fanfic_graph（同人·番茄拓扑）。"""
+    if fanfic_graph is None:
+        raise RuntimeError(
+            "fanfic_graph 尚未初始化，请确认 init_bootstrap_graph() 已在 startup 中被 await。"
+        )
+    return fanfic_graph
+
+
 async def init_bootstrap_graph(pg_conn_string: str) -> None:
     """在 FastAPI startup 中调用：创建 psycopg3 异步连接池 + AsyncPostgresSaver，
     建立 checkpoint 表（幂等），编译并注册全局 bootstrap_graph。
@@ -74,11 +83,12 @@ async def init_bootstrap_graph(pg_conn_string: str) -> None:
         pg_conn_string: PostgreSQL DSN，例如 "postgresql://user:pw@host:5432/db"。
                         psycopg3 直接接受标准 DSN，无需 +psycopg 前缀。
     """
-    global bootstrap_graph, fanqie_graph, _pg_pool
+    global bootstrap_graph, fanqie_graph, fanfic_graph, _pg_pool
 
     from psycopg_pool import AsyncConnectionPool
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from app.services.bootstrap.graph_fanqie import _build_fanqie_graph
+    from app.services.bootstrap.graph_fanfic import _build_fanfic_graph
 
     # autocommit=True 是 LangGraph checkpointer 的强制要求
     _pg_pool = AsyncConnectionPool(
@@ -94,19 +104,21 @@ async def init_bootstrap_graph(pg_conn_string: str) -> None:
 
     bootstrap_graph = _build_graph(checkpointer)
     fanqie_graph = _build_fanqie_graph(checkpointer)
+    fanfic_graph = _build_fanfic_graph(checkpointer)
     logger.info(
-        "bootstrap_graph / fanqie_graph 初始化完成（AsyncPostgresSaver，pg_pool 已就绪）"
+        "bootstrap_graph / fanqie_graph / fanfic_graph 初始化完成（AsyncPostgresSaver）"
     )
 
 
 async def close_bootstrap_graph() -> None:
     """在 FastAPI shutdown 中调用，优雅关闭连接池。"""
-    global bootstrap_graph, fanqie_graph, _pg_pool
+    global bootstrap_graph, fanqie_graph, fanfic_graph, _pg_pool
     if _pg_pool is not None:
         await _pg_pool.close()
         _pg_pool = None
     bootstrap_graph = None
     fanqie_graph = None
+    fanfic_graph = None
     logger.info("bootstrap_graph pg_pool 已关闭")
 
 

@@ -444,7 +444,6 @@ async def gen_vol_chapter_plans(
                     batch_data = batch_data.get("chapters", [])
             except Exception as exc:
                 err_msg = str(exc).strip() or type(exc).__name__
-                batch_errors.append(f"第{batch_start}-{batch_end}章：{err_msg}")
                 logger.warning(
                     "vol_chapters JSON 解析/调用失败 project=%s volume=%s "
                     "batch=%d-%d attempt=%d: %s; raw_tail=%r",
@@ -457,6 +456,9 @@ async def gen_vol_chapter_plans(
                     (raw or "")[-500:],
                 )
                 batch_data = []
+                if gen_attempt == 0:
+                    continue
+                batch_errors.append(f"第{batch_start}-{batch_end}章：{err_msg}")
                 break
 
             actual_count = len(batch_data)

@@ -127,6 +127,7 @@ export function isLlmRelatedEndpoint(endpoint?: string): boolean {
   return [
     '/ai/',
     '/bootstrap/stream',
+    '/bootstrap/fanfic/',
     '/outline/ai-expand',
     '/outline/ai-full-generate',
   ].some((pattern) => endpoint.includes(pattern))

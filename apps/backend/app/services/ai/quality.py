@@ -152,7 +152,8 @@ class QualityMixin:
         if power_systems_summary:
             _extra_dim_doc += (
                 '\n    "realm_check": {{"score": 9, "status": "pass",'
-                ' "comment": "本章功法/技能/战力描写是否符合境界体系规则？有无超纲行为（如低境界人物秒杀高境界）？（0-10）"}},'
+                ' "comment": "本章功法/技能/战力描写是否符合境界体系规则？有无超纲行为（如低境界人物秒杀高境界）？'
+                '跨≥2大境的越阶击杀是否有「跨境破例预算」中已登记的依据且未超次数？（0-10）"}},'
             )
 
         _extra_constraints = ""
@@ -170,6 +171,10 @@ class QualityMixin:
             _extra_constraints += (
                 "\n- realm_check < 6 时，issues 中必须加一条 type=\"realm_violation\" 的 warning，"
                 "明确指出是哪个角色、在哪个场景、用了什么超出境界的能力"
+                "\n- 【跨境破例铁律】出现低境界角色击败/秒杀高于其 ≥2 大境的角色时：若该越阶依据"
+                "**未出现在「跨境破例预算」登记表**中（哪怕正文临时编了某种体质/血脉/外挂），"
+                "或虽登记但跨度超过其 max_span / 已超剩余次数，则必须加一条 type=\"power_exception_overrun\" "
+                "的 warning，写明涉及角色、双方境界跨度、所用依据，并指出它不在预算内或已超预算。"
             )
 
         # ── 白话直白（番茄纯爽文）质检标准自适应 ──────────────────────

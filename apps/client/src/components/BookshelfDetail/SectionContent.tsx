@@ -15,6 +15,7 @@ import type {
 import { VolumeDirectorCard } from '../Outline/VolumeDirectorView'
 import OpeningContractSection from './OpeningContractSection'
 import FanqieSection from './FanqieSection'
+import FanficSection from './FanficSection'
 import RecapEmptyWithRegen from './RecapEmptyWithRegen'
 import { EmotionArcSection, VillainArcSection } from './NarrativeArcSections'
 import { resolveEmotionArc, resolveVillainArc } from '../../utils/narrativeArcDisplay'
@@ -594,6 +595,7 @@ export default function SectionContent({ sectionId, data, projectId, onDataRefre
     )
     case 'consistency':  return <ConsistencySection data={data} />
     case 'fanqie':       return <FanqieSection data={data} />
+    case 'fanfic':       return <FanficSection data={data} />
     default:             return <p style={S.muted}>选择左侧区域查看内容</p>
   }
 }

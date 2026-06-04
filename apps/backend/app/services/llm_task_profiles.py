@@ -103,6 +103,12 @@ TASK_PROFILES: dict[str, dict] = {
         "frequency_penalty": 0.1,
         "presence_penalty": 0.0,
     },
+    "bootstrap.fanfic_synopsis": {
+        "temperature": 0.55,
+        "top_p": 0.9,
+        "frequency_penalty": 0.15,
+        "presence_penalty": 0.0,
+    },
     "bootstrap.project": {
         "temperature": 0.6,
         "top_p": 0.9,

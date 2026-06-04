@@ -33,6 +33,7 @@ from app.services.llm_token_budgets import (
 )
 from app.services.llm_billing_context import resolve_llm_billing_user_id
 from app.services.llm_call_log import log_llm_call, merge_truncation_into_context
+from app.services.ai.llm_response_text import message_completion_text
 from app.services.genre_kit import get_genre_guardrail, normalize_genre
 from app.services.xuanhuan_lexicon import (
     format_modern_blacklist_for_prompt,
@@ -173,7 +174,15 @@ class SamplingMixin:
             if not choices:
                 raise RuntimeError("LLM 返回空 choices，无法读取正文")
             msg = getattr(choices[0], "message", None)
-            content = (getattr(msg, "content", None) or "") if msg is not None else ""
+            content = message_completion_text(msg)
+            if not content.strip():
+                usage_obj = getattr(resp, "usage", None)
+                comp_tok = getattr(usage_obj, "completion_tokens", None) if usage_obj else None
+                raise RuntimeError(
+                    "LLM 返回空正文"
+                    + (f"（completion_tokens={comp_tok}，thinking 模型可能未输出可见 JSON）"
+                       if comp_tok else "")
+                )
             usage_obj = getattr(resp, "usage", None)
             usage = {
                 "prompt_tokens": getattr(usage_obj, "prompt_tokens", None),

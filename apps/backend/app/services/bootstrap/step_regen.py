@@ -402,7 +402,11 @@ async def dispatch_regen(svc: Any, project: Any, step: str, ctx: dict) -> Any:
 
     if step == "volumes":
         extra = project.extra if isinstance(getattr(project, "extra", None), dict) else {}
-        if extra.get("fanqie_positioning") or extra.get("power_ladder"):
+        if extra.get("fanfic_positioning"):
+            from app.services.bootstrap.fanfic_ctx import merge_fanfic_extra_into_ctx
+
+            merge_fanfic_extra_into_ctx(project, ctx)
+        elif extra.get("fanqie_positioning") or extra.get("power_ladder"):
             from app.services.bootstrap.fanqie_ctx import merge_fanqie_extra_into_ctx
 
             merge_fanqie_extra_into_ctx(project, ctx)

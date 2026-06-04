@@ -18,16 +18,48 @@ import re
 from typing import Any
 
 
+def _extract_balanced_json(text: str, start: int) -> str:
+    """从 start 起截取首个括号平衡的 JSON 片段（尊重字符串转义）。"""
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch == "}" and stack and stack[-1] == "{":
+            stack.pop()
+        elif ch == "]" and stack and stack[-1] == "[":
+            stack.pop()
+            if not stack:
+                return text[start : i + 1]
+    return text[start:]
+
+
 def _extract_json_span(text: str) -> str:
-    """截取最外层 JSON 片段（首个 {/[ 到末个 }/]），丢弃尾部说明文字。"""
+    """截取最外层 JSON 片段；优先括号平衡，避免 LLM 尾部多余 ] 干扰。"""
     start_obj = text.find("{")
     start_arr = text.find("[")
     if start_obj == -1 and start_arr == -1:
         return text
     if start_arr != -1 and (start_obj == -1 or start_arr < start_obj):
-        start, end_char = start_arr, "]"
+        start = start_arr
     else:
-        start, end_char = start_obj, "}"
+        start = start_obj
+    balanced = _extract_balanced_json(text, start)
+    if balanced != text[start:]:
+        return balanced
+    end_char = "]" if text[start] == "[" else "}"
     end = text.rfind(end_char)
     if end != -1 and end >= start:
         return text[start : end + 1]
@@ -40,6 +72,9 @@ def _repair_llm_json_typos(text: str) -> str:
     text = re.sub(r'([^\\])"\](\s*\n\s*\],)', r'\1"\2', text)
     # "key":\n [ 或 "key":\n { — gemini 写前预警常见非法换行
     text = re.sub(r":\s*\n\s*([\[\{])", r": \1", text)
+    # 章纲大数组末尾多余 ]：  }\n]] → }\n]
+    text = re.sub(r"\}\s*\]\s*\]\s*$", r"}]", text.strip())
+    text = re.sub(r"\]\s*\]\s*$", r"]", text.strip())
     return text
 
 

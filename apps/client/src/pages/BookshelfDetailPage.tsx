@@ -149,8 +149,14 @@ const SECTIONS: SectionCfg[] = [
  * 番茄书：判定是否为番茄专线项目（pace_type=fast 或 extra 含 fanqie_* 产物）。
  * 番茄线产物存于 Project.extra（face_slap_map / golden_finger / rhythm_map / fanqie_positioning）。
  */
+function isFanficProject(extra: Record<string, any> | null | undefined): boolean {
+  const e = extra || {}
+  return Boolean(e.fanfic_positioning || (e.positioning || {}).bootstrap_mode === 'fanfic')
+}
+
 function isFanqieProject(extra: Record<string, any> | null | undefined): boolean {
   const e = extra || {}
+  if (isFanficProject(extra)) return true
   if (e.fanqie_positioning || e.fanqie_opening_volume) return true
   const pos = e.positioning || {}
   return pos.pace_type === 'fast'
@@ -160,6 +166,21 @@ function isFanqieProject(extra: Record<string, any> | null | undefined): boolean
 const HIDDEN_FOR_FANQIE = new Set(['storylines', 'settings', 'emotion_arc', 'villain_arc'])
 
 /** 番茄专属栏目：聚合打脸地图 / 金手指 / 爽点节奏（番茄写手最常翻的三样）。 */
+const FANFIC_SECTION: SectionCfg = {
+  id: 'fanfic',
+  label: '同人设定',
+  icon: <BookMarked size={16} />,
+  color: '#6366f1',
+  countFn: d => {
+    const e = d.project.extra || {}
+    let n = 0
+    if (e.fanfic_canon?.immutable_facts?.length) n += 1
+    if (e.fanfic_deviation?.divergence_point) n += 1
+    if (e.fanfic_entry?.trigger_event) n += 1
+    return n
+  },
+}
+
 const FANQIE_SECTION: SectionCfg = {
   id: 'fanqie',
   label: '爽点节奏',
@@ -180,7 +201,10 @@ function resolveVisibleSections(extra: Record<string, any> | null | undefined): 
   const kept = SECTIONS.filter(s => !HIDDEN_FOR_FANQIE.has(s.id))
   const idx = kept.findIndex(s => s.id === 'volumes')
   const at = idx >= 0 ? idx + 1 : kept.length
-  return [...kept.slice(0, at), FANQIE_SECTION, ...kept.slice(at)]
+  const inserts = isFanficProject(extra)
+    ? [FANFIC_SECTION, FANQIE_SECTION]
+    : [FANQIE_SECTION]
+  return [...kept.slice(0, at), ...inserts, ...kept.slice(at)]
 }
 
 // ── 子组件：左侧导航项 ────────────────────────────────────────

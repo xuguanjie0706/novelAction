@@ -42,7 +42,7 @@ from app.services.ai_service import AIService
 async def test_expand_outline_includes_batch_continuity_context():
     captured = {}
 
-    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None, **kwargs):
         captured["prompt"] = prompt
         return """
         {
@@ -87,7 +87,7 @@ async def test_expand_outline_includes_batch_continuity_context():
 async def test_expand_outline_adds_xuanhuan_genre_guardrails():
     captured = {}
 
-    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None, **kwargs):
         captured["prompt"] = prompt
         return '{"volume_analysis": {}, "chapters": []}'
 
@@ -118,7 +118,7 @@ async def test_expand_outline_adds_xuanhuan_genre_guardrails():
 async def test_expand_outline_includes_prior_volumes_when_provided():
     captured: dict = {}
 
-    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None, **kwargs):
         captured["prompt"] = prompt
         return '{"volume_analysis": {}, "chapters": []}'
 
@@ -149,7 +149,7 @@ async def test_expand_outline_includes_prior_volumes_when_provided():
 async def test_gemini_expand_outline_uses_volume_sized_token_budget():
     captured = {}
 
-    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None, **kwargs):
         captured["max_tokens"] = max_tokens
         return '{"volume_analysis": {}, "chapters": []}'
 
@@ -174,7 +174,7 @@ async def test_gemini_expand_outline_uses_volume_sized_token_budget():
 async def test_outline_quality_check_prompt_requires_patchable_findings():
     captured = {}
 
-    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None, **kwargs):
         captured["prompt"] = prompt
         captured["max_tokens"] = max_tokens
         return """
@@ -242,7 +242,7 @@ async def test_outline_quality_check_prompt_requires_patchable_findings():
 async def test_outline_quality_check_prompt_includes_story_bible_context():
     captured = {}
 
-    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None, **kwargs):
         captured["prompt"] = prompt
         return """
         {
@@ -290,7 +290,7 @@ async def test_outline_quality_check_prompt_includes_story_bible_context():
 async def test_outline_repair_plan_prompt_returns_patch_list_for_problem_chapters():
     captured = {}
 
-    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None, **kwargs):
         captured["prompt"] = prompt
         captured["context"] = context
         return """
@@ -1170,7 +1170,7 @@ async def test_draft_prompt_includes_plot_dossier_context():
 async def test_auto_debrief_extracts_memory_updates_for_foreshadow_and_information_source():
     captured = {}
 
-    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None, **kwargs):
         captured["prompt"] = prompt
         assert "简体中文" in system
         return """
@@ -1228,21 +1228,23 @@ async def test_auto_debrief_extracts_memory_updates_for_foreshadow_and_informati
             "title": "萧炎突破六段斗之气",
             "content": "萧炎在第8章明确突破并稳定在六段斗之气。",
             "tags": ["萧炎", "境界"],
+            "importance_score": 0.5,
         },
         {
             "memory_type": "foreshadow",
             "title": "丹虚子感应黑雾",
             "content": "丹虚子通过昨夜黑雾感应到魂殿气息，第9章提及时必须回扣这个来源。",
             "tags": ["丹虚子", "魂殿", "信息来源"],
+            "importance_score": 0.5,
         },
     ]
 
 
 @pytest.mark.asyncio
 async def test_auto_debrief_extracts_chapter_index():
-    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None, **kwargs):
         assert "章节索引" in prompt
-        assert "章末钩子强度" in prompt
+        assert "hook_strength" in prompt
         assert "简体中文" in system
         assert "勿用 Day" in prompt
         return """
@@ -1325,7 +1327,7 @@ async def test_auto_debrief_extracts_reader_promises():
 async def test_auto_debrief_extracts_asset_updates_without_replacing_memory():
     captured = {}
 
-    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None, **kwargs):
         captured["prompt"] = prompt
         assert "简体中文" in system
         return """
@@ -1453,7 +1455,7 @@ async def test_gemini_draft_prompt_uses_expanded_story_context():
 async def test_gemini_quality_check_reads_full_chapter_and_continuity_context():
     captured = {}
 
-    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None, **kwargs):
         captured["prompt"] = prompt
         captured["max_tokens"] = max_tokens
         return """
@@ -1496,7 +1498,7 @@ async def test_gemini_quality_check_reads_full_chapter_and_continuity_context():
 async def test_gemini_chapter_coherence_uses_full_text_and_project_context():
     captured = {}
 
-    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None):
+    async def fake_call(system: str, prompt: str, max_tokens: int = 2048, context=None, **kwargs):
         captured["prompt"] = prompt
         captured["max_tokens"] = max_tokens
         return """

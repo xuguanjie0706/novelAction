@@ -50,8 +50,9 @@ class Settings(BaseSettings):
     # Bootstrap Step 12.5 首卷章纲：远程 Gemini 等建议 ≥40960，可一次生成 60 章避免 30+30 断档
     VOL1_CHAPTERS_MAX_TOKENS: int = 40960
 
-    # 复盘（auto_debrief）max_tokens — JSON 含人物/故事线/伏笔/资产/章索引等多块，复杂章可达 8k+ completion
-    GEMINI_AUTO_DEBRIEF_MAX_TOKENS: int = 16384
+    # 复盘（auto_debrief）max_tokens — JSON 含人物/故事线/伏笔/资产/章索引等多块；
+    # thinking 模型会把 completion 预算耗在推理上，须预留可见 JSON 输出（实测可达 64k+ reasoning）
+    GEMINI_AUTO_DEBRIEF_MAX_TOKENS: int = 65536
     # 写前预警 JSON 体量大；thinking 模型会把 completion 预算耗在推理上，2500 易截断可见正文
     GEMINI_PRE_WRITE_WARNING_MAX_TOKENS: int = 12288
 

@@ -11,6 +11,52 @@ from app.services.bootstrap.storyline_weave_blocks import build_storyline_weave_
 from app.services.outline_planning import words_to_plan
 
 
+def build_fanfic_volumes_block(ctx: dict) -> str:
+    """同人专用卷骨架约束（仅 fanfic 线注入；通用线/番茄线 ctx 无 fanfic_positioning → 空串）。
+
+    解决卷骨架「盲生成」：把原著时间线锚点、分歧点、切入点喂给卷级导演单，
+    并在原著无修真体系时解除境界铁律，避免给都市/言情同人硬套金丹元婴。
+    """
+    fp = ctx.get("fanfic_positioning")
+    if not fp:
+        return ""
+    canon = ctx.get("fanfic_canon") or {}
+    dev = ctx.get("fanfic_deviation") or {}
+    entry = ctx.get("fanfic_entry") or {}
+    ladder = ctx.get("power_ladder") or {}
+
+    lines = ["\n【同人·原著时间线与魔改节奏（卷骨架必须贯彻）】"]
+    lines.append(
+        f"  原著：{fp.get('source_work_title', '')} · {fp.get('fanfic_trope_label', '')} · "
+        f"贴合{fp.get('canon_fidelity', 'medium')}"
+    )
+    anchors = canon.get("timeline_anchors") or []
+    if anchors:
+        lines.append("  原著时间线锚点（卷级推进须与之对齐/错开，不得无视）：")
+        for a in anchors[:6]:
+            lines.append(f"    · {a}")
+    if dev.get("divergence_point"):
+        lines.append(f"  首处分歧点：{dev['divergence_point']}（此前贴原著，此后走同人主线）")
+    if entry.get("entry_chapter_hint"):
+        lines.append(f"  切入位置：{entry['entry_chapter_hint']}（第一卷须从此处附近起笔）")
+    if dev.get("main_plot_promise"):
+        lines.append(f"  同人主线新增价值：{dev['main_plot_promise']}")
+    lines.append(
+        "  ⚠️ 卷节奏铁律：卷与卷之间沿「原著时间线 × 同人分歧扩大」双轴推进——"
+        "前期贴原著借势造爽点，中期分歧扩大与原著走向背离，后期完全进入同人主线高潮；"
+        "禁止逐卷复述原著剧情，每卷必须有相对原著的新增价值。"
+    )
+    psrc = str(canon.get("power_system_from_source") or "")
+    has_realm = bool(ladder.get("social_ladder")) and "无明确体系" not in psrc
+    if not has_realm:
+        lines.append(
+            "  ⚠️ 本书原著无修真/数值等级体系：protagonist_realm_start/end 与 volume_boss_realm "
+            "请填「社会地位/势力位阶/影响力层级」，禁止套用金丹/元婴/斗罗等修真境界名；"
+            "卷级战力曲线铁律按「地位/资源升级」理解。"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def build_volumes_prompt(project: Project, ctx: dict) -> tuple[str, str]:
     """返回 (system, user_prompt)。"""
     system = (
@@ -49,6 +95,7 @@ def build_volumes_prompt(project: Project, ctx: dict) -> tuple[str, str]:
             positioning_block = "\n【立项定位（每卷必须贯彻）】\n" + "\n".join(_pos_lines) + "\n"
 
     kit_block = get_genre_kit_block(ctx)
+    fanfic_block = build_fanfic_volumes_block(ctx)
     entity_block = build_volume_entity_prompt_block(ctx)
     roster_block = build_antagonist_ladder_prompt_block(ctx, n_volumes)
     protagonist_progression_block = build_protagonist_progression_prompt_block(ctx, n_volumes)
@@ -77,7 +124,7 @@ def build_volumes_prompt(project: Project, ctx: dict) -> tuple[str, str]:
     prompt = f"""小说：《{ctx['project_title']}》主角：{ctx.get('protagonist', '主角')}
 创意：{ctx.get('logline')}
 立意与类型：{ctx.get('premise', '')[:700] or '（未填写）'}
-设定摘要：{ctx.get('settings_summary', '')}{storyline_hint}{villain_block}{positioning_block}{entity_block}{roster_block}{kit_block}{protag_block}
+设定摘要：{ctx.get('settings_summary', '')}{storyline_hint}{villain_block}{positioning_block}{fanfic_block}{entity_block}{roster_block}{kit_block}{protag_block}
 
 主线核心角色：{', '.join(ctx.get('char_names', []))}
 ⚠️ 节拍描述必须用到上述已命名角色/势力；可提及职能配角但核心燃点须绑定具名角色。

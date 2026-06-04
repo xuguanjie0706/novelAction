@@ -63,3 +63,20 @@ def test_parse_json_repairs_colon_newline_before_array():
 }"""
     data = parse_json(raw)
     assert data["protagonist_fact_sheet"]["key_skills"] == ["技能A"]
+
+
+def test_parse_json_strips_trailing_extra_array_bracket():
+    """章纲 LLM 偶发在数组末尾多写一个 ]。"""
+    raw = """[
+  {"chapter_number": 1, "title": "第一章"},
+  {"chapter_number": 2, "title": "第二章", "completion_risk": "结尾断章感太强"}
+]]"""
+    data = parse_json(raw)
+    assert len(data) == 2
+    assert data[1]["completion_risk"] == "结尾断章感太强"
+
+
+def test_parse_json_balanced_extract_before_trailing_garbage():
+    """括号平衡截取应忽略首个完整 JSON 之后的说明文字或多余符号。"""
+    raw = '[{"a": 1}] 以上是章纲。'
+    assert parse_json(raw) == [{"a": 1}]

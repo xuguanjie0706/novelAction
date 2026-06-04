@@ -92,8 +92,20 @@ async def quality_check(
                 names.append(str(sk))
         return "、".join(n for n in names if n) or "无"
 
+    # 方向3（境界滞后止血）：质检发生在复盘提交之前，本章合理突破会被旧记录误判。
+    # 用本章章纲 power_milestone 的「计划境界 floor」只读投影主角境界，使质检基准为
+    # 本章计划值而非滞后记录；不写库（落库由复盘期 persist_planned_realm_floor 负责）。
+    from app.routers.ai.realm_plan_floor import project_planned_realm_floor
+    _realm_floor = project_planned_realm_floor(db, project, chapter)
+
+    def _display_realm(c: Character) -> str:
+        floor = _realm_floor.get(c.name)
+        if floor:
+            return f"{floor['realm']}（本章计划，记录待复盘同步）"
+        return c.current_realm or "未知"
+
     character_states = [
-        f"{c.name}：境界={c.current_realm or '未知'}，"
+        f"{c.name}：境界={_display_realm(c)}，"
         f"位置={c.current_location or '未知'}，"
         f"状态={c.current_status or 'alive'}，"
         f"已知技能=[{_skill_names(c.known_skills)}]"
@@ -109,7 +121,14 @@ async def quality_check(
         for s in active_storylines
     ]
 
-    power_systems_summary = [build_draft_power_context_from_db(db, project_id)]
+    # 战力体系上下文 + 跨境破例预算（方向4：未登记的越阶碾压一律按崩坏处理）。
+    from app.services.ai.power_exception import build_power_exception_block
+    power_systems_summary = [
+        s for s in (
+            build_draft_power_context_from_db(db, project_id),
+            build_power_exception_block(project),
+        ) if s and s.strip()
+    ]
 
     outline_context = ""
     node: Optional[OutlineNode] = None

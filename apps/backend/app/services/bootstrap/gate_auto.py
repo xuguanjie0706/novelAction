@@ -14,6 +14,7 @@ from uuid import UUID
 
 from app.database import SessionLocal
 from app.models.bootstrap_run import BootstrapRun
+from app.schemas.bootstrap_fanfic_positioning import try_validate_fanfic_positioning
 from app.schemas.bootstrap_fanqie_positioning import try_validate_fanqie_positioning
 from app.schemas.bootstrap_positioning import try_validate_positioning
 
@@ -88,7 +89,9 @@ def build_auto_resume_payload(run: BootstrapRun) -> dict | None:
         if not isinstance(raw, dict) or not raw:
             logger.warning("auto_mode: run %s 缺少 positioning，无法自动 resume", run.id)
             return None
-        if run.mode == "fanqie":
+        if run.mode == "fanfic":
+            normalized, err = try_validate_fanfic_positioning(raw)
+        elif run.mode == "fanqie":
             normalized, err = try_validate_fanqie_positioning(raw)
         else:
             normalized, err = try_validate_positioning(raw)
@@ -108,13 +111,14 @@ def schedule_auto_resume_for_run(run_id: str) -> None:
         if not run:
             return
         gd = run.gate_data if isinstance(run.gate_data, dict) else {}
-        if run.mode == "fanqie":
+        if run.mode == "fanfic":
+            from app.services.bootstrap.graph_fanfic import resume_bootstrap_fanfic as resume_fn
+            mode = "fanfic"
+        elif run.mode == "fanqie":
             from app.services.bootstrap.graph_fanqie import resume_bootstrap_fanqie as resume_fn
-
             mode = "fanqie"
         else:
             from app.services.bootstrap.graph import resume_bootstrap as resume_fn
-
             mode = run.mode or "sequential"
         schedule_auto_resume_if_needed(
             str(run.id),

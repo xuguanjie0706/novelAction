@@ -390,6 +390,86 @@ def sync_power_ladder_to_power_system(db: Session, project: Project) -> PowerSys
     return ps
 
 
+def distribute_volume_realm_ranks(start: int, end: int, n: int) -> list[tuple[int, int]]:
+    """把全书主角境界 [start, end] 单调分摊到 n 卷，返回每卷 (start_rank, end_rank)。
+
+    纯函数（便于回归测试）：卷末 rank 线性插值后取整、非递减；卷首接上一卷卷末。
+    """
+    if n <= 0:
+        return []
+    if end < start:
+        end = start
+    out: list[tuple[int, int]] = []
+    prev_end = start
+    for i in range(n):
+        vol_start = start if i == 0 else prev_end
+        vol_end = round(start + (end - start) * (i + 1) / n)
+        vol_end = max(vol_start, min(vol_end, end))
+        out.append((vol_start, vol_end))
+        prev_end = vol_end
+    return out
+
+
+def backfill_fanqie_volume_realm_ranks(db: Session, project: Project) -> int:
+    """回填番茄/同人卷节点的 protagonist_realm_start_rank/end_rank（方向1 让插值轴生效）。
+
+    番茄/同人线的 gen_volumes 早于 PowerSystem 生成，卷节点缺主角境界 rank，导致章级境界轴
+    （realm_axis）失效。converge 时 PowerSystem 已建好，据其主角起止 rank 把全书境界单调分摊到各卷，
+    使每章（含未写突破点的）都能插值出应有境界。幂等：已有 rank 的卷不覆盖。
+    """
+    from app.routers.outline.helpers.realm_timeline import _realm_display_name_for_rank
+    from app.routers.outline.helpers.realm_whitelist import build_realm_rank_map
+
+    systems = db.query(PowerSystem).filter(PowerSystem.project_id == project.id).all()
+    if not systems:
+        return 0
+    name_to_rank, _max, _ = build_realm_rank_map(systems)
+    if not name_to_rank:
+        return 0
+    rank_values = sorted(set(name_to_rank.values()))
+    min_rank, top_rank = rank_values[0], rank_values[-1]
+
+    primary = min(systems, key=lambda s: s.sort_order or 0)
+    start = getattr(primary, "protagonist_current_rank", None)
+    end = getattr(primary, "protagonist_end_rank", None)
+    start = start if isinstance(start, int) and start > 0 else min_rank
+    end = end if isinstance(end, int) and end > 0 else top_rank
+    start = max(min_rank, min(start, top_rank))
+    end = max(start, min(end, top_rank))
+
+    volumes = (
+        db.query(OutlineNode)
+        .filter(OutlineNode.project_id == project.id, OutlineNode.node_type == "volume")
+        .order_by(OutlineNode.sort_order)
+        .all()
+    )
+    if not volumes:
+        return 0
+
+    dist = distribute_volume_realm_ranks(start, end, len(volumes))
+    updated = 0
+    for vol, (vs, ve) in zip(volumes, dist):
+        ex = dict(vol.extra or {})
+        if isinstance(ex.get("protagonist_realm_start_rank"), int) and isinstance(
+            ex.get("protagonist_realm_end_rank"), int
+        ):
+            continue  # 幂等：已有 rank（如通用线已填）不覆盖
+        ex["protagonist_realm_start_rank"] = vs
+        ex["protagonist_realm_end_rank"] = ve
+        sname = _realm_display_name_for_rank(vs, name_to_rank)
+        ename = _realm_display_name_for_rank(ve, name_to_rank)
+        if sname:
+            ex.setdefault("protagonist_realm_start", sname)
+        if ename:
+            ex.setdefault("protagonist_realm_end", ename)
+        vol.extra = ex
+        flag_modified(vol, "extra")
+        updated += 1
+    if updated:
+        db.commit()
+    return updated
+
+
 def is_fanqie_project(project: Project, ctx: dict | None = None) -> bool:
     """番茄项目：pace_type=fast 或 extra 含 fanqie_positioning（兼容旧 opening_5chapters）。"""
     ctx = ctx or {}
@@ -516,6 +596,9 @@ def converge_fanqie_project(db: Session, project: Project, ctx: dict | None = No
         db.commit()
 
     sync_power_ladder_to_power_system(db, project)
+
+    # 方向1：PowerSystem 已建好，回填卷级主角境界 rank，使章级境界轴对番茄/同人线生效。
+    backfill_fanqie_volume_realm_ranks(db, project)
 
     # 开局承诺回填：番茄线不跑通用 Step 12，从 rhythm_map/face_slap_map 派生 opening_contract
     # + ReaderPromise，补上番茄追读命脉，让 UI 与下游章纲/复盘复用既有契约。

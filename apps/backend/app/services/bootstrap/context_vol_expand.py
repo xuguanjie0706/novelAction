@@ -135,6 +135,10 @@ def build_vol_expand_ctx(
     if positioning.get("pace_type") == "fast":
         from app.services.bootstrap.context_vol_fanqie import build_fanqie_enhance_block
         fanqie_block = build_fanqie_enhance_block(project, volume_node, ctx)
+        from app.services.bootstrap.context_vol_fanfic import build_fanfic_canon_block
+        fanfic_blk = build_fanfic_canon_block(project, volume_node, ctx)
+        if fanfic_blk:
+            fanqie_block = (fanqie_block + fanfic_blk) if fanqie_block else fanfic_blk
 
     # ── 组合 editorial_prompt_block ────────────────────────────────────────────
     genre_kit_block = (ctx.get("genre_kit_prompt") or "").strip()

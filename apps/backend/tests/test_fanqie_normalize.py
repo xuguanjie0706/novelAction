@@ -3,9 +3,33 @@ from app.services.bootstrap.fanqie_normalize import (
     apply_normalized_chapter_plan,
     build_chapter_hook,
     build_chapter_summary,
+    distribute_volume_realm_ranks,
     infer_chapter_title,
     pacing_from_rhythm_tag,
 )
+
+
+def test_distribute_realm_ranks_monotonic_and_endpoints():
+    """方向1 番茄/同人卷级 rank 回填：单调非递减、首卷起点、末卷终点。"""
+    dist = distribute_volume_realm_ranks(1, 5, 4)
+    assert dist[0][0] == 1  # 首卷起点 = 全书起点
+    assert dist[-1][1] == 5  # 末卷终点 = 全书终点
+    # 卷首接上一卷卷末，整体非递减
+    flat = [r for pair in dist for r in pair]
+    assert all(flat[i] <= flat[i + 1] for i in range(len(flat) - 1))
+
+
+def test_distribute_realm_ranks_flat_when_no_progression():
+    assert distribute_volume_realm_ranks(3, 3, 3) == [(3, 3), (3, 3), (3, 3)]
+
+
+def test_distribute_realm_ranks_clamps_inverted_input():
+    # end < start 时夹回 start，不产生倒退
+    assert distribute_volume_realm_ranks(5, 2, 2) == [(5, 5), (5, 5)]
+
+
+def test_distribute_realm_ranks_empty_volumes():
+    assert distribute_volume_realm_ranks(1, 5, 0) == []
 
 
 def test_infer_title_from_core_event_when_missing():

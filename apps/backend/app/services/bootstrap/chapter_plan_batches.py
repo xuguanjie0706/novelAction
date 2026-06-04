@@ -26,13 +26,15 @@ def normalize_volume_planned_chapters(value: object, *, default: int = DEFAULT_V
 
 
 def chapter_plan_batch_ranges(planned: int, max_completion_tokens: int) -> list[tuple[int, int]]:
-    """按输出 token 预算切批；预算足够时整卷单次生成，否则 30 章一批 + 末批余数。"""
+    """按输出 token 预算切批；单批硬上限 30 章，避免超大 JSON 解析失败。"""
     if planned <= 0:
         return []
-    max_in_one_shot = max(
+    token_cap = max(
         BATCH_CHUNK_SIZE,
         max_completion_tokens // EST_COMPLETION_TOKENS_PER_CHAPTER,
     )
+    # 实测 50 章整批一次生成易出 JSON 笔误（尾部 ]]、字段内引号等）；30 章一批更稳。
+    max_in_one_shot = min(token_cap, BATCH_CHUNK_SIZE)
     if planned <= max_in_one_shot:
         return [(1, planned)]
     ranges: list[tuple[int, int]] = []

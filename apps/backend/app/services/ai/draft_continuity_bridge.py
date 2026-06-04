@@ -233,4 +233,91 @@ def build_draft_continuity_bridge_block(
     if style_guard:
         sections.append(style_guard)
 
+    realm_target = _realm_axis_bridge_block(db, project_id, chapter)
+    if realm_target:
+        sections.append(realm_target)
+
+    exc_block = _power_exception_bridge_block(db, project_id)
+    if exc_block:
+        sections.append(exc_block)
+
+    canon_block = _fanfic_canon_bridge_block(db, project_id)
+    if canon_block:
+        sections.append(canon_block)
+
     return "\n\n".join(sections)
+
+
+def _realm_axis_bridge_block(db: Session, project_id: str, chapter: Any) -> str:
+    """写章硬目标：本章主角「应有境界」（方向1 单一权威轴）。无境界体系/无章纲锚点时空。"""
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project or chapter is None:
+        return ""
+    try:
+        from app.services.ai.realm_axis import expected_realm_for_chapter
+
+        label, rank = expected_realm_for_chapter(db, project, chapter)
+    except Exception:
+        return ""
+    if not label or rank is None:
+        return ""
+    return (
+        "▍本章主角应有境界（章级境界轴，写章硬目标）\n"
+        f"· 本章主角境界应处于「{label}」一线：不得无故落后于此（写成更低境界），"
+        "也不得无代价、无过程地跳到更高大境；如确有突破，须在正文交代修炼/机缘过程与代价。"
+    )
+
+
+def _power_exception_bridge_block(db: Session, project_id: str) -> str:
+    """写章硬约束：跨境破例预算（方向4）。仅在已登记破例或本书有境界体系时注入，避免无境界书噪声。"""
+    from app.models import PowerSystem
+    from app.services.ai.power_exception import (
+        build_power_exception_block,
+        get_power_exception_budget,
+    )
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return ""
+    has_budget = bool(get_power_exception_budget(project))
+    has_power_system = (
+        db.query(PowerSystem.id).filter(PowerSystem.project_id == project_id).first() is not None
+    )
+    if not has_budget and not has_power_system:
+        return ""
+    block = build_power_exception_block(project)
+    return f"▍{block}" if block else ""
+
+
+def _fanfic_canon_bridge_block(db: Session, project_id: str) -> str:
+    """同人书：注入原著不可改事实与 OOC 雷区（纯读库，零 LLM）。"""
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        return ""
+    extra = project.extra if isinstance(project.extra, dict) else {}
+    if not extra.get("fanfic_positioning"):
+        return ""
+    fp = extra.get("fanfic_positioning") or {}
+    canon = extra.get("fanfic_canon") or {}
+    dev = extra.get("fanfic_deviation") or {}
+    entry = extra.get("fanfic_entry") or {}
+    lines = [
+        "▍同人·原著约束（正文硬遵守）",
+        f"· 原著《{fp.get('source_work_title', '')}》· {fp.get('fanfic_trope_label', '')} · 贴合{fp.get('canon_fidelity', 'medium')}",
+    ]
+    if dev.get("divergence_point"):
+        lines.append(f"· 分歧点：{dev['divergence_point']}（此前须贴原著走向，此后走同人主线）")
+    if entry.get("entry_chapter_hint"):
+        lines.append(f"· 原著时间锚点：当前进度对应{entry['entry_chapter_hint']}，时间线不得前后矛盾")
+    for anc in (canon.get("timeline_anchors") or [])[:3]:
+        lines.append(f"· 原著节点：{anc}")
+    for fact in (canon.get("immutable_facts") or [])[:5]:
+        lines.append(f"· 不可改：{fact}")
+    for forb in (dev.get("forbidden_changes") or [])[:4]:
+        lines.append(f"· 禁止魔改：{forb}")
+    for taboo in (fp.get("ooc_taboos") or [])[:4]:
+        lines.append(f"· 雷区：{taboo}")
+    lines.append(
+        "· 对话须贴合各角色 speech_style；禁止把原著角色写成完全不同的性格而无剧情交代。"
+    )
+    return "\n".join(lines)

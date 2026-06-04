@@ -8,6 +8,7 @@
  * - ``abortSse``：仅断开当前 fetch/SSE；``cancelRun``：调用 ``POST .../cancel`` 终止后端任务并清理本地状态
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import toast from 'react-hot-toast'
 import { authFetch } from '../../../api/authFetch'
 import {
   clearActiveBootstrapRun,
@@ -44,6 +45,8 @@ export type StepKey =
   // 番茄专属步骤
   | 'contrast_design' | 'golden_finger' | 'face_slap_map'
   | 'power_ladder' | 'rhythm_map' | 'signal_audit'
+  | 'canon_pack' | 'deviation_contract' | 'entry_hook'
+  | 'canon_power' | 'canon_characters' | 'canon_audit'
 
 /** SSE linter_issues_top 单项（章纲阻断时附带） */
 export interface LinterIssuePreview {
@@ -75,16 +78,22 @@ export interface StepState {
   linterBlockingRules?: string[]
 }
 
+export interface FanficStartMeta {
+  source_work_title: string
+  canon_synopsis: string
+  fanfic_trope: 'transmigration' | 'rebirth' | 'au'
+  focal_characters?: string
+}
+
 export interface StartParams {
   logline: string
-  mode: 'sequential' | 'fanqie'
+  mode: 'sequential' | 'fanqie' | 'fanfic'
   targetWords: number
   modelProfile: string
   llmProviderId?: string | null
-  /** 为 true 时跳过闸门人工确认（后端自动 approve）；步骤失败不自动重试 */
   autoMode?: boolean
-  /** 写作风格档位：plain 白话直白 / standard 默认 / dense 老白文。默认 standard。 */
   writingStyle?: 'plain' | 'standard' | 'dense'
+  fanficMeta?: FanficStartMeta
 }
 
 export const STEP_META: Record<StepKey, {
@@ -115,6 +124,12 @@ export const STEP_META: Record<StepKey, {
   power_ladder:      { icon: '🪜', stepColor: '#06b6d4', phase: 'world',      stepNum: 'FQ-4',  desc: '构建权力阶梯（5阶社会结构），最小化世界观设计' },
   rhythm_map:        { icon: '🎵', stepColor: '#8b5cf6', phase: 'blueprint',  stepNum: 'FQ-5',  desc: '爽点节奏图（前50章打标）+ 剧情储量池（3-5个备用支线弧）' },
   signal_audit:      { icon: '✅', stepColor: '#22c55e', phase: 'qa',         stepNum: 'FQ-6',  desc: '番茄算法双校验：类型信号强度 + 爽感密度审计' },
+  canon_pack:        { icon: '📜', stepColor: '#6366f1', phase: 'foundation', stepNum: 'FF-1',  desc: '结构化原著设定（世界观/人物/不可改事实）' },
+  deviation_contract:{ icon: '⚖️', stepColor: '#8b5cf6', phase: 'foundation', stepNum: 'FF-2',  desc: '魔改边界与 CP/主线承诺' },
+  entry_hook:        { icon: '🪝', stepColor: '#f97316', phase: 'foundation', stepNum: 'FF-3',  desc: '穿书/重生/AU 切入点' },
+  canon_power:       { icon: '🪜', stepColor: '#06b6d4', phase: 'world',      stepNum: 'FF-4',  desc: '原著权力阶梯' },
+  canon_characters:  { icon: '👥', stepColor: '#22c55e', phase: 'characters', stepNum: 'FF-5',  desc: '原著人物建档' },
+  canon_audit:       { icon: '✅', stepColor: '#22c55e', phase: 'qa',         stepNum: 'FF-6',  desc: '原著贴合 + 爽感双校验' },
 }
 
 const SEQ_STEP_KEYS: StepKey[] = [
@@ -133,8 +148,16 @@ const FANQIE_STEP_KEYS: StepKey[] = [
   'rhythm_map', 'signal_audit',
 ]
 
+const FANFIC_STEP_KEYS: StepKey[] = [
+  'positioning', 'project',
+  'canon_pack', 'deviation_contract', 'entry_hook',
+  'golden_finger', 'face_slap_map', 'canon_power',
+  'canon_characters', 'volumes', 'rhythm_map', 'canon_audit',
+]
+
 function getStepKeys(mode: StartParams['mode']): StepKey[] {
   if (mode === 'fanqie') return FANQIE_STEP_KEYS
+  if (mode === 'fanfic') return FANFIC_STEP_KEYS
   return SEQ_STEP_KEYS
 }
 
@@ -384,6 +407,9 @@ export function useBootstrapStream() {
         ))
       }
       setErrorMsg(`${key ? `[${key}] ` : ''}${msg}`)
+      if (event === 'step_halted') {
+        streamCompleteRef.current = false
+      }
     } else if (event === 'gate_pending') {
       const gst = isGatePendingStep(step) ? step : 'positioning'
       setGateStep(gst)
@@ -485,16 +511,20 @@ export function useBootstrapStream() {
 
     try {
       // sequential 和 fanqie 均走 /runs 协议
-      const apiMode = params.mode === 'fanqie' ? 'fanqie' : 'sequential'
+      const apiMode = params.mode
+      const payload: Record<string, unknown> = {
+        ...body,
+        mode: apiMode,
+        auto_mode: Boolean(params.autoMode),
+        writing_style: params.writingStyle ?? 'standard',
+      }
+      if (params.mode === 'fanfic' && params.fanficMeta) {
+        payload.fanfic_meta = params.fanficMeta
+      }
       const runRes = await authFetch('/api/v1/bootstrap/runs', {
         method: 'POST', signal: abort.signal,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...body,
-          mode: apiMode,
-          auto_mode: Boolean(params.autoMode),
-          writing_style: params.writingStyle ?? 'standard',
-        }),
+        body: JSON.stringify(payload),
       })
       if (!runRes.ok) throw new Error(await runRes.text().catch(() => `创建失败 (${runRes.status})`))
       const { run_id } = await runRes.json()
@@ -561,7 +591,7 @@ export function useBootstrapStream() {
 
       // 根据快照中的 mode 还原步骤列表与 ref
       const runMode: StartParams['mode'] =
-        run.mode === 'fanqie' ? 'fanqie' : 'sequential'
+        (run.mode === 'fanqie' || run.mode === 'fanfic') ? run.mode : 'sequential'
       currentModeRef.current = runMode
       setSteps(getStepKeys(runMode).map(k => makeStep(k)))
       setActiveLogline((run.logline || opts?.loglineHint || '').trim())
@@ -701,7 +731,10 @@ export function useBootstrapStream() {
     params: Pick<StartParams, 'modelProfile' | 'llmProviderId'>,
   ) {
     const rid = runIdRef.current ?? runId
-    if (!rid) return
+    if (!rid) {
+      toast.error('找不到运行记录，请从书架「继续生成」恢复后再重试')
+      return
+    }
     setRetryLoading(true)
     try {
       const res = await authFetch(`/api/v1/bootstrap/runs/${rid}/resume`, {
@@ -716,24 +749,29 @@ export function useBootstrapStream() {
       })
       if (!res.ok) {
         const text = await res.text().catch(() => '')
-        throw new Error(text || `重试失败 (${res.status})`)
+        let detail = text
+        try {
+          const parsed = JSON.parse(text) as { detail?: unknown }
+          if (typeof parsed.detail === 'string') detail = parsed.detail
+        } catch { /* raw text */ }
+        throw new Error(detail || `重试失败 (${res.status})`)
       }
       setHaltedStep(null)
       setErrorMsg('')
       setSteps(prev => resetStepsFromRetry(prev, step))
       setPhase('generating')
-      if (streamCompleteRef.current) {
-        streamCompleteRef.current = false
-        abortRef.current?.abort()
-        const abort = new AbortController()
-        abortRef.current = abort
-        const evtRes = await authFetch(`/api/v1/bootstrap/runs/${rid}/events`, {
-          signal: abort.signal,
-        })
-        if (evtRes.ok) void readSse(evtRes)
-      }
+      streamCompleteRef.current = false
+      abortRef.current?.abort()
+      const abort = new AbortController()
+      abortRef.current = abort
+      const evtRes = await authFetch(`/api/v1/bootstrap/runs/${rid}/events`, {
+        signal: abort.signal,
+      })
+      if (evtRes.ok) void readSse(evtRes)
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : '重试失败')
+      const msg = err instanceof Error ? err.message : '重试失败'
+      setErrorMsg(msg)
+      toast.error(msg.length > 120 ? `${msg.slice(0, 120)}…` : msg)
     } finally {
       setRetryLoading(false)
     }

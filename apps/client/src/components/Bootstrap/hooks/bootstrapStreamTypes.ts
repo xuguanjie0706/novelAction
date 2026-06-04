@@ -36,6 +36,9 @@ export type StepKey =
   // 番茄专属步骤
   | 'contrast_design' | 'golden_finger' | 'face_slap_map'
   | 'power_ladder' | 'rhythm_map' | 'signal_audit'
+  // 同人·番茄专属
+  | 'canon_pack' | 'deviation_contract' | 'entry_hook'
+  | 'canon_power' | 'canon_characters' | 'canon_audit'
 
 /** SSE linter_issues_top 单项（章纲阻断时附带） */
 export interface LinterIssuePreview {
@@ -67,14 +70,23 @@ export interface StepState {
   linterBlockingRules?: string[]
 }
 
+export interface FanficStartMeta {
+  source_work_title: string
+  canon_synopsis: string
+  fanfic_trope: 'transmigration' | 'rebirth' | 'au'
+  focal_characters?: string
+}
+
 export interface StartParams {
   logline: string
-  mode: 'sequential' | 'fanqie'
+  mode: 'sequential' | 'fanqie' | 'fanfic'
   targetWords: number
   modelProfile: string
   llmProviderId?: string | null
   /** 为 true 时自动通过闸门；步骤失败不自动重试 */
   autoMode?: boolean
+  writingStyle?: 'plain' | 'standard' | 'dense'
+  fanficMeta?: FanficStartMeta
 }
 
 // ── Constants ──────────────────────────────────────────────────
@@ -105,6 +117,12 @@ export const STEP_META: Record<StepKey, {
   power_ladder:      { icon: '🪜', stepColor: '#06b6d4', phase: 'world',      stepNum: 'FQ-4', desc: '构建权力阶梯（5阶社会结构），最小化世界观设计' },
   rhythm_map:        { icon: '🎵', stepColor: '#8b5cf6', phase: 'blueprint',  stepNum: 'FQ-5', desc: '爽点节奏图（前50章打标）+ 剧情储量池（3-5个备用支线弧）' },
   signal_audit:      { icon: '✅', stepColor: '#22c55e', phase: 'qa',         stepNum: 'FQ-6', desc: '番茄算法双校验：类型信号强度 + 爽感密度审计' },
+  canon_pack:        { icon: '📜', stepColor: '#6366f1', phase: 'foundation', stepNum: 'FF-1', desc: '将作者填写的原著梗概结构化为世界观/人物/不可改事实' },
+  deviation_contract:{ icon: '⚖️', stepColor: '#8b5cf6', phase: 'foundation', stepNum: 'FF-2', desc: '明确魔改边界：允许改动、禁止改动、CP/主线承诺' },
+  entry_hook:        { icon: '🪝', stepColor: '#f97316', phase: 'foundation', stepNum: 'FF-3', desc: '穿书/重生/AU 切入点与开局落差（800字内触发）' },
+  canon_power:       { icon: '🪜', stepColor: '#06b6d4', phase: 'world',      stepNum: 'FF-4', desc: '从原著提炼权力阶梯，不另造世界观' },
+  canon_characters:  { icon: '👥', stepColor: '#22c55e', phase: 'characters', stepNum: 'FF-5', desc: '原著人物建档并标注 canon/oc' },
+  canon_audit:       { icon: '✅', stepColor: '#22c55e', phase: 'qa',         stepNum: 'FF-6', desc: '原著贴合 + 番茄爽感双校验' },
 }
 
 export const SEQ_STEP_KEYS: StepKey[] = [
@@ -123,8 +141,16 @@ export const FANQIE_STEP_KEYS: StepKey[] = [
   'rhythm_map', 'signal_audit',
 ]
 
+export const FANFIC_STEP_KEYS: StepKey[] = [
+  'positioning', 'project',
+  'canon_pack', 'deviation_contract', 'entry_hook',
+  'golden_finger', 'face_slap_map', 'canon_power',
+  'canon_characters', 'volumes', 'rhythm_map', 'canon_audit',
+]
+
 export function getStepKeys(mode: StartParams['mode']): StepKey[] {
-  if (mode === 'fanqie') return FANQIE_STEP_KEYS
+  if (mode === 'fanfie') return FANQIE_STEP_KEYS
+  if (mode === 'fanfic') return FANFIC_STEP_KEYS
   return SEQ_STEP_KEYS
 }
 

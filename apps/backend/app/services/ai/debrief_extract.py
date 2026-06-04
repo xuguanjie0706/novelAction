@@ -7,7 +7,6 @@ debrief_extract.py — 章节自动复盘提取 Mixin
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 from typing import List
@@ -21,10 +20,39 @@ from app.services.ai.debrief_helpers import (
     _clean_speech_kit_updates,
     split_foreshadow_updates,
 )
+from app.services.bootstrap.parse import parse_json
 from app.services.bootstrap.prompts.character_naming import character_naming_constraints_for_prompt
 from app.services.llm_token_budgets import max_tokens_auto_debrief
 
 logger = logging.getLogger(__name__)
+
+_COMPACT_DEBRIEF_JSON_HINT = (
+    "【重试约束】上次输出无效。请直接输出一个 JSON 对象（不要用 markdown 代码块、"
+    "不要思考过程标签），键名与上文 schema 完全一致；JSON 必须出现在可见正文中。"
+)
+
+
+def _debrief_parse_error(exc: Exception, response: str) -> dict:
+    """复盘 JSON 解析/LLM 空响应时的统一降级结构。"""
+    return {
+        "character_updates": [],
+        "storyline_updates": [],
+        "memory_updates": [],
+        "asset_updates": {
+            "new_items": [], "item_updates": [],
+            "new_skills": [], "skill_updates": [],
+            "new_factions": [], "faction_updates": [],
+        },
+        "new_characters": [],
+        "chapter_index": {},
+        "new_reader_promises": [],
+        "fulfilled_promise_texts": [],
+        "speech_kit_updates": [],
+        "next_chapter_directives": [],
+        "summary": "",
+        "error": f"解析失败: {exc}",
+        "raw": (response or "")[:300],
+    }
 
 
 class DebriefMixin:
@@ -365,196 +393,206 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
   ]
 }}"""
 
-        response = await self._call_ai(
-            system,
-            prompt,
-            max_tokens=max_tokens_auto_debrief(self.profile),
-            context={"operation": "auto_extract_debrief", "chapter_title": chapter_title},
-            task="debrief.auto",
-        )
-        try:
-            text = response.strip()
-            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-            if "```" in text:
-                fence = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
-                if fence:
-                    text = fence.group(1).strip()
-            start = text.find("{")
-            if start != -1:
-                text = text[start:]
-            data = json.loads(text)
-            # 清理空字段
-            char_updates = []
-            for cu in data.get("character_updates", []):
-                cleaned = {k: v for k, v in cu.items() if v and k not in ("character_name",)}
-                # realm_rank 为 0 时 v=0 被过滤，需单独保留
-                if "realm_rank" in cu and cu["realm_rank"] is not None:
-                    try:
-                        cleaned["realm_rank"] = int(cu["realm_rank"])
-                    except (ValueError, TypeError):
-                        pass
-                if len(cleaned) > 1:  # 除 character_id 外还有其他字段
-                    cleaned["character_name"] = cu.get("character_name", "")
-                    char_updates.append(cleaned)
-            sl_updates = []
-            for su in data.get("storyline_updates", []):
-                cleaned = {
-                    k: v for k, v in su.items()
-                    if v is not None and v != "" and k not in ("storyline_name",)
-                }
-                if su.get("crossover_executed") is False:
-                    cleaned["crossover_executed"] = False
-                if len(cleaned) > 1:
-                    cleaned["storyline_name"] = su.get("storyline_name", "")
-                    if cleaned.get("beat") and not cleaned.get("append_beat"):
-                        cleaned["append_beat"] = cleaned["beat"]
-                    sl_updates.append(cleaned)
-            memory_updates = []
-            valid_memory_types = {"event", "character_state", "foreshadow", "setting", "conflict"}
-            for mu in data.get("memory_updates", []):
-                if not isinstance(mu, dict):
-                    continue
-                memory_type = mu.get("memory_type") or "event"
-                if memory_type not in valid_memory_types:
-                    memory_type = "event"
-                content = (mu.get("content") or "").strip()
-                if not content:
-                    continue
-                tags = mu.get("tags") if isinstance(mu.get("tags"), list) else []
-                try:
-                    imp = float(mu.get("importance_score") or 0.5)
-                    imp = max(0.0, min(1.0, imp))
-                except (ValueError, TypeError):
-                    imp = 0.5
-                memory_updates.append({
-                    "memory_type": memory_type,
-                    "title": (mu.get("title") or memory_type).strip()[:120],
-                    "content": content,
-                    "tags": [str(t) for t in tags[:8] if str(t).strip()],
-                    "importance_score": imp,
-                })
-            raw_assets = data.get("asset_updates") if isinstance(data.get("asset_updates"), dict) else {}
-
-            def _clean_asset_items(key: str, limit: int = 8) -> list:
-                return [
-                    item for item in (raw_assets.get(key) or [])[:limit]
-                    if isinstance(item, dict) and (
-                        item.get("name") or item.get("item_name")
-                        or item.get("skill_name") or item.get("faction_name")
-                    )
-                ]
-
-            asset_updates = {
-                "new_items": [
-                    item for item in _clean_asset_items("new_items")
-                    if item.get("tier", "B") in ("A", "B") and item.get("name")
-                ],
-                "item_updates": _clean_asset_items("item_updates"),
-                "new_skills": [
-                    item for item in _clean_asset_items("new_skills")
-                    if item.get("tier", "B") in ("A", "B") and item.get("name")
-                ],
-                "skill_updates": _clean_asset_items("skill_updates"),
-                "new_factions": [
-                    item for item in _clean_asset_items("new_factions")
-                    if item.get("tier", "B") in ("A", "B") and item.get("name")
-                ],
-                "faction_updates": _clean_asset_items("faction_updates"),
-            }
-            chapter_index = data.get("chapter_index") if isinstance(data.get("chapter_index"), dict) else {}
-            hook_strength = chapter_index.get("hook_strength", 1)
+        response = ""
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            attempt_system = system if attempt == 0 else f"{system}\n\n{_COMPACT_DEBRIEF_JSON_HINT}"
             try:
-                hook_strength = max(1, min(5, int(hook_strength)))
-            except Exception:
-                hook_strength = 1
-            cleaned_index = {
-                "story_day": (chapter_index.get("story_day") or "").strip(),
-                "core_events": [
-                    item for item in (chapter_index.get("core_events") or [])[:5]
-                    if isinstance(item, (str, dict)) and item
-                ],
-                "first_appearances": [
-                    item for item in (chapter_index.get("first_appearances") or [])[:8]
-                    if isinstance(item, dict) and (item.get("name") or item.get("character_id"))
-                ],
-                **split_foreshadow_updates(chapter_index),
-                "ending_hook": (chapter_index.get("ending_hook") or "").strip(),
-                "hook_strength": hook_strength,
-                "continuity_notes": [
-                    item for item in (chapter_index.get("continuity_notes") or [])[:10]
-                    if isinstance(item, (str, dict)) and item
-                ],
-                "in_world_named_terms": [
-                    str(item).strip()
-                    for item in (chapter_index.get("in_world_named_terms") or [])[:12]
-                    if isinstance(item, str) and str(item).strip()
-                ],
-                "protagonist_known_terms": [
-                    str(item).strip()
-                    for item in (chapter_index.get("protagonist_known_terms") or [])[:12]
-                    if isinstance(item, str) and str(item).strip()
-                ],
-            }
-            # 提取 new_characters，过滤无效项；兼容 AI 把多人写进单个 description 字段的错误格式
-            raw_new_chars = data.get("new_characters") or []
-            new_characters = []
-            for item in raw_new_chars:
-                if not isinstance(item, dict):
+                response = await self._call_ai(
+                    attempt_system,
+                    prompt,
+                    max_tokens=max_tokens_auto_debrief(self.profile),
+                    context={
+                        "operation": "auto_extract_debrief",
+                        "chapter_title": chapter_title,
+                        "attempt": attempt + 1,
+                    },
+                    task="debrief.auto",
+                )
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "auto_extract_debrief LLM 调用失败 chapter=%s attempt=%d: %s",
+                    chapter_title,
+                    attempt + 1,
+                    exc,
+                )
+                if attempt == 0:
                     continue
-                if item.get("name"):
-                    new_characters.append(item)
-                elif item.get("description") and not item.get("name"):
-                    desc = str(item["description"])
-                    parts = re.split(r"[、，,；;\n]+", desc)
-                    for part in parts:
-                        name = re.split(r"[（(【]", part.strip())[0].strip()
-                        if name and 1 <= len(name) <= 10:
-                            new_characters.append({"name": name, "role": "supporting", "current_status": "alive"})
-            new_characters = new_characters[:6]  # 单章最多6个新配角
+                return _debrief_parse_error(last_exc, response)
 
-            new_reader_promises = _clean_new_reader_promises(data.get("new_reader_promises"))
-            fulfilled_promise_texts = _clean_fulfilled_promise_texts(
-                data.get("fulfilled_promise_texts")
-            )
-            speech_kit_updates = _clean_speech_kit_updates(data.get("speech_kit_updates"))
-            next_chapter_directives = _clean_next_chapter_directives(
-                data.get("next_chapter_directives")
-            )
-            char_updates = resolve_character_updates_from_states(char_updates, character_states)
-            char_updates = merge_character_updates_for_debrief(
-                char_updates, cleaned_index, character_states,
-            )
+            try:
+                data = parse_json(response)
+                if not isinstance(data, dict):
+                    raise ValueError("复盘 JSON 根节点须为对象")
+                break
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "auto_extract_debrief JSON 解析失败 chapter=%s attempt=%d: %s; raw_tail=%r",
+                    chapter_title,
+                    attempt + 1,
+                    exc,
+                    (response or "")[-400:],
+                )
+                if attempt == 0:
+                    continue
+                return _debrief_parse_error(last_exc, response)
+        else:
+            return _debrief_parse_error(last_exc or RuntimeError("复盘失败"), response)
 
-            return {
-                "character_updates": char_updates,
-                "storyline_updates": sl_updates,
-                "memory_updates": memory_updates,
-                "asset_updates": asset_updates,
-                "new_characters": new_characters,
-                "chapter_index": cleaned_index,
-                "new_reader_promises": new_reader_promises,
-                "fulfilled_promise_texts": fulfilled_promise_texts,
-                "speech_kit_updates": speech_kit_updates,
-                "next_chapter_directives": next_chapter_directives,
-                "summary": data.get("summary", ""),
+        # 清理空字段
+        char_updates = []
+        for cu in data.get("character_updates", []):
+            cleaned = {k: v for k, v in cu.items() if v and k not in ("character_name",)}
+            # realm_rank 为 0 时 v=0 被过滤，需单独保留
+            if "realm_rank" in cu and cu["realm_rank"] is not None:
+                try:
+                    cleaned["realm_rank"] = int(cu["realm_rank"])
+                except (ValueError, TypeError):
+                    pass
+            if len(cleaned) > 1:  # 除 character_id 外还有其他字段
+                cleaned["character_name"] = cu.get("character_name", "")
+                char_updates.append(cleaned)
+        sl_updates = []
+        for su in data.get("storyline_updates", []):
+            cleaned = {
+                k: v for k, v in su.items()
+                if v is not None and v != "" and k not in ("storyline_name",)
             }
-        except Exception as e:
-            return {
-                "character_updates": [],
-                "storyline_updates": [],
-                "memory_updates": [],
-                "asset_updates": {
-                    "new_items": [], "item_updates": [],
-                    "new_skills": [], "skill_updates": [],
-                    "new_factions": [], "faction_updates": [],
-                },
-                "new_characters": [],
-                "chapter_index": {},
-                "new_reader_promises": [],
-                "fulfilled_promise_texts": [],
-                "speech_kit_updates": [],
-                "next_chapter_directives": [],
-                "summary": "",
-                "error": f"解析失败: {e}",
-                "raw": response[:300],
-            }
+            if su.get("crossover_executed") is False:
+                cleaned["crossover_executed"] = False
+            if len(cleaned) > 1:
+                cleaned["storyline_name"] = su.get("storyline_name", "")
+                if cleaned.get("beat") and not cleaned.get("append_beat"):
+                    cleaned["append_beat"] = cleaned["beat"]
+                sl_updates.append(cleaned)
+        memory_updates = []
+        valid_memory_types = {"event", "character_state", "foreshadow", "setting", "conflict"}
+        for mu in data.get("memory_updates", []):
+            if not isinstance(mu, dict):
+                continue
+            memory_type = mu.get("memory_type") or "event"
+            if memory_type not in valid_memory_types:
+                memory_type = "event"
+            content = (mu.get("content") or "").strip()
+            if not content:
+                continue
+            tags = mu.get("tags") if isinstance(mu.get("tags"), list) else []
+            try:
+                imp = float(mu.get("importance_score") or 0.5)
+                imp = max(0.0, min(1.0, imp))
+            except (ValueError, TypeError):
+                imp = 0.5
+            memory_updates.append({
+                "memory_type": memory_type,
+                "title": (mu.get("title") or memory_type).strip()[:120],
+                "content": content,
+                "tags": [str(t) for t in tags[:8] if str(t).strip()],
+                "importance_score": imp,
+            })
+        raw_assets = data.get("asset_updates") if isinstance(data.get("asset_updates"), dict) else {}
+
+        def _clean_asset_items(key: str, limit: int = 8) -> list:
+            return [
+                item for item in (raw_assets.get(key) or [])[:limit]
+                if isinstance(item, dict) and (
+                    item.get("name") or item.get("item_name")
+                    or item.get("skill_name") or item.get("faction_name")
+                )
+            ]
+
+        asset_updates = {
+            "new_items": [
+                item for item in _clean_asset_items("new_items")
+                if item.get("tier", "B") in ("A", "B") and item.get("name")
+            ],
+            "item_updates": _clean_asset_items("item_updates"),
+            "new_skills": [
+                item for item in _clean_asset_items("new_skills")
+                if item.get("tier", "B") in ("A", "B") and item.get("name")
+            ],
+            "skill_updates": _clean_asset_items("skill_updates"),
+            "new_factions": [
+                item for item in _clean_asset_items("new_factions")
+                if item.get("tier", "B") in ("A", "B") and item.get("name")
+            ],
+            "faction_updates": _clean_asset_items("faction_updates"),
+        }
+        chapter_index = data.get("chapter_index") if isinstance(data.get("chapter_index"), dict) else {}
+        hook_strength = chapter_index.get("hook_strength", 1)
+        try:
+            hook_strength = max(1, min(5, int(hook_strength)))
+        except Exception:
+            hook_strength = 1
+        cleaned_index = {
+            "story_day": (chapter_index.get("story_day") or "").strip(),
+            "core_events": [
+                item for item in (chapter_index.get("core_events") or [])[:5]
+                if isinstance(item, (str, dict)) and item
+            ],
+            "first_appearances": [
+                item for item in (chapter_index.get("first_appearances") or [])[:8]
+                if isinstance(item, dict) and (item.get("name") or item.get("character_id"))
+            ],
+            **split_foreshadow_updates(chapter_index),
+            "ending_hook": (chapter_index.get("ending_hook") or "").strip(),
+            "hook_strength": hook_strength,
+            "continuity_notes": [
+                item for item in (chapter_index.get("continuity_notes") or [])[:10]
+                if isinstance(item, (str, dict)) and item
+            ],
+            "in_world_named_terms": [
+                str(item).strip()
+                for item in (chapter_index.get("in_world_named_terms") or [])[:12]
+                if isinstance(item, str) and str(item).strip()
+            ],
+            "protagonist_known_terms": [
+                str(item).strip()
+                for item in (chapter_index.get("protagonist_known_terms") or [])[:12]
+                if isinstance(item, str) and str(item).strip()
+            ],
+        }
+        # 提取 new_characters，过滤无效项；兼容 AI 把多人写进单个 description 字段的错误格式
+        raw_new_chars = data.get("new_characters") or []
+        new_characters = []
+        for item in raw_new_chars:
+            if not isinstance(item, dict):
+                continue
+            if item.get("name"):
+                new_characters.append(item)
+            elif item.get("description") and not item.get("name"):
+                desc = str(item["description"])
+                parts = re.split(r"[、，,；;\n]+", desc)
+                for part in parts:
+                    name = re.split(r"[（(【]", part.strip())[0].strip()
+                    if name and 1 <= len(name) <= 10:
+                        new_characters.append({"name": name, "role": "supporting", "current_status": "alive"})
+        new_characters = new_characters[:6]  # 单章最多6个新配角
+
+        new_reader_promises = _clean_new_reader_promises(data.get("new_reader_promises"))
+        fulfilled_promise_texts = _clean_fulfilled_promise_texts(
+            data.get("fulfilled_promise_texts")
+        )
+        speech_kit_updates = _clean_speech_kit_updates(data.get("speech_kit_updates"))
+        next_chapter_directives = _clean_next_chapter_directives(
+            data.get("next_chapter_directives")
+        )
+        char_updates = resolve_character_updates_from_states(char_updates, character_states)
+        char_updates = merge_character_updates_for_debrief(
+            char_updates, cleaned_index, character_states,
+        )
+
+        return {
+            "character_updates": char_updates,
+            "storyline_updates": sl_updates,
+            "memory_updates": memory_updates,
+            "asset_updates": asset_updates,
+            "new_characters": new_characters,
+            "chapter_index": cleaned_index,
+            "new_reader_promises": new_reader_promises,
+            "fulfilled_promise_texts": fulfilled_promise_texts,
+            "speech_kit_updates": speech_kit_updates,
+            "next_chapter_directives": next_chapter_directives,
+            "summary": data.get("summary", ""),
+        }

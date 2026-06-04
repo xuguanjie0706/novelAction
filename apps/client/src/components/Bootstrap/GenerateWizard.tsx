@@ -31,6 +31,7 @@ import { useBootstrapStepRegen } from './hooks/useBootstrapStepRegen'
 import BootstrapGateTimelineDetail from './BootstrapGateTimelineDetail'
 import BootstrapTimeline from './BootstrapTimeline'
 import BootstrapTimelineDetail from './BootstrapTimelineDetail'
+import FanficInputSection, { type FanficTrope } from './FanficInputSection'
 
 // ── 字数目标选项 ──────────────────────────────────────────────
 const WORD_OPTIONS = [
@@ -49,7 +50,7 @@ interface Props {
   onRecoverConsumed?: () => void
 }
 
-type Mode = 'sequential' | 'fanqie'
+type Mode = 'sequential' | 'fanqie' | 'fanfic'
 
 /** 弹层（默认正常提交） vs 全屏工作台（默认恢复 run） */
 type BootstrapShell = 'modal' | 'workspace'
@@ -97,6 +98,10 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
   const [autoMode, setAutoMode]         = useState(() => readBootstrapAutoMode())
   // 写作风格档位：plain 白话直白 / standard 默认 / dense 老白文
   const [writingStyle, setWritingStyle] = useState<'plain' | 'standard' | 'dense'>('standard')
+  const [sourceWorkTitle, setSourceWorkTitle] = useState('')
+  const [canonSynopsis, setCanonSynopsis] = useState('')
+  const [fanficTrope, setFanficTrope] = useState<FanficTrope>('transmigration')
+  const [focalCharacters, setFocalCharacters] = useState('')
   const [waitSec, setWaitSec]           = useState(0)
   /** resume 请求进行中（gate 面板按钮禁用态） */
   const [resumeLoading, setResumeLoading] = useState(false)
@@ -221,12 +226,22 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
   /** 切换生成方案；番茄线默认白话直白，与后端 fanqie→plain 兜底一致。 */
   function selectMode(next: Mode) {
     setMode(next)
-    if (next === 'fanqie') setWritingStyle('plain')
+    if (next === 'fanqie' || next === 'fanfic') setWritingStyle('plain')
   }
 
   // ── 开始生成 ─────────────────────────────────────────────────
   function handleStart() {
     if (!logline.trim()) return
+    if (mode === 'fanfic') {
+      if (!sourceWorkTitle.trim()) {
+        toast.error('请填写原著名')
+        return
+      }
+      if (canonSynopsis.trim().length < 80) {
+        toast.error('请先生成并选择一条原著梗概（至少 80 字）')
+        return
+      }
+    }
     saveBootstrapAutoMode(autoMode)
     hookStart({
       logline: logline.trim(),
@@ -236,6 +251,14 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
       llmProviderId: llmProviderIdFromRoute(aiBackendRoute),
       autoMode,
       writingStyle,
+      ...(mode === 'fanfic' ? {
+        fanficMeta: {
+          source_work_title: sourceWorkTitle.trim(),
+          canon_synopsis: canonSynopsis.trim(),
+          fanfic_trope: fanficTrope,
+          focal_characters: focalCharacters.trim(),
+        },
+      } : {}),
     })
   }
 
@@ -483,7 +506,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
             {/* 生成方案 */}
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-2">生成方案</label>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <button
                   onClick={() => selectMode('sequential')}
                   className={clsx(
@@ -520,8 +543,47 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                     金手指 + 打脸地图 + 爽点节奏图，卷纲在 Bootstrap、章纲进工作台按需展开。
                   </div>
                 </button>
+                <button
+                  onClick={() => selectMode('fanfic')}
+                  className={clsx(
+                    'p-3 rounded-xl border-2 text-left transition-all',
+                    mode === 'fanfic'
+                      ? 'border-indigo-400 bg-indigo-50'
+                      : 'border-gray-100 hover:border-indigo-200'
+                  )}
+                >
+                  <div className="text-sm font-semibold text-gray-800 mb-1">
+                    📖 同人·番茄
+                    {mode === 'fanfic' && (
+                      <span className="ml-2 text-xs bg-indigo-500 text-white px-1.5 py-0.5 rounded-full">已选</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500 leading-relaxed">
+                    填原著名，AI 生成梗概三选一；穿书/重生/AU + 原著约束 + 番茄爽点节奏。
+                  </div>
+                </button>
               </div>
             </div>
+
+            {mode === 'fanfic' && (
+              <FanficInputSection
+                logline={logline}
+                modelProfile={modelProfileFromRoute(aiBackendRoute)}
+                llmProviderId={llmProviderIdFromRoute(aiBackendRoute)}
+                values={{
+                  sourceWorkTitle,
+                  canonSynopsis,
+                  fanficTrope,
+                  focalCharacters,
+                }}
+                onChange={patch => {
+                  if (patch.sourceWorkTitle !== undefined) setSourceWorkTitle(patch.sourceWorkTitle)
+                  if (patch.canonSynopsis !== undefined) setCanonSynopsis(patch.canonSynopsis)
+                  if (patch.fanficTrope !== undefined) setFanficTrope(patch.fanficTrope)
+                  if (patch.focalCharacters !== undefined) setFocalCharacters(patch.focalCharacters)
+                }}
+              />
+            )}
 
             {/* 字数目标 */}
             <div>

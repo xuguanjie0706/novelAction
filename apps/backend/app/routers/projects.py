@@ -22,6 +22,12 @@ from app.models import (
     ChapterDebriefUndo,
     ChapterCoherenceReport,
     AiChatMessage,
+    Scene,
+    ReaderPromise,
+    PreWriteWarningRecord,
+    ChapterAnalysisRecord,
+    RagRetrievalLog,
+    MemoryConflictDetectLog,
 )
 from app.models.user import User
 from app.schemas import ProjectCreate, ProjectUpdate, ProjectOut
@@ -155,12 +161,7 @@ def reset_writing_progress(
         QualityDebt.project_id == pid,
     ).update({"chapter_id": None}, synchronize_session=False)
 
-    # ── 1. 章节 & 版本 ────────────────────────────────────
-    stats["chapters"] = db.query(Chapter).filter(Chapter.project_id == pid).delete(synchronize_session=False)
-    # ChapterVersion 级联删除（依赖 Chapter FK），但为防止无级联配置，显式清
-    stats["chapter_versions"] = db.query(ChapterVersion).filter(ChapterVersion.project_id == pid).delete(synchronize_session=False)
-
-    # ── 2. 章节衍生数据 ───────────────────────────────────
+    # ── 1. 章节衍生数据（须先于 chapters 删除，避免 FK 约束）────────
     stats["memories"] = db.query(MemoryChunk).filter(MemoryChunk.project_id == pid).delete(synchronize_session=False)
     stats["foreshadows"] = db.query(Foreshadow).filter(Foreshadow.project_id == pid).delete(synchronize_session=False)
     stats["chapter_indexes"] = db.query(ChapterIndex).filter(ChapterIndex.project_id == pid).delete(synchronize_session=False)
@@ -172,6 +173,27 @@ def reset_writing_progress(
     stats["coherence_reports"] = db.query(ChapterCoherenceReport).filter(ChapterCoherenceReport.project_id == pid).delete(synchronize_session=False)
     stats["ai_messages"] = db.query(AiChatMessage).filter(AiChatMessage.project_id == pid).delete(synchronize_session=False)
     stats["char_change_logs"] = db.query(CharacterChangeLog).filter(CharacterChangeLog.project_id == pid).delete(synchronize_session=False)
+    stats["scenes"] = db.query(Scene).filter(Scene.project_id == pid).delete(synchronize_session=False)
+    stats["reader_promises"] = db.query(ReaderPromise).filter(ReaderPromise.project_id == pid).delete(synchronize_session=False)
+    stats["pre_write_warnings"] = db.query(PreWriteWarningRecord).filter(
+        PreWriteWarningRecord.project_id == pid
+    ).delete(synchronize_session=False)
+    stats["chapter_analysis_records"] = db.query(ChapterAnalysisRecord).filter(
+        ChapterAnalysisRecord.project_id == pid
+    ).delete(synchronize_session=False)
+    stats["rag_retrieval_logs"] = db.query(RagRetrievalLog).filter(
+        RagRetrievalLog.project_id == pid
+    ).delete(synchronize_session=False)
+    stats["memory_conflict_logs"] = db.query(MemoryConflictDetectLog).filter(
+        MemoryConflictDetectLog.project_id == pid
+    ).delete(synchronize_session=False)
+
+    # ── 2. 章节 & 版本（版本仅挂 chapter_id，须先于 chapters 删除）──
+    chapter_ids_q = db.query(Chapter.id).filter(Chapter.project_id == pid)
+    stats["chapter_versions"] = db.query(ChapterVersion).filter(
+        ChapterVersion.chapter_id.in_(chapter_ids_q)
+    ).delete(synchronize_session=False)
+    stats["chapters"] = db.query(Chapter).filter(Chapter.project_id == pid).delete(synchronize_session=False)
 
     # ── 3. 技能 & 道具（可由 Bootstrap 重新生成）──────────
     stats["skills"] = db.query(Skill).filter(Skill.project_id == pid).delete(synchronize_session=False)

@@ -336,9 +336,32 @@ def wipe_step(db: Session, project_id: str | UUID, step: str) -> None:
             logger.exception("wipe_step(ch1_scenes) failed")
             db.rollback()
 
-    elif step in ("consistency", "opening_contract", "emotion_arc", "villain_arc"):
+    elif step in (
+        "consistency", "opening_contract", "emotion_arc", "villain_arc",
+        "rhythm_map", "signal_audit", "promise_seeds",
+    ):
         # 这些步骤只写 project.extra，不删表行；由 dispatch_regen 覆盖写入即可
-        pass
+        _extra_keys = {
+            "rhythm_map": ("rhythm_map",),
+            "signal_audit": ("signal_audit",),
+            "promise_seeds": ("core_mysteries", "opening_contract"),
+        }
+        keys = _extra_keys.get(step)
+        if keys:
+            try:
+                from app.models import Project as _Project
+                from sqlalchemy.orm.attributes import flag_modified
+                proj = db.query(_Project).filter(_Project.id == pid).first()
+                if proj and isinstance(proj.extra, dict):
+                    extra = dict(proj.extra)
+                    for k in keys:
+                        extra.pop(k, None)
+                    proj.extra = extra
+                    flag_modified(proj, "extra")
+                    db.commit()
+            except Exception:
+                logger.exception("wipe_step(%s) failed", step)
+                db.rollback()
 
     else:
         logger.warning("wipe_step: 未知步骤 %s，跳过清理", step)
@@ -417,5 +440,25 @@ async def dispatch_regen(svc: Any, project: Any, step: str, ctx: dict) -> Any:
                 f"{n.title}：{(n.summary or '')[:40]}" for n in nodes
             )
         return nodes or []
+
+    if step in ("rhythm_map", "signal_audit", "promise_seeds"):
+        extra = project.extra if isinstance(getattr(project, "extra", None), dict) else {}
+        if extra.get("fanqie_positioning") or extra.get("face_slap_map"):
+            from app.services.bootstrap.fanqie_ctx import merge_fanqie_extra_into_ctx
+
+            merge_fanqie_extra_into_ctx(project, ctx)
+        if step == "rhythm_map":
+            from app.services.bootstrap.steps.fanqie.rhythm_map import gen_rhythm_map
+
+            data = await gen_rhythm_map(svc, project, ctx)
+        elif step == "signal_audit":
+            from app.services.bootstrap.steps.fanqie.signal_audit import gen_signal_audit
+
+            data = await gen_signal_audit(svc, project, ctx)
+        else:
+            from app.services.bootstrap.steps.fanqie.promise_seeds import gen_promise_seeds
+
+            data = await gen_promise_seeds(svc, project, ctx)
+        return [data] if data else []
 
     raise ValueError(f"不支持的步骤：{step}")

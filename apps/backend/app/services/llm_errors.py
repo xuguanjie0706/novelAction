@@ -5,6 +5,39 @@ from __future__ import annotations
 import re
 
 
+def is_retryable_llm_error(err: BaseException) -> bool:
+    """判定是否为可重试的瞬时网关/网络错误（与 AIService 内层退避一致）。"""
+    status_code = getattr(err, "status_code", None)
+    if isinstance(status_code, int) and status_code in (408, 429, 500, 502, 503, 504):
+        return True
+    type_name = type(err).__name__.lower()
+    if any(k in type_name for k in ("connection", "timeout", "connect", "remoteprotocol")):
+        return True
+    msg = str(err).lower()
+    return any(
+        key in msg
+        for key in (
+            "error code: 502",
+            "bad gateway",
+            "timeout",
+            "timed out",
+            "temporarily unavailable",
+            "connection error",
+            "connection refused",
+            "connection reset",
+            "connect timeout",
+            "network unreachable",
+            "name or service not known",
+            "ssl",
+            "eof occurred",
+            "peer closed",
+            "incomplete chunked",
+            "server disconnected",
+            "without sending a response",
+        )
+    )
+
+
 def format_llm_error_message(exc: BaseException) -> str:
     """把 OpenAI SDK / httpx 异常转成可操作的提示，保留原始信息便于排查。"""
     msg = str(exc).strip() or type(exc).__name__
@@ -34,6 +67,16 @@ def format_llm_error_message(exc: BaseException) -> str:
         return f"API Key 无效或未授权：{msg}"
     if "404" in low and "model" in low:
         return f"模型 id 不存在或网关未提供该模型：{msg}"
+    if (
+        "server disconnected" in low
+        or "without sending a response" in low
+        or "remoteprotocol" in type_low
+    ):
+        return (
+            "大模型网关中途断开连接（Server disconnected）。"
+            "多为网关不稳定或瞬时过载，请稍后重试该步骤，或在管理后台换一条线路。"
+            f" 原始信息：{msg}"
+        )
     if "bad gateway" in low or re.search(r"\b(502|503|504)\b", low):
         return f"大模型网关暂时不可用，请稍后重试：{msg}"
     if "peer closed" in low or "incomplete chunked" in low:

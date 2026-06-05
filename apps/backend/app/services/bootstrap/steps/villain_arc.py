@@ -20,8 +20,10 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.bootstrap.narrative_arc_gen import (
+    apply_ladder_boss_names,
     call_json_array_with_retry,
     persist_extra_arc,
+    write_villain_arc_ctx,
 )
 
 
@@ -105,28 +107,10 @@ async def gen_villain_arc(
     arc = await call_json_array_with_retry(
         svc, system, prompt, task="bootstrap.villain_arc",
     )
-    if ladder:
-        for i, row in enumerate(arc):
-            vi = row.get("vol_index")
-            try:
-                idx = int(vi) if vi is not None else i
-            except (TypeError, ValueError):
-                idx = i
-            entry = next((r for r in ladder if int(r.get("vol_index", -1)) == idx), None)
-            if entry and entry.get("boss_name"):
-                row["villain_name"] = entry["boss_name"]
+    arc = apply_ladder_boss_names(arc, ladder)
 
     if persist:
         persist_extra_arc(svc, project, "villain_arc", arc)
 
-    # ctx 摘要（供章纲 prompt + 一致性扫描引用）
-    if arc:
-        ctx["villain_arc"] = arc
-        parts = []
-        for i, v in enumerate(arc):
-            title = v.get("vol_title") or f"卷{v.get('vol_index', i)}"
-            goal = (v.get("vol_goal") or "?")[:20]
-            parts.append(f"{title}:{v.get('villain_name','?')}→{goal}[{v.get('vol_result','?')}]")
-        ctx["villain_arc_summary"] = " | ".join(parts)
-
+    write_villain_arc_ctx(ctx, arc)
     return arc

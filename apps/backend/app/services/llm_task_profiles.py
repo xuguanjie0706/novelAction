@@ -141,6 +141,7 @@ TASK_PROFILES: dict[str, dict] = {
     "bootstrap.relations": {"temperature": 0.65, "top_p": 0.9},
     "bootstrap.emotion_arc": {"temperature": 0.45, "top_p": 0.85},
     "bootstrap.villain_arc": {"temperature": 0.45, "top_p": 0.85},
+    "bootstrap.narrative_arcs": {"temperature": 0.45, "top_p": 0.85},
 
     # ── 大纲规划 ────────────────────────────────────────────────
     "outline.full_structure": {"temperature": 0.55, "top_p": 0.9},

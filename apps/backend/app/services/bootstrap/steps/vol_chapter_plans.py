@@ -11,6 +11,7 @@ from app.services.bootstrap.chapter_plan_batches import (
     log_chapter_plan_batches,
     normalize_volume_planned_chapters,
 )
+from app.services.bootstrap.foreshadow_ops import prepare_chapter_foreshadow_for_node
 from app.services.bootstrap.foreshadow_sync import sync_chapter_foreshadow
 from app.services.bootstrap.parse import parse_json
 from app.services.bootstrap.steps.phase_guidance import (
@@ -526,6 +527,7 @@ async def gen_vol_chapter_plans(
                 is_fanqie=is_fanqie,
             )
             expected_words_val = ai_words if isinstance(ai_words, int) and 1500 <= ai_words <= 4000 else dynamic_words
+            fs_ops, fs_laid, fs_resolved, _ = prepare_chapter_foreshadow_for_node(item)
             node = OutlineNode(
                 project_id=project.id,
                 parent_id=volume_node.id,
@@ -541,6 +543,8 @@ async def gen_vol_chapter_plans(
                 power_milestone=item.get("power_milestone") or None,
                 involved_character_ids=involved_ids,
                 storyline_ids=sl_ids,
+                foreshadows_laid=fs_laid or None,
+                foreshadows_resolved=fs_resolved or None,
                 expected_words=expected_words_val,
                 sort_order=ch_num - 1,
                 extra=_build_chapter_extra(item, is_fanqie),
@@ -608,8 +612,10 @@ async def gen_vol_chapter_plans(
 
 def _build_chapter_extra(item: dict, is_fanqie: bool) -> dict:
     """构建 OutlineNode.extra，番茄模式时追加爽感字段。"""
+    fs_ops, _, _, foreshadow_legacy = prepare_chapter_foreshadow_for_node(item)
     base = {
-        "foreshadow": (item.get("foreshadow") or "").strip(),
+        "foreshadow": foreshadow_legacy,
+        "foreshadow_ops": fs_ops,
         "promise_fulfilled": (item.get("promise_fulfilled") or "").strip(),
         "end_hook": (item.get("end_hook") or "").strip(),
         "has_face_slap": item.get("has_face_slap", False),

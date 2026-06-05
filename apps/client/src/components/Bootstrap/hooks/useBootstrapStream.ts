@@ -482,16 +482,17 @@ export function useBootstrapStream() {
       setSteps(getStepKeys(currentModeRef.current).map(k => makeStep(k)))
       setErrorMsg('')
     } else if (event === 'complete') {
-      if (haltedStepRef.current) {
-        setErrorMsg(prev =>
-          prev || '流程已结束，但卷纲等步骤仍失败，请使用「重新生成本步」补跑。',
-        )
-        return
-      }
+      const hadHalt = Boolean(haltedStepRef.current)
+      syncHaltedStep(null)
       streamCompleteRef.current = true
       setProjectId(project_id)
       setPhase('done')
       clearActiveBootstrapRun()
+      if (hadHalt) {
+        setErrorMsg(prev =>
+          prev || '部分步骤曾失败但流程已收尾；若数据不完整，请点「重新生成本步」补跑对应步骤。',
+        )
+      }
     }
   }, [tryFinalizeFanqieRun, syncHaltedStep])
 
@@ -706,6 +707,7 @@ export function useBootstrapStream() {
 
       if (run.status === 'done') {
         streamCompleteRef.current = true
+        syncHaltedStep(null)
         if (run.project_id) setProjectId(run.project_id)
         setPhase('done')
         clearActiveBootstrapRun()
@@ -738,6 +740,27 @@ export function useBootstrapStream() {
         return
       }
       if (run.status === 'failed') {
+        const failedStep = [...evs].reverse().find(
+          e => (e.event === 'error' || e.event === 'step_halted') && e.step,
+        )
+        const failedKey = failedStep ? toKey(failedStep.step) : null
+        if (failedKey && run.project_id) {
+          autoModeRef.current = false
+          syncHaltedStep(failedKey)
+          setProjectId(run.project_id)
+          setPhase('generating')
+          setSteps(prev => blockStepsAfter(prev, failedKey))
+          setErrorMsg(
+            (run.error_message || '步骤失败').slice(0, 300)
+            + '。请点击「重试此步骤」继续，无需重头生成。',
+          )
+          saveActiveBootstrapRun({
+            runId: rid,
+            logline: (run.logline || opts?.loglineHint || '').trim() || undefined,
+            projectId: run.project_id,
+          })
+          return
+        }
         setErrorMsg(run.error_message || '生成已失败')
         setPhase('input')
         clearActiveBootstrapRun()
@@ -803,7 +826,10 @@ export function useBootstrapStream() {
       const msg = err instanceof Error ? err.message : '重试失败'
       setErrorMsg(msg)
       if (msg.includes("status 'done'") && projectIdRef.current) {
-        toast.error('本次生成已结束，请点「重新生成本步」补跑卷纲', { duration: 5000 })
+        toast.error(
+          `本次生成已结束，无法 resume；请点「重新生成本步」补跑（${step}）`,
+          { duration: 6000 },
+        )
       } else {
         toast.error(msg.length > 120 ? `${msg.slice(0, 120)}…` : msg)
       }

@@ -120,6 +120,7 @@ async def resume_pipeline(
     model_profile: str,
     llm_provider_id,
     user_id,
+    recovered_from_failed: bool = False,
 ) -> None:
     """从 checkpoint 继续执行。"""
     from app.services.bootstrap.gate_auto import resume_lock
@@ -142,7 +143,11 @@ async def resume_pipeline(
                     "user_id": user_id,
                 },
             }
-            await graph.ainvoke(Command(resume=dict(resume_payload)), config=cfg)
+            if recovered_from_failed:
+                # 异常中断且无 interrupt 时，从 PG checkpoint 续跑失败节点
+                await graph.ainvoke(None, config=cfg)
+            else:
+                await graph.ainvoke(Command(resume=dict(resume_payload)), config=cfg)
         except asyncio.CancelledError:
             emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")
             raise

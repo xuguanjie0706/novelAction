@@ -67,18 +67,14 @@ def _register_all() -> None:
     from app.services.bootstrap.graph_fanqie import (
         node_antagonist_ladder as fanqie_antagonist_ladder,
         node_audit as fanqie_audit,
-        node_contrast,
-        node_consistency_scan,
         node_ctx_bridge,
-        node_face_slap as fanqie_face_slap,
+        node_fanqie_formula,
         node_fanqie_gate,
         node_fanqie_positioning,
         node_factions as fanqie_factions,
-        node_golden_finger as fanqie_golden_finger,
-        node_opening_contract as fanqie_opening_contract,
         node_power_ladder,
         node_project as fanqie_project,
-        node_core_mysteries as fanqie_core_mysteries,
+        node_promise_seeds as fanqie_promise_seeds,
         node_rhythm as fanqie_rhythm,
         node_settings as fanqie_settings,
         node_storylines as fanqie_storylines,
@@ -94,14 +90,10 @@ def _register_all() -> None:
         graph_id="gate", interrupt_before=True,
     ))
     register_node(NodeSpec(key="project_fanqie", fn=fanqie_project, seq=200, graph_id="project", replaces="project"))
-    register_node(NodeSpec(key="contrast_design", fn=node_contrast, seq=301, label="设计主角落差（越惨越爽）..."))
+    # Phase B 合并：原 contrast_design + golden_finger_fanqie + face_slap_map_fanqie → fanqie_formula（-2 LLM）
     register_node(NodeSpec(
-        key="golden_finger_fanqie", fn=fanqie_golden_finger, seq=302,
-        graph_id="golden_finger", label="设计金手指工程...",
-    ))
-    register_node(NodeSpec(
-        key="face_slap_map_fanqie", fn=fanqie_face_slap, seq=303,
-        graph_id="face_slap_map", label="规划打脸地图...",
+        key="fanqie_formula", fn=node_fanqie_formula, seq=301,
+        label="设计爽文公式（落差+金手指+打脸地图）...",
     ))
     register_node(NodeSpec(
         key="power_ladder", fn=node_power_ladder, seq=304,
@@ -130,20 +122,16 @@ def _register_all() -> None:
     ))
     register_node(NodeSpec(
         key="rhythm_map_fanqie", fn=fanqie_rhythm, seq=870,
-        graph_id="rhythm_map", label="生成爽点节奏图 + 剧情储量池...",
+        graph_id="rhythm_map", label="生成爽点节奏图（规则+LLM备用弧）...",
     ))
+    # Phase F 合并：原 core_mysteries_fanqie + opening_contract_fanqie → promise_seeds_fanqie（-1 LLM）
+    # opening_contract 在 StyleConfig.skip_core 中排除，避免 CORE_NODES 重复注入
     register_node(NodeSpec(
-        key="core_mysteries_fanqie", fn=fanqie_core_mysteries, seq=910,
-        graph_id="core_mysteries", replaces="core_mysteries",
+        key="promise_seeds_fanqie", fn=fanqie_promise_seeds, seq=915,
+        graph_id="promise_seeds", replaces="core_mysteries",
+        label="预置谜题钩子 + 开局追读承诺...",
     ))
-    register_node(NodeSpec(
-        key="opening_contract_fanqie", fn=fanqie_opening_contract, seq=920,
-        graph_id="opening_contract", replaces="opening_contract",
-    ))
-    register_node(NodeSpec(
-        key="consistency_scan", fn=node_consistency_scan, seq=935,
-        graph_id="consistency", replaces="consistency",
-    ))
+    # signal_audit 已内置写 consistency_issues，consistency_scan 节点已移除（-1 LLM）
     register_node(NodeSpec(key="signal_audit", fn=fanqie_audit, seq=950, label="执行番茄算法双校验..."))
 
     # ── 同人线 ───────────────────────────────────────────────

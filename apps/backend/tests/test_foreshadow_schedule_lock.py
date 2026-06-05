@@ -5,7 +5,9 @@ import uuid
 from types import SimpleNamespace
 
 from app.services.ai.foreshadow_schedule_lock import (
+    _build_audit_phrases,
     _detect_outline_early_lay,
+    _detect_outline_early_lay_from_ops,
     audit_early_foreshadow_plants,
     build_foreshadow_ledger,
     format_foreshadow_ledger_line,
@@ -42,6 +44,19 @@ def test_detect_outline_early_lay_conflict():
     conflicts = _detect_outline_early_lay(raw, forbidden)
     assert len(conflicts) == 1
     assert "十三指" in conflicts[0]["outline_text"]
+
+
+def test_detect_outline_early_lay_from_ops_conflict():
+    forbidden = [{
+        "name": "十三指青印",
+        "planned_lay_chapter": 5,
+        "keywords": ["十三指青印", "青印"],
+        "reason": "计划第5章才埋",
+    }]
+    ops = [{"op": "lay", "name": "十三指青印", "theme": "上界算计"}]
+    conflicts = _detect_outline_early_lay_from_ops(ops, forbidden)
+    assert len(conflicts) == 1
+    assert conflicts[0]["field"] == "foreshadow_ops"
 
 
 def test_merge_schedule_adds_critical_risk():
@@ -130,11 +145,33 @@ def test_audit_early_plant_detects_forbidden_keyword():
             "name": "腹中黑珠",
             "planned_lay_chapter": 5,
             "keywords": ["黑珠", "腹中"],
+            "audit_phrases": ["腹中黑珠"],
         }],
     }
     hits = audit_early_foreshadow_plants("他感到腹中黑珠轻轻跳动。", lock)
     assert len(hits) == 1
-    assert hits[0]["matched_keyword"] == "黑珠"
+    assert hits[0]["matched_keyword"] == "腹中黑珠"
+
+
+def test_build_audit_phrases_filters_short_keywords():
+    phrases = _build_audit_phrases("腹中黑珠", ["黑珠", "腹中黑珠"], "黑珠跳动声")
+    assert "腹中黑珠" in phrases
+    assert "黑珠" not in phrases
+    assert phrases[0] == "腹中黑珠"  # 谜题名优先于 lay_method 子串
+
+
+def test_audit_early_plant_ignores_short_keyword_fragment():
+    """2～3 字关键词不应单独触发违约（降低误杀）。"""
+    lock = {
+        "forbidden_early_plants": [{
+            "name": "太虚古殿",
+            "planned_lay_chapter": 10,
+            "keywords": ["古殿"],
+            "audit_phrases": ["太虚古殿"],
+        }],
+    }
+    hits = audit_early_foreshadow_plants("他独自走进一座破败古殿。", lock)
+    assert hits == []
 
 
 def test_merge_early_plant_audit_caps_score():

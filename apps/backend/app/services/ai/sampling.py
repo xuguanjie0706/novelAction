@@ -32,6 +32,7 @@ from app.services.llm_token_budgets import (
     min_completion_tokens,
 )
 from app.services.llm_billing_context import resolve_llm_billing_user_id
+from app.services.llm_errors import is_retryable_llm_error
 from app.services.llm_call_log import log_llm_call, merge_truncation_into_context
 from app.services.ai.llm_response_text import message_completion_text
 from app.services.genre_kit import get_genre_guardrail, normalize_genre
@@ -63,33 +64,7 @@ class SamplingMixin:
         credit_service.preflight_billed_call(uid, db=self._db)
 
     def _is_retryable_llm_error(self, err: Exception) -> bool:
-        status_code = getattr(err, "status_code", None)
-        if isinstance(status_code, int) and status_code in (408, 429, 500, 502, 503, 504):
-            return True
-        type_name = type(err).__name__.lower()
-        if any(k in type_name for k in ("connection", "timeout", "connect")):
-            return True
-        msg = str(err).lower()
-        return any(
-            key in msg
-            for key in (
-                "error code: 502",
-                "bad gateway",
-                "timeout",
-                "timed out",
-                "temporarily unavailable",
-                "connection error",
-                "connection refused",
-                "connection reset",
-                "connect timeout",
-                "network unreachable",
-                "name or service not known",
-                "ssl",
-                "eof occurred",
-                "peer closed",
-                "incomplete chunked",
-            )
-        )
+        return is_retryable_llm_error(err)
 
     def _build_sampling_kwargs(
         self,

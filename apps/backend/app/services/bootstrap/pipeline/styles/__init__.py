@@ -23,28 +23,27 @@ STYLE_REGISTRY: dict[str, StyleConfig] = {
         style_id="fanqie",
         display_name="番茄",
         nodes=[
-            "positioning_fanqie",
-            "gate_positioning_fanqie",
-            "project_fanqie",
-            "contrast_design",
-            "golden_finger_fanqie",
-            "face_slap_map_fanqie",
-            "power_ladder",
-            "ctx_bridge",
-            "factions_fanqie",
-            "storylines_fanqie",
-            "antagonist_ladder_fanqie",
-            "gate_characters",
-            "settings_fanqie",
-            "volumes_fanqie",
-            "gate_volumes",
-            "rhythm_map_fanqie",
-            "core_mysteries_fanqie",
-            "opening_contract_fanqie",
-            "consistency_scan",
-            "signal_audit",
+            "positioning_fanqie",       # Phase A: 算法立项
+            "gate_positioning_fanqie",  # Phase A: 确认闸门
+            "project_fanqie",           # Phase A: 项目创建
+            "fanqie_formula",           # Phase B: 爽文公式（合并：落差+金手指+打脸地图）
+            "power_ladder",             # Phase B: 权力阶梯
+            "ctx_bridge",               # Phase B: 番茄ctx→通用ctx桥接
+            "factions_fanqie",          # Phase C: 势力体系
+            "storylines_fanqie",        # Phase C: 故事线
+            "antagonist_ladder_fanqie", # Phase C: 卷级对立面
+            "gate_characters",          # Phase C: 人物确认闸门
+            "settings_fanqie",          # Phase C: 世界观设定（精简3张）
+            "volumes_fanqie",           # Phase D: 卷级骨架
+            "gate_volumes",             # Phase D: 卷质量闸门
+            "rhythm_map_fanqie",        # Phase E: 节奏图（规则+LLM备用弧）
+            "promise_seeds_fanqie",     # Phase F: 谜题钩子+开局承诺（合并）
+            "signal_audit",             # Phase G: 番茄算法双校验（含consistency）
         ],
         default_writing_style="plain",
+        # opening_contract 已合并进 promise_seeds_fanqie，从 CORE_NODES 中排除
+        # consistency 已由 signal_audit 内置处理，无需独立节点
+        skip_core=frozenset({"opening_contract", "consistency"}),
     ),
 
     "fanfic": StyleConfig(
@@ -65,7 +64,7 @@ STYLE_REGISTRY: dict[str, StyleConfig] = {
             "gate_volumes",
             "volumes_fanfic",
             "rhythm_map_fanfic",
-            "consistency_scan",
+            # consistency_scan 已移除，由 CORE_NODE "consistency" 自动注入
             "canon_audit",
         ],
         default_writing_style="plain",

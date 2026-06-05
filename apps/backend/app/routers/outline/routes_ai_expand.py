@@ -22,6 +22,8 @@ from app.schemas import OutlineNodeOut
 from app.services.ai_service import AIService
 from app.services.outline_planning import TARGET_CHAPTERS_PER_VOLUME, TARGET_WORDS_PER_CHAPTER
 from app.utils.chapter_numbering import normalize_chapter_plan_title
+from app.services.bootstrap.foreshadow_ops import prepare_chapter_foreshadow_for_node
+from app.services.bootstrap.foreshadow_sync import sync_chapter_foreshadow
 
 from app.routers.outline.helpers_core import *
 from app.routers.outline.schemas import CommitExpandRequest, ExpandRequest
@@ -223,26 +225,37 @@ def commit_expand(
     for i, ch in enumerate(req.chapters):
         safe_ch = _sanitize_generated_outline_chapter(ch, genre) if isinstance(ch, dict) else {}
         _word_est = int(safe_ch.get("word_estimate") or TARGET_WORDS_PER_CHAPTER)
+        ch_num = int(safe_ch.get("number") or i + 1)
+        fs_ops, fs_laid, fs_resolved, fs_legacy = prepare_chapter_foreshadow_for_node(safe_ch)
         node = OutlineNode(
             project_id=project_id,
             parent_id=parent.id,
             node_type="chapter_plan",
-            title=normalize_chapter_plan_title(safe_ch.get("number", i + 1), safe_ch.get("title")),
+            title=normalize_chapter_plan_title(ch_num, safe_ch.get("title")),
             summary=safe_ch.get("core_event"),
             hook=safe_ch.get("opening_hook"),
             highlight=safe_ch.get("end_hook"),    # 章末钩子放 highlight 字段
             conflict=safe_ch.get("character_change"),
             sort_order=i,
             expected_words=_word_est,  # 同步写 DB 列（单一数据源）
+            foreshadows_laid=fs_laid or None,
+            foreshadows_resolved=fs_resolved or None,
             extra={
-                "foreshadow":    safe_ch.get("foreshadow", ""),
-                "pacing":        safe_ch.get("pacing", "medium"),
+                "foreshadow": fs_legacy,
+                "foreshadow_ops": fs_ops,
+                "pacing": safe_ch.get("pacing", "medium"),
                 "word_estimate": _word_est,
-                "end_hook":      safe_ch.get("end_hook", ""),
+                "end_hook": safe_ch.get("end_hook", ""),
+                "protagonist_want": (safe_ch.get("protagonist_want") or "").strip(),
+                "protagonist_obstacle": (safe_ch.get("protagonist_obstacle") or "").strip(),
+                "protagonist_choice": (safe_ch.get("protagonist_choice") or "").strip(),
+                "choice_cost": (safe_ch.get("choice_cost") or "").strip(),
+                "villain_action": (safe_ch.get("villain_action") or "").strip(),
             },
         )
         db.add(node)
         db.flush()
+        sync_chapter_foreshadow(db, project_id, node, ch_num)
         results.append(node)
 
     db.commit()

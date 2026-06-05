@@ -364,13 +364,35 @@ async def resume_run(
     """
     run = _get_owned_run(db, run_id, current_user.id)
     gd = run.gate_data if isinstance(run.gate_data, dict) else {}
+    recovered_from_failed = False
     step_retry_pending = gd.get("kind") == "step_retry" or run.status == "awaiting_retry"
     if step_retry_pending and run.status != "awaiting_retry":
         run.status = "awaiting_retry"
         run.error_message = None
         db.commit()
+    # 番茄线等步骤异常落 failed（无 interrupt）时，允许 retry_step 从 checkpoint 续跑
+    if run.status == "failed" and req.action == "retry_step":
+        step = (req.step or "").strip() or _infer_failed_step_from_events(run.events or [])
+        if not step:
+            raise HTTPException(
+                status_code=422,
+                detail="无法识别失败步骤，请指定 step 参数（如 rhythm_map）",
+            )
+        fail_msg = (run.error_message or f"步骤 {step} 失败，请重试")[:500]
+        run.status = "awaiting_retry"
+        run.error_message = None
+        run.gate_data = {
+            **gd,
+            "kind": "step_retry",
+            "step": step,
+            "message": fail_msg,
+        }
+        db.commit()
+        gd = run.gate_data if isinstance(run.gate_data, dict) else {}
+        step_retry_pending = True
+        recovered_from_failed = True
     # 闸门 UI 仍可见但 resume 因异常落 failed 时，允许在 gate 上下文恢复
-    if run.status == "failed" and req.action in ("approve", "regenerate") and gd.get("current_gate"):
+    elif run.status == "failed" and req.action in ("approve", "regenerate") and gd.get("current_gate"):
         run.status = "awaiting_gate"
         run.error_message = None
         db.commit()
@@ -401,6 +423,7 @@ async def resume_run(
             model_profile=req.model_profile,
             llm_provider_id=req.llm_provider_id,
             user_id=current_user.id,
+            recovered_from_failed=recovered_from_failed,
         )
 
     task = asyncio.create_task(
@@ -438,6 +461,19 @@ async def cancel_run(
 # ──────────────────────────────────────────────────────
 # 内部辅助
 # ──────────────────────────────────────────────────────
+
+
+def _infer_failed_step_from_events(events: list) -> str:
+    """从已持久化 SSE 事件中推断最近失败步骤（用于 failed run 恢复）。"""
+    for ev in reversed(events or []):
+        if not isinstance(ev, dict):
+            continue
+        if ev.get("event") not in ("error", "step_halted"):
+            continue
+        step = str(ev.get("step") or "").strip()
+        if step:
+            return step
+    return ""
 
 
 def _build_resume_payload(run: BootstrapRun, req: ResumeRequest) -> dict:

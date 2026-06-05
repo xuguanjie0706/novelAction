@@ -1,145 +1,144 @@
-"""Bootstrap Fanqie Steps 17-18：算法双校验。
+"""Bootstrap Fanqie：算法双校验（规则版，无 LLM）。
 
-两个校验维度完全独立，对应番茄算法的两个核心行为：
-1. 类型信号强度：推荐标签匹配（决定能不能被推到对的读者）
-2. 爽感密度审计：完读率（决定算法愿不愿意继续推）
-
-这不是「文学审美评估」，而是「平台算法审计」。
-产物写入 Project.extra['signal_audit']。
+设计动机（2026-06）
+------------------
+原实现走 ``quality.check``，管理后台误标为「章节质检」，且与写作期质检重复。
+Bootstrap 阶段改为纯规则审计（金手指字数 / 首次打脸章 / 节奏 dry_spell 等），
+零 token；产物 schema 与下游 ``consistency_issues`` 兼容。
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.models import Project
-from app.services.bootstrap.steps.fanqie._json_once import call_fanqie_json_once
 
 _STEP = "signal_audit"
 
 
-async def gen_signal_audit(svc: Any, project: Project, ctx: dict) -> dict:
-    """
-    执行番茄算法双校验：类型信号强度 + 爽感密度审计。
+def _first_int(s: str) -> int | None:
+    m = re.search(r"\d+", str(s))
+    return int(m.group()) if m else None
 
-    对于不通过的检查项，自动生成修复建议并写回对应的 extra 字段。
 
-    @returns signal_audit dict（含 overall_pass 和 fix_suggestions）
-    """
-    system = (
-        "你是番茄小说算法审核官，代入番茄的推荐算法逻辑做审核。"
-        "只返回 JSON，不要解释文字。"
-    )
+def _build_signal_audit_by_rules(ctx: dict) -> dict:
+    """从已有 Bootstrap 产物做番茄算法规则审计，不调用 LLM。"""
     fanqie_pos = ctx.get("fanqie_positioning") or {}
     contrast = ctx.get("contrast_design") or {}
     gf = ctx.get("golden_finger") or {}
     fsm = ctx.get("face_slap_map") or {}
     rm = ctx.get("rhythm_map") or {}
 
-    first_slap_ch = fsm.get("first_slap_chapter", 99)
-    trigger_est = contrast.get("trigger_word_estimate", "")
-    opening_hook = (
-        (contrast.get("initial_state_headline") or "").strip()
-        or (fanqie_pos.get("algo_hook") or "").strip()
-        or "（未设定）"
-    )
+    genre_archetype = (fanqie_pos.get("genre_archetype") or "").strip()
+    platform_tags = fanqie_pos.get("platform_tags") or []
+    algo_hook = (fanqie_pos.get("algo_hook") or "").strip()
+    opening_hook = (contrast.get("initial_state_headline") or "").strip() or algo_hook
+
+    first_slap_ch = fsm.get("first_slap_chapter")
+    if not isinstance(first_slap_ch, int):
+        first_slap_ch = _first_int(str(first_slap_ch or "")) or 99
+
+    trigger_raw = str(
+        contrast.get("trigger_word_estimate")
+        or gf.get("trigger_timing")
+        or gf.get("activation_timing")
+        or "",
+    ).strip()
+    trigger_words = _first_int(trigger_raw)
+
     dry_spells = rm.get("auto_dry_spells") or rm.get("dry_spell_warnings") or []
-    tags_sample = (rm.get("chapter_tags") or [])[:10]
+    dry_count = len(dry_spells) if isinstance(dry_spells, list) else 0
+    worst_dry = dry_spells[0] if dry_spells else None
 
-    prompt = f"""小说：《{ctx['project_title']}》
-类型公式：{fanqie_pos.get('genre_archetype', '')}
-平台标签：{fanqie_pos.get('platform_tags', [])}
-核心爽感：{fanqie_pos.get('core_satisfaction', '')}
-算法钩子：{fanqie_pos.get('algo_hook', '')}
+    genre_pass = bool(genre_archetype) and bool(platform_tags)
+    genre_check = {
+        "pass": genre_pass,
+        "score": 8 if genre_pass else 4,
+        "issue": None if genre_pass else "缺少类型公式或平台标签",
+        "detail": f"类型={genre_archetype or '未设定'}；标签数={len(platform_tags)}",
+        "fix": None if genre_pass else "补全 fanqie_positioning.genre_archetype 与 platform_tags",
+    }
 
-开局处境/钩子：{opening_hook[:120]}
-金手指：{gf.get('finger_name', '（未设定）')}
-金手指触发时机：{trigger_est or '（未设定）'}
-首次打脸章节：第{first_slap_ch}章
-连续过渡警告：{dry_spells or '（无警告）'}
-前10章节奏标签：{_fmt_tags(tags_sample)}
+    gf_pass = trigger_words is None or trigger_words <= 800
+    gf_check = {
+        "pass": gf_pass,
+        "trigger_word_estimate": str(trigger_words or trigger_raw or "未设定"),
+        "threshold": 800,
+        "issue": None if gf_pass else f"金手指触发约第{trigger_words}字，超过800字阈值",
+        "fix": None if gf_pass else "将金手指触发前移到800字内，或在 contrast_design 调整 trigger_word_estimate",
+    }
 
-请作为番茄算法审核官，执行双校验，返回 JSON：
-{{
-  "genre_signal_check": {{
-    "pass": true,
-    "score": 8,
-    "issue": "类型信号问题（如有），否则 null",
-    "detail": "评估：第1章前200字能否让读者在5秒内判断类型？平台标签是否准确？（30字内）",
-    "fix": "修复建议（如 pass=true 则填 null）"
-  }},
-  "golden_finger_timing_check": {{
-    "pass": true,
-    "trigger_word_estimate": "具体字数（如650）",
-    "threshold": 800,
-    "issue": "若超过800字触发则说明问题，否则 null",
-    "fix": "修复建议（如 pass=true 则填 null）"
-  }},
-  "first_slap_timing_check": {{
-    "pass": true,
-    "chapter": {first_slap_ch},
-    "threshold": 5,
-    "issue": "若超过第5章则说明问题，否则 null",
-    "fix": "修复建议（如 pass=true 则填 null）"
-  }},
-  "satisfaction_density_check": {{
-    "pass": true,
-    "dry_spell_count": {len(dry_spells)},
-    "worst_dry_spell": "最长连续过渡区间（如有），否则 null",
-    "issue": "问题说明（如有），否则 null",
-    "fix": "修复建议（如 pass=true 则填 null）"
-  }},
-  "hook_quality_check": {{
-    "pass": true,
-    "score": 7,
-    "issue": "算法钩子是否足够吸引目标读者？有无明显问题？",
-    "fix": "优化建议（最重要的一条，或 null）"
-  }},
-  "overall_pass": true,
-  "overall_score": 85,
-  "critical_fixes": ["最需要在正式写作前修复的问题（按优先级排，最多3条；若全部通过则为空数组）"],
-  "algo_optimization_tips": ["提升番茄算法推荐量的额外建议（2-3条，针对本书的具体建议）"]
-}}
+    slap_pass = isinstance(first_slap_ch, int) and first_slap_ch <= 5
+    slap_check = {
+        "pass": slap_pass,
+        "chapter": first_slap_ch,
+        "threshold": 5,
+        "issue": None if slap_pass else f"首次打脸在第{first_slap_ch}章，超过第5章",
+        "fix": None if slap_pass else "将 face_slap_map.first_slap_chapter 调整到 ≤5",
+    }
 
-评分标准：
-- 类型信号 ≥7分：第1章前200字类型清晰，平台标签准确
-- 金手指触发 ≤800字：否则读者流失前未获得爽感期待
-- 首次打脸 ≤第5章：番茄算法基准线
-- 满分100分：各项检查通过各+20分，algo_optimization加分
-- 只返回 JSON"""
+    density_pass = dry_count <= 1
+    density_check = {
+        "pass": density_pass,
+        "dry_spell_count": dry_count,
+        "worst_dry_spell": worst_dry,
+        "issue": None if density_pass else f"存在 {dry_count} 处连续过渡区间",
+        "fix": None if density_pass else "在 rhythm_map 中增加 small_win/big_win 锚点",
+    }
 
-    def _validate(data: Any) -> str | None:
-        if not isinstance(data, dict):
-            return "须为 JSON 对象"
-        required = {"genre_signal_check", "overall_pass", "overall_score"}
-        if missing := required - data.keys():
-            return f"缺少字段：{missing}"
-        return None
+    hook_pass = len(opening_hook) >= 8
+    hook_check = {
+        "pass": hook_pass,
+        "score": 8 if hook_pass else 5,
+        "issue": None if hook_pass else "开局钩子/处境 headline 过短或缺失",
+        "fix": None if hook_pass else "补全 contrast_design.initial_state_headline 或 fanqie_positioning.algo_hook",
+    }
 
-    data = await call_fanqie_json_once(
-        svc,
-        step=_STEP,
-        system=system,
-        prompt=prompt,
-        task="quality.check",
-        validate=_validate,
-    )
+    checks = (genre_check, gf_check, slap_check, density_check, hook_check)
+    overall_pass = all(c.get("pass") for c in checks)
+    overall_score = min(100, sum(20 for c in checks if c.get("pass")) + (5 if overall_pass else 0))
+
+    critical_fixes = []
+    for key, label, chk in (
+        ("genre", "类型信号", genre_check),
+        ("gf", "金手指时机", gf_check),
+        ("slap", "首次打脸", slap_check),
+        ("density", "爽感密度", density_check),
+        ("hook", "算法钩子", hook_check),
+    ):
+        if not chk.get("pass") and chk.get("issue"):
+            critical_fixes.append(f"[{label}] {chk['issue']}")
+    critical_fixes = critical_fixes[:3]
+
+    return {
+        "genre_signal_check": genre_check,
+        "golden_finger_timing_check": gf_check,
+        "first_slap_timing_check": slap_check,
+        "satisfaction_density_check": density_check,
+        "hook_quality_check": hook_check,
+        "overall_pass": overall_pass,
+        "overall_score": overall_score,
+        "critical_fixes": critical_fixes,
+        "algo_optimization_tips": [] if overall_pass else ["规则审计未全通过，请按 critical_fixes 修正规划产物"],
+        "_generated_by": "rule",
+    }
+
+
+async def gen_signal_audit(svc: Any, project: Project, ctx: dict) -> dict:
+    """
+    执行番茄算法双校验（规则版）。
+
+    @returns signal_audit dict（含 overall_pass 和 fix_suggestions）
+    """
+    data = _build_signal_audit_by_rules(ctx)
 
     extra = dict(project.extra or {})
     extra["signal_audit"] = data
-    issues = _collect_issues(data)
-    extra["consistency_issues"] = issues
+    extra["consistency_issues"] = _collect_issues(data)
     project.extra = extra
     svc.db.commit()
     ctx["signal_audit"] = data
     return data
-
-
-def _fmt_tags(tags: list) -> str:
-    if not tags:
-        return "（未生成）"
-    return "  ".join(
-        f"Ch{t.get('ch','')}:{t.get('type','')}" for t in tags[:10] if isinstance(t, dict)
-    )
 
 
 def _collect_issues(audit: dict) -> list[dict]:

@@ -173,7 +173,11 @@ class OutlineExpandMixin:
       "opening_hook": "开篇钩子：前500字的核心手段。例：用主角被宣判死刑的场面倒叙开篇",
       "core_event": "核心事件：必须是 protagonist_choice 的直接后果，格式「因[choice]→[result]」",
       "character_change": "人物变化：谁的认知/处境/关系发生了不可逆变化",
-      "foreshadow": "伏笔管理：埋[伏笔内容|主题:与立意的关联] 收[伏笔内容]（无则填空）",
+      "foreshadow_ops": [
+        {{"op": "lay", "name": "伏笔名称", "theme": "与立意的关联"}},
+        {{"op": "heat", "code": "F-03", "note": "推进方式"}},
+        {{"op": "resolve", "code": "F-01", "note": "回收说明"}}
+      ],
       "villain_action": "反派这一章在做什么（即便不是本章视角），以及如何逼迫主角",
       "end_hook": "章末钩子：读者读完最后一句停不下来的原因，要具体到手法",
       "reader_emotion_target": "本章结束时读者的目标情绪（exciting/tense/sad/romantic/mysterious/warm/anxious/epic）",
@@ -189,12 +193,12 @@ class OutlineExpandMixin:
 3. villain_action 不能只写"（无）"——反派在大格局中始终有独立行动
 4. 每章「章末钩子」必须具体，不能只写"留下悬念"，要说清楚「悬念的具体内容」
 5. 每章字数预估控制在 2200-2400 字，默认 2300 字
-6. 伏笔要有连续性，本卷内至少有2条贯穿始终的伏笔线；埋入时附「|主题:xxx」说明与立意的关联
+6. 伏笔用 foreshadow_ops 数组（lay/heat/resolve），本卷内至少2条贯穿伏笔线；lay 须含 theme 说明与立意关联（无则 []）
 7. 如果提供了已生成章节上下文或滚动连续性账本，必须承接上一批章末钩子、人物状态和未回收伏笔，不得重复已发生的核心事件
 8. 本批第一章要自然回应上一批最后一章留下的具体悬念；如果处于新卷开头，则先承接全书卷线蓝图再开启本卷核心问题
 9. 若提供了「前几卷已规划章纲」：不得复述或改头换面重复前序已写核心事件；新卷情节在其上推进
-10. 若提供了「前几卷伏笔台账」：本卷各章 foreshadow 字段须点名埋/收，优先处理台账中高优先级仍未回收条目，并与章纲五要素一致
-11. 「合同型伏笔」硬约束：台账中 deadline_chapter <= 本批最后一章章号 的条目视为「逾期伏笔」，必须在本批章纲中安排至少一章写明「收[F-xxx：...]」，否则视为结构缺陷"""
+10. 若提供了「前几卷伏笔台账」：本卷各章 foreshadow_ops 须体现 lay/heat/resolve，优先处理台账中高优先级仍未回收条目，并与章纲五要素一致
+11. 「合同型伏笔」硬约束：台账中 deadline_chapter <= 本批最后一章章号 的条目视为「逾期伏笔」，必须在本批至少一章 foreshadow_ops 含 op=resolve 且 code 对齐 F-xxx，否则视为结构缺陷"""
 
         max_tok = max_tokens_expand_outline(self.profile)
         response = await self._call_ai(

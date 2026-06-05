@@ -457,17 +457,30 @@ export default function BootstrapTimelineDetail({
             {(step.linterIssues?.length ?? 0) > 0 && (
               <LinterIssuesList issues={step.linterIssues!} />
             )}
-            {haltedStep === step.key && onRetryStep && (
-              <button
-                type="button"
-                disabled={retryLoading}
-                onClick={() => void onRetryStep()}
-                className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-red-700 disabled:opacity-50"
-              >
-                {retryLoading ? <Loader2 size={14} className="animate-spin" /> : null}
-                {retryLoading ? '重试中…' : '重试此步骤'}
-              </button>
-            )}
+            <div className="flex flex-wrap gap-2">
+              {haltedStep === step.key && onRetryStep && (
+                <button
+                  type="button"
+                  disabled={retryLoading || !!regenStep}
+                  onClick={() => void onRetryStep()}
+                  className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-red-700 disabled:opacity-50"
+                >
+                  {retryLoading ? <Loader2 size={14} className="animate-spin" /> : null}
+                  {retryLoading ? '重试中…' : '重试此步骤'}
+                </button>
+              )}
+              {onRegen && projectId && (
+                <button
+                  type="button"
+                  disabled={!!regenStep}
+                  onClick={() => onRegen(step.key)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-800 shadow-sm transition-colors hover:bg-amber-50 disabled:opacity-50"
+                >
+                  {regenStep === step.key ? <Loader2 size={14} className="animate-spin" /> : null}
+                  {regenStep === step.key ? '重新生成中…' : '重新生成本步'}
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -570,7 +583,7 @@ export default function BootstrapTimelineDetail({
             </button>
           )}
           {/* 单步重新生成：仅在选中步骤已完成且 onRegen 已传入时显示 */}
-          {onRegen && step && step.status === 'done' && (
+          {onRegen && step && (step.status === 'done' || step.status === 'error') && (
             <button
               type="button"
               disabled={!!regenStep}

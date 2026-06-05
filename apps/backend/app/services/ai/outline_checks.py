@@ -208,7 +208,7 @@ class OutlineChecksMixin:
         Args:
             project_title: 项目名称。
             theme_statement: 全书立意（用于判断伏笔是否有主题共鸣）。
-            chapters: 章节计划列表，含 foreshadow/number/title 字段。
+            chapters: 章节计划列表，含 foreshadow（ops 渲染摘要）/number/title 字段。
             prior_ledger: 前批未回收伏笔台账（文本格式）。
 
         Returns:
@@ -229,20 +229,20 @@ class OutlineChecksMixin:
         prompt = f"""小说：《{project_title}》
 全书立意：{theme_statement or '（未填写）'}
 {prior_block}
-【本批各章伏笔字段（埋/收记录）】
+【本批各章伏笔记录（由 foreshadow_ops 渲染为 埋/加热/收 摘要）】
 {chr(10).join(lines) or '（本批无显式伏笔记录）'}
 
 检查两件事：
 
 1. 配对完整性：
-   - 每条「埋[xxx]」在本批或前台账中是否能找到对应「收[xxx]」
-   - 孤立的埋入（无收束且无跨卷延续说明）视为「孤悬伏笔」
-   - 孤立的回收（找不到来源的「收[xxx]」）视为「无源回收」
+   - 每条 lay（埋入）在本批或前台账中是否能找到对应 resolve（收束）
+   - 孤立的 lay（无 resolve 且无跨卷延续说明）视为「孤悬伏笔」
+   - 孤立的 resolve（找不到来源）视为「无源回收」
 
 2. 主题共鸣质量：
    - 伏笔回收时，是否利用了「读者第一次看时的误解/盲区」制造「原来如此」的惊喜
    - 若某条伏笔只是信息传递（A埋B，B出现）而没有反转/深化意义，标记为「低共鸣」
-   - 伏笔的主题标注（|主题:xxx）是否与全书立意相关；无关联的伏笔质量视为低
+   - lay 的 theme 是否与全书立意相关；无关联的伏笔质量视为低
 
 返回JSON（不要任何额外文字）：
 {{

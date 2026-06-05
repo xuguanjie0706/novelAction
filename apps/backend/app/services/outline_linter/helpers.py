@@ -150,16 +150,32 @@ def face_slap_bounds(pace_type: str, chapter_count: int) -> tuple[int, int, int]
     return min_total, max_total, window
 
 
+def chapter_foreshadow_ops(ch: ChapterSnapshot) -> list[dict[str, Any]]:
+    """本章伏笔 ops：优先结构化字段，回退 legacy 文本解析。"""
+    extra = ch.extra or {}
+    raw_ops = extra.get("foreshadow_ops")
+    if isinstance(raw_ops, list) and raw_ops:
+        from app.services.bootstrap.foreshadow_ops import normalize_op
+
+        return [o for o in (normalize_op(x) for x in raw_ops) if o]
+
+    from app.services.bootstrap.foreshadow_ops import legacy_string_to_ops
+
+    return legacy_string_to_ops(ch.ex_str("foreshadow"))
+
+
+def chapter_has_foreshadow_lay(ch: ChapterSnapshot) -> bool:
+    """本章是否规划了埋伏笔（结构化或 legacy）。"""
+    from app.services.bootstrap.foreshadow_ops import chapter_has_lay
+
+    return chapter_has_lay(chapter_foreshadow_ops(ch))
+
+
 def distinct_foreshadow_lay_lines(chapters: list[ChapterSnapshot]) -> set[str]:
+    from app.services.bootstrap.foreshadow_ops import extract_lay_names
+
     themes: set[str] = set()
     for ch in chapters:
-        raw = ch.ex_str("foreshadow")
-        if FORESHADOW_LAY_MARK not in raw:
-            continue
-        # 粗粒度：按「埋[」分段取首段主题
-        parts = raw.split(FORESHADOW_LAY_MARK)
-        for part in parts[1:]:
-            body = part.split("]")[0].split("）")[0].strip()
-            if body:
-                themes.add(body[:40])
+        for name in extract_lay_names(chapter_foreshadow_ops(ch)):
+            themes.add(name[:40])
     return themes

@@ -107,6 +107,8 @@ async def outline_checks_aggregate(
     # 将 OutlineNode 转为质检方法期望的 dict 格式
     def _node_to_check_dict(n: OutlineNode) -> dict:
         """OutlineNode → 质检方法期望的章节 dict。"""
+        from app.services.bootstrap.foreshadow_ops import foreshadow_summary_from_extra
+
         ex = n.extra or {}
         return {
             "number": n.sort_order + 1,
@@ -115,7 +117,7 @@ async def outline_checks_aggregate(
             "character_change": n.conflict or "",
             "opening_hook": n.hook or "",
             "end_hook": ex.get("end_hook", n.highlight or ""),
-            "foreshadow": ex.get("foreshadow", ""),
+            "foreshadow": foreshadow_summary_from_extra(ex),
             # 因果链四元组（新字段，旧数据可能为空）
             "protagonist_want":     ex.get("protagonist_want", ""),
             "protagonist_obstacle": ex.get("protagonist_obstacle", ""),

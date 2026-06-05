@@ -5,21 +5,17 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.outline_linter.chapter_index import build_global_chapter_index
-from app.services.outline_linter.helpers import (
-    FORESHADOW_HEAT_MARK,
-    FORESHADOW_LAY_MARK,
-    FORESHADOW_RESOLVE_MARK,
-    ChapterSnapshot,
-)
+from app.services.bootstrap.foreshadow_ops import mystery_op_covered
+from app.services.outline_linter.helpers import ChapterSnapshot
 from app.services.outline_linter.schemas import LinterIssue
 
 
-def _foreshadow_text_for_global(
+def _foreshadow_extra_for_global(
     db: Any,
     project_id: Any,
     global_chapter: int,
     node_to_global: dict[str, int],
-) -> str:
+) -> dict:
     from app.models import OutlineNode
 
     for node in (
@@ -31,13 +27,13 @@ def _foreshadow_text_for_global(
         .all()
     ):
         if node_to_global.get(str(node.id)) == global_chapter:
-            return ((node.extra or {}).get("foreshadow") or "").strip()
-    return ""
+            return dict(node.extra or {})
+    return {}
 
 
-def _chapter_snapshots_foreshadow(chapters: list[ChapterSnapshot], global_start: int) -> dict[int, str]:
+def _chapter_snapshots_extra(chapters: list[ChapterSnapshot], global_start: int) -> dict[int, dict]:
     return {
-        global_start + ch.sort_order: ch.ex_str("foreshadow")
+        global_start + ch.sort_order: dict(ch.extra or {})
         for ch in chapters
     }
 
@@ -57,7 +53,7 @@ def lint_core_mysteries(
         return issues
 
     node_to_global, max_global = build_global_chapter_index(db, project_id)
-    local_fs = _chapter_snapshots_foreshadow(chapters, volume_start_global)
+    local_extra = _chapter_snapshots_extra(chapters, volume_start_global)
 
     has_identity = False
     reveal_chapters: list[int] = []
@@ -79,31 +75,37 @@ def lint_core_mysteries(
             reveal_chapters.append(reveal)
 
         if lay:
-            fs = local_fs.get(lay, "") or _foreshadow_text_for_global(
+            extra = local_extra.get(lay) or _foreshadow_extra_for_global(
                 db, project_id, lay, node_to_global
             )
-            if name and name not in fs and FORESHADOW_LAY_MARK not in fs:
+            if name and not mystery_op_covered(name, extra, "lay"):
                 issues.append(LinterIssue(
                     rule_id="CM-01",
                     severity="high",
                     scope="volume",
                     message=f"核心谜题「{name}」应在第{lay}章埋下，章纲伏笔字段未体现",
-                    suggestion=f"第{lay}章伏笔写：埋[{name}|主题:…]",
+                    suggestion=(
+                        f'第{lay}章 foreshadow_ops 增加 '
+                        f'{{"op":"lay","name":"{name}","theme":"…"}}'
+                    ),
                 ))
 
         for hc in heat_chapters:
             if not isinstance(hc, int):
                 continue
-            fs = local_fs.get(hc, "") or _foreshadow_text_for_global(
+            extra = local_extra.get(hc) or _foreshadow_extra_for_global(
                 db, project_id, hc, node_to_global
             )
-            if name and name not in fs and FORESHADOW_HEAT_MARK not in fs:
+            if name and not mystery_op_covered(name, extra, "heat"):
                 issues.append(LinterIssue(
                     rule_id="CM-02",
                     severity="high",
                     scope="volume",
                     message=f"核心谜题「{name}」应在第{hc}章加热，章纲伏笔字段未体现",
-                    suggestion=f"第{hc}章伏笔写：加热[{name}+手法]",
+                    suggestion=(
+                        f'第{hc}章 foreshadow_ops 增加 '
+                        f'{{"op":"heat","code":"…","note":"{name}推进"}}'
+                    ),
                 ))
 
         if lay and reveal and reveal < lay + 10:
@@ -116,16 +118,19 @@ def lint_core_mysteries(
             ))
 
         if reveal and max_global > reveal:
-            fs = local_fs.get(reveal, "") or _foreshadow_text_for_global(
+            extra = local_extra.get(reveal) or _foreshadow_extra_for_global(
                 db, project_id, reveal, node_to_global
             )
-            if FORESHADOW_RESOLVE_MARK not in fs and (name and name not in fs):
+            if name and not mystery_op_covered(name, extra, "resolve"):
                 issues.append(LinterIssue(
                     rule_id="CM-04",
                     severity="medium",
                     scope="volume",
-                    message=f"谜题「{name}」已过揭晓章（第{reveal}章），章纲未见「收[…]」回收",
-                    suggestion=f"在第{reveal}章伏笔写：收[{name}]",
+                    message=f"谜题「{name}」已过揭晓章（第{reveal}章），章纲未见 resolve 回收",
+                    suggestion=(
+                        f'在第{reveal}章 foreshadow_ops 增加 '
+                        f'{{"op":"resolve","code":"…","note":"{name}"}}'
+                    ),
                 ))
 
     if mysteries and not has_identity:

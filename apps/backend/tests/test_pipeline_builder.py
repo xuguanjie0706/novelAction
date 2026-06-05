@@ -23,7 +23,8 @@ def test_fanqie_skips_power_systems_and_uses_power_ladder():
     assert "power_systems" not in keys
     assert "signal_audit" in keys
     assert "consistency" not in keys
-    assert "consistency_scan" in keys
+    assert "opening_contract" not in keys
+    assert "promise_seeds_fanqie" in keys
     assert "volumes_fanqie" in keys
     assert "volumes" not in keys
 

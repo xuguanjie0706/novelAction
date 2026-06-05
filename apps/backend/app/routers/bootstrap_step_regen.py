@@ -49,6 +49,7 @@ _SUPPORTED_STEPS = frozenset({
     "volumes", "memory", "relations",
     "opening_contract", "core_mysteries",
     "consistency", "emotion_arc", "villain_arc",
+    "rhythm_map", "signal_audit", "promise_seeds",
 })
 
 

@@ -15,6 +15,7 @@ import logging
 
 from app.models import OutlineNode, Project
 from app.services.bootstrap.context_vol_expand import _build_reader_promises_block
+from app.services.bootstrap.foreshadow_ops import prepare_chapter_foreshadow_for_node
 from app.services.bootstrap.foreshadow_sync import sync_chapter_foreshadow
 from app.services.bootstrap.parse import parse_json
 from app.services.bootstrap.chapter_plan_batches import (
@@ -218,7 +219,11 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
     "opening_hook": "开篇钩子：前500字核心手段，如何让读者第一句无法放下（≤30字）",
     "core_event": "核心事件：必须是主角选择的直接后果，格式「因[choice]→[result]」（≤60字）",
     "character_change": "人物变化：谁的认知/处境/关系发生了不可逆变化（≤30字）",
-    "foreshadow": "伏笔管理：埋[伏笔内容|主题:与全书立意的关联] 收[伏笔内容] 加热[伏笔代号+推进方式]（无则填空）",
+    "foreshadow_ops": [
+      {{"op": "lay", "name": "伏笔名称", "theme": "与全书立意的关联"}},
+      {{"op": "heat", "code": "F-03", "note": "推进方式"}},
+      {{"op": "resolve", "code": "F-01", "note": "回收说明"}}
+    ],
     "promise_fulfilled": "本章兑现了哪条读者承诺（填承诺原文关键词片段，无则填空字符串）",
     "villain_action": "反派这一章在做什么（即便不是本章视角），以及如何逼迫主角",
     "end_hook": "章末钩子：读完最后一句停不下来的原因，具体到手法（≤30字，禁用「留下悬念」）",
@@ -243,7 +248,7 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
 6. 第1章和第3章的 opening_hook/end_hook 必须对应 chapter1_hook/chapter3_payoff 的要求（若有）
 7. opening phase 每3章内至少有1次主角主动发起的胜利或资源获取
 8. storyline_refs 要交叉出现，不要只推进主线
-9. foreshadow 字段：本卷内至少2条贯穿始终的伏笔线，埋入章写「埋[xxx|主题:yyy]」，回收章写「收[xxx]」
+9. foreshadow_ops：本卷内至少2条贯穿伏笔线；埋入章 op=lay，推进章 op=heat，回收章 op=resolve（无则 []）
 10. 🔴🟠级读者承诺必须在承诺窗口内的某一章填写 promise_fulfilled（与承诺原文有关键词重叠），不得拖欠
 只返回JSON数组，不要解释。"""
 
@@ -334,6 +339,7 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
                 vol1.phase or "opening", pacing_val, has_slap, has_beat
             )
             expected_words_val = ai_words if isinstance(ai_words, int) and 1500 <= ai_words <= 4000 else dynamic_words
+            fs_ops, fs_laid, fs_resolved, fs_legacy = prepare_chapter_foreshadow_for_node(item)
             node = OutlineNode(
                 project_id=project.id,
                 parent_id=vol1.id,
@@ -349,10 +355,13 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
                 power_milestone=item.get("power_milestone") or None,
                 involved_character_ids=involved_ids,
                 storyline_ids=sl_ids,
+                foreshadows_laid=fs_laid or None,
+                foreshadows_resolved=fs_resolved or None,
                 expected_words=expected_words_val,
                 sort_order=ch_num - 1,
                 extra={
-                    "foreshadow": (item.get("foreshadow") or "").strip(),
+                    "foreshadow": fs_legacy,
+                    "foreshadow_ops": fs_ops,
                     "promise_fulfilled": (item.get("promise_fulfilled") or "").strip(),
                     "end_hook": end_hook_val or "",
                     "has_face_slap": item.get("has_face_slap", False),

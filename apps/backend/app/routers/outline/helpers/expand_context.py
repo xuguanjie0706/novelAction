@@ -10,6 +10,7 @@ from app.services.outline_planning import TARGET_WORDS_PER_CHAPTER
 from app.utils.chapter_numbering import display_chapter_number
 
 from app.routers.outline.helpers.text_utils import _clean_outline_text
+from app.services.bootstrap.foreshadow_ops import foreshadow_summary_from_extra
 
 def _outline_node_to_chapter_context(node: OutlineNode) -> dict:
     title_text = str(node.title or "")
@@ -25,7 +26,7 @@ def _outline_node_to_chapter_context(node: OutlineNode) -> dict:
         "character_change": node.conflict or "",
         # 实力里程碑常单独写突破/境界，需并入成长轨迹扫描
         "power_milestone": getattr(node, "power_milestone", None) or "",
-        "foreshadow": extra.get("foreshadow", ""),
+        "foreshadow": foreshadow_summary_from_extra(extra),
         "end_hook": extra.get("end_hook") or node.highlight or "",
         "protagonist_want": extra.get("protagonist_want", ""),
         "protagonist_obstacle": extra.get("protagonist_obstacle", ""),

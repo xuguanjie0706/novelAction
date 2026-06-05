@@ -70,3 +70,71 @@ def merge_project_extra_fields(svc: Any, project: Any, fields: dict[str, Any]) -
     flag_modified(project, "extra")
     svc.db.commit()
     svc.db.refresh(project)
+
+
+async def call_json_object_with_retry(
+    svc: Any,
+    system: str,
+    prompt: str,
+    *,
+    task: str,
+) -> dict:
+    """调用 LLM 并解析 JSON 对象；解析失败时追加约束重试一次。"""
+    max_tok = max_tokens_bootstrap_completion()
+    raw = await svc._call_with_retry(system, prompt, max_tokens=max_tok, task=task)
+    try:
+        data = parse_json(raw)
+        if not isinstance(data, dict):
+            raise ValueError(f"{task} 返回非对象 JSON")
+        return data
+    except (json.JSONDecodeError, ValueError) as first_err:
+        logger.warning("%s JSON parse failed, retrying: %s", task, first_err)
+        raw = await svc._call_with_retry(
+            system + _JSON_STRICT_SUFFIX,
+            prompt + "\n\n【修正】只输出合法 JSON 对象，不要 markdown 代码块或任何说明文字。",
+            max_tokens=max_tok,
+            task=task,
+        )
+        data = parse_json(raw)
+        if not isinstance(data, dict):
+            raise ValueError(f"{task} 返回非对象 JSON")
+        return data
+
+
+def apply_ladder_boss_names(arc: list[dict], ladder: list[dict]) -> list[dict]:
+    """将 villain_arc 各卷 villain_name 对齐 antagonist_ladder 登记名。"""
+    if not ladder:
+        return arc
+    for i, row in enumerate(arc):
+        vi = row.get("vol_index")
+        try:
+            idx = int(vi) if vi is not None else i
+        except (TypeError, ValueError):
+            idx = i
+        entry = next((r for r in ladder if int(r.get("vol_index", -1)) == idx), None)
+        if entry and entry.get("boss_name"):
+            row["villain_name"] = entry["boss_name"]
+    return arc
+
+
+def write_emotion_arc_ctx(ctx: dict, arc: list[dict]) -> None:
+    if not arc:
+        return
+    ctx["emotion_arc"] = arc
+    parts = []
+    for i, v in enumerate(arc):
+        title = v.get("vol_title") or f"卷{v.get('vol_index', i)}"
+        parts.append(f"{title}({v.get('net_balance', '?')},{v.get('dominant_emotion', '?')})")
+    ctx["emotion_arc_summary"] = " | ".join(parts)
+
+
+def write_villain_arc_ctx(ctx: dict, arc: list[dict]) -> None:
+    if not arc:
+        return
+    ctx["villain_arc"] = arc
+    parts = []
+    for i, v in enumerate(arc):
+        title = v.get("vol_title") or f"卷{v.get('vol_index', i)}"
+        goal = (v.get("vol_goal") or "?")[:20]
+        parts.append(f"{title}:{v.get('villain_name', '?')}→{goal}[{v.get('vol_result', '?')}]")
+    ctx["villain_arc_summary"] = " | ".join(parts)

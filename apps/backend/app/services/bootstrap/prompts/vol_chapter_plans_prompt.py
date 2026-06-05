@@ -140,7 +140,7 @@ def build_chapter_plan_generation_tail(
             "5. villain_action 不能只写「（无）」——反派的独立行动是本书节奏的第二引擎\n"
             "6. core_event（即 summary）必须是 protagonist_choice 的直接后果，不能为空\n"
             "7. storyline_refs 必须交叉出现，主线不能连续 3 章独占（除非 phase=climax 的最后 5 章）\n"
-            "8. 本卷内至少 2 条贯穿伏笔线：埋入章写「埋[xxx|主题:yyy]」，推进章写「加热[xxx+手法]」，回收章写「收[xxx]」\n"
+            "8. 本卷内至少 2 条贯穿伏笔线：用 foreshadow_ops 数组（lay/heat/resolve），禁止再用埋[…] 自由文本\n"
             "9. promise_fulfilled：若本章是某条未兑现承诺的兑现章，必须填写承诺原文中的关键短语（2字以上）；"
             "其余章节填空字符串即可，不要填占位文字如「无」「暂无」。\n"
             "10. has_face_slap 的频率必须符合立项定位的 face_slap_pattern（不能全是 false）\n"
@@ -174,8 +174,12 @@ def build_chapter_plan_generation_tail(
         '    "character_change": "谁的认知/处境/关系发生了不可逆变化（≤30字，不能只写外部变化）",\n'
         '    "end_hook": "章末钩子：读完最后一句停不下来的原因（≤30字，禁用「悬念丛生」「让读者期待」等废话，必须具体手法）",\n'
         "\n"
-        "    // ── 伏笔与承诺管理 ──\n"
-        '    "foreshadow": "伏笔操作：埋[伏笔内容|主题:与全书立意的关联] / 收[伏笔代号+内容] / 加热[伏笔代号+推进方式]（无则填空）",\n'
+        "    // ── 伏笔与承诺管理（结构化 ops，禁止再用埋[…] 自由文本）──\n"
+        '    "foreshadow_ops": [\n'
+        '      {"op": "lay", "name": "伏笔名称", "theme": "与全书立意的关联（lay 必填 name，theme 可选）"},\n'
+        '      {"op": "heat", "code": "F-03", "note": "推进方式（heat/resolve 必填 code 或 note）"},\n'
+        '      {"op": "resolve", "code": "F-01", "note": "回收说明"}\n'
+        "    ],\n"
         '    "promise_fulfilled": "本章兑现了哪条读者承诺（填承诺原文片段，无则填空字符串）",\n'
         "\n"
         "    // ── 反派与配角 ──\n"

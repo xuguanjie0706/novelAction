@@ -114,8 +114,10 @@ def _outline_end_hook(outline_node: OutlineNode | None) -> str:
 def _current_outline_foreshadow(outline_node: OutlineNode | None) -> str:
     if not outline_node:
         return ""
+    from app.services.bootstrap.foreshadow_ops import foreshadow_summary_from_extra
+
     extra = outline_node.extra if isinstance(outline_node.extra, dict) else {}
-    return (extra.get("foreshadow") or "").strip()
+    return foreshadow_summary_from_extra(extra)
 
 
 def _detect_foreshadow_conflicts(corpus: str, foreshadow: str) -> list[dict[str, str]]:

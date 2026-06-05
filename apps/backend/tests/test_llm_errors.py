@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.services.ai_service import AIService
-from app.services.llm_errors import format_llm_error_message
+from app.services.llm_errors import format_llm_error_message, is_retryable_llm_error
 
 
 def test_format_connection_error():
@@ -17,6 +17,14 @@ def test_format_connection_error():
 def test_retryable_connection_error():
     ai = AIService(profile="gemini")
     assert ai._is_retryable_llm_error(Exception("Connection error.")) is True
+    assert is_retryable_llm_error(Exception("Connection error.")) is True
+    assert is_retryable_llm_error(Exception("Server disconnected without sending a response.")) is True
+    assert is_retryable_llm_error(Exception("Error code: 502")) is True
+
+
+def test_format_server_disconnected_error():
+    msg = format_llm_error_message(Exception("Server disconnected without sending a response."))
+    assert "网关中途断开" in msg
 
 
 def test_format_blocked_error():

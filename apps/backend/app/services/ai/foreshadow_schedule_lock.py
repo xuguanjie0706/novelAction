@@ -12,10 +12,14 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models import Chapter, OutlineNode, Project
+from app.services.bootstrap.foreshadow_ops import extract_lay_names, normalize_op
 from app.services.bootstrap.foreshadow_sync import _RE_LAY
 from app.utils.chapter_numbering import display_chapter_number
 
 _RE_KEYWORD = re.compile(r"[\u4e00-\u9fff]{2,}")
+
+# 正文提前埋设质检：短语最短匹配长度（过滤 2～3 字误杀）
+_MIN_AUDIT_PHRASE_LEN = 4
 
 
 def _extract_keywords(text: str) -> list[str]:
@@ -130,11 +134,31 @@ def _opening_teases(opening: dict, chapter_number: int) -> list[dict[str, Any]]:
     return teases
 
 
+def _detect_outline_early_lay_from_ops(
+    ops: list[dict[str, Any]],
+    forbidden_early: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """章纲 foreshadow_ops 是否含 lay 但日程表禁止提前埋设。"""
+    if not ops or not forbidden_early:
+        return []
+    conflicts: list[dict[str, str]] = []
+    for lay_text in extract_lay_names(ops):
+        for item in forbidden_early:
+            if _keywords_overlap(lay_text, item.get("keywords") or []):
+                conflicts.append({
+                    "field": "foreshadow_ops",
+                    "outline_text": lay_text[:200],
+                    "reason": item.get("reason", ""),
+                })
+                break
+    return conflicts
+
+
 def _detect_outline_early_lay(
     foreshadow_raw: str,
     forbidden_early: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
-    """章纲 foreshadow 字段是否含「埋[…]」但日程表禁止提前埋设。"""
+    """legacy：章纲 foreshadow 文本是否含「埋[…]」但日程表禁止提前埋设。"""
     if not foreshadow_raw.strip() or not forbidden_early:
         return []
     conflicts: list[dict[str, str]] = []
@@ -192,10 +216,15 @@ def build_foreshadow_schedule_lock(
             heat_chapters = []
 
         if lay and lay > ch_no:
+            lay_method = (m.get("lay_method") or "").strip()
             forbidden_early.append({
                 "name": name,
                 "planned_lay_chapter": lay,
                 "keywords": keywords,
+                "lay_method": lay_method,
+                "audit_phrases": _build_audit_phrases(
+                    name, keywords, lay_method,
+                ),
                 "reason": (
                     f"核心谜题「{name}」计划第{lay}章才正式埋下，"
                     f"第{ch_no}章禁止完整埋设（不得点名/描写 lay_method 中的关键细节）。"
@@ -221,11 +250,20 @@ def build_foreshadow_schedule_lock(
                 })
 
     opening_teases = _opening_teases(opening, ch_no)
-    foreshadow_raw = ""
+    outline_conflicts: list[dict[str, str]] = []
     if outline_node:
-        foreshadow_raw = ((outline_node.extra or {}).get("foreshadow") or "").strip()
-
-    outline_conflicts = _detect_outline_early_lay(foreshadow_raw, forbidden_early)
+        extra = outline_node.extra if isinstance(outline_node.extra, dict) else {}
+        raw_ops = extra.get("foreshadow_ops")
+        if isinstance(raw_ops, list) and raw_ops:
+            normalized = [o for o in (normalize_op(x) for x in raw_ops) if o]
+            outline_conflicts = _detect_outline_early_lay_from_ops(
+                normalized, forbidden_early,
+            )
+        else:
+            foreshadow_raw = (extra.get("foreshadow") or "").strip()
+            outline_conflicts = _detect_outline_early_lay(
+                foreshadow_raw, forbidden_early,
+            )
 
     lock: dict[str, Any] = {
         "current_chapter_number": ch_no,
@@ -336,6 +374,32 @@ def _strip_html(text: str) -> str:
     return re.sub(r"<[^>]+>", "", text or "").replace("&nbsp;", " ")
 
 
+def _build_audit_phrases(
+    name: str,
+    keywords: list[str] | None,
+    lay_method: str = "",
+) -> list[str]:
+    """
+    正文质检触发短语：仅保留 ≥4 字片段，按长度降序（优先最长匹配，降低误杀）。
+    """
+    phrases: set[str] = set()
+    n = (name or "").strip()
+    if len(n) >= 3:
+        phrases.add(n)
+    for kw in keywords or []:
+        k = (kw or "").strip()
+        if len(k) >= _MIN_AUDIT_PHRASE_LEN:
+            phrases.add(k)
+    for kw in _extract_keywords(lay_method or ""):
+        if len(kw) >= _MIN_AUDIT_PHRASE_LEN:
+            phrases.add(kw)
+    ordered = sorted(phrases, key=len, reverse=True)
+    if n and n in ordered:
+        ordered.remove(n)
+        return [n, *ordered]
+    return ordered
+
+
 def audit_early_foreshadow_plants(
     chapter_text: str,
     lock: dict[str, Any],
@@ -362,15 +426,16 @@ def audit_early_foreshadow_plants(
         name = (item.get("name") or "").strip()
         lay = item.get("planned_lay_chapter")
         keywords = list(item.get("keywords") or [])
-        if not keywords and name:
-            keywords = _extract_keywords(name)
+        phrases = item.get("audit_phrases") or _build_audit_phrases(
+            name,
+            keywords,
+            (item.get("lay_method") or ""),
+        )
         matched_kw = ""
-        for kw in keywords:
-            if len(kw) >= 2 and kw in plain:
-                matched_kw = kw
+        for phrase in phrases:
+            if phrase and phrase in plain:
+                matched_kw = phrase
                 break
-        if not matched_kw and name and len(name) >= 2 and name in plain:
-            matched_kw = name
         if not matched_kw:
             continue
         violations.append({

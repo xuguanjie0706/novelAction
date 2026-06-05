@@ -187,6 +187,20 @@ export function toKey(step: unknown): StepKey | null {
   return STEP_ALIAS[step] ?? null
 }
 
+/** 从已持久化 SSE 事件推断最近失败步骤（failed run 重连恢复用）。 */
+export function inferFailedStepFromEvents(
+  events: Array<{ event?: string; step?: string }> | null | undefined,
+): StepKey | null {
+  if (!events?.length) return null
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i]
+    if (!ev || (ev.event !== 'error' && ev.event !== 'step_halted')) continue
+    const key = toKey(ev.step)
+    if (key) return key
+  }
+  return null
+}
+
 // ── Pure state helpers ─────────────────────────────────────────
 
 /** 某步失败后，后续未开始的步骤标记为 blocked，避免 UI 显示仍在继续。 */

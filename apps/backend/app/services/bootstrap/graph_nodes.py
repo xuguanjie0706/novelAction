@@ -308,69 +308,44 @@ async def node_consistency(state: BootstrapState, config: dict | None = None) ->
 
 
 async def node_emotion_villain(state: BootstrapState, config: dict | None = None) -> dict:
-    """Step 9.5 + 9.8 并行：情绪节律图 + 反派行动线。
+    """Step 9.5 + 9.8 合并：情绪节律图 + 反派行动线（一次 LLM 调用）。
 
-    两步均只依赖卷骨架（Step 9 产物），互不依赖，合并为单节点并行执行节省一次 AI 调用时间。
-    LLM 并行、落库串行：避免并行 read-modify-write ``project.extra`` 互相覆盖。
-    任一步失败不中断另一步，错误收集后统一上报。
+    产物仍分写 emotion_arc / villain_arc 两个 extra 键；UI 仍 emit 两个 step 事件。
+    单步 regen 走 gen_emotion_arc / gen_villain_arc 独立路径。
     """
+    from app.services.bootstrap.steps.narrative_arcs import gen_narrative_arcs
+
     config = _resolve_config(config)
     db = config["configurable"]["db"]
     run_id = state["run_id"]
     svc = _make_svc(config)
     ctx = sanitize_bootstrap_ctx(dict(state.get("ctx") or {}))
     from app.models import Project
-    from app.services.bootstrap.narrative_arc_gen import merge_project_extra_fields
     project = db.query(Project).filter(Project.id == state.get("project_id")).first()
 
     while True:
         emit(run_id, "step_start", db, step="emotion_arc", label="规划全书情绪节律...")
         emit(run_id, "step_start", db, step="villain_arc", label="生成反派独立行动线...")
         try:
-            results = await asyncio.wait_for(
-                asyncio.gather(
-                    svc._gen_emotion_arc(project, ctx, persist=False),
-                    svc._gen_villain_arc(project, ctx, persist=False),
-                    return_exceptions=True,
-                ),
+            emotion_arc, villain_arc = await asyncio.wait_for(
+                gen_narrative_arcs(svc, project, ctx, persist=True),
                 timeout=360.0,
             )
         except asyncio.TimeoutError:
-            msg = "情绪节律/反派行动线并行生成超时，请重试"
-            user = await pause_for_step_retry(state, config, step="emotion_arc", message=msg, ctx=ctx)
-            if user_wants_step_retry(user):
-                continue
-            return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "emotion_villain", "reason": "timeout"}]}
+            msg = "情绪节律/反派行动线生成超时，请重试"
+        except Exception as exc:
+            msg = format_llm_error_message(exc)
+        else:
+            emit(run_id, "step_done", db, step="emotion_arc", count=len(emotion_arc))
+            emit(run_id, "step_done", db, step="villain_arc", count=len(villain_arc))
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": ["emotion_arc", "villain_arc"]}
 
-        failed: list[tuple[str, BaseException]] = []
-        for step_name, res in (("emotion_arc", results[0]), ("villain_arc", results[1])):
-            if isinstance(res, BaseException):
-                emit(run_id, "error", db, step=step_name,
-                     message=f"生成失败：{format_llm_error_message(res)}")
-                failed.append((step_name, res))
-
-        if failed:
-            step_name, res = failed[0]
-            msg = format_llm_error_message(res)
-            user = await pause_for_step_retry(
-                state, config, step=step_name, message=msg, ctx=ctx, emit_error=False,
-            )
-            if user_wants_step_retry(user):
-                continue
-            return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": step_name, "reason": msg}]}
-
-        emotion_arc = results[0] if not isinstance(results[0], BaseException) else []
-        villain_arc = results[1] if not isinstance(results[1], BaseException) else []
-        extra_patch: dict = {}
-        if emotion_arc:
-            extra_patch["emotion_arc"] = emotion_arc
-        if villain_arc:
-            extra_patch["villain_arc"] = villain_arc
-        if extra_patch:
-            merge_project_extra_fields(svc, project, extra_patch)
-        emit(run_id, "step_done", db, step="emotion_arc", count=len(emotion_arc))
-        emit(run_id, "step_done", db, step="villain_arc", count=len(villain_arc))
-        return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": ["emotion_arc", "villain_arc"]}
+        user = await pause_for_step_retry(
+            state, config, step="emotion_arc", message=msg, ctx=ctx,
+        )
+        if user_wants_step_retry(user):
+            continue
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "emotion_villain", "reason": msg}]}
 
 
 async def node_memory_relations(state: BootstrapState, config: dict | None = None) -> dict:

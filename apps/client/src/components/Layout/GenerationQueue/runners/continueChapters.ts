@@ -7,11 +7,7 @@ import { authFetch } from '../../../../api/authFetch'
 import { formatApiError } from '../../../../utils/apiError'
 import { autoCommitGeneratedChapterDebrief } from '../../../../utils/generatedChapterDebrief'
 import { postDraftAssistAccumulatedWithPrewriteRetry } from '../../../../utils/draftPrewriteBlocked'
-import {
-  splitStreamedDraftText,
-  parseChapterIndexMarkdown,
-  fallbackChapterIndexFromRawMarkdown,
-} from '../../../../utils/draftChapterIndexSplit'
+import { splitStreamedDraftText } from '../../../../utils/draftChapterIndexSplit'
 import { useAppStore } from '../../../../store'
 import {
   draftAssistSideEventHandler,
@@ -77,7 +73,7 @@ export async function runContinueChapters(
 
       if (!accumulated.trim()) throw new Error('未收到正文内容')
 
-      const { body: draftBody, indexMarkdown } = splitStreamedDraftText(accumulated.trim())
+      const { body: draftBody } = splitStreamedDraftText(accumulated.trim())
       if (!draftBody.trim()) throw new Error('未收到叙事正文（可能只有索引块）')
 
       pushProgress({ step: phaseStep('draft'), label: `✓ 正文生成完成 ${stepLabel}`, done: true, error: false })
@@ -101,14 +97,6 @@ export async function runContinueChapters(
       upsertChapter(updateRes.data)
       pushProgress({ step: phaseStep('save'), label: `✓ ${stepLabel} 已保存（仅叙事；稿末见模型调用记录）`, done: true, error: false })
 
-      // 读取项目质量门槛（writing_config.min_overall_score，默认 0 即始终入库）
-      const minOverallScore = (() => {
-        const ex = (useAppStore.getState().currentProject as any)?.extra
-        const cfg = (ex && typeof ex === 'object') ? (ex as Record<string, any>).writing_config : null
-        return typeof cfg?.min_overall_score === 'number' ? cfg.min_overall_score : 0
-      })()
-      let indexPersistedFromDraft = false
-
       pushProgress({ step: phaseStep('quality'), label: `正在质检 ${stepLabel}…`, done: false, error: false })
       try {
         const qualityRes = await aiApi.qualityCheck(projectId, {
@@ -125,38 +113,6 @@ export async function runContinueChapters(
         })
         const refreshedChapter = await chaptersApi.get(projectId, chapterId)
         upsertChapter(refreshedChapter.data)
-
-        // 质检通过阈值后才解析稿末索引入库，避免低分稿污染 ChapterIndex
-        if (indexMarkdown && Number.isFinite(score) && score >= minOverallScore) {
-          pushProgress({ step: phaseStep('index'), label: `正在写入 ChapterIndex ${stepLabel}…`, done: false, error: false })
-          try {
-            const parsed = parseChapterIndexMarkdown(indexMarkdown)
-            const chapter_index = parsed ?? fallbackChapterIndexFromRawMarkdown(indexMarkdown)
-            await aiApi.chapterDebrief(projectId, {
-              chapter_id: chapterId,
-              chapter_index,
-              apply_source: 'queue_auto',
-              model_profile: modelProfile,
-              ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}),
-            })
-            indexPersistedFromDraft = true
-            pushProgress({ step: phaseStep('index'), label: `✓ 索引已从流式稿末解析入库（质检 ${score.toFixed(1)} ≥ ${minOverallScore}）`, done: true, error: false })
-          } catch (e: any) {
-            pushProgress({
-              step: phaseStep('index'),
-              label: `索引解析入库失败：${formatApiError(e)}`,
-              done: true,
-              error: true,
-            })
-          }
-        } else if (indexMarkdown && Number.isFinite(score) && score < minOverallScore) {
-          pushProgress({
-            step: phaseStep('index'),
-            label: `跳过索引入库（质检 ${score.toFixed(1)} < 阈值 ${minOverallScore}，重写通过后再入库）`,
-            done: true,
-            error: false,
-          })
-        }
       } catch (e: any) {
         pushProgress({
           step: phaseStep('quality'),
@@ -166,21 +122,19 @@ export async function runContinueChapters(
         })
       }
 
-      pushProgress({ step: phaseStep('debrief'), label: `正在复盘并写入 ChapterIndex ${stepLabel}…`, done: false, error: false })
+      pushProgress({ step: phaseStep('debrief'), label: `正在复盘并写入线索页（情节档案/伏笔）${stepLabel}…`, done: false, error: false })
       try {
         const applied = await autoCommitGeneratedChapterDebrief(
           projectId,
           chapterId,
           modelProfile,
           llmProviderId,
-          { omitChapterIndex: indexPersistedFromDraft },
         )
         if (applied.debriefPreview && typeof applied.debriefPreview === 'object') {
           useAppStore.getState().setQueueDebriefUiSnapshot(chapterId, applied.debriefPreview as Record<string, unknown>)
         }
         markChapterDebriefCommitted(chapterId)
-        const indexLabel =
-          applied.chapterIndexSaved || indexPersistedFromDraft ? 'ChapterIndex 已写入' : 'ChapterIndex 未更新'
+        const indexLabel = applied.chapterIndexSaved ? '情节档案已写入' : '情节档案未更新'
         pushProgress({
           step: phaseStep('debrief'),
           label: `✓ 复盘完成：${applied.characterCount} 个人物/${applied.storylineCount} 条故事线/${applied.memoryCount} 条记忆，${indexLabel}`,

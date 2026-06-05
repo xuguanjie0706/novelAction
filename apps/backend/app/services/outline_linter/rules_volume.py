@@ -183,13 +183,15 @@ def _lint_opening_contract(chapters: list[ChapterSnapshot]) -> list[LinterIssue]
             ))
 
     ch5 = next((ch for ch in chapters if ch.chapter_number == 5), None)
-    if ch5 and "埋[" not in ch5.ex_str("foreshadow"):
+    from app.services.outline_linter.helpers import chapter_has_foreshadow_lay
+
+    if ch5 and not chapter_has_foreshadow_lay(ch5):
         issues.append(LinterIssue(
             rule_id="OC-03",
             severity="high",
             scope="volume",
-            message="第5章未埋设长线伏笔（伏笔字段须含「埋[…]」）",
-            suggestion="按开局规划在第5章埋下跨卷伏笔，使用 埋[内容|主题:关联] 格式",
+            message="第5章未埋设长线伏笔（foreshadow_ops 须含 op=lay）",
+            suggestion="按开局规划在第5章埋下跨卷伏笔：foreshadow_ops 增加 {\"op\":\"lay\",\"name\":\"…\",\"theme\":\"…\"}",
             chapter_number_in_volume=5,
             node_id=ch5.id,
         ))

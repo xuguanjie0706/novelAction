@@ -19,6 +19,7 @@ import { useNavigate } from 'react-router-dom'
 import { Loader2, Maximize2, Minimize2, Sparkles, X } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
+import { authFetch } from '../../api/authFetch'
 import { llmApi, projectsApi } from '../../api/client'
 import type { LlmOverview } from '../../types'
 import { llmProviderIdFromRoute, modelProfileFromRoute, useAppStore } from '../../store'
@@ -722,13 +723,25 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                 errorMsg={errorMsg}
                 haltedStep={haltedStep}
                 retryLoading={retryLoading}
-                onRetryStep={() => {
+                onRetryStep={async () => {
                   const step = haltedStep ?? selectedStepKey
-                  if (!step) return
-                  // 番茄线卷纲失败时 run 可能已是 done，resume 会 409 → 改走单步 regenerate
-                  if (phase === 'done' && projectId) {
+                  if (!step || !projectId) return
+                  // run 已 done 时 resume 会 409，改走单步 regenerate
+                  if (phase === 'done') {
                     void triggerRegen(step, projectId, resumeParams)
                     return
+                  }
+                  if (runId) {
+                    try {
+                      const res = await authFetch(`/api/v1/bootstrap/runs/${runId}`)
+                      if (res.ok) {
+                        const run = (await res.json()) as { status?: string }
+                        if (run.status === 'done') {
+                          void triggerRegen(step, projectId, resumeParams)
+                          return
+                        }
+                      }
+                    } catch { /* 回落 retryFailedStep */ }
                   }
                   void retryFailedStep(step, resumeParams)
                 }}
@@ -739,7 +752,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                     ...updated,
                   }))
                 }
-                onRegen={phase === 'done' && projectId
+                onRegen={projectId
                   ? (step) => void triggerRegen(step, projectId, resumeParams)
                   : undefined}
                 regenStep={regenStep}

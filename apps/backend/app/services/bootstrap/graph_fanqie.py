@@ -1,31 +1,34 @@
 """
 graph_fanqie.py — 番茄小说专属 Bootstrap LangGraph（重构版）
 
-拓扑（与通用线对齐，补全所有缺失步骤）：
+拓扑（精简后，约10次 LLM 调用，较原版减少约40%）：
   Phase A  番茄算法定位
     fanqie_positioning → gate → project
-  Phase B  番茄创意设计（无通用等价）
-    → contrast_design → golden_finger → face_slap_map → power_ladder → ctx_bridge
+  Phase B  番茄爽文公式（合并步骤，原三步→一次调用）
+    → fanqie_formula（contrast+golden_finger+face_slap_map）→ power_ladder → ctx_bridge
   Phase C  世界构建（复用通用步骤函数）
     → factions → storylines → antagonist_ladder
     → characters → gate_characters
-    → skills_items → settings
+    → skills_items → settings（精简为3张核心卡）
   Phase D  卷级结构
     → volumes → gate_volumes
   Phase E  节奏 + 情绪
-    → emotion_villain → rhythm_map
+    → emotion_villain → rhythm_map（rule-based chapter_tags + LLM story_buffer）
   Phase F  记忆 / 伏笔 / 承诺
-    → memory_relations → core_mysteries → opening_contract
+    → memory_relations → promise_seeds（core_mysteries+opening_contract 合并）
   Phase G  校验
-    → consistency_scan → signal_audit（最后一步，emits complete）
+    → signal_audit（含 consistency_issues，移除独立 consistency_scan）
     → END
 
-设计原则：
-- 通用步骤（factions/storylines/...）直接复用 graph_nodes / graph_gates，
-  自动继承 writing_style=plain 和番茄 ctx，不另写 prompt。
-- 只有需要与番茄 ctx 深度集成的步骤（positioning / gate / volumes / signal_audit）
-  才在本文件内独立实现。
-- 代码红线：本文件 ≤ 600 行。
+精简决策（2026-06）：
+- Phase B 合并：contrast/golden_finger/face_slap_map 三步→一次调用（-2 LLM）
+- rhythm_map chapter_tags 改为规则生成，LLM 只跑 story_buffer（-0.8 LLM）
+- core_mysteries + opening_contract 合并为 promise_seeds（-1 LLM）
+- consistency_scan 移除（signal_audit 已输出 consistency_issues）（-1 LLM）
+
+通用步骤（factions/storylines/...）直接复用 graph_nodes / graph_gates，
+自动继承 writing_style=plain 和番茄 ctx，不另写 prompt。
+代码红线：本文件 ≤ 600 行。
 """
 from __future__ import annotations
 
@@ -55,6 +58,15 @@ logger = logging.getLogger(__name__)
 # 通用薄步骤执行器（Fanqie 版）
 # ──────────────────────────────────────────────────────
 
+def _fanqie_step_result_ok(result) -> tuple[bool, int]:
+    """判断步骤产物是否有效；返回 (是否成功, 用于 step_done 的 count)。"""
+    if isinstance(result, list):
+        return len(result) > 0, len(result)
+    if isinstance(result, dict):
+        return bool(result), (1 if result else 0)
+    return bool(result), (1 if result else 0)
+
+
 async def _fanqie_step(
     state: BootstrapState,
     config: dict | None,
@@ -64,34 +76,44 @@ async def _fanqie_step(
     *,
     needs_project: bool = True,
 ) -> dict:
-    """emit start → fn(svc, project, ctx) → emit done；超时/异常跳过不中断图。"""
+    """emit start → fn → emit done；失败则 interrupt 等待用户 retry_step（与同人线一致）。"""
+    from app.services.bootstrap.step_failure import pause_for_step_retry, user_wants_step_retry
+    from app.services.llm_errors import format_llm_error_message
+
     config = _resolve_config(config)
     db = config["configurable"]["db"]
     run_id = _state_run_id(state, config)
     svc = _make_svc(config)
-    emit(run_id, "step_start", db, step=step, label=label)
     ctx = dict(state.get("ctx") or {})
     project = None
     if needs_project:
         project = db.query(Project).filter(Project.id == state.get("project_id")).first()
-    try:
-        if needs_project:
-            result = await asyncio.wait_for(fn(svc, project, ctx), timeout=300.0)
+
+    while True:
+        emit(run_id, "step_start", db, step=step, label=label)
+        try:
+            if needs_project:
+                result = await asyncio.wait_for(fn(svc, project, ctx), timeout=300.0)
+            else:
+                result = await asyncio.wait_for(fn(svc, ctx), timeout=300.0)
+        except BootstrapStepError as exc:
+            msg = str(exc)
+        except asyncio.TimeoutError:
+            msg = f"{step} 超时（5 分钟），请重试或检查模型线路"
+        except Exception as exc:
+            msg = f"{step} 失败：{format_llm_error_message(exc)}"
+            logger.warning("fanqie step %s failed: %s", step, exc)
         else:
-            result = await asyncio.wait_for(fn(svc, ctx), timeout=300.0)
-    except BootstrapStepError as exc:
-        emit(run_id, "error", db, step=step, message=str(exc))
-        raise
-    except asyncio.TimeoutError:
-        emit(run_id, "error", db, step=step, message=f"{step} 超时")
-        raise RuntimeError(f"[{step}] 超时") from None
-    except Exception as exc:
-        emit(run_id, "error", db, step=step, message=f"{step} 失败：{exc}")
-        logger.warning("fanqie step %s failed: %s", step, exc)
-        raise
-    count = len(result) if isinstance(result, list) else (1 if result else 0)
-    emit(run_id, "step_done", db, step=step, count=count)
-    return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": [step]}
+            ok, count = _fanqie_step_result_ok(result)
+            if ok:
+                emit(run_id, "step_done", db, step=step, count=count)
+                return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": [step]}
+            msg = f"{step} 生成结果为空，请重试或更换模型线路"
+
+        user = await pause_for_step_retry(state, config, step=step, message=msg, ctx=ctx)
+        if user_wants_step_retry(user):
+            continue
+        return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": step, "reason": msg}]}
 
 
 # ──────────────────────────────────────────────────────
@@ -188,20 +210,13 @@ async def node_project(state: BootstrapState, config: dict | None = None) -> dic
 
 
 # ──────────────────────────────────────────────────────
-# Phase B：番茄创意设计
+# Phase B：番茄爽文公式（合并步骤）
 # ──────────────────────────────────────────────────────
 
-async def node_contrast(s, c=None):
-    from app.services.bootstrap.steps.fanqie.contrast_design import gen_contrast_design
-    return await _fanqie_step(s, c, "contrast_design", "设计主角落差（越惨越爽）...", gen_contrast_design)
-
-async def node_golden_finger(s, c=None):
-    from app.services.bootstrap.steps.fanqie.golden_finger import gen_golden_finger
-    return await _fanqie_step(s, c, "golden_finger", "设计金手指工程...", gen_golden_finger)
-
-async def node_face_slap(s, c=None):
-    from app.services.bootstrap.steps.fanqie.face_slap_map import gen_face_slap_map
-    return await _fanqie_step(s, c, "face_slap_map", "规划打脸地图...", gen_face_slap_map)
+async def node_fanqie_formula(s, c=None):
+    """一次调用完成落差设计 + 金手指工程 + 打脸地图（原三步合并）。"""
+    from app.services.bootstrap.steps.fanqie.fanqie_formula import gen_fanqie_formula
+    return await _fanqie_step(s, c, "fanqie_formula", "设计爽文公式（落差+金手指+打脸地图）...", gen_fanqie_formula)
 
 async def node_power_ladder(s, c=None):
     from app.services.bootstrap.steps.fanqie.power_ladder import gen_power_ladder
@@ -266,21 +281,23 @@ async def node_skills_items(state: BootstrapState, config: dict | None = None) -
     return await _si(state, config)
 
 async def node_settings(state: BootstrapState, config: dict | None = None) -> dict:
-    """番茄版设定卡：仅生成 8 张与打脸/成长路径强相关的核心卡，不生成深度世界观。"""
+    """番茄版设定卡：仅生成 3 张直接影响场景和打脸的核心卡。
+
+    番茄读者不看深度世界观；只保留「主角起点生存环境」「世界底层规则」
+    「资源经济与稀缺机制」三张，其余略去节省 LLM token 和生成时间。
+    """
     from app.services.bootstrap.steps.settings import gen_settings
     from app.services.bootstrap.prompts.blueprints import GEMINI_SETTING_BLUEPRINTS
 
-    # 番茄读者不看深度世界观；只保留直接影响场景/打脸的 8 张核心卡
-    _KEEP = {"作品立意", "世界底层规则", "时代格局与阶层结构", "主角起点生存环境",
-             "开篇城镇与日常空间", "资源经济与稀缺机制", "宗门礼法与等级称谓", "交易习惯与黑市规矩"}
+    _KEEP = {"主角起点生存环境", "世界底层规则", "资源经济与稀缺机制"}
     fanqie_blueprints = [bp for bp in GEMINI_SETTING_BLUEPRINTS if bp.get("title") in _KEEP]
     if not fanqie_blueprints:
-        fanqie_blueprints = GEMINI_SETTING_BLUEPRINTS[:8]
+        fanqie_blueprints = GEMINI_SETTING_BLUEPRINTS[:3]
 
     async def _gen(svc, project, ctx):
         return await gen_settings(svc, project, ctx, blueprints=fanqie_blueprints)
 
-    return await _fanqie_step(state, config, "settings", "生成世界观设定卡（极简版）...", _gen)
+    return await _fanqie_step(state, config, "settings", "生成世界观设定卡（番茄精简版，3张）...", _gen)
 
 
 # ──────────────────────────────────────────────────────
@@ -347,44 +364,24 @@ async def node_memory_relations(state: BootstrapState, config: dict | None = Non
     from app.services.bootstrap.graph_nodes import node_memory_relations as _mr
     return await _mr(state, config)
 
-async def node_core_mysteries(s, c=None):
-    from app.services.bootstrap.steps.core_mysteries import gen_core_mysteries
-    return await _fanqie_step(s, c, "core_mysteries", "预分配全书核心谜题...", gen_core_mysteries)
-
-async def node_opening_contract(s, c=None):
-    from app.services.bootstrap.steps.opening_contract import gen_opening_contract
-    return await _fanqie_step(s, c, "opening_contract", "规划开局追读承诺...", gen_opening_contract)
+async def node_promise_seeds(s, c=None):
+    """一次调用完成核心谜题预置 + 开局追读承诺（原两步合并）。"""
+    from app.services.bootstrap.steps.fanqie.promise_seeds import gen_promise_seeds
+    return await _fanqie_step(s, c, "promise_seeds", "预置谜题钩子 + 开局追读承诺...", gen_promise_seeds)
 
 
 # ──────────────────────────────────────────────────────
 # Phase G：校验
+# signal_audit 已在内部写入 consistency_issues，无需独立 consistency_scan。
 # ──────────────────────────────────────────────────────
-
-async def node_consistency_scan(state: BootstrapState, config: dict | None = None) -> dict:
-    """一致性扫描（不 emit complete，由 signal_audit 最后发出）。"""
-    config = _resolve_config(config)
-    db = config["configurable"]["db"]
-    run_id = _state_run_id(state, config)
-    svc = _make_svc(config)
-    ctx = dict(state.get("ctx") or {})
-    project = db.query(Project).filter(Project.id == state.get("project_id")).first()
-    emit(run_id, "step_start", db, step="consistency", label="全局一致性扫描...")
-    try:
-        issues = await asyncio.wait_for(
-            svc._gen_consistency_scan(project, ctx), timeout=240.0,
-        )
-        emit(run_id, "step_done", db, step="consistency", count=len(issues),
-             preview=f"发现{len(issues)}处需确认项" if issues else "无明显矛盾")
-    except Exception as exc:
-        emit(run_id, "error", db, step="consistency", message=f"一致性扫描失败（已跳过）：{exc}")
-    return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": ["consistency"]}
-
 
 async def node_audit(state: BootstrapState, config: dict | None = None) -> dict:
     """番茄算法双校验（最后一步，完成后 emit complete）。"""
     from app.services.bootstrap.steps.fanqie.signal_audit import gen_signal_audit
 
     patch = await _fanqie_step(state, config, "signal_audit", "执行番茄算法双校验...", gen_signal_audit)
+    if patch.get("errors"):
+        return patch
 
     config = _resolve_config(config)
     db = config["configurable"]["db"]

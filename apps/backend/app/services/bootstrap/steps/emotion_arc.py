@@ -24,6 +24,7 @@ from typing import Any
 from app.services.bootstrap.narrative_arc_gen import (
     call_json_array_with_retry,
     persist_extra_arc,
+    write_emotion_arc_ctx,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,13 +100,5 @@ async def gen_emotion_arc(
     if persist:
         persist_extra_arc(svc, project, "emotion_arc", arc)
 
-    # ctx 摘要（供章纲 prompt 引用）
-    if arc:
-        ctx["emotion_arc"] = arc
-        parts = []
-        for i, v in enumerate(arc):
-            title = v.get("vol_title") or f"卷{v.get('vol_index', i)}"
-            parts.append(f"{title}({v.get('net_balance','?')},{v.get('dominant_emotion','?')})")
-        ctx["emotion_arc_summary"] = " | ".join(parts)
-
+    write_emotion_arc_ctx(ctx, arc)
     return arc

@@ -5,7 +5,12 @@ from __future__ import annotations
 import uuid
 
 from app.models import Foreshadow
-from app.services.bootstrap.foreshadow_sync import _title_from_text
+from app.services.bootstrap.foreshadow_sync import (
+    _RE_HEAT,
+    _RE_LAY,
+    _RE_RESOLVE,
+    _title_from_text,
+)
 
 
 def test_foreshadow_constructor_accepts_extra():
@@ -25,6 +30,15 @@ def test_foreshadow_constructor_accepts_extra():
     )
     assert fs.extra["theme_note"] == "主角身世"
     assert fs.extra["heat_log"] == []
+
+
+def test_foreshadow_op_regex_supports_common_brackets():
+    """章纲五要素常见括号形态均应可解析。"""
+    assert _RE_LAY.search("埋[神秘玉佩|主题:主角身世]").group(1) == "神秘玉佩|主题:主角身世"
+    assert _RE_LAY.search("埋＜测试＞").group(1) == "测试"
+    assert _RE_LAY.search("埋【青印线索】").group(1) == "青印线索"
+    assert _RE_HEAT.search("加热[FM-01+主角追问]").group(1) == "FM-01+主角追问"
+    assert _RE_RESOLVE.search("收[FM-01+真相揭晓]").group(1) == "FM-01+真相揭晓"
 
 
 def test_title_from_text_truncates_long_description():

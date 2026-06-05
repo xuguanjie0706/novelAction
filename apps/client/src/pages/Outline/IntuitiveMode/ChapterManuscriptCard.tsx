@@ -2,8 +2,13 @@
  * @file 直观模式 · 单章稿纸卡片（左侧连续阅读）
  */
 import { forwardRef } from 'react'
-import { Clock, Flame, Zap, AlertTriangle } from 'lucide-react'
+import { Clock, Flame, Zap, AlertTriangle, GitBranch } from 'lucide-react'
 import clsx from 'clsx'
+import {
+  foreshadowOpChipMeta,
+  formatForeshadowOpSummary,
+  resolveChapterForeshadowOps,
+} from '../../../utils/foreshadowOpsDisplay'
 import type { IntuitiveChapterRow } from './intuitiveTypes'
 
 const PACING_LABEL: Record<string, string> = {
@@ -32,6 +37,7 @@ const ChapterManuscriptCard = forwardRef<HTMLElement, Props>(function ChapterMan
   const coreEvent = (extra.core_event as string) || ''
   const obstacle = (extra.obstacle as string) || node.conflict || ''
   const hookEnd = node.hook || (extra.chapter_end_hook as string) || ''
+  const foreshadowOps = resolveChapterForeshadowOps(node)
 
   const accent =
     hasCritical ? 'border-l-red-500' :
@@ -142,6 +148,29 @@ const ChapterManuscriptCard = forwardRef<HTMLElement, Props>(function ChapterMan
             <Flame size={11} className="shrink-0 mt-0.5 text-indigo-400" />
             <span>代价 · {choiceCost}</span>
           </p>
+        )}
+
+        {foreshadowOps.length > 0 && (
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
+            <span className="inline-flex items-center gap-0.5 text-[10px] text-stone-400 mr-0.5">
+              <GitBranch size={10} /> 伏笔
+            </span>
+            {foreshadowOps.map((op, i) => {
+              const meta = foreshadowOpChipMeta(op)
+              return (
+                <span
+                  key={`fs-${i}`}
+                  title={formatForeshadowOpSummary(op)}
+                  className={clsx(
+                    'text-[10px] px-1.5 py-0.5 rounded-md border max-w-[200px] truncate',
+                    meta.className,
+                  )}
+                >
+                  {meta.label} · {formatForeshadowOpSummary(op)}
+                </span>
+              )
+            })}
+          </div>
         )}
 
         {hookEnd && (

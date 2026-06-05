@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────
 bootstrap_graph = None  # type: ignore[assignment]
 fanqie_graph = None     # type: ignore[assignment]
+fanfic_graph = None     # type: ignore[assignment]
 _pg_pool = None         # AsyncConnectionPool，供优雅关闭使用
 
 

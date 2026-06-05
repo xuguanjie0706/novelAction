@@ -1,4 +1,5 @@
 """rhythm_map → pacing_skeleton 压缩与修复单测。"""
+from app.services.bootstrap.steps.fanqie.rhythm_map import _build_story_buffer_by_rule
 from app.services.bootstrap.rhythm_pacing import (
     apply_rhythm_to_pacing_skeleton,
     build_pacing_skeleton_from_tags,
@@ -78,6 +79,39 @@ def test_apply_preserves_semantic_skeleton():
     tags = _user_example_tags()
     assert refresh_opening_volume_pacing_skeleton(semantic, tags) == semantic
     assert apply_rhythm_to_pacing_skeleton(semantic, tags) == semantic
+
+
+def test_build_story_buffer_by_rule_from_face_slap_targets():
+    ctx = {
+        "face_slap_map": {
+            "targets": [
+                {
+                    "name": "赵凌霄",
+                    "chapter_estimate": "约第10章",
+                    "slap_type": "武力碾压",
+                    "slap_scene": "当众击败赵凌霄",
+                },
+                {
+                    "name": "厉九幽",
+                    "chapter_estimate": "第25章",
+                    "slap_type": "财富碾压",
+                    "slap_scene": "砸钱压服厉九幽",
+                },
+                {
+                    "name": "楚惊鸿",
+                    "chapter_estimate": "40",
+                    "slap_type": "感情反转",
+                    "slap_scene": "反转楚惊鸿态度",
+                },
+            ],
+        },
+        "golden_finger": {"upgrade_stages": [{"name": "初觉醒", "chapter_range": "第5章"}]},
+    }
+    buffers = _build_story_buffer_by_rule(ctx)
+    assert 3 <= len(buffers) <= 5
+    types = {b["satisfaction_type"] for b in buffers}
+    assert len(types) >= 2
+    assert all(b.get("insertion_point") for b in buffers)
 
 
 def test_apply_replaces_mechanical_and_tag_style():

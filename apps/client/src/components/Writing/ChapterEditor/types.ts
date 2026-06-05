@@ -47,11 +47,23 @@ export type StorylinePreWarnItem = {
   storyline_name?: string
 }
 
+/** 写章前程序生成的情节锁定表（先于主编 LLM 预警） */
+export type ChapterLockTable = {
+  has_prev: boolean
+  prev_chapter_number?: number | string | null
+  current_chapter_number?: number | string | null
+  locked_beats?: string[]
+  forbidden_replays?: string[]
+  outline_conflicts?: Array<{ field?: string; outline_text?: string; reason?: string }>
+  prev_tail_anchor?: string
+}
+
 export type PreWriteWarnResult = {
   ok: boolean
   risk_count: number
   risks: Array<{ type: string; severity: string; description: string; suggested_fix: string }>
   reminders: string[]
+  chapter_lock_table?: ChapterLockTable
   /** 主角状态锁定：境界/位置/可用技能/持有道具/禁止项 */
   protagonist_fact_sheet?: {
     realm: string

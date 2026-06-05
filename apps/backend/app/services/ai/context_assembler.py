@@ -317,12 +317,38 @@ async def assemble_full(
     story_day_str = (outline_node.extra or {}).get("story_day", "") if outline_node else ""
     word_target_val = _resolve_word_target(outline_node)
 
-    # 境界快照：仅出场人物
-    realm_snapshot_value: dict = {
-        c.name: c.current_realm
-        for c in characters[:8]
-        if c.name and (c.current_realm or "").strip()
-    }
+    # 境界快照：仅出场人物（番茄线规范到主轴阶梯名，避免筑基等套话进入写章硬约束）
+    realm_snapshot_value: dict = {}
+    for c in characters[:8]:
+        if not c.name or not (c.current_realm or "").strip():
+            continue
+        realm_snapshot_value[c.name] = (c.current_realm or "").strip()
+    from app.services.bootstrap.fanqie_normalize import is_fanqie_project
+
+    if is_fanqie_project(project):
+        from app.models import PowerSystem
+        from app.routers.outline.helpers.realm_whitelist import build_realm_rank_map
+        from app.services.bootstrap.fanqie_realm_policy import (
+            normalize_realm_label_for_primary_axis,
+        )
+
+        pss = (
+            db.query(PowerSystem)
+            .filter(PowerSystem.project_id == project_id)
+            .order_by(PowerSystem.sort_order)
+            .all()
+        )
+        name_to_rank, _, _ = build_realm_rank_map(pss)
+        if name_to_rank:
+            sanitized: dict = {}
+            for c in characters[:8]:
+                if not c.name or not (c.current_realm or "").strip():
+                    continue
+                canonical, _ = normalize_realm_label_for_primary_axis(
+                    c.current_realm or "", name_to_rank,
+                )
+                sanitized[c.name] = canonical
+            realm_snapshot_value = sanitized
 
     return dict(
         chapter_title=chapter.title or "",

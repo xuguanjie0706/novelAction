@@ -1,6 +1,5 @@
 import { Button, Card, Empty, List, Select, Space, Tag, Typography } from 'antd'
-import { CHECK_LABELS } from '../constants'
-import { scoreTag } from '../utils'
+import { ChapterQualityDimensionsView } from '../../../components/ChapterQualityDimensionsView'
 import type { QualityReport } from '../../../types/review'
 
 type ChapterOption = { label: string; value: string }
@@ -49,28 +48,7 @@ export function ChapterQualityTab({
       ) : (
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <Card title={`总分：${qualityReport.overall_score ?? '-'} 分`}>
-            <Space wrap>
-              {Object.entries(qualityReport.dimensions || {}).map(([key, val]) => (
-                <Tag
-                  key={key}
-                  color={val.status === 'fail' ? 'red' : val.status === 'warning' ? 'orange' : 'blue'}
-                >
-                  {CHECK_LABELS[key] ?? key}：{val.score}
-                </Tag>
-              ))}
-            </Space>
-            {qualityReport.dimensions?.outline_alignment ? (
-              <Card
-                size="small"
-                style={{ marginTop: 12, background: '#fff7e6', borderColor: '#ffd591' }}
-                title="大纲匹配度专项"
-              >
-                <Space wrap>
-                  {scoreTag(qualityReport.dimensions.outline_alignment.score)}
-                  <Typography.Text>{qualityReport.dimensions.outline_alignment.comment}</Typography.Text>
-                </Space>
-              </Card>
-            ) : null}
+            <ChapterQualityDimensionsView dimensions={qualityReport.dimensions} />
             <Typography.Paragraph style={{ marginTop: 12, marginBottom: 0 }}>
               {qualityReport.summary || '暂无总结'}
             </Typography.Paragraph>

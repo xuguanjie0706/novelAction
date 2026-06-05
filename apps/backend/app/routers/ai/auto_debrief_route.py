@@ -165,6 +165,12 @@ async def auto_debrief(
     project = db.query(Project).filter(Project.id == project_id).first()
     project_genre = project.genre if project else None
 
+    from app.services.bootstrap.fanqie_realm_policy import (
+        build_fanqie_realm_discipline_for_project,
+    )
+
+    realm_discipline = build_fanqie_realm_discipline_for_project(db, project_id)
+
     result = await svc.auto_extract_debrief(
         chapter_content=narrative_plain,
         chapter_title=chapter.title,
@@ -174,6 +180,7 @@ async def auto_debrief(
         open_promises=open_promises_data,
         genre=project_genre,
         writing_style=resolve_project_writing_style(project),
+        realm_discipline_block=realm_discipline,
     )
     if isinstance(result, dict) and not result.get("error"):
         fpt = result.get("fulfilled_promise_texts") or []

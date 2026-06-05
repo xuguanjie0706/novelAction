@@ -34,6 +34,8 @@ const DIMENSION_LABELS: Record<string, string> = {
   storyline_tension_fit: '张力曲线',
   storyline_screen_balance: '戏份均衡',
   realm_check: '境界体系',
+  readability: '可读性',
+  craft_discipline: '反AI味',
 }
 
 function chapterPlainTextLen(ch: Chapter): number {

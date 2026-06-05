@@ -51,13 +51,15 @@ export default function NodeDetailPanel({
    */
   initialTab?: 'overview' | 'quality' | 'chapters' | 'chapter' | 'scene' | 'ai'
 }) {
-  const { characters, storyLines } = useAppStore()
+  const { characters, storyLines, outlineTree } = useAppStore()
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [activeTab, setActiveTab] = useState<'overview' | 'quality' | 'chapters' | 'chapter' | 'scene' | 'ai'>('overview')
   /** 章节清单 Tab 中展开 linter 详情的章号（1-based） */
   const [expandedLintChapter, setExpandedLintChapter] = useState<number | null>(null)
-  const [volumeForm, setVolumeForm] = useState<VolumeDirectorForm>(() => volumeDirectorFormFromNode(node))
+  const [volumeForm, setVolumeForm] = useState<VolumeDirectorForm>(() =>
+    volumeDirectorFormFromNode(node, { allVolumes: outlineTree }),
+  )
   const [form, setForm] = useState({
     title: node.title ?? '',
     summary: node.summary ?? '',
@@ -79,7 +81,7 @@ export default function NodeDetailPanel({
     const resolved = (initialTab === ('linter' as string)) ? 'quality' : (initialTab ?? 'overview')
     setActiveTab(resolved as 'overview' | 'quality' | 'chapters' | 'chapter' | 'scene' | 'ai')
     // 重置表单（包含 P2 新字段）
-    setVolumeForm(volumeDirectorFormFromNode(node))
+    setVolumeForm(volumeDirectorFormFromNode(node, { allVolumes: outlineTree }))
     setForm({
       title: node.title ?? '',
       summary: node.summary ?? '',
@@ -350,6 +352,7 @@ export default function NodeDetailPanel({
           editing={editing}
           form={volumeForm}
           setForm={setVolumeForm}
+          allVolumes={outlineTree}
         />
       )}
 

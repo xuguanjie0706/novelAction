@@ -12,8 +12,9 @@ from __future__ import annotations
 from typing import Any
 
 from app.models import Project
-from app.services.bootstrap.parse import parse_json
-from app.services.llm_token_budgets import max_tokens_bootstrap_completion
+from app.services.bootstrap.steps.fanqie._json_once import call_fanqie_json_once
+
+_STEP = "power_ladder"
 
 
 async def gen_power_ladder(svc: Any, project: Project, ctx: dict) -> dict:
@@ -63,40 +64,37 @@ async def gen_power_ladder(svc: Any, project: Project, ctx: dict) -> dict:
 4. 禁止输出超过5行的背景介绍（这是世界架构，不是世界观章节）
 5. 只返回 JSON"""
 
-    last_err = ""
-    for attempt in range(3):
-        fix = f"\n【请修正：{last_err}】" if last_err else ""
-        raw = await svc._call_with_retry(
-            system, prompt + fix,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.positioning",
-        )
-        try:
-            data = parse_json(raw)
-        except Exception:
-            last_err = "JSON 解析失败"
-            continue
+    def _validate(data: Any) -> str | None:
         if not isinstance(data, dict):
-            last_err = "须为 JSON 对象"
-            continue
+            return "须为 JSON 对象"
         if not data.get("world_core_rule"):
-            last_err = "world_core_rule 不能为空"
-            continue
+            return "world_core_rule 不能为空"
         ladder = data.get("social_ladder")
         if not isinstance(ladder, list) or len(ladder) < 3:
-            last_err = "social_ladder 至少需要 3 层"
-            continue
+            return "social_ladder 至少需要 3 层"
+        return None
 
-        extra = dict(project.extra or {})
-        extra["power_ladder"] = data
-        # 兼容：把 world_core_rule 写入 world_overview，供通用步骤读取
-        if not project.world_overview:
-            project.world_overview = data.get("world_core_rule", "")
-        project.extra = extra
-        svc.db.commit()
+    data = await call_fanqie_json_once(
+        svc,
+        step=_STEP,
+        system=system,
+        prompt=prompt,
+        task="bootstrap.positioning",
+        validate=_validate,
+    )
 
-        ctx["power_ladder"] = data
-        ctx["world_overview"] = project.world_overview
-        return data
+    extra = dict(project.extra or {})
+    extra["power_ladder"] = data
+    if not project.world_overview:
+        project.world_overview = data.get("world_core_rule", "")
+    project.extra = extra
+    svc.db.commit()
 
-    return {}
+    ctx["power_ladder"] = data
+    ctx["world_overview"] = project.world_overview
+    from app.services.bootstrap.fanqie_normalize import sync_power_ladder_to_power_system
+    from app.services.bootstrap.fanqie_realm_policy import hydrate_fanqie_power_ctx
+
+    hydrate_fanqie_power_ctx(ctx)
+    sync_power_ladder_to_power_system(svc.db, project)
+    return data

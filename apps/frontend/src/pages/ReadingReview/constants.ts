@@ -1,3 +1,5 @@
+import { CHAPTER_QUALITY_DIMENSION_LABELS } from '../../constants/chapterQualityDimensions'
+
 /** 单章 / 连贯性评测维度键名 */
 export const CHECK_TYPES = [
   'plot',
@@ -10,18 +12,12 @@ export const CHECK_TYPES = [
   'emotional_resonance',
   'subscribe_intent',
   'craft_discipline',
+  'realm_check',
+  'readability',
 ] as const
 
 export const CHECK_LABELS: Record<string, string> = {
-  plot: '情节推进',
-  character: '人物一致',
-  setting_consistency: '设定一致',
-  pacing: '节奏控制',
-  hooks: '悬念钩子',
-  outline_alignment: '大纲匹配度',
-  face_slap_payoff: '打脸兑现',
-  emotional_resonance: '情感共鸣',
-  subscribe_intent: '追读意愿',
+  ...CHAPTER_QUALITY_DIMENSION_LABELS,
   craft_discipline: '反AI味(视角/铺垫/设定)',
 }
 

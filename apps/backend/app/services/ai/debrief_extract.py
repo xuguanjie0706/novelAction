@@ -66,6 +66,7 @@ class DebriefMixin:
         open_promises: List[dict] = [],  # [{"id":…,"promise_text":…,"promise_type":…,"source_chapter_number":…,"priority":…}]
         genre: str | None = None,
         writing_style: str = "standard",
+        realm_discipline_block: str = "",
     ) -> dict:
         """
         AI 读取章节正文，对照人物当前状态和故事线，
@@ -169,6 +170,7 @@ realm_rank 若填写必须与上方人物列表所属力量体系 levels 的 ran
 C级临时资产（一次性丹药、普通符箓、无名小队、普通招式）不要放进 asset_updates，只可在正文或 memory_updates 中作为事件细节出现。
 记忆库记录"第几章发生了什么、信息来源是什么、为何获得/使用/暴露该资产"；资产表记录"这个实体现在是什么、谁持有/掌握、能力/限制/状态是什么"。两者不要互相替代。
 {naming_block}
+{realm_discipline_block}
 `character_updates.current_status` 只能填写以下枚举之一：
 - alive
 - dead

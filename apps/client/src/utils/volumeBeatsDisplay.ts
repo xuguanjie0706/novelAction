@@ -2,6 +2,11 @@
  * 卷级导演单（Step 9 beat_highlights / volume_climax）展示与解析。
  */
 import type { OutlineNode } from '../types'
+import {
+  chapterStartForVolume,
+  formatVolumeChapterLabel,
+  shiftPacingSkeletonDisplay,
+} from './volumeChapterStarts'
 
 export interface VolumeBeatHighlight {
   chapter_hint: number
@@ -44,6 +49,14 @@ export interface VolumeDirectorData {
   /** 旧版数据：无 director 节拍时 hook 曾用作本卷追读悬念 */
   legacyReaderHook: string
   hasDirectorBeats: boolean
+  /** 本卷第 1 章对应的全书章号（extra.chapter_start_global 或由全书卷列表推算） */
+  chapterStartGlobal: number
+  /** 节奏骨架展示文案（已换算全书章号，非编辑用原文） */
+  pacingSkeletonDisplay: string
+}
+
+export function formatBeatChapterHint(local: number, chapterStartGlobal: number): string {
+  return formatVolumeChapterLabel(local, chapterStartGlobal)
 }
 
 export const PHASE_LABEL: Record<string, string> = {
@@ -95,8 +108,12 @@ export function formatProtagonistRealmRange(start?: string, end?: string): strin
 }
 
 /** 从 OutlineNode 解析卷级导演单展示数据。 */
-export function parseVolumeDirector(vol: OutlineNode): VolumeDirectorData {
+export function parseVolumeDirector(
+  vol: OutlineNode,
+  options?: { allVolumes?: OutlineNode[] },
+): VolumeDirectorData {
   const extra = vol.extra ?? {}
+  const chapterStartGlobal = chapterStartForVolume(vol, options?.allVolumes)
   const beatHighlights = asBeatList(extra.beat_highlights)
   const volumeClimax = asRecord(extra.volume_climax) as VolumeClimaxBeat
   const climaxDesc = (
@@ -138,6 +155,8 @@ export function parseVolumeDirector(vol: OutlineNode): VolumeDirectorData {
     nextVolumeHook: hasDirectorBeats ? hook : '',
     legacyReaderHook,
     hasDirectorBeats,
+    chapterStartGlobal,
+    pacingSkeletonDisplay: shiftPacingSkeletonDisplay(pacingSkeleton, chapterStartGlobal),
   }
 }
 

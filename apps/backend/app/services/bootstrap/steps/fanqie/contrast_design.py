@@ -2,29 +2,32 @@
 
 番茄核心公式：越惨越爽。
 主角的初始耻辱感越具体、越可视化，金手指激活后的爽感就越强。
-
-设计约束：
-- 初始状态必须「一句话能说清楚」且「听完想骂人（替主角不值）」
-- 触发事件必须在第一章 800 字内发生，不允许铺垫超过两页
-- 落差系数 = 终态地位 / 初始状态，番茄要求视觉上 ≥ 10x
 """
 from __future__ import annotations
 
 from typing import Any
 
 from app.models import Project
-from app.services.bootstrap.parse import parse_json
-from app.services.llm_token_budgets import max_tokens_bootstrap_completion
+from app.services.bootstrap.steps.fanqie._json_once import call_fanqie_json_once
+
+_STEP = "contrast_design"
+
+
+def _validate_contrast(data: Any) -> str | None:
+    if not isinstance(data, dict):
+        return "须为 JSON 对象"
+    required = {"protagonist_name", "initial_state_headline", "trigger_event", "final_destination"}
+    if missing := required - data.keys():
+        return f"缺少字段：{missing}"
+    if not (data.get("protagonist_name") or "").strip():
+        return "protagonist_name 不能为空"
+    if not data.get("initial_state_headline"):
+        return "initial_state_headline 不能为空"
+    return None
 
 
 async def gen_contrast_design(svc: Any, project: Project, ctx: dict) -> dict:
-    """
-    生成落差工程：主角初始耻辱状态 + 金手指触发事件设计。
-
-    产物写入 Project.extra['contrast_design'] 并缓存到 ctx。
-
-    @returns contrast_design dict
-    """
+    """生成落差工程：主角初始耻辱状态 + 金手指触发事件设计。"""
     system = "你是番茄小说开局设计专家。只返回 JSON，不要解释文字。"
     fanqie_pos = ctx.get("fanqie_positioning") or {}
     archetype = fanqie_pos.get("genre_archetype", "")
@@ -39,6 +42,7 @@ async def gen_contrast_design(svc: Any, project: Project, ctx: dict) -> dict:
 
 返回 JSON：
 {{
+  "protagonist_name": "全书POV主角姓名（2~4字，后文所有步骤须沿用此名，禁止另造萧凡/萧炎式替身名）",
   "initial_state_headline": "一句话概括主角当前处境（必须含具体身份+具体羞辱事件，如：'上门女婿，被丈母娘当众撕毁结婚证，老婆提出离婚'，禁止用'穷困潦倒'这类模糊词）",
   "humiliation_scenes": [
     "具体羞辱场景1（可发生在第1章开头，含人物+地点+羞辱方式，20字内）",
@@ -57,35 +61,18 @@ async def gen_contrast_design(svc: Any, project: Project, ctx: dict) -> dict:
 3. final_destination 要让读者「光是想想就觉得爽」——高度要足够高，反差要足够大
 4. 只返回 JSON"""
 
-    last_err = ""
-    for attempt in range(3):
-        fix = f"\n【请修正：{last_err}】" if last_err else ""
-        raw = await svc._call_with_retry(
-            system, prompt + fix,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.positioning",
-        )
-        try:
-            data = parse_json(raw)
-        except Exception:
-            last_err = "JSON 解析失败"
-            continue
-        if not isinstance(data, dict):
-            last_err = "须为 JSON 对象"
-            continue
-        required = {"initial_state_headline", "trigger_event", "final_destination"}
-        if missing := required - data.keys():
-            last_err = f"缺少字段：{missing}"
-            continue
-        if not data.get("initial_state_headline"):
-            last_err = "initial_state_headline 不能为空"
-            continue
+    data = await call_fanqie_json_once(
+        svc,
+        step=_STEP,
+        system=system,
+        prompt=prompt,
+        task="bootstrap.positioning",
+        validate=_validate_contrast,
+    )
 
-        # 持久化到 Project.extra
-        extra = dict(project.extra or {})
-        extra["contrast_design"] = data
-        project.extra = extra
-        svc.db.commit()
-        return data
-
-    return {}
+    ctx["protagonist"] = str(data["protagonist_name"]).strip()
+    extra = dict(project.extra or {})
+    extra["contrast_design"] = data
+    project.extra = extra
+    svc.db.commit()
+    return data

@@ -30,6 +30,7 @@ class PreWriteWarnMixin:
         outline_context: str = "",
         phase: str = "",
         transition_menu: str = "",
+        chapter_lock_table_block: str = "",
     ) -> dict:
         """写前预警：像三十年主编在落笔前把本章的「坑、约束、写法」全交代清楚。
 
@@ -80,8 +81,18 @@ class PreWriteWarnMixin:
             "让写正文的 AI 无法出现幻觉和逻辑错误。严格返回 JSON，不要任何额外文字。"
         )
 
+        lock_part = (
+            self._clip_context(chapter_lock_table_block, 2000, None, field_name="chapter_lock_table")
+            if chapter_lock_table_block and chapter_lock_table_block.strip()
+            else "（第一章或无上章成稿，无锁定表）"
+        )
+
         prompt = f"""小说：《{project_title}》（{genre}）
 {f'当前阶段：{phase_hint}' if phase_hint else ''}
+
+══════════════════════════════════════
+【情节锁定表（程序生成，硬事实，优先级高于本章章纲字面）】
+{lock_part}
 
 ══════════════════════════════════════
 【本章计划（大纲五要素）】
@@ -105,7 +116,10 @@ class PreWriteWarnMixin:
 {self._clip_context(transition_menu, 1200, None, field_name="transition_menu") if transition_menu else ""}
 
 ══════════════════════════════════════
-请以「三十年主编」的视角完成以下五件事，**全部输出到 JSON**：
+请以「三十年主编」的视角完成以下六件事，**全部输出到 JSON**：
+
+⓪ 你必须以【情节锁定表】为准：若锁定表或「章纲冲突」与【本章计划】矛盾，risks 必须包含 critical 级 continuity，
+   must_events / writing_brief.opening_strategy 须按锁定表消化冲突，不得建议倒带重播上章已完成节拍。
 
 ① 主角状态锁定（protagonist_fact_sheet）
    核对上述资料，锁定本章开笔时主角的精确状态，AI 写正文必须严格遵守这份清单：

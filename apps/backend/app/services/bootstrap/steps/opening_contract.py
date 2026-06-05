@@ -9,8 +9,8 @@ from app.services.bootstrap.opening_contract_io import persist_opening_contract
 from app.services.bootstrap.parse import parse_json
 from app.services.bootstrap.prompts.opening_contract import build_opening_contract_prompt
 from app.services.bootstrap.reader_promise_seed import seed_reader_promises
-from app.services.xuanhuan_lexicon import (
 from app.services.llm_token_budgets import max_tokens_bootstrap_completion
+from app.services.xuanhuan_lexicon import (
     is_xuanhuan_like_genre,
     sanitize_xuanhuan_text,
 )

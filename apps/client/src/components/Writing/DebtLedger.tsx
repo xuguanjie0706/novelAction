@@ -19,8 +19,7 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, AlertCircle, CheckCircle2, RefreshCw, Loader2 } from 'lucide-react'
 import clsx from 'clsx'
-// 与 api/client.ts 保持同步的 API 基础路径
-const API_BASE = '/api/v1'
+import { authFetch } from '../../api/authFetch'
 
 // ── 类型 ─────────────────────────────────────────────────────────
 
@@ -49,7 +48,7 @@ async function fetchDebtSummary(
   outlineNodeId: string,
   chapterId?: string,
 ): Promise<DebtSummary> {
-  const res = await fetch(`${API_BASE}/projects/${projectId}/ai/chapter-ingredients`, {
+  const res = await authFetch(`/api/v1/projects/${projectId}/ai/chapter-ingredients`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

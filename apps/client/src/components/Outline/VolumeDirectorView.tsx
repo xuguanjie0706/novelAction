@@ -8,6 +8,7 @@ import {
   parseVolumeDirector,
   PHASE_LABEL,
   beatTypeLabel,
+  formatBeatChapterHint,
   type VolumeDirectorData,
 } from '../../utils/volumeBeatsDisplay'
 import { Field } from '../../pages/Outline/shared/Field'
@@ -33,8 +34,11 @@ export interface VolumeDirectorForm {
   turningChapter: string
 }
 
-export function volumeDirectorFormFromNode(node: OutlineNode): VolumeDirectorForm {
-  const d = parseVolumeDirector(node)
+export function volumeDirectorFormFromNode(
+  node: OutlineNode,
+  options?: { allVolumes?: OutlineNode[] },
+): VolumeDirectorForm {
+  const d = parseVolumeDirector(node, options)
   return {
     title: node.title ?? '',
     summary: node.summary ?? '',
@@ -82,8 +86,16 @@ export function buildVolumeDirectorSavePayload(
 
 function MetaBadges({ d }: { d: VolumeDirectorData }) {
   const phase = d.phase
+  const rangeHint = d.chapterStartGlobal > 1 && d.plannedChapters
+    ? `全书约第${d.chapterStartGlobal}–${d.chapterStartGlobal + d.plannedChapters - 1}章`
+    : null
   return (
     <div className="flex flex-wrap items-center gap-2 mb-3">
+      {rangeHint && (
+        <span className="text-[10px] text-sky-700 font-medium" title="节拍章号为卷内序号，此处为全书累计">
+          {rangeHint}
+        </span>
+      )}
       {phase && (
         <span className={clsx(
           'text-[10px] font-bold px-2 py-0.5 rounded-full',
@@ -102,7 +114,7 @@ function MetaBadges({ d }: { d: VolumeDirectorData }) {
       )}
       {d.volumeClimax?.chapter_hint != null && (
         <span className="text-[10px] text-red-600 font-medium">
-          高潮第 {d.volumeClimax.chapter_hint} 章
+          高潮 {formatBeatChapterHint(d.volumeClimax.chapter_hint, d.chapterStartGlobal)}
         </span>
       )}
       {d.protagonistRealmRange && (
@@ -126,18 +138,28 @@ function MetaBadges({ d }: { d: VolumeDirectorData }) {
   )
 }
 
-function BeatList({ beats }: { beats: VolumeDirectorData['beatHighlights'] }) {
+function BeatList({
+  beats,
+  chapterStartGlobal,
+}: {
+  beats: VolumeDirectorData['beatHighlights']
+  chapterStartGlobal: number
+}) {
   if (beats.length === 0) return null
   return (
     <section>
-      <SectionLabel icon={<Flame size={12} className="text-orange-500" />} title="燃点节拍" hint="章纲展开须按章号兑现" />
+      <SectionLabel
+        icon={<Flame size={12} className="text-orange-500" />}
+        title="燃点节拍"
+        hint={chapterStartGlobal > 1 ? '章纲按本卷内章号兑现；标签已标全书章号' : '章纲展开须按章号兑现'}
+      />
       <ul className="space-y-2">
         {beats.map((b, i) => (
           <li key={i} className="rounded-lg border border-orange-100 bg-orange-50/50 px-3 py-2">
             <div className="flex flex-wrap items-center gap-2 mb-1">
               <span className="text-[10px] font-bold text-orange-700">#{i + 1}</span>
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-800">
-                第 {b.chapter_hint} 章
+                {formatBeatChapterHint(b.chapter_hint, chapterStartGlobal)}
               </span>
               <span className="text-[10px] text-gray-500">{beatTypeLabel(b.beat_type)}</span>
             </div>
@@ -199,13 +221,17 @@ export function VolumeDirectorPanel({
   editing,
   form,
   setForm,
+  allVolumes,
 }: {
   node: OutlineNode
   editing: boolean
   form: VolumeDirectorForm
   setForm: React.Dispatch<React.SetStateAction<VolumeDirectorForm>>
+  /** 全书卷节点列表，用于推算全书章号（无 chapter_start_global 的旧数据） */
+  allVolumes?: OutlineNode[]
 }) {
-  const d = parseVolumeDirector(node)
+  const d = parseVolumeDirector(node, { allVolumes })
+  const localChapterHint = d.chapterStartGlobal > 1 ? '本卷内章号' : '章号'
 
   if (editing) {
     return (
@@ -215,17 +241,23 @@ export function VolumeDirectorPanel({
         <Field label="核心冲突" sublabel="不可调和的矛盾" value={form.conflict} editing={editing} onChange={v => setForm(f => ({ ...f, conflict: v }))} />
         <div className="grid grid-cols-1 sm:grid-cols-[1fr_5rem] gap-3">
           <Field label="卷末高潮" sublabel="本卷情绪最高点场面" value={form.climaxSummary} editing={editing} onChange={v => setForm(f => ({ ...f, climaxSummary: v }))} />
-          <Field label="高潮章" sublabel="章号" value={form.climaxChapter} editing={editing} onChange={v => setForm(f => ({ ...f, climaxChapter: v }))} singleLine />
+          <Field label="高潮章" sublabel={localChapterHint} value={form.climaxChapter} editing={editing} onChange={v => setForm(f => ({ ...f, climaxChapter: v }))} singleLine />
         </div>
         {!d.hasDirectorBeats ? (
           <Field label="本卷追读悬念" sublabel="旧版 hook 字段（重新生成 Step 9 后将拆分为燃点+高潮）" value={form.nextVolumeHook} editing={editing} onChange={v => setForm(f => ({ ...f, nextVolumeHook: v }))} />
         ) : (
           <Field label="下卷悬念种子" sublabel="留给下一卷承接的悬念（hook 字段）" value={form.nextVolumeHook} editing={editing} onChange={v => setForm(f => ({ ...f, nextVolumeHook: v }))} />
         )}
-        <Field label="节奏骨架" sublabel="快/慢/打脸章段分布" value={form.pacingSkeleton} editing={editing} onChange={v => setForm(f => ({ ...f, pacingSkeleton: v }))} />
+        <Field
+          label="节奏骨架"
+          sublabel={d.chapterStartGlobal > 1 ? '本卷内章段（如 1-15章）' : '快/慢/打脸章段分布'}
+          value={form.pacingSkeleton}
+          editing={editing}
+          onChange={v => setForm(f => ({ ...f, pacingSkeleton: v }))}
+        />
         <div className="grid grid-cols-1 sm:grid-cols-[1fr_5rem] gap-3">
           <Field label="情感转折点" sublabel="主角认知/关系不可逆变化（可选）" value={form.turningDescription} editing={editing} onChange={v => setForm(f => ({ ...f, turningDescription: v }))} />
-          <Field label="转折章" sublabel="章号" value={form.turningChapter} editing={editing} onChange={v => setForm(f => ({ ...f, turningChapter: v }))} singleLine />
+          <Field label="转折章" sublabel={localChapterHint} value={form.turningChapter} editing={editing} onChange={v => setForm(f => ({ ...f, turningChapter: v }))} singleLine />
         </div>
         {d.beatHighlights.length > 0 && (
           <p className="text-[11px] text-gray-400 flex items-start gap-1">
@@ -256,11 +288,13 @@ export function VolumeDirectorPanel({
           {node.conflict}
         </ReadBlock>
       )}
-      <BeatList beats={d.beatHighlights} />
+      <BeatList beats={d.beatHighlights} chapterStartGlobal={d.chapterStartGlobal} />
       {d.climaxSummary && (
         <ReadBlock
           label="卷末高潮"
-          sublabel={d.volumeClimax?.chapter_hint ? `第 ${d.volumeClimax.chapter_hint} 章` : '情绪最高点'}
+          sublabel={d.volumeClimax?.chapter_hint
+            ? formatBeatChapterHint(d.volumeClimax.chapter_hint, d.chapterStartGlobal)
+            : '情绪最高点'}
           accent="red"
         >
           {d.climaxSummary}
@@ -269,7 +303,9 @@ export function VolumeDirectorPanel({
       {d.emotionalTurningPoint?.description && (
         <ReadBlock
           label="情感转折"
-          sublabel={d.emotionalTurningPoint.chapter_hint ? `第 ${d.emotionalTurningPoint.chapter_hint} 章` : undefined}
+          sublabel={d.emotionalTurningPoint.chapter_hint
+            ? formatBeatChapterHint(d.emotionalTurningPoint.chapter_hint, d.chapterStartGlobal)
+            : undefined}
         >
           {d.emotionalTurningPoint.description}
         </ReadBlock>
@@ -283,10 +319,14 @@ export function VolumeDirectorPanel({
         </section>
       )}
       {d.pacingSkeleton && (
-        <ReadBlock label="节奏骨架" sublabel="全卷快慢分布" accent="gray">
+        <ReadBlock
+          label="节奏骨架"
+          sublabel={d.chapterStartGlobal > 1 ? '全书章段（由本卷内序号换算）' : '全卷快慢分布'}
+          accent="gray"
+        >
           <span className="flex items-center gap-1.5 text-xs">
             <Clock size={11} className="shrink-0 opacity-60" />
-            {d.pacingSkeleton}
+            {d.pacingSkeletonDisplay}
           </span>
         </ReadBlock>
       )}
@@ -316,13 +356,15 @@ export function VolumeDirectorCard({
   index,
   chapterCount,
   variant = 'inline',
+  allVolumes,
 }: {
   vol: OutlineNode
   index: number
   chapterCount?: number
   variant?: 'inline' | 'tailwind'
+  allVolumes?: OutlineNode[]
 }) {
-  const d = parseVolumeDirector(vol)
+  const d = parseVolumeDirector(vol, { allVolumes })
   const phase = d.phase
 
   if (variant === 'inline') {
@@ -464,18 +506,18 @@ function VolumeDirectorCardBodyContent({
       {d.beatHighlights.slice(0, 3).map((b, i) => (
         styles ? (
           <p key={i} style={{ ...styles.tiny, marginTop: 4, color: '#c2410c' }}>
-            燃·第{b.chapter_hint}章：{b.description.slice(0, 60)}{b.description.length > 60 ? '…' : ''}
+            燃·{formatBeatChapterHint(b.chapter_hint, d.chapterStartGlobal)}：{b.description.slice(0, 60)}{b.description.length > 60 ? '…' : ''}
           </p>
         ) : (
           <p key={i} className="text-[11px] text-orange-700 mt-1">
-            燃·第{b.chapter_hint}章：{b.description.slice(0, 60)}{b.description.length > 60 ? '…' : ''}
+            燃·{formatBeatChapterHint(b.chapter_hint, d.chapterStartGlobal)}：{b.description.slice(0, 60)}{b.description.length > 60 ? '…' : ''}
           </p>
         )
       ))}
       {d.climaxSummary && (
         styles
-          ? <p style={tinyRed}>高潮{d.volumeClimax?.chapter_hint ? `·第${d.volumeClimax.chapter_hint}章` : ''}：{d.climaxSummary}</p>
-          : <p className="text-[11px] text-red-700 mt-1.5">高潮{d.volumeClimax?.chapter_hint ? `·第${d.volumeClimax.chapter_hint}章` : ''}：{d.climaxSummary}</p>
+          ? <p style={tinyRed}>高潮{d.volumeClimax?.chapter_hint ? `·${formatBeatChapterHint(d.volumeClimax.chapter_hint, d.chapterStartGlobal)}` : ''}：{d.climaxSummary}</p>
+          : <p className="text-[11px] text-red-700 mt-1.5">高潮{d.volumeClimax?.chapter_hint ? `·${formatBeatChapterHint(d.volumeClimax.chapter_hint, d.chapterStartGlobal)}` : ''}：{d.climaxSummary}</p>
       )}
       {d.legacyReaderHook && (
         styles

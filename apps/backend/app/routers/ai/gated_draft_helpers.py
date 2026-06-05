@@ -218,6 +218,13 @@ async def _run_pre_write_warning_inline(
         outline_power_milestone=_power_milestone,
     )
 
+    from app.services.ai.chapter_lock_table import (
+        build_chapter_lock_table,
+        merge_lock_table_into_warn_result,
+    )
+
+    lock_table = build_chapter_lock_table(db, project_id, chapter)
+
     result = await svc.pre_write_warning(
         project_title=project.title,
         genre=project.genre or "玄幻",
@@ -230,7 +237,9 @@ async def _run_pre_write_warning_inline(
         outline_context=outline_context,
         phase=phase,
         transition_menu=transition_menu,
+        chapter_lock_table_block=lock_table.get("prompt_block") or "",
     )
+    result = merge_lock_table_into_warn_result(result, lock_table)
     if _rag_log is not None:
         result = dict(result)
         result["rag_retrieval_log_id"] = str(_rag_log.id)
@@ -253,6 +262,24 @@ def _build_pre_warn_prompt_block(warn_result: dict) -> str:
     @returns 格式化文本块（用于拼入 user_prompt）
     """
     lines: list[str] = ["\n\n===【写前简报（由30年主编生成，写正文时必须严格遵守）】==="]
+
+    # ⓪ 情节锁定表（程序生成，优先于章纲）
+    clt = warn_result.get("chapter_lock_table") or {}
+    if isinstance(clt, dict) and clt.get("has_prev"):
+        lines.append(
+            f"\n▍情节锁定表（第{clt.get('prev_chapter_number')}章→第{clt.get('current_chapter_number')}章，"
+            "不可倒带，优先级高于章纲 foreshadow/hook）"
+        )
+        for i, b in enumerate((clt.get("locked_beats") or [])[:8], 1):
+            lines.append(f"  已发生{i}：{b}")
+        anchor = (clt.get("prev_tail_anchor") or "").strip()
+        if anchor:
+            lines.append(f"  上章末尾锚点：「{anchor[:200]}」")
+        for fb in (clt.get("forbidden_replays") or [])[:6]:
+            lines.append(f"  ⛔ 禁止：{fb}")
+        for oc in (clt.get("outline_conflicts") or [])[:4]:
+            if isinstance(oc, dict) and oc.get("reason"):
+                lines.append(f"  ⚠️ 章纲冲突：{oc['reason']}")
 
     # ① 主角状态锁定
     pfs = warn_result.get("protagonist_fact_sheet") or {}

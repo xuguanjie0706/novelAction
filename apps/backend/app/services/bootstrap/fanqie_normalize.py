@@ -450,10 +450,15 @@ def backfill_fanqie_volume_realm_ranks(db: Session, project: Project) -> int:
     updated = 0
     for vol, (vs, ve) in zip(volumes, dist):
         ex = dict(vol.extra or {})
-        if isinstance(ex.get("protagonist_realm_start_rank"), int) and isinstance(
-            ex.get("protagonist_realm_end_rank"), int
+        sr = ex.get("protagonist_realm_start_rank")
+        er = ex.get("protagonist_realm_end_rank")
+        if (
+            isinstance(sr, int)
+            and isinstance(er, int)
+            and sr > 0
+            and er > 0
         ):
-            continue  # 幂等：已有 rank（如通用线已填）不覆盖
+            continue  # 幂等：已有有效 rank（如通用线已填）不覆盖；rank≤0 视为历史脏数据须修复
         ex["protagonist_realm_start_rank"] = vs
         ex["protagonist_realm_end_rank"] = ve
         sname = _realm_display_name_for_rank(vs, name_to_rank)

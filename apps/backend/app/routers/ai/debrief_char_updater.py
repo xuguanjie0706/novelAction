@@ -137,7 +137,23 @@ def apply_character_updates(
         _before_location = char.current_location
 
         if cu.current_realm is not None:
-            char.current_realm = cu.current_realm.strip()[:100]
+            raw_realm = cu.current_realm.strip()[:100]
+            from app.models import Project
+            from app.services.bootstrap.fanqie_normalize import is_fanqie_project
+            from app.services.bootstrap.fanqie_realm_policy import (
+                normalize_realm_label_for_primary_axis,
+            )
+
+            project = db.query(Project).filter(Project.id == project_id).first()
+            if project and is_fanqie_project(project) and name_to_rank:
+                canonical, norm_warn = normalize_realm_label_for_primary_axis(
+                    raw_realm, name_to_rank,
+                )
+                char.current_realm = canonical[:100]
+                if norm_warn:
+                    realm_rank_warnings.append(f"{char.name}：{norm_warn}")
+            else:
+                char.current_realm = raw_realm
 
         _eff_label = (char.current_realm or "").strip()
         _label_rank = (

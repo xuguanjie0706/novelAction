@@ -10,8 +10,9 @@ from __future__ import annotations
 from typing import Any
 
 from app.models import Project
-from app.services.bootstrap.parse import parse_json
-from app.services.llm_token_budgets import max_tokens_bootstrap_completion
+from app.services.bootstrap.steps.fanqie._json_once import call_fanqie_json_once
+
+_STEP = "golden_finger"
 
 _FINGER_TYPES = (
     "系统面板（属性/技能/任务）/ 空间戒指（储物/种植/炼丹）/ "
@@ -75,38 +76,29 @@ async def gen_golden_finger(svc: Any, project: Project, ctx: dict) -> dict:
 3. constraint 必须真实有效，不能是「偶尔疲劳」这种无效限制
 4. 只返回 JSON"""
 
-    last_err = ""
-    for attempt in range(3):
-        fix = f"\n【请修正：{last_err}】" if last_err else ""
-        raw = await svc._call_with_retry(
-            system, prompt + fix,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.positioning",
-        )
-        try:
-            data = parse_json(raw)
-        except Exception:
-            last_err = "JSON 解析失败"
-            continue
+    def _validate(data: Any) -> str | None:
         if not isinstance(data, dict):
-            last_err = "须为 JSON 对象"
-            continue
+            return "须为 JSON 对象"
         stages = data.get("upgrade_stages")
         if not isinstance(stages, list) or len(stages) < 3:
-            last_err = "upgrade_stages 至少需要 3 个阶段"
-            continue
+            return "upgrade_stages 至少需要 3 个阶段"
         required = {"finger_type", "finger_name", "mechanism", "visualization_style"}
         if missing := required - data.keys():
-            last_err = f"缺少字段：{missing}"
-            continue
+            return f"缺少字段：{missing}"
+        return None
 
-        extra = dict(project.extra or {})
-        extra["golden_finger"] = data
-        project.extra = extra
-        svc.db.commit()
+    data = await call_fanqie_json_once(
+        svc,
+        step=_STEP,
+        system=system,
+        prompt=prompt,
+        task="bootstrap.positioning",
+        validate=_validate,
+    )
 
-        # 写入 ctx 供后续步骤使用
-        ctx["golden_finger"] = data
-        return data
-
-    return {}
+    extra = dict(project.extra or {})
+    extra["golden_finger"] = data
+    project.extra = extra
+    svc.db.commit()
+    ctx["golden_finger"] = data
+    return data

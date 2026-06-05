@@ -11,6 +11,7 @@ import type {
   ReviewMemoryChunk,
   ReviewProject,
 } from '../types/review'
+import { ChapterQualityDimensionsView } from '../components/ChapterQualityDimensionsView'
 import { OutlineQualityManagementSection } from '../components/OutlinePlanQualityPanel'
 
 /** 复盘记忆类型（API 英文枚举 → 展示文案） */
@@ -20,16 +21,6 @@ const MEMORY_TYPE_LABELS: Record<string, string> = {
   foreshadow: '伏笔',
   setting: '设定',
   conflict: '冲突',
-}
-
-/** 章节质检维度键名 → 中文（与 ReadingReviewPage 一致） */
-const QUALITY_DIMENSION_LABELS: Record<string, string> = {
-  plot: '情节推进',
-  character: '人物一致',
-  setting_consistency: '设定一致',
-  pacing: '节奏控制',
-  hooks: '悬念钩子',
-  outline_alignment: '大纲匹配度',
 }
 
 const CHAPTER_STATUS_LABELS: Record<string, string> = {
@@ -409,19 +400,13 @@ export default function NovelManagementPage() {
                         />
                       )}
                     </Card>
-                    <Card loading={chapterDetailLoading} title="质检结果" bodyStyle={{ maxHeight: 220, overflowY: 'auto' }}>
+                    <Card loading={chapterDetailLoading} title="质检结果" bodyStyle={{ maxHeight: 360, overflowY: 'auto' }}>
                       {!selectedChapterQuality ? (
                         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无质检报告" />
                       ) : (
                         <Space direction="vertical" size="small" style={{ width: '100%' }}>
                           <Typography.Text strong>总分：{selectedChapterQuality.overall_score ?? '—'}</Typography.Text>
-                          <Space wrap>
-                            {Object.entries(selectedChapterQuality.dimensions || {}).map(([key, dim]) => (
-                              <Tag key={key} color={dim.status === 'fail' ? 'red' : dim.status === 'warning' ? 'orange' : 'blue'}>
-                                {QUALITY_DIMENSION_LABELS[key] ?? key}：{dim.score}
-                              </Tag>
-                            ))}
-                          </Space>
+                          <ChapterQualityDimensionsView dimensions={selectedChapterQuality.dimensions} />
                           <Typography.Text type="secondary">{selectedChapterQuality.summary || '暂无总结'}</Typography.Text>
                         </Space>
                       )}

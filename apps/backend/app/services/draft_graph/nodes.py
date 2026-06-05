@@ -524,6 +524,10 @@ async def debrief(state: ChapterDraftState) -> dict:
         project = db.query(Project).filter(Project.id == state["project_id"]).first()
         project_genre = project.genre if project else None
 
+        from app.services.bootstrap.fanqie_realm_policy import (
+            build_fanqie_realm_discipline_for_project,
+        )
+
         svc = _make_ai_service(state, db=db)
         await svc.auto_extract_debrief(
             chapter_content=state.get("draft_content", ""),
@@ -533,6 +537,9 @@ async def debrief(state: ChapterDraftState) -> dict:
             storylines=storylines_data,
             genre=project_genre,
             writing_style=resolve_project_writing_style(project),
+            realm_discipline_block=build_fanqie_realm_discipline_for_project(
+                db, str(state["project_id"]),
+            ),
         )
         db.commit()
     except Exception as exc:

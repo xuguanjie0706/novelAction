@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.bootstrap.parse import parse_json
+from app.services.bootstrap.json_once import call_bootstrap_json_once
 from app.services.bootstrap.steps.fanfic._helpers import TROPE_LABELS
-from app.services.llm_token_budgets import max_tokens_bootstrap_completion
+
+_STEP = "fanfic_canon_synopsis"
 
 _MIN_SYNOPSIS_LEN = 80
 _OPTION_COUNT = 3
@@ -85,31 +86,24 @@ async def gen_canon_synopsis_options(
         focal_characters=focal_characters,
     )
 
-    last_err = ""
-    for attempt in range(3):
-        fix = f"\n【请修正：{last_err}】" if last_err else ""
-        raw = await svc._call_with_retry(
-            system,
-            prompt + fix,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.fanfic_synopsis",
-        )
-        try:
-            data = parse_json(raw)
-        except Exception:
-            last_err = "JSON 解析失败"
-            continue
+    def _validate(data: Any) -> str | None:
         if not isinstance(data, dict):
-            last_err = "根类型须为 JSON 对象"
-            continue
+            return "根类型须为 JSON 对象"
         options_raw = data.get("options")
         if not isinstance(options_raw, list):
-            last_err = "缺少 options 数组"
-            continue
+            return "缺少 options 数组"
         normalized = _normalize_options(options_raw)
         if len(normalized) < _OPTION_COUNT:
-            last_err = f"有效梗概不足 {_OPTION_COUNT} 条（每条至少 {_MIN_SYNOPSIS_LEN} 字）"
-            continue
-        return normalized[:_OPTION_COUNT]
+            return f"有效梗概不足 {_OPTION_COUNT} 条（每条至少 {_MIN_SYNOPSIS_LEN} 字）"
+        data["_normalized"] = normalized[:_OPTION_COUNT]
+        return None
 
-    raise RuntimeError(last_err or "梗概生成失败")
+    data = await call_bootstrap_json_once(
+        svc,
+        step=_STEP,
+        system=system,
+        prompt=prompt,
+        task="bootstrap.fanfic_synopsis",
+        validate=_validate,
+    )
+    return data["_normalized"]

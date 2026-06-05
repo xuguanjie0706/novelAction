@@ -4,6 +4,33 @@ from __future__ import annotations
 from app.services.bootstrap.power_registry import resolve_realm_in_registry
 
 
+def _build_rank_map_from_ctx(ctx: dict, level_names: list[str]) -> dict[str, int]:
+    """境界名 → PowerSystem rank（1-based）；无 registry 时按 level_names 顺序生成。"""
+    registry: dict = ctx.get("power_level_registry") or {}
+    rank_map: dict[str, int] = {}
+    if registry:
+        for name, meta in registry.items():
+            if isinstance(meta, dict) and isinstance(meta.get("rank"), int) and meta["rank"] > 0:
+                r = int(meta["rank"])
+                if name not in rank_map or r > rank_map[name]:
+                    rank_map[name] = r
+    if not rank_map:
+        rank_map = {name: i + 1 for i, name in enumerate(level_names)}
+    return rank_map
+
+
+def _realm_display_at_rank(rank: int, level_names: list[str], rank_map: dict[str, int]) -> str:
+    """1-based rank → 境界展示名（与 realm_axis / PowerSystem 一致）。"""
+    if rank <= 0:
+        return ""
+    inverse = {v: k for k, v in rank_map.items()}
+    if rank in inverse:
+        return inverse[rank]
+    if rank <= len(level_names):
+        return level_names[rank - 1]
+    return level_names[-1] if level_names else ""
+
+
 def compute_book_realm_endpoints(ctx: dict) -> tuple[int, int, list[str]] | None:
     """计算全书主角起点/终点 rank。
 
@@ -14,16 +41,16 @@ def compute_book_realm_endpoints(ctx: dict) -> tuple[int, int, list[str]] | None
     if not level_names:
         return None
 
-    rank_map = {name: i for i, name in enumerate(level_names)}
-    max_rank = len(level_names) - 1
+    rank_map = _build_rank_map_from_ctx(ctx, level_names)
     registry: dict = ctx.get("power_level_registry") or {}
+    max_rank = max(rank_map.values()) if rank_map else len(level_names)
 
     protagonist = (ctx.get("protagonist") or "主角").strip()
-    start_rank = 0
+    start_rank = 1
     protag_realm = (ctx.get("char_realms") or {}).get(protagonist, "")
     if protag_realm:
         resolved = resolve_realm_in_registry(protag_realm, registry) if registry else protag_realm
-        start_rank = rank_map.get(resolved or protag_realm, 0)
+        start_rank = rank_map.get(resolved or protag_realm, 1)
 
     end_rank = max_rank
     for snap in ctx.get("power_systems_full") or []:
@@ -80,13 +107,14 @@ def vol_protagonist_realm_bounds(
     vol_end_ranks: list[int],
     level_names: list[str],
     book_start_rank: int,
+    rank_map: dict[str, int],
 ) -> tuple[str, str, int, int]:
-    """单卷主角境界起止（canonical 名 + rank）。"""
+    """单卷主角境界起止（canonical 名 + 1-based rank）。"""
     start_rank = book_start_rank if vol_index == 0 else vol_end_ranks[vol_index - 1]
     end_rank = vol_end_ranks[vol_index]
     return (
-        level_names[start_rank],
-        level_names[end_rank],
+        _realm_display_at_rank(start_rank, level_names, rank_map),
+        _realm_display_at_rank(end_rank, level_names, rank_map),
         start_rank,
         end_rank,
     )
@@ -104,7 +132,7 @@ def apply_volume_protagonist_fields(
     if not level_names:
         return
 
-    rank_map = {name: i for i, name in enumerate(level_names)}
+    rank_map = _build_rank_map_from_ctx(ctx, level_names)
     registry: dict = ctx.get("power_level_registry") or {}
     endpoints = compute_book_realm_endpoints(ctx)
     vol_end_ranks = compute_vol_end_ranks(ctx, n_volumes)
@@ -113,7 +141,7 @@ def apply_volume_protagonist_fields(
     if endpoints and vol_end_ranks and vol_index < len(vol_end_ranks):
         book_start, _, _ = endpoints
         fallback_start, fallback_end, fb_start_rank, fb_end_rank = vol_protagonist_realm_bounds(
-            vol_index, vol_end_ranks, level_names, book_start,
+            vol_index, vol_end_ranks, level_names, book_start, rank_map,
         )
 
     ai_start = (vol.get("protagonist_realm_start") or "").strip()
@@ -121,26 +149,26 @@ def apply_volume_protagonist_fields(
     start_rank = _resolve_realm_rank_simple(ai_start, rank_map, level_names, registry)
     end_rank = _resolve_realm_rank_simple(ai_end, rank_map, level_names, registry)
 
-    if start_rank < 0 and fb_start_rank >= 0:
+    if start_rank < 1 and fb_start_rank >= 1:
         start_rank, ai_start = fb_start_rank, fallback_start
-    elif start_rank >= 0:
-        ai_start = level_names[start_rank]
+    elif start_rank >= 1:
+        ai_start = _realm_display_at_rank(start_rank, level_names, rank_map)
 
-    if end_rank < 0 and fb_end_rank >= 0:
+    if end_rank < 1 and fb_end_rank >= 1:
         end_rank, ai_end = fb_end_rank, fallback_end
-    elif end_rank >= 0:
-        ai_end = level_names[end_rank]
+    elif end_rank >= 1:
+        ai_end = _realm_display_at_rank(end_rank, level_names, rank_map)
 
-    if start_rank >= 0 and end_rank >= 0 and end_rank < start_rank:
+    if start_rank >= 1 and end_rank >= 1 and end_rank < start_rank:
         end_rank, ai_end = start_rank, ai_start
 
     if ai_start:
         vol_extra["protagonist_realm_start"] = ai_start
     if ai_end:
         vol_extra["protagonist_realm_end"] = ai_end
-    if start_rank >= 0:
+    if start_rank >= 1:
         vol_extra["protagonist_realm_start_rank"] = start_rank
-    if end_rank >= 0:
+    if end_rank >= 1:
         vol_extra["protagonist_realm_end_rank"] = end_rank
 
 
@@ -152,14 +180,15 @@ def build_protagonist_progression_prompt_block(ctx: dict, n_volumes: int) -> str
         return ""
 
     start_rank, end_rank, level_names = endpoints
-    max_rank = len(level_names) - 1
+    rank_map = _build_rank_map_from_ctx(ctx, level_names)
+    max_rank = max(rank_map.values()) if rank_map else len(level_names)
     protagonist = (ctx.get("protagonist") or "主角").strip()
 
     lines: list[str] = [
         "\n【⚠️ 主角境界成长路线（必须严格遵守）】",
         (
-            f"主角「{protagonist}」：起点 {level_names[start_rank]}（rank={start_rank}）"
-            f" → 全书终点 {level_names[end_rank]}（rank={end_rank}）"
+            f"主角「{protagonist}」：起点 {_realm_display_at_rank(start_rank, level_names, rank_map)}（rank={start_rank}）"
+            f" → 全书终点 {_realm_display_at_rank(end_rank, level_names, rank_map)}（rank={end_rank}）"
         ),
         "各卷须填写 protagonist_realm_start / protagonist_realm_end（须从境界阶梯精确选名）：",
     ]
@@ -168,8 +197,8 @@ def build_protagonist_progression_prompt_block(ctx: dict, n_volumes: int) -> str
         sr = book_start if vi == 0 else vol_end_ranks[vi - 1]
         boss_max_rank = min(vr + 2, max_rank)
         lines.append(
-            f"  第{vi + 1}卷：{level_names[sr]} → {level_names[vr]}"
-            f"（rank {sr}→{vr}）| volume_boss_realm rank 上限 {level_names[boss_max_rank]}（{boss_max_rank}）"
+            f"  第{vi + 1}卷：{_realm_display_at_rank(sr, level_names, rank_map)} → {_realm_display_at_rank(vr, level_names, rank_map)}"
+            f"（rank {sr}→{vr}）| volume_boss_realm rank 上限 {_realm_display_at_rank(boss_max_rank, level_names, rank_map)}（{boss_max_rank}）"
         )
     lines.append(
         "⚠️ 每卷 volume_boss_realm 的 rank 严格 ≤ protagonist_realm_end 对应 rank + 2；"
@@ -177,7 +206,7 @@ def build_protagonist_progression_prompt_block(ctx: dict, n_volumes: int) -> str
     )
     lines.append(
         f"⚠️ 终局卷（phase=climax 或 ending）的 volume_boss_realm 必须处于"
-        f" {level_names[max(end_rank - 1, 0)]} 或 {level_names[end_rank]}，"
+        f" {_realm_display_at_rank(max(end_rank - 1, 1), level_names, rank_map)} 或 {_realm_display_at_rank(end_rank, level_names, rank_map)}，"
         f"禁止终局 Boss 停留在中低档境界（rank < {end_rank - 1}）。"
     )
     return "\n".join(lines) + "\n"

@@ -70,11 +70,46 @@ export function normalizePreWriteWarnResult(raw: unknown): PreWriteWarnResult {
   const error = typeof r.error === 'string' && r.error.trim() ? r.error.trim() : undefined
   const errorRaw = typeof r.raw === 'string' && r.raw.trim() ? r.raw.trim() : undefined
   const storyline_pre_warns = Array.isArray(r.storyline_pre_warns) ? r.storyline_pre_warns : undefined
+  const cltRaw = r.chapter_lock_table
+  const chapter_lock_table =
+    cltRaw && typeof cltRaw === 'object'
+      ? {
+          has_prev: Boolean((cltRaw as Record<string, unknown>).has_prev),
+          prev_chapter_number: (cltRaw as Record<string, unknown>).prev_chapter_number as
+            | number
+            | string
+            | null
+            | undefined,
+          current_chapter_number: (cltRaw as Record<string, unknown>).current_chapter_number as
+            | number
+            | string
+            | null
+            | undefined,
+          locked_beats: Array.isArray((cltRaw as Record<string, unknown>).locked_beats)
+            ? ((cltRaw as Record<string, unknown>).locked_beats as unknown[]).map(String)
+            : [],
+          forbidden_replays: Array.isArray((cltRaw as Record<string, unknown>).forbidden_replays)
+            ? ((cltRaw as Record<string, unknown>).forbidden_replays as unknown[]).map(String)
+            : [],
+          outline_conflicts: Array.isArray((cltRaw as Record<string, unknown>).outline_conflicts)
+            ? ((cltRaw as Record<string, unknown>).outline_conflicts as unknown[]).map((c) => {
+                const cc = c && typeof c === 'object' ? (c as Record<string, unknown>) : {}
+                return {
+                  field: String(cc.field ?? ''),
+                  outline_text: String(cc.outline_text ?? ''),
+                  reason: String(cc.reason ?? ''),
+                }
+              })
+            : [],
+          prev_tail_anchor: String((cltRaw as Record<string, unknown>).prev_tail_anchor ?? ''),
+        }
+      : undefined
   return {
     ok,
     risk_count,
     risks,
     reminders,
+    chapter_lock_table,
     protagonist_fact_sheet,
     writing_brief,
     must_events,

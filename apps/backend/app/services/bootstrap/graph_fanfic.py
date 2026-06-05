@@ -66,6 +66,8 @@ async def _fanfic_step(
     if needs_project:
         project = db.query(Project).filter(Project.id == state.get("project_id")).first()
 
+    from app.services.bootstrap.json_once import BootstrapStepError
+
     while True:
         emit(run_id, "step_start", db, step=step, label=label)
         try:
@@ -73,6 +75,9 @@ async def _fanfic_step(
                 result = await asyncio.wait_for(fn(svc, project, ctx), timeout=300.0)
             else:
                 result = await asyncio.wait_for(fn(svc, ctx), timeout=300.0)
+        except BootstrapStepError as exc:
+            emit(run_id, "error", db, step=step, message=str(exc))
+            raise
         except asyncio.TimeoutError:
             msg = f"{step} 超时（5 分钟），请重试或检查模型线路"
         except Exception as exc:
@@ -105,10 +110,6 @@ async def node_fanfic_positioning(state: BootstrapState, config: dict | None = N
         "target_words": state["target_words"],
     })
     pos = await gen_fanfic_positioning(svc, ctx)
-    if not pos:
-        emit(run_id, "error", db, step="positioning", message="同人立项生成失败，请检查梗概后重试")
-        raise ValueError("fanfic_positioning_invalid")
-
     ctx["fanfic_positioning"] = pos
     ctx["positioning"] = _to_generic_positioning(pos, ctx.get("fanfic_meta") or {})
 
@@ -147,8 +148,6 @@ async def node_fanfic_gate(state: BootstrapState, config: dict | None = None) ->
             ctx.update({"logline": state["logline"], "premise": state["premise"],
                         "target_words": state["target_words"]})
             positioning = await gen_fanfic_positioning(svc, ctx)
-            if not positioning:
-                raise ValueError("fanfic_positioning_regen_failed")
             ctx["fanfic_positioning"] = positioning
             ctx["positioning"] = _to_generic_positioning(positioning, ctx.get("fanfic_meta") or {})
             emit(run_id, "step_done", db, step="positioning", count=1,

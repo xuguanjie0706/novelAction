@@ -12,11 +12,12 @@ from __future__ import annotations
 from typing import Any
 
 from app.models import Character, Project
-from app.services.bootstrap.parse import parse_json
-from app.services.bootstrap.steps.fanfic._helpers import fanfic_meta_block, persist_extra
 from app.services.bootstrap.antagonist_roster import normalize_antagonist_ladder
-from app.services.llm_token_budgets import max_tokens_bootstrap_completion
+from app.services.bootstrap.json_once import BootstrapStepError, call_bootstrap_json_once
+from app.services.bootstrap.steps.fanfic._helpers import fanfic_meta_block, persist_extra
 from app.services.outline_planning import words_to_plan
+
+_STEP = "fanfic_canon_characters"
 
 
 def _role_from_item(item: dict) -> str:
@@ -90,72 +91,71 @@ async def gen_canon_characters(svc: Any, project: Project, ctx: dict) -> list[Ch
   }}
 ]"""
 
-    last_err = ""
-    for attempt in range(3):
-        fix = f"\n【请修正：{last_err}】" if last_err else ""
-        raw = await svc._call_with_retry(
-            system, prompt + fix,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.characters",
-        )
-        try:
-            data = parse_json(raw)
-        except Exception:
-            last_err = "JSON 解析失败"
-            continue
+    def _validate(data: Any) -> str | None:
         if not isinstance(data, list) or len(data) < 5:
-            last_err = "须至少 5 个角色"
-            continue
+            return "须至少 5 个角色的 JSON 数组"
+        return None
 
-        chars: list[Character] = []
-        canon_count = 0
-        protagonist_count = 0
-        for item in data:
-            if not isinstance(item, dict) or not item.get("name"):
-                continue
-            rt = (item.get("role_type") or "canon").strip().lower()
-            if rt == "canon":
-                canon_count += 1
-            if rt == "protagonist":
-                protagonist_count += 1
-            char = Character(
-                project_id=project.id,
-                name=str(item["name"])[:64],
-                role=_role_from_item(item),
-                gender=item.get("gender"),
-                personality=(item.get("personality") or "")[:500],
-                speech_style=(item.get("speech_style") or "")[:200],
-                current_status=(item.get("current_status") or "alive")[:20],
-                current_location=(item.get("current_location") or "")[:200] or None,
-                extra={
-                    "role_type": rt,
-                    "source_role": item.get("source_role", ""),
-                    "function_tag": item.get("function_tag", ""),
-                    "core_wound": item.get("core_wound", ""),
-                    "current_desire": item.get("current_desire", ""),
-                    "intro_chapter": item.get("intro_chapter", 1),
-                    "first_scene": item.get("first_scene", ""),
-                    "core_role": item.get("core_role", ""),
-                    "relation_to_protagonist": item.get("relation_to_protagonist", ""),
-                },
-            )
-            svc.db.add(char)
-            chars.append(char)
-        if protagonist_count != 1:
-            last_err = f"必须恰好 1 个 role_type=protagonist（当前 {protagonist_count} 个）"
-            svc.db.rollback()
-            continue
-        if canon_count < 3:
-            last_err = "至少 3 个 role_type=canon 角色"
-            svc.db.rollback()
-            continue
-        svc.db.commit()
-        for c in chars:
-            svc.db.refresh(c)
+    data = await call_bootstrap_json_once(
+        svc,
+        step=_STEP,
+        system=system,
+        prompt=prompt,
+        task="bootstrap.characters",
+        validate=_validate,
+    )
 
-        _populate_ctx(project, ctx, chars, svc)
-        return chars
-    return []
+    chars: list[Character] = []
+    canon_count = 0
+    protagonist_count = 0
+    for item in data:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        rt = (item.get("role_type") or "canon").strip().lower()
+        if rt == "canon":
+            canon_count += 1
+        if rt == "protagonist":
+            protagonist_count += 1
+        char = Character(
+            project_id=project.id,
+            name=str(item["name"])[:64],
+            role=_role_from_item(item),
+            gender=item.get("gender"),
+            personality=(item.get("personality") or "")[:500],
+            speech_style=(item.get("speech_style") or "")[:200],
+            current_status=(item.get("current_status") or "alive")[:20],
+            current_location=(item.get("current_location") or "")[:200] or None,
+            extra={
+                "role_type": rt,
+                "source_role": item.get("source_role", ""),
+                "function_tag": item.get("function_tag", ""),
+                "core_wound": item.get("core_wound", ""),
+                "current_desire": item.get("current_desire", ""),
+                "intro_chapter": item.get("intro_chapter", 1),
+                "first_scene": item.get("first_scene", ""),
+                "core_role": item.get("core_role", ""),
+                "relation_to_protagonist": item.get("relation_to_protagonist", ""),
+            },
+        )
+        svc.db.add(char)
+        chars.append(char)
+
+    if protagonist_count != 1:
+        svc.db.rollback()
+        raise BootstrapStepError(
+            _STEP,
+            f"必须恰好 1 个 role_type=protagonist（当前 {protagonist_count} 个）",
+        )
+    if canon_count < 3:
+        svc.db.rollback()
+        raise BootstrapStepError(_STEP, "至少 3 个 role_type=canon 角色")
+
+    svc.db.commit()
+    for c in chars:
+        svc.db.refresh(c)
+
+    _populate_ctx(project, ctx, chars, svc)
+    return chars
 
 
 def _populate_ctx(project: Project, ctx: dict, chars: list[Character], svc: Any) -> None:

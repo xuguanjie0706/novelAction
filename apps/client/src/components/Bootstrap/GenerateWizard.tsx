@@ -724,7 +724,13 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                 retryLoading={retryLoading}
                 onRetryStep={() => {
                   const step = haltedStep ?? selectedStepKey
-                  if (step) void retryFailedStep(step, resumeParams)
+                  if (!step) return
+                  // 番茄线卷纲失败时 run 可能已是 done，resume 会 409 → 改走单步 regenerate
+                  if (phase === 'done' && projectId) {
+                    void triggerRegen(step, projectId, resumeParams)
+                    return
+                  }
+                  void retryFailedStep(step, resumeParams)
                 }}
                 onInsightsUpdate={(updated) =>
                   setInsights(prev => ({

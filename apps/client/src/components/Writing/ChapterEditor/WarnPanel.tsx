@@ -161,6 +161,43 @@ export default function WarnPanel({
                 : `发现 ${warnResult.risk_count} 处风险，建议先修正`}
           </div>
 
+          {/* ── 情节锁定表（程序生成，先于主编预警）── */}
+          {warnResult.chapter_lock_table?.has_prev && (
+            <div className="rounded-lg border border-violet-200 bg-violet-50/70 p-2.5 space-y-1.5">
+              <p className="text-[10px] font-semibold text-violet-800 uppercase tracking-wide flex items-center gap-1">
+                <ShieldCheck size={10} />
+                情节锁定表
+                {warnResult.chapter_lock_table.prev_chapter_number != null && (
+                  <span className="font-normal normal-case text-violet-700">
+                    （第{warnResult.chapter_lock_table.prev_chapter_number}章 → 第
+                    {warnResult.chapter_lock_table.current_chapter_number}章）
+                  </span>
+                )}
+              </p>
+              {(warnResult.chapter_lock_table.locked_beats ?? []).map((b, i) => (
+                <p key={i} className="text-xs text-violet-900 pl-2 leading-relaxed">
+                  · 已发生：{b}
+                </p>
+              ))}
+              {warnResult.chapter_lock_table.prev_tail_anchor && (
+                <p className="text-xs text-violet-800 pl-2 leading-relaxed italic">
+                  上章末尾：「{warnResult.chapter_lock_table.prev_tail_anchor.slice(0, 180)}
+                  {warnResult.chapter_lock_table.prev_tail_anchor.length > 180 ? '…' : ''}」
+                </p>
+              )}
+              {(warnResult.chapter_lock_table.forbidden_replays ?? []).map((f, i) => (
+                <p key={`f-${i}`} className="text-xs text-rose-700 pl-2 leading-relaxed">
+                  ⛔ {f}
+                </p>
+              ))}
+              {(warnResult.chapter_lock_table.outline_conflicts ?? []).map((c, i) => (
+                <p key={`c-${i}`} className="text-xs text-amber-800 pl-2 leading-relaxed">
+                  ⚠️ {c.reason || c.outline_text}
+                </p>
+              ))}
+            </div>
+          )}
+
           {/* ── 主角状态锁定 ── */}
           {warnResult.protagonist_fact_sheet &&
             (warnResult.protagonist_fact_sheet.realm ||

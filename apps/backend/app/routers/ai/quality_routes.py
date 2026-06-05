@@ -203,8 +203,23 @@ async def quality_check(
     chapter.last_quality_report = result
     chapter.quality_checked_at = func.now()
     sync_quality_debts(db, project_id, chapter, result)
+
+    # 根因台账：任意维度 score<8 或存在 issue 时，落库低分项并 best-effort 触发管线级归因。
+    # 全程不抛错，绝不影响质检主结果。
+    from app.services.ai.quality_root_cause import (
+        build_system_knowledge_brief,
+        collect_and_analyze,
+    )
+    rc_brief = build_system_knowledge_brief(
+        character_states=character_states,
+        power_systems_summary=power_systems_summary,
+        continuity_context=continuity_context,
+        storylines_context=storylines_context,
+    )
+    rc_summary = await collect_and_analyze(svc, db, project, chapter, result, rc_brief)
     db.commit()
 
+    result["root_cause_run"] = rc_summary
     return result
 
 
@@ -382,6 +397,13 @@ async def pre_write_warning(
         db=db,
         llm_provider_id=req.llm_provider_id,
     )
+    from app.services.ai.chapter_lock_table import (
+        build_chapter_lock_table,
+        merge_lock_table_into_warn_result,
+    )
+
+    lock_table = build_chapter_lock_table(db, project_id, chapter)
+
     result = await svc.pre_write_warning(
         project_title=project.title,
         genre=project.genre or "玄幻",
@@ -393,7 +415,9 @@ async def pre_write_warning(
         power_systems_summary=power_systems_summary,
         outline_context=outline_context,
         phase=phase,
+        chapter_lock_table_block=lock_table.get("prompt_block") or "",
     )
+    result = merge_lock_table_into_warn_result(result, lock_table)
 
     ch_no = req.chapter_number if req.chapter_number > 0 else (chapter.sort_order or 0)
     profile = req.model_profile if req.model_profile in ("local", "gemini") else "local"

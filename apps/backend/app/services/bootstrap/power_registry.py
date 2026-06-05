@@ -301,5 +301,12 @@ def build_draft_power_context_from_db(db: Any, project_id: Any) -> str:
         "【写章铁律】人物境界/器物/道途须与上述 registry 对齐；"
         "禁止越境施法、未渡劫强行突破、道途与宗门设定矛盾。"
     )
+    from app.services.bootstrap.fanqie_normalize import is_fanqie_project
+    from app.services.bootstrap.fanqie_realm_policy import build_fanqie_realm_discipline_block
+
+    if project and is_fanqie_project(project):
+        fanqie_block = build_fanqie_realm_discipline_block(ctx.get("power_level_names") or [])
+        if fanqie_block:
+            parts.append(fanqie_block)
     return "\n\n".join(parts)
 

@@ -37,6 +37,7 @@ from app.models.memory_conflict_detect_log import MemoryConflictDetectLog
 from app.models.generation_job import GenerationJob
 from app.models.email_login_code import EmailLoginCode
 from app.models.outline_issue_log import OutlineIssueLog
+from app.models.quality_root_cause_log import QualityRootCauseLog
 
 __all__ = [
     "Project",
@@ -78,4 +79,5 @@ __all__ = [
     "GenerationJob",
     "EmailLoginCode",
     "OutlineIssueLog",
+    "QualityRootCauseLog",
 ]

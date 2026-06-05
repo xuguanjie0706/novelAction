@@ -2,6 +2,8 @@
 
 from app.services.bootstrap.protagonist_progression import (
     apply_volume_protagonist_fields,
+    build_protagonist_progression_prompt_block,
+    compute_book_realm_endpoints,
     compute_vol_end_ranks,
     format_volume_realm_anchor_line,
 )
@@ -17,6 +19,22 @@ def _sample_ctx():
             {"axis_role": "primary", "protagonist_end_rank": 5},
         ],
     }
+
+
+def test_compute_book_realm_endpoints_with_char_realms():
+    """回归：char_realms 存在时不得 NameError（registry 须从 ctx 读取）。"""
+    ctx = _sample_ctx()
+    result = compute_book_realm_endpoints(ctx)
+    assert result is not None
+    start_rank, end_rank, names = result
+    assert start_rank >= 1
+    assert end_rank > start_rank
+    assert names
+
+
+def test_build_protagonist_progression_prompt_with_char_realms():
+    block = build_protagonist_progression_prompt_block(_sample_ctx(), 5)
+    assert "主角境界成长路线" in block
 
 
 def test_compute_vol_end_ranks_monotonic():

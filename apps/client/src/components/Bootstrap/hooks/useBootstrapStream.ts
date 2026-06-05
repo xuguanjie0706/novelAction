@@ -38,8 +38,8 @@ export type StepKey =
   | 'positioning' | 'project'
   | 'power_systems' | 'factions' | 'storylines' | 'antagonist_ladder' | 'characters'
   | 'skills' | 'items' | 'settings'
-  | 'volumes' | 'memory' | 'relations'
-  | 'opening_contract' | 'consistency'
+  | 'volumes' | 'emotion_arc' | 'villain_arc' | 'memory' | 'relations'
+  | 'core_mysteries' | 'opening_contract' | 'consistency'
   /** 时间轴汇总 / 落库中（仅 UI 图标，非 graph 步骤） */
   | 'all' | 'saving'
   // 番茄专属步骤
@@ -110,8 +110,11 @@ export const STEP_META: Record<StepKey, {
   items:            { icon: '💎', stepColor: '#eab308', phase: 'characters', stepNum: 'STEP 7',    desc: '生成关键道具与法宝，埋下伏笔与稀缺资源节点' },
   settings:         { icon: '🌍', stepColor: '#06b6d4', phase: 'world',      stepNum: 'STEP 8',    desc: '生成世界底层规则、地理格局、历史传说等叙事性设定卡' },
   volumes:          { icon: '📖', stepColor: '#a78bfa', phase: 'narrative',  stepNum: 'STEP 9',    desc: '规划全书卷级骨架，为每卷分配叙事阶段标记' },
+  emotion_arc:      { icon: '🎭', stepColor: '#ec4899', phase: 'narrative',  stepNum: 'STEP 9.5',  desc: '规划全书情绪节律图，标记每卷情绪收支' },
+  villain_arc:      { icon: '😈', stepColor: '#dc2626', phase: 'narrative',  stepNum: 'STEP 9.8',  desc: '生成反派独立行动线，与主角成长轴对位' },
   memory:           { icon: '🧠', stepColor: '#ec4899', phase: 'narrative',  stepNum: 'STEP 10',   desc: '注入长篇记忆系统的初始知识种子，供后续章节检索' },
   relations:        { icon: '🕸️', stepColor: '#22c55e', phase: 'characters', stepNum: 'STEP 11',   desc: '建立人物关系网络，明确情感张力与社会结构' },
+  core_mysteries:   { icon: '🔮', stepColor: '#8b5cf6', phase: 'narrative',  stepNum: 'STEP 11.5', desc: '预分配全书跨卷核心谜题，埋下追更伏笔' },
   opening_contract: { icon: '🤝', stepColor: '#22c55e', phase: 'narrative',  stepNum: 'STEP 12',   desc: '明确前10章对读者的追读承诺，防止开局流失' },
   consistency:      { icon: '🔍', stepColor: '#ef4444', phase: 'qa',         stepNum: 'STEP 13',   desc: '交叉核验所有生成物，标出矛盾与需要确认的问题' },
   all:              { icon: '📋', stepColor: '#94a3b8', phase: 'qa',         stepNum: '—',         desc: '全部步骤汇总视图' },
@@ -136,16 +139,27 @@ const SEQ_STEP_KEYS: StepKey[] = [
   'positioning', 'project',
   'power_systems', 'factions', 'storylines', 'antagonist_ladder', 'characters',
   'skills', 'items', 'settings',
-  'volumes', 'memory', 'relations',
+  'volumes', 'emotion_arc', 'villain_arc',
+  'memory', 'relations', 'core_mysteries',
   'opening_contract', 'consistency',
 ]
 
-/** 番茄专属 Bootstrap 步骤列表（9阶段）*/
+/** 番茄专属 Bootstrap 步骤列表（与通用线对齐，补全全部步骤）*/
 const FANQIE_STEP_KEYS: StepKey[] = [
   'positioning', 'project',
-  'contrast_design', 'golden_finger', 'face_slap_map',
-  'power_ladder', 'characters', 'volumes',
-  'rhythm_map', 'signal_audit',
+  // Phase B：番茄创意设计
+  'contrast_design', 'golden_finger', 'face_slap_map', 'power_ladder',
+  // Phase C：世界构建（复用通用）
+  'factions', 'storylines', 'antagonist_ladder', 'characters',
+  'skills', 'items', 'settings',
+  // Phase D：卷骨架
+  'volumes',
+  // Phase E：节奏 + 情绪
+  'emotion_arc', 'villain_arc', 'rhythm_map',
+  // Phase F：记忆 / 伏笔 / 承诺
+  'memory', 'relations', 'core_mysteries', 'opening_contract',
+  // Phase G：校验
+  'consistency', 'signal_audit',
 ]
 
 const FANFIC_STEP_KEYS: StepKey[] = [
@@ -229,6 +243,11 @@ export function useBootstrapStream() {
   const [gateMessage, setGateMessage]     = useState('')
   const [gatePreview, setGatePreview]     = useState<Record<string, unknown> | null>(null)
   const [haltedStep, setHaltedStep]       = useState<StepKey | null>(null)
+  const haltedStepRef = useRef<StepKey | null>(null)
+  const syncHaltedStep = useCallback((next: StepKey | null) => {
+    haltedStepRef.current = next
+    setHaltedStep(next)
+  }, [])
   const [retryLoading, setRetryLoading]   = useState(false)
   const [generationStartMs, setGenStartMs] = useState<number | null>(null)
   const [activeLogline, setActiveLogline]   = useState('')
@@ -238,6 +257,7 @@ export function useBootstrapStream() {
   const streamCompleteRef = useRef(false)
   /** 供 ``cancel()`` 读取最新 run_id，避免闭包陈旧 */
   const runIdRef          = useRef<string | null>(null)
+  const projectIdRef      = useRef<string | null>(null)
   /** 当前运行模式；供 cancel / reconnect 等回调读取，避免闭包陈旧 */
   const currentModeRef    = useRef<StartParams['mode']>('sequential')
   const autoModeRef       = useRef(false)
@@ -251,6 +271,10 @@ export function useBootstrapStream() {
   useEffect(() => {
     runIdRef.current = runId
   }, [runId])
+
+  useEffect(() => {
+    projectIdRef.current = projectId
+  }, [projectId])
 
   function gateStepFromGateData(gd: Record<string, unknown> | null | undefined): GatePendingStep | null {
     if (!gd) return null
@@ -330,6 +354,7 @@ export function useBootstrapStream() {
       if (!res.ok) return
       const run = (await res.json()) as { project_id?: string | null; status?: string }
       if (!run.project_id) return
+      if (haltedStepRef.current) return
       streamCompleteRef.current = true
       setProjectId(run.project_id)
       setPhase('done')
@@ -347,7 +372,7 @@ export function useBootstrapStream() {
       typeof evt.ts === 'number' && Number.isFinite(evt.ts) ? (evt.ts as number) : Date.now()
 
     if (event === 'step_start' && key) {
-      setHaltedStep(prev => (prev === key ? null : prev))
+      syncHaltedStep(haltedStepRef.current === key ? null : haltedStepRef.current)
       setSteps(prev => prev.map(s =>
         s.key === key
           ? { ...s, status: 'running', inflight: s.inflight + 1,
@@ -396,7 +421,7 @@ export function useBootstrapStream() {
       const msg = (typeof message === 'string' && message.trim()) ? message : '生成失败'
       if (key) {
         setPhase('generating')
-        setHaltedStep(key)
+        syncHaltedStep(key)
         setSteps(prev => blockStepsAfter(
           prev.map(s =>
             s.key === key
@@ -457,12 +482,18 @@ export function useBootstrapStream() {
       setSteps(getStepKeys(currentModeRef.current).map(k => makeStep(k)))
       setErrorMsg('')
     } else if (event === 'complete') {
+      if (haltedStepRef.current) {
+        setErrorMsg(prev =>
+          prev || '流程已结束，但卷纲等步骤仍失败，请使用「重新生成本步」补跑。',
+        )
+        return
+      }
       streamCompleteRef.current = true
       setProjectId(project_id)
       setPhase('done')
       clearActiveBootstrapRun()
     }
-  }, [tryFinalizeFanqieRun])
+  }, [tryFinalizeFanqieRun, syncHaltedStep])
 
   async function readSse(res: Response) {
     if (!res.body) throw new Error('响应无流式正文')
@@ -664,7 +695,7 @@ export function useBootstrapStream() {
         const haltMsg = typeof gd?.message === 'string' ? gd.message : '步骤失败，请手动重试此步骤'
         if (run.project_id) setProjectId(run.project_id)
         if (failed) {
-          setHaltedStep(failed)
+          syncHaltedStep(failed)
           setErrorMsg(haltMsg)
           setSteps(prev => blockStepsAfter(prev, failed))
           setPhase('generating')
@@ -756,7 +787,7 @@ export function useBootstrapStream() {
         } catch { /* raw text */ }
         throw new Error(detail || `重试失败 (${res.status})`)
       }
-      setHaltedStep(null)
+      syncHaltedStep(null)
       setErrorMsg('')
       setSteps(prev => resetStepsFromRetry(prev, step))
       setPhase('generating')
@@ -771,7 +802,11 @@ export function useBootstrapStream() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '重试失败'
       setErrorMsg(msg)
-      toast.error(msg.length > 120 ? `${msg.slice(0, 120)}…` : msg)
+      if (msg.includes("status 'done'") && projectIdRef.current) {
+        toast.error('本次生成已结束，请点「重新生成本步」补跑卷纲', { duration: 5000 })
+      } else {
+        toast.error(msg.length > 120 ? `${msg.slice(0, 120)}…` : msg)
+      }
     } finally {
       setRetryLoading(false)
     }

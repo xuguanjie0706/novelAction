@@ -231,8 +231,6 @@ async def _run_step(state: BootstrapState, config: dict | None,
 
 async def node_positioning(state: BootstrapState, config: dict | None = None) -> dict:
     """Step 0：立项会议。"""
-    from app.services.bootstrap.step_failure import pause_for_step_retry, user_wants_step_retry
-
     config = _resolve_config(config)
     db = config["configurable"]["db"]
     run_id = _state_run_id(state, config)
@@ -241,18 +239,8 @@ async def node_positioning(state: BootstrapState, config: dict | None = None) ->
     ctx.update({"logline": state["logline"], "premise": state["premise"],
                 "target_words": state["target_words"]})
 
-    while True:
-        emit(run_id, "step_start", db, step="positioning", label="召开立项会议（题材定位）...")
-        positioning = await svc._gen_positioning(ctx)
-        if positioning:
-            break
-        msg = "立项定位生成未通过 schema 校验（已重试 3 次），请更换模型或精简创意后重试"
-        emit(run_id, "error", db, step="positioning", message=msg)
-        user = await pause_for_step_retry(state, config, step="positioning", message=msg, ctx=ctx)
-        if user_wants_step_retry(user):
-            continue
-        return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "positioning", "reason": msg}]}
-
+    emit(run_id, "step_start", db, step="positioning", label="召开立项会议（题材定位）...")
+    positioning = await svc._gen_positioning(ctx)
     ctx["positioning"] = positioning
     emit(run_id, "step_done", db, step="positioning", count=1,
          preview=(positioning.get("selling_point") or "")[:30])
@@ -292,10 +280,6 @@ async def node_gate(state: BootstrapState, config: dict | None = None) -> dict:
             ctx.update({"logline": state["logline"], "premise": state["premise"],
                         "target_words": state["target_words"]})
             positioning = await svc._gen_positioning(ctx)
-            if not positioning:
-                emit(run_id, "error", db, step="positioning",
-                     message="重新生成立项定位失败，请稍后重试")
-                raise ValueError("positioning_regen_failed")
             ctx["positioning"] = positioning
             emit(run_id, "step_start", db, step="positioning", label="重新召开立项会议…")
             emit(run_id, "step_done", db, step="positioning", count=1,

@@ -10,8 +10,9 @@ from __future__ import annotations
 from typing import Any
 
 from app.models import Project
-from app.services.bootstrap.parse import parse_json
-from app.services.llm_token_budgets import max_tokens_bootstrap_completion
+from app.services.bootstrap.steps.fanqie._json_once import call_fanqie_json_once
+
+_STEP = "rhythm_map"
 
 
 async def gen_rhythm_map(svc: Any, project: Project, ctx: dict) -> dict:
@@ -79,47 +80,38 @@ async def gen_rhythm_map(svc: Any, project: Project, ctx: dict) -> dict:
 3. major_payoff_chapters 标出5个最重要的大爽点章节
 4. 只返回 JSON"""
 
-    last_err = ""
-    for attempt in range(3):
-        fix = f"\n【请修正：{last_err}】" if last_err else ""
-        raw = await svc._call_with_retry(
-            system, prompt + fix,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.opening_contract",
-        )
-        try:
-            data = parse_json(raw)
-        except Exception:
-            last_err = "JSON 解析失败"
-            continue
+    def _validate(data: Any) -> str | None:
         if not isinstance(data, dict):
-            last_err = "须为 JSON 对象"
-            continue
+            return "须为 JSON 对象"
         tags = data.get("chapter_tags")
         if not isinstance(tags, list) or len(tags) < 30:
-            last_err = "chapter_tags 至少需要30条"
-            continue
+            return "chapter_tags 至少需要30条"
         buffer = data.get("story_buffer")
         if not isinstance(buffer, list) or len(buffer) < 2:
-            last_err = "story_buffer 至少需要2个支线弧"
-            continue
+            return "story_buffer 至少需要2个支线弧"
+        return None
 
-        # 自动检测连续过渡超2章
-        data["auto_dry_spells"] = _detect_dry_spells(tags)
+    data = await call_fanqie_json_once(
+        svc,
+        step=_STEP,
+        system=system,
+        prompt=prompt,
+        task="bootstrap.opening_contract",
+        validate=_validate,
+    )
 
-        extra = dict(project.extra or {})
-        extra["rhythm_map"] = data
-        project.extra = extra
-        svc.db.commit()
+    data["auto_dry_spells"] = _detect_dry_spells(data.get("chapter_tags") or [])
 
-        ctx["rhythm_map"] = data
+    extra = dict(project.extra or {})
+    extra["rhythm_map"] = data
+    project.extra = extra
+    svc.db.commit()
+    ctx["rhythm_map"] = data
 
-        from app.services.bootstrap.fanqie_normalize import converge_fanqie_project
+    from app.services.bootstrap.fanqie_normalize import converge_fanqie_project
 
-        converge_fanqie_project(svc.db, project, ctx)
-        return data
-
-    return {}
+    converge_fanqie_project(svc.db, project, ctx)
+    return data
 
 
 def _detect_dry_spells(tags: list) -> list[str]:

@@ -8,6 +8,7 @@ from app.services.bootstrap.volume_beats import VOLUME_JSON_BEAT_SCHEMA
 from app.services.bootstrap.antagonist_roster import build_antagonist_ladder_prompt_block
 from app.services.bootstrap.volume_entity_registry import build_volume_entity_prompt_block
 from app.services.bootstrap.storyline_weave_blocks import build_storyline_weave_volumes_block
+from app.services.bootstrap.volume_chapter_starts import build_volume_global_ranges_block
 from app.services.outline_planning import words_to_plan
 
 
@@ -69,6 +70,10 @@ def build_volumes_prompt(project: Project, ctx: dict) -> tuple[str, str]:
     plan = words_to_plan(tw)
     n_volumes = plan["total_volumes"]
     total_chapters_hint = plan["total_chapters"]
+    per_vol = max(15, total_chapters_hint // max(n_volumes, 1))
+    remainder = total_chapters_hint - per_vol * n_volumes
+    planned_hint = [per_vol + (1 if i < remainder else 0) for i in range(n_volumes)]
+    global_ranges_block = build_volume_global_ranges_block(planned_hint)
 
     positioning = ctx.get("positioning") or {}
     positioning_block = ""
@@ -135,7 +140,7 @@ def build_volumes_prompt(project: Project, ctx: dict) -> tuple[str, str]:
 根据故事规模规划卷级结构，返回 JSON 数组。
 【字数目标】全书 {tw:,} 字，约 {total_chapters_hint} 章；**必须恰好 {n_volumes} 卷**。
 每卷 planned_chapters 填 15-80（标准 30 或 60）；各卷之和尽量接近 {total_chapters_hint} 章。
-{protagonist_progression_block}
+{global_ranges_block}{protagonist_progression_block}
 【卷级战力曲线铁律】
 - protagonist_realm_start / protagonist_realm_end 必填（可带小境，如「金丹境初期→金丹境后期」）。
 - volume_boss / volume_boss_realm 必填；大境 rank 须 ≥ 前卷；同大境须更高小境（初期<中期<后期<圆满）。

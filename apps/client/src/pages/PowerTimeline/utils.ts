@@ -1,5 +1,5 @@
 /** 战力时间轴图表布局与配色工具。 */
-import type { PowerTimeline, RealmScaleLevel } from '../../types'
+import type { PowerTimeline, PowerTimelinePoint, PowerTimelineRow, RealmScaleLevel } from '../../types'
 
 export const LABEL_W = 132
 export const VOL_W = 72
@@ -73,6 +73,88 @@ export function xSlotOffset(slot: string): number {
   if (slot.includes('start') || slot === 'debut') return -VOL_W * 0.22
   if (slot.includes('end') || slot === 'climax' || slot === 'volume_boss' || slot === 'peak') return VOL_W * 0.22
   return 0
+}
+
+export function pointScore(p: PowerTimelinePoint): number {
+  return p.effective_score ?? p.major_rank
+}
+
+/** 主角折线路径顺序：同卷 start→end，再按卷序串联（禁止字母序 end 先于 start）。 */
+export function orderProtagonistPathPoints(points: PowerTimelinePoint[]): PowerTimelinePoint[] {
+  const byVol = new Map<number, { start?: PowerTimelinePoint; end?: PowerTimelinePoint }>()
+  for (const p of points) {
+    const bucket = byVol.get(p.volume_order) ?? {}
+    if (p.point_kind.includes('start')) bucket.start = p
+    else if (p.point_kind.includes('end')) bucket.end = p
+    byVol.set(p.volume_order, bucket)
+  }
+  const ordered: PowerTimelinePoint[] = []
+  for (const vo of [...byVol.keys()].sort((a, b) => a - b)) {
+    const { start, end } = byVol.get(vo)!
+    if (start) ordered.push(start)
+    if (end) ordered.push(end)
+  }
+  return ordered
+}
+
+/** 卷间境界回退时断开折线，避免画出「断崖」误导线。 */
+export function splitProtagonistPathSegments(points: PowerTimelinePoint[]): PowerTimelinePoint[][] {
+  const ordered = orderProtagonistPathPoints(points)
+  if (!ordered.length) return []
+
+  const segments: PowerTimelinePoint[][] = [[ordered[0]]]
+  for (let i = 1; i < ordered.length; i++) {
+    const prev = ordered[i - 1]
+    const cur = ordered[i]
+    const crossVolume = prev.point_kind.includes('end') && cur.point_kind.includes('start')
+    const regressed = crossVolume && pointScore(cur) < pointScore(prev) - 0.01
+    if (regressed) segments.push([cur])
+    else segments[segments.length - 1].push(cur)
+  }
+  return segments
+}
+
+export function pathFromPoints(
+  points: PowerTimelinePoint[],
+  min: number,
+  max: number,
+  innerH: number,
+): string {
+  return points
+    .map((p, i) => {
+      const x = xVolumeCenter(p.volume_order) + xSlotOffset(p.point_kind)
+      const y = yToPx(pointScore(p), min, max, innerH)
+      return `${i === 0 ? 'M' : 'L'} ${x} ${y}`
+    })
+    .join(' ')
+}
+
+/** 从结构化表行检测战力曲线数据异常（非渲染问题）。 */
+export function detectPowerTimelineWarnings(rows: PowerTimelineRow[]): string[] {
+  const warnings: string[] = []
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    const start = row.protagonist_rank_start
+    const end = row.protagonist_rank_end
+    if (start != null && end != null && end - start >= 2) {
+      warnings.push(
+        `第${row.volume_order}卷：主角单卷跃升 ${end - start} 个大境（${row.protagonist_realm_start ?? '—'}→${row.protagonist_realm_end ?? '—'}）`,
+      )
+    }
+    if ((row.boss_vs_protagonist_end_delta ?? 0) < 0) {
+      warnings.push(`第${row.volume_order}卷：卷末主角已强于本卷 Boss（差值 ${row.boss_vs_protagonist_end_delta}）`)
+    }
+    if (i < rows.length - 1) {
+      const next = rows[i + 1]
+      const nextStart = next.protagonist_rank_start
+      if (end != null && nextStart != null && nextStart < end) {
+        warnings.push(
+          `第${row.volume_order}卷末→第${next.volume_order}卷初境界回退（${row.protagonist_realm_end ?? '—'}→${next.protagonist_realm_start ?? '—'}）`,
+        )
+      }
+    }
+  }
+  return warnings
 }
 
 export function formatPhase(phase: string): string {

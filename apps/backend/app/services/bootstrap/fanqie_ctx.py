@@ -18,4 +18,7 @@ def merge_fanqie_extra_into_ctx(project: Any, ctx: dict) -> dict:
     ):
         if extra.get(key):
             ctx[key] = extra[key]
+    from app.services.bootstrap.fanqie_realm_policy import hydrate_fanqie_power_ctx
+
+    hydrate_fanqie_power_ctx(ctx)
     return ctx

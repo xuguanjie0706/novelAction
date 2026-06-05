@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.bootstrap.parse import parse_json
-from app.services.llm_token_budgets import max_tokens_bootstrap_completion
+from app.services.bootstrap.steps.fanqie._json_once import call_fanqie_json_once
+
+_STEP = "fanqie_positioning"
 
 # 番茄主流类型公式（供 AI 选择，避免生成不上架的边缘题材）
 _FANQIE_ARCHETYPES = (
@@ -21,13 +22,32 @@ _FANQIE_ARCHETYPES = (
 )
 
 
+def _validate_positioning(data: Any) -> str | None:
+    if not isinstance(data, dict):
+        return "根类型须为 JSON 对象"
+    required = {
+        "genre_archetype",
+        "core_satisfaction",
+        "competitor_works",
+        "differentiation",
+        "platform_tags",
+        "algo_hook",
+    }
+    if missing := required - data.keys():
+        return f"缺少字段：{missing}"
+    if not data.get("genre_archetype") or not data.get("core_satisfaction"):
+        return "genre_archetype / core_satisfaction 不能为空"
+    return None
+
+
 async def gen_algo_positioning(svc: Any, ctx: dict) -> dict:
     """
     召开番茄算法立项会议：从 logline 锁定类型公式 + ONE 核心爽感 + 竞品差异。
 
     产物写入 ctx['fanqie_positioning']，同时以 ctx['positioning'] 兼容项目创建步骤。
 
-    @returns fanqie_positioning dict；校验失败三次后返回空 dict（不中断图）
+    @returns fanqie_positioning dict
+    @raises FanqieStepError: JSON 解析或字段校验失败（不重试）
     """
     system = (
         "你是有20年番茄小说运营经验的平台总编。"
@@ -59,33 +79,12 @@ async def gen_algo_positioning(svc: Any, ctx: dict) -> dict:
 4. 若 logline 暗示的题材不适合番茄（如纯文学、政治敏感），请在 taboo_check 中说明
 5. 只返回 JSON，不要解释"""
 
-    last_err = ""
-    for attempt in range(3):
-        fix = (
-            f"\n【上次输出未通过校验，请修正：{last_err}】"
-            if last_err else ""
-        )
-        raw = await svc._call_with_retry(
-            system, prompt + fix,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.positioning",
-        )
-        try:
-            data = parse_json(raw)
-        except Exception:
-            last_err = "JSON 解析失败"
-            continue
-        if not isinstance(data, dict):
-            last_err = "根类型须为 JSON 对象"
-            continue
-        required = {"genre_archetype", "core_satisfaction", "competitor_works",
-                    "differentiation", "platform_tags", "algo_hook"}
-        missing = required - data.keys()
-        if missing:
-            last_err = f"缺少字段：{missing}"
-            continue
-        if not data.get("genre_archetype") or not data.get("core_satisfaction"):
-            last_err = "genre_archetype / core_satisfaction 不能为空"
-            continue
-        return data
-    return {}
+    data = await call_fanqie_json_once(
+        svc,
+        step=_STEP,
+        system=system,
+        prompt=prompt,
+        task="bootstrap.positioning",
+        validate=_validate_positioning,
+    )
+    return data

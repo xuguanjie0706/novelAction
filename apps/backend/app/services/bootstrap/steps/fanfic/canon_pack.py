@@ -4,11 +4,11 @@ from __future__ import annotations
 from typing import Any
 
 from app.models import Project
-from app.services.bootstrap.parse import parse_json
+from app.services.bootstrap.json_once import call_bootstrap_json_once
 from app.services.bootstrap.steps.fanfic._helpers import fanfic_meta_block, persist_extra
-from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
-# 空话黑名单：immutable_facts 必须可执行校验，禁止这类无法在正文里验真的口号。
+_STEP = "fanfic_canon_pack"
+
 _VAGUE_FACT_MARKERS = (
     "保持原著风格", "忠于原著", "尊重原著", "原著风格", "符合原著",
     "贴合原著", "还原原著", "不要OOC", "不能OOC", "保持人设",
@@ -16,7 +16,6 @@ _VAGUE_FACT_MARKERS = (
 
 
 def _facts_are_executable(facts: Any) -> tuple[bool, str]:
-    """启发式校验 immutable_facts：须为具体、可比对的事实，而非空泛口号。"""
     if not isinstance(facts, list) or len(facts) < 4:
         return False, "immutable_facts 至少 4 条"
     bad: list[str] = []
@@ -67,34 +66,27 @@ async def gen_canon_pack(svc: Any, project: Project, ctx: dict) -> dict:
 2. immutable_facts 必须可执行校验（禁止「保持原著风格」）
 3. 只返回 JSON"""
 
-    last_err = ""
-    for attempt in range(3):
-        fix = f"\n【请修正：{last_err}】" if last_err else ""
-        raw = await svc._call_with_retry(
-            system, prompt + fix,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.settings",
-        )
-        try:
-            data = parse_json(raw)
-        except Exception:
-            last_err = "JSON 解析失败"
-            continue
+    def _validate(data: Any) -> str | None:
         if not isinstance(data, dict):
-            last_err = "须为 JSON 对象"
-            continue
+            return "须为 JSON 对象"
         roster = data.get("character_roster")
         if not isinstance(roster, list) or len(roster) < 3:
-            last_err = "character_roster 至少 3 人"
-            continue
+            return "character_roster 至少 3 人"
         if not data.get("world_summary"):
-            last_err = "world_summary 不能为空"
-            continue
+            return "world_summary 不能为空"
         facts_ok, facts_err = _facts_are_executable(data.get("immutable_facts"))
         if not facts_ok:
-            last_err = facts_err
-            continue
-        persist_extra(project, svc, "fanfic_canon", data)
-        ctx["fanfic_canon"] = data
-        return data
-    return {}
+            return facts_err
+        return None
+
+    data = await call_bootstrap_json_once(
+        svc,
+        step=_STEP,
+        system=system,
+        prompt=prompt,
+        task="bootstrap.settings",
+        validate=_validate,
+    )
+    persist_extra(project, svc, "fanfic_canon", data)
+    ctx["fanfic_canon"] = data
+    return data

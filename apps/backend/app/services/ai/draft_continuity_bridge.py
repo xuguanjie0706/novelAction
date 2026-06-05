@@ -14,20 +14,8 @@ from sqlalchemy.orm import Session
 
 from app.models import Chapter, ChapterIndex, Character, OutlineNode, Project
 from app.services.ai.narrative_knowledge import build_knowledge_boundary_lines
+from app.services.ai.chapter_lock_table import collect_locked_beats, detect_hook_rewind_risk
 from app.utils.chapter_numbering import display_chapter_number
-
-# 上章若已出现左列语义，本章 hook/开篇禁止再以右列语义「重新演一遍」
-_REWIND_PAIRS: list[tuple[str, str]] = [
-    ("觉醒", r"觉醒|重组|淬体|苏醒|异变初启"),
-    ("休妻", r"休书|休妻|退婚书|写下.*休"),
-    ("黑火", r"黑火|神火|九幽|岩浆|火焰涌出"),
-    ("突破", r"突破|破境|节节攀升|冲破.*桎梏"),
-    ("击杀", r"轰杀|斩杀|毙命|跪地求饶"),
-]
-
-_REWIND_HOOK_MARKERS = re.compile(
-    r"觉醒|重组|剧痛|淬体|再度|再次|刚刚开始|初显|异变"
-)
 
 
 def _fmt_index_item(item: Any) -> str:
@@ -64,53 +52,6 @@ def _outline_end_hook(outline_node: OutlineNode | None) -> str:
         return ""
     extra = outline_node.extra if isinstance(outline_node.extra, dict) else {}
     return (extra.get("end_hook") or outline_node.highlight or "").strip()
-
-
-def _locked_beats(
-    prev_idx: ChapterIndex | None,
-    prev_outline: OutlineNode | None,
-) -> list[str]:
-    beats: list[str] = []
-    if prev_idx:
-        for ev in (prev_idx.core_events or [])[:8]:
-            text = _fmt_index_item(ev)
-            if text:
-                beats.append(text)
-        if (prev_idx.ending_hook or "").strip():
-            beats.append(f"章末状态：{(prev_idx.ending_hook or '').strip()}")
-    end_from_outline = _outline_end_hook(prev_outline)
-    if end_from_outline:
-        beats.append(f"大纲章末：{end_from_outline}")
-    return beats
-
-
-def _text_blob(*parts: str) -> str:
-    return "\n".join(p for p in parts if (p or "").strip())
-
-
-def detect_hook_rewind_risk(
-    prev_beats: list[str],
-    prev_tail: str,
-    prev_ending_hook: str,
-    current_hook: str,
-) -> str | None:
-    """规则检测：本章开篇 hook 是否在要求「重播」上章已完成节拍。"""
-    corpus = _text_blob(prev_ending_hook, prev_tail, "；".join(prev_beats))
-    if not corpus.strip() or not (current_hook or "").strip():
-        return None
-    if not _REWIND_HOOK_MARKERS.search(current_hook):
-        return None
-    hits: list[str] = []
-    for done_key, rewind_pat in _REWIND_PAIRS:
-        if done_key in corpus and re.search(rewind_pat, current_hook):
-            hits.append(done_key)
-    if not hits:
-        return None
-    return (
-        f"章纲开篇钩子疑似要求重播上章已完成的节拍（{'、'.join(hits)}）。"
-        "本章开头必须紧接上章末尾**下一拍**，用「核心事件」推进新动作，"
-        "不得把 hook 当作倒叙重开同一场景。"
-    )
 
 
 def _protagonist_voice_block(db: Session, project_id: str) -> str:
@@ -183,7 +124,7 @@ def build_draft_continuity_bridge_block(
             OutlineNode.id == prev_chapter.outline_node_id
         ).first()
 
-    beats = _locked_beats(prev_idx, prev_outline)
+    beats = collect_locked_beats(prev_idx, prev_outline)
     prev_ending = (prev_idx.ending_hook if prev_idx else "") or _outline_end_hook(prev_outline)
 
     sections: list[str] = [

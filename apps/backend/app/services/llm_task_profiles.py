@@ -157,6 +157,7 @@ TASK_PROFILES: dict[str, dict] = {
     },
     # ── 质检 / 一致性（要稳定 JSON 与可比较打分）────────────────
     "quality.micro_patch": {"temperature": 0.15, "top_p": 0.75},
+    "quality.root_cause": {"temperature": 0.2, "top_p": 0.8},
     "quality.check": {
         "temperature": 0.2,
         "top_p": 0.8,

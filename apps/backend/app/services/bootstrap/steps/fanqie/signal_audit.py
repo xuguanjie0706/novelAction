@@ -12,8 +12,9 @@ from __future__ import annotations
 from typing import Any
 
 from app.models import Project
-from app.services.bootstrap.parse import parse_json
-from app.services.llm_token_budgets import max_tokens_bootstrap_completion
+from app.services.bootstrap.steps.fanqie._json_once import call_fanqie_json_once
+
+_STEP = "signal_audit"
 
 
 async def gen_signal_audit(svc: Any, project: Project, ctx: dict) -> dict:
@@ -106,39 +107,31 @@ async def gen_signal_audit(svc: Any, project: Project, ctx: dict) -> dict:
 - 满分100分：各项检查通过各+20分，algo_optimization加分
 - 只返回 JSON"""
 
-    last_err = ""
-    for attempt in range(3):
-        fix = f"\n【请修正：{last_err}】" if last_err else ""
-        raw = await svc._call_with_retry(
-            system, prompt + fix,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="quality.check",
-        )
-        try:
-            data = parse_json(raw)
-        except Exception:
-            last_err = "JSON 解析失败"
-            continue
+    def _validate(data: Any) -> str | None:
         if not isinstance(data, dict):
-            last_err = "须为 JSON 对象"
-            continue
+            return "须为 JSON 对象"
         required = {"genre_signal_check", "overall_pass", "overall_score"}
         if missing := required - data.keys():
-            last_err = f"缺少字段：{missing}"
-            continue
+            return f"缺少字段：{missing}"
+        return None
 
-        extra = dict(project.extra or {})
-        extra["signal_audit"] = data
-        # 将不通过的检查项写入 consistency_issues（兼容前端展示）
-        issues = _collect_issues(data)
-        extra["consistency_issues"] = issues
-        project.extra = extra
-        svc.db.commit()
+    data = await call_fanqie_json_once(
+        svc,
+        step=_STEP,
+        system=system,
+        prompt=prompt,
+        task="quality.check",
+        validate=_validate,
+    )
 
-        ctx["signal_audit"] = data
-        return data
-
-    return {}
+    extra = dict(project.extra or {})
+    extra["signal_audit"] = data
+    issues = _collect_issues(data)
+    extra["consistency_issues"] = issues
+    project.extra = extra
+    svc.db.commit()
+    ctx["signal_audit"] = data
+    return data
 
 
 def _fmt_tags(tags: list) -> str:

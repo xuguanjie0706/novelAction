@@ -15,7 +15,10 @@ import {
   collectScoreExtent,
   formatPhase,
   phaseBarClass,
+  detectPowerTimelineWarnings,
+  pathFromPoints,
   realmTicks,
+  splitProtagonistPathSegments,
   xSlotOffset,
   xVolumeCenter,
   yToPx,
@@ -31,18 +34,11 @@ export default function HybridPowerChart({ data }: Props) {
   const innerH = HYBRID_H - PAD_TOP - PAD_BOTTOM
   const { min, max } = useMemo(() => collectScoreExtent(data), [data])
 
-  const protagonistPath = useMemo(() => {
-    const pts = [...data.chart.protagonist].sort(
-      (a, b) => a.volume_order - b.volume_order || a.point_kind.localeCompare(b.point_kind),
-    )
-    return pts
-      .map((p, i) => {
-        const x = xVolumeCenter(p.volume_order) + xSlotOffset(p.point_kind)
-        const y = yToPx(p.effective_score ?? p.major_rank, min, max, innerH)
-        return `${i === 0 ? 'M' : 'L'} ${x} ${y}`
-      })
-      .join(' ')
-  }, [data.chart.protagonist, min, max, innerH])
+  const protagonistSegments = useMemo(
+    () => splitProtagonistPathSegments(data.chart.protagonist),
+    [data.chart.protagonist],
+  )
+  const dataWarnings = useMemo(() => detectPowerTimelineWarnings(data.rows), [data.rows])
 
   const bossPath = useMemo(() => {
     const pts = [...data.chart.boss].sort((a, b) => a.volume_order - b.volume_order)
@@ -62,6 +58,16 @@ export default function HybridPowerChart({ data }: Props) {
       <div className="px-3 py-2 border-b border-gray-100 text-xs font-semibold text-gray-700">
         折线 + 卷阶段泳道（主角 vs 卷 Boss）
       </div>
+      {dataWarnings.length > 0 && (
+        <div className="mx-2 mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] text-amber-900">
+          <p className="font-semibold mb-1">卷骨架境界数据异常（需在大纲卷导演中修正或重生成卷骨架）</p>
+          <ul className="list-disc pl-4 space-y-0.5">
+            {dataWarnings.map(w => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="p-2 min-w-max">
         <div className="flex">
           <div style={{ width: LABEL_W }} className="shrink-0" />
@@ -109,9 +115,20 @@ export default function HybridPowerChart({ data }: Props) {
                 <line key={i} x1={x} y1={PAD_TOP} x2={x} y2={HYBRID_H - PAD_BOTTOM} stroke="#f3f4f6" />
               )
             })}
-            {protagonistPath && (
-              <path d={protagonistPath} fill="none" stroke="#2563eb" strokeWidth={2.5} strokeLinejoin="round" />
-            )}
+            {protagonistSegments.map((seg, si) => {
+              const d = pathFromPoints(seg, min, max, innerH)
+              if (!d) return null
+              return (
+                <path
+                  key={`p-seg-${si}`}
+                  d={d}
+                  fill="none"
+                  stroke="#2563eb"
+                  strokeWidth={2.5}
+                  strokeLinejoin="round"
+                />
+              )
+            })}
             {bossPath && (
               <path
                 d={bossPath}

@@ -90,6 +90,9 @@ def coerce_pre_write_warning_from_dict(data: dict) -> dict:
             "spatial_bridge": _bridge("spatial_bridge"),
             "realm_bridge": _bridge("realm_bridge"),
         },
+        "chapter_lock_table": data.get("chapter_lock_table")
+        if isinstance(data.get("chapter_lock_table"), dict)
+        else {},
     }
 
 
@@ -127,6 +130,7 @@ def empty_pre_write_warning_error(exc: Exception, response: str) -> dict:
             "spatial_bridge": dict(_EMPTY_BRIDGE),
             "realm_bridge": dict(_EMPTY_BRIDGE),
         },
+        "chapter_lock_table": {},
         "error": str(exc),
         "raw": (response or "")[:1500],
         "parse_failed": True,
@@ -147,5 +151,8 @@ def has_usable_pre_write_body(result: dict | None) -> bool:
     if coerced.get("risks") or coerced.get("reminders"):
         return True
     if coerced.get("must_events") or coerced.get("hallucination_traps"):
+        return True
+    clt = coerced.get("chapter_lock_table") or {}
+    if isinstance(clt, dict) and clt.get("has_prev") and (clt.get("locked_beats") or clt.get("forbidden_replays")):
         return True
     return False

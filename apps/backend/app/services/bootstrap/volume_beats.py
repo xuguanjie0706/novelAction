@@ -255,6 +255,10 @@ def has_volume_beats(extra: dict | None) -> bool:
     )
 
 
+def _chapter_start_global(extra: dict) -> int:
+    return max(_safe_int(extra.get("chapter_start_global"), 1), 1)
+
+
 def format_volume_beats_skeleton_block(
     volume_node: Any,
     *,
@@ -266,31 +270,44 @@ def format_volume_beats_skeleton_block(
     if not has_volume_beats(extra):
         return ""
 
+    from app.services.bootstrap.volume_chapter_starts import (
+        format_volume_chapter_label,
+        shift_chapter_refs_in_text,
+    )
+
+    start_g = _chapter_start_global(extra)
     lines: list[str] = []
     marker = " ← 本卷节拍" if is_current else ""
     if beats["pacing_skeleton"]:
-        lines.append(f"      节奏骨架：{beats['pacing_skeleton'][:100]}{marker}")
+        pacing = shift_chapter_refs_in_text(beats["pacing_skeleton"], start_g)
+        lines.append(f"      节奏骨架：{pacing[:100]}{marker}")
 
     for i, b in enumerate(beats["beat_highlights"][:4], 1):
         if not isinstance(b, dict):
             continue
         bt = _BEAT_TYPE_ZH.get(b.get("beat_type", ""), b.get("beat_type", "燃点"))
+        hint = _safe_int(b.get("chapter_hint"), 0)
+        ch_lbl = format_volume_chapter_label(hint, start_g) if hint > 0 else "第?章"
         lines.append(
-            f"      燃点#{i}·第{b.get('chapter_hint', '?')}章[{bt}]："
+            f"      燃点#{i}·{ch_lbl}[{bt}]："
             f"{(b.get('description') or '')[:70]}"
         )
 
     climax = beats["volume_climax"]
     if isinstance(climax, dict) and climax.get("description"):
+        ch = _safe_int(climax.get("chapter_hint"), 0)
+        ch_lbl = format_volume_chapter_label(ch, start_g) if ch > 0 else "第?章"
         lines.append(
-            f"      卷末高潮·第{climax.get('chapter_hint', '?')}章："
+            f"      卷末高潮·{ch_lbl}："
             f"{str(climax['description'])[:70]}"
         )
 
     turning = beats["emotional_turning_point"]
     if isinstance(turning, dict) and turning.get("description"):
+        ch = _safe_int(turning.get("chapter_hint"), 0)
+        ch_lbl = format_volume_chapter_label(ch, start_g) if ch > 0 else "第?章"
         lines.append(
-            f"      情感转折·第{turning.get('chapter_hint', '?')}章："
+            f"      情感转折·{ch_lbl}："
             f"{str(turning['description'])[:60]}"
         )
 
@@ -464,6 +481,11 @@ def append_volume_beat_draft_brief(
 
 
 VOLUME_JSON_BEAT_SCHEMA = """
+【章号语义（必读，避免每卷都从「全书第1章」误解）】
+- beat_highlights / volume_climax / emotional_turning_point 的 chapter_hint：只填**本卷内**章号（1 ～ planned_chapters），禁止填全书累计章号。
+- pacing_skeleton 中的章段同样用**本卷内**章号（如「1-5章密钩」= 本卷第1-5章，不是全书第1-5章）。
+- 第2卷起剧情须承接前卷 hook / 冲突，禁止每卷 summary 都写成「开局入门/重生第1天」式重置。
+
 【卷级导演单 · 节拍（必填，与 phase 分工：phase=整卷情绪走向，节拍=章序锚点）】
 - beat_highlights：2～4 个「燃点」，禁止整卷只有 1 个或超过 5 个
 - volume_climax：本卷唯一主高潮（通常落在 planned_chapters 后 15%～25%）

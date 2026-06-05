@@ -4,9 +4,10 @@ from __future__ import annotations
 from typing import Any
 
 from app.models import Project
-from app.services.bootstrap.parse import parse_json
+from app.services.bootstrap.json_once import call_bootstrap_json_once
 from app.services.bootstrap.steps.fanfic._helpers import fanfic_meta_block, persist_extra
-from app.services.llm_token_budgets import max_tokens_bootstrap_completion
+
+_STEP = "fanfic_entry"
 
 
 async def gen_entry_hook(svc: Any, project: Project, ctx: dict) -> dict:
@@ -30,35 +31,30 @@ async def gen_entry_hook(svc: Any, project: Project, ctx: dict) -> dict:
   "entry_chapter_hint": "建议切入原著第几章/什么事件前后（同人专用）"
 }}"""
 
-    last_err = ""
-    for attempt in range(3):
-        fix = f"\n【请修正：{last_err}】" if last_err else ""
-        raw = await svc._call_with_retry(
-            system, prompt + fix,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.positioning",
-        )
-        try:
-            data = parse_json(raw)
-        except Exception:
-            last_err = "JSON 解析失败"
-            continue
+    def _validate(data: Any) -> str | None:
         if not isinstance(data, dict):
-            last_err = "须为 JSON 对象"
-            continue
+            return "须为 JSON 对象"
         if not data.get("initial_state_headline") or not data.get("trigger_event"):
-            last_err = "initial_state_headline / trigger_event 必填"
-            continue
-        persist_extra(project, svc, "fanfic_entry", data)
-        ctx["fanfic_entry"] = data
-        ctx["contrast_design"] = {
-            "initial_state_headline": data["initial_state_headline"],
-            "humiliation_scenes": data.get("humiliation_scenes") or [],
-            "protagonist_pain_point": data.get("protagonist_pain_point", ""),
-            "trigger_event": data["trigger_event"],
-            "trigger_word_estimate": data.get("trigger_word_estimate", ""),
-            "final_destination": data.get("final_destination", ""),
-            "contrast_ratio_note": data.get("contrast_ratio_note", ""),
-        }
-        return data
-    return {}
+            return "initial_state_headline / trigger_event 必填"
+        return None
+
+    data = await call_bootstrap_json_once(
+        svc,
+        step=_STEP,
+        system=system,
+        prompt=prompt,
+        task="bootstrap.positioning",
+        validate=_validate,
+    )
+    persist_extra(project, svc, "fanfic_entry", data)
+    ctx["fanfic_entry"] = data
+    ctx["contrast_design"] = {
+        "initial_state_headline": data["initial_state_headline"],
+        "humiliation_scenes": data.get("humiliation_scenes") or [],
+        "protagonist_pain_point": data.get("protagonist_pain_point", ""),
+        "trigger_event": data["trigger_event"],
+        "trigger_word_estimate": data.get("trigger_word_estimate", ""),
+        "final_destination": data.get("final_destination", ""),
+        "contrast_ratio_note": data.get("contrast_ratio_note", ""),
+    }
+    return data

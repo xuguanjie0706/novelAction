@@ -10,8 +10,9 @@ from __future__ import annotations
 from typing import Any
 
 from app.models import Project
-from app.services.bootstrap.parse import parse_json
-from app.services.llm_token_budgets import max_tokens_bootstrap_completion
+from app.services.bootstrap.steps.fanqie._json_once import call_fanqie_json_once
+
+_STEP = "face_slap_map"
 
 
 async def gen_face_slap_map(svc: Any, project: Project, ctx: dict) -> dict:
@@ -67,40 +68,32 @@ async def gen_face_slap_map(svc: Any, project: Project, ctx: dict) -> dict:
 4. slap_scene 必须是「动作」而非「结果」（错误：'主角赢了'；正确：'主角当众把支票摔在对方脸上'）
 5. 只返回 JSON"""
 
-    last_err = ""
-    for attempt in range(3):
-        fix = f"\n【请修正：{last_err}】" if last_err else ""
-        raw = await svc._call_with_retry(
-            system, prompt + fix,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.positioning",
-        )
-        try:
-            data = parse_json(raw)
-        except Exception:
-            last_err = "JSON 解析失败"
-            continue
+    def _validate(data: Any) -> str | None:
         if not isinstance(data, dict):
-            last_err = "须为 JSON 对象"
-            continue
+            return "须为 JSON 对象"
         targets = data.get("targets")
         if not isinstance(targets, list) or len(targets) < 3:
-            last_err = "targets 至少需要 3 个打脸对象"
-            continue
+            return "targets 至少需要 3 个打脸对象"
         first_ch = data.get("first_slap_chapter")
         if isinstance(first_ch, int) and first_ch > 5:
-            last_err = "first_slap_chapter 必须 ≤ 5"
-            continue
+            return "first_slap_chapter 必须 ≤ 5"
+        return None
 
-        extra = dict(project.extra or {})
-        extra["face_slap_map"] = data
-        project.extra = extra
-        svc.db.commit()
+    data = await call_fanqie_json_once(
+        svc,
+        step=_STEP,
+        system=system,
+        prompt=prompt,
+        task="bootstrap.positioning",
+        validate=_validate,
+    )
 
-        ctx["face_slap_map"] = data
-        return data
-
-    return {}
+    extra = dict(project.extra or {})
+    extra["face_slap_map"] = data
+    project.extra = extra
+    svc.db.commit()
+    ctx["face_slap_map"] = data
+    return data
 
 
 def _format_stages(stages: list) -> str:

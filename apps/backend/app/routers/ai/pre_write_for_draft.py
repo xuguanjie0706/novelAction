@@ -37,6 +37,7 @@ def _pre_warn_done_payload(
         "hallucination_traps": warn_result.get("hallucination_traps") or [],
         "risks": (warn_result.get("risks") or [])[:5],
         "reminders": (warn_result.get("reminders") or [])[:5],
+        "chapter_lock_table": warn_result.get("chapter_lock_table") or {},
         "rag_retrieval_log_id": warn_result.get("rag_retrieval_log_id"),
         "record_id": record_id,
         "reused": reused,
@@ -67,9 +68,22 @@ def try_reuse_pre_write_brief_from_record(
     )
     if not rec:
         return None
+    chapter = db.query(Chapter).filter(
+        Chapter.id == chapter_id,
+        Chapter.project_id == project_id,
+    ).first()
+    if not chapter:
+        return None
     raw = rec.result
     warn_result = raw if isinstance(raw, dict) else {}
     from app.services.ai.pre_write_warn_parse import has_usable_pre_write_body
+    from app.services.ai.chapter_lock_table import (
+        build_chapter_lock_table,
+        merge_lock_table_into_warn_result,
+    )
+
+    lock_table = build_chapter_lock_table(db, project_id, chapter)
+    warn_result = merge_lock_table_into_warn_result(warn_result, lock_table)
 
     if not has_usable_pre_write_body(warn_result):
         return None

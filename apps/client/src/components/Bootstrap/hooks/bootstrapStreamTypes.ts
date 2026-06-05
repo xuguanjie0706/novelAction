@@ -29,8 +29,8 @@ export type StepKey =
   | 'positioning' | 'project'
   | 'power_systems' | 'factions' | 'storylines' | 'antagonist_ladder' | 'characters'
   | 'skills' | 'items' | 'settings'
-  | 'volumes' | 'memory' | 'relations'
-  | 'opening_contract' | 'consistency'
+  | 'volumes' | 'emotion_arc' | 'villain_arc' | 'memory' | 'relations'
+  | 'core_mysteries' | 'opening_contract' | 'consistency'
   /** 时间轴汇总 / 落库中（仅 UI 图标，非 graph 步骤） */
   | 'all' | 'saving'
   // 番茄专属步骤
@@ -104,8 +104,11 @@ export const STEP_META: Record<StepKey, {
   items:             { icon: '💎', stepColor: '#eab308', phase: 'characters', stepNum: 'STEP 7',  desc: '生成关键道具与法宝，埋下伏笔与稀缺资源节点' },
   settings:          { icon: '🌍', stepColor: '#06b6d4', phase: 'world',      stepNum: 'STEP 8',  desc: '生成世界底层规则、地理格局、历史传说等叙事性设定卡' },
   volumes:           { icon: '📖', stepColor: '#a78bfa', phase: 'narrative',  stepNum: 'STEP 9',  desc: '规划全书卷级骨架，为每卷分配叙事阶段标记' },
+  emotion_arc:       { icon: '🎭', stepColor: '#ec4899', phase: 'narrative',  stepNum: 'STEP 9.5', desc: '规划全书情绪节律图，标记每卷情绪收支' },
+  villain_arc:       { icon: '😈', stepColor: '#dc2626', phase: 'narrative',  stepNum: 'STEP 9.8', desc: '生成反派独立行动线，与主角成长轴对位' },
   memory:            { icon: '🧠', stepColor: '#ec4899', phase: 'narrative',  stepNum: 'STEP 10', desc: '注入长篇记忆系统的初始知识种子，供后续章节检索' },
   relations:         { icon: '🕸️', stepColor: '#22c55e', phase: 'characters', stepNum: 'STEP 11', desc: '建立人物关系网络，明确情感张力与社会结构' },
+  core_mysteries:    { icon: '🔮', stepColor: '#8b5cf6', phase: 'narrative',  stepNum: 'STEP 11.5', desc: '预分配全书跨卷核心谜题，埋下追更伏笔' },
   opening_contract:  { icon: '🤝', stepColor: '#22c55e', phase: 'narrative',  stepNum: 'STEP 12', desc: '明确前10章对读者的追读承诺，防止开局流失' },
   consistency:       { icon: '🔍', stepColor: '#ef4444', phase: 'qa',         stepNum: 'STEP 13', desc: '交叉核验所有生成物，标出矛盾与需要确认的问题' },
   all:               { icon: '📋', stepColor: '#94a3b8', phase: 'qa',         stepNum: '—',       desc: '全部步骤汇总视图' },
@@ -129,16 +132,27 @@ export const SEQ_STEP_KEYS: StepKey[] = [
   'positioning', 'project',
   'power_systems', 'factions', 'storylines', 'antagonist_ladder', 'characters',
   'skills', 'items', 'settings',
-  'volumes', 'memory', 'relations',
+  'volumes', 'emotion_arc', 'villain_arc',
+  'memory', 'relations', 'core_mysteries',
   'opening_contract', 'consistency',
 ]
 
-/** 番茄专属 Bootstrap 步骤列表（9阶段）*/
+/** 番茄专属 Bootstrap 步骤列表（与通用线对齐，补全全部步骤）*/
 export const FANQIE_STEP_KEYS: StepKey[] = [
   'positioning', 'project',
-  'contrast_design', 'golden_finger', 'face_slap_map',
-  'power_ladder', 'characters', 'volumes',
-  'rhythm_map', 'signal_audit',
+  // Phase B：番茄创意设计
+  'contrast_design', 'golden_finger', 'face_slap_map', 'power_ladder',
+  // Phase C：世界构建（复用通用）
+  'factions', 'storylines', 'antagonist_ladder', 'characters',
+  'skills', 'items', 'settings',
+  // Phase D：卷骨架
+  'volumes',
+  // Phase E：节奏 + 情绪
+  'emotion_arc', 'villain_arc', 'rhythm_map',
+  // Phase F：记忆 / 伏笔 / 承诺
+  'memory', 'relations', 'core_mysteries', 'opening_contract',
+  // Phase G：校验
+  'consistency', 'signal_audit',
 ]
 
 export const FANFIC_STEP_KEYS: StepKey[] = [
@@ -149,7 +163,7 @@ export const FANFIC_STEP_KEYS: StepKey[] = [
 ]
 
 export function getStepKeys(mode: StartParams['mode']): StepKey[] {
-  if (mode === 'fanfie') return FANQIE_STEP_KEYS
+  if (mode === 'fanqie') return FANQIE_STEP_KEYS
   if (mode === 'fanfic') return FANFIC_STEP_KEYS
   return SEQ_STEP_KEYS
 }

@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.bootstrap.parse import parse_json
+from app.services.bootstrap.json_once import call_bootstrap_json_once
 from app.services.bootstrap.steps.fanfic._helpers import TROPE_LABELS
-from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 
+_STEP = "fanfic_positioning"
 _TROPE_OPTIONS = "穿书（transmigration）/ 重生（rebirth）/ AU平行（au）"
 
 
@@ -49,29 +49,15 @@ async def gen_fanfic_positioning(svc: Any, ctx: dict) -> dict:
 2. ooc_taboos 必须具体，禁止「不要OOC」这种空话
 3. 只返回 JSON"""
 
-    last_err = ""
-    for attempt in range(3):
-        fix = f"\n【请修正：{last_err}】" if last_err else ""
-        raw = await svc._call_with_retry(
-            system, prompt + fix,
-            max_tokens=max_tokens_bootstrap_completion(),
-            task="bootstrap.positioning",
-        )
-        try:
-            data = parse_json(raw)
-        except Exception:
-            last_err = "JSON 解析失败"
-            continue
+    def _validate(data: Any) -> str | None:
         if not isinstance(data, dict):
-            last_err = "根类型须为 JSON 对象"
-            continue
+            return "根类型须为 JSON 对象"
         required = {
             "source_work_title", "fanfic_trope", "core_satisfaction",
             "fan_expectation", "platform_tags", "algo_hook",
         }
         if missing := required - data.keys():
-            last_err = f"缺少字段：{missing}"
-            continue
+            return f"缺少字段：{missing}"
         if data.get("fanfic_trope") not in TROPE_LABELS:
             data["fanfic_trope"] = trope
         data["fanfic_trope_label"] = TROPE_LABELS.get(
@@ -79,5 +65,13 @@ async def gen_fanfic_positioning(svc: Any, ctx: dict) -> dict:
         )
         if not data.get("source_work_title"):
             data["source_work_title"] = meta.get("source_work_title", "")
-        return data
-    return {}
+        return None
+
+    return await call_bootstrap_json_once(
+        svc,
+        step=_STEP,
+        system=system,
+        prompt=prompt,
+        task="bootstrap.positioning",
+        validate=_validate,
+    )

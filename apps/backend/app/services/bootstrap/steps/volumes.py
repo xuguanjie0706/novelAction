@@ -10,6 +10,7 @@ from app.services.bootstrap.prompts.volumes import build_volumes_prompt
 from app.services.bootstrap.protagonist_progression import apply_volume_protagonist_fields
 from app.services.bootstrap.antagonist_roster import bind_volume_boss_from_roster
 from app.services.bootstrap.volume_beats import apply_volume_beat_fields
+from app.services.bootstrap.volume_chapter_starts import compute_chapter_starts
 from app.services.bootstrap.volume_entity_registry import (
     format_volume_realm_fix_hint,
     lint_volume_entity_issues,
@@ -56,8 +57,8 @@ def run_volume_entity_lint(db: Any, project_id: Any, ctx: dict) -> list:
 def _persist_volumes(svc: Any, project: Project, data: list, ctx: dict, n_volumes: int) -> list:
     """将 AI 卷级 JSON 落库为 OutlineNode（volume）。"""
     valid_phases = {"opening", "rising", "turning", "dark_hour", "climax", "ending"}
-    results = []
-    for i, vol in enumerate(data):
+    planned_list: list[int] = []
+    for vol in data:
         planned = vol.get("planned_chapters", 30)
         if not isinstance(planned, int) or planned < 15:
             planned = 30
@@ -68,6 +69,11 @@ def _persist_volumes(svc: Any, project: Project, data: list, ctx: dict, n_volume
                 project.id,
             )
             planned = 60
+        planned_list.append(planned)
+    chapter_starts = compute_chapter_starts(planned_list)
+    results = []
+    for i, vol in enumerate(data):
+        planned = planned_list[i]
         phase_val = (vol.get("phase") or "").strip().lower() or None
         if phase_val and phase_val not in valid_phases:
             phase_val = None
@@ -79,7 +85,11 @@ def _persist_volumes(svc: Any, project: Project, data: list, ctx: dict, n_volume
                 phase_val = "ending"
             else:
                 phase_val = "rising"
-        vol_extra: dict = {"planned_chapters": planned, "phase": phase_val}
+        vol_extra: dict = {
+            "planned_chapters": planned,
+            "phase": phase_val,
+            "chapter_start_global": chapter_starts[i],
+        }
         boss = (vol.get("volume_boss") or vol.get("volume_antagonist") or "").strip()
         boss_realm = (vol.get("volume_boss_realm") or "").strip()
         boss_path = (vol.get("volume_boss_path") or "").strip()
@@ -126,6 +136,9 @@ async def gen_volumes(
     自动模式仅调用 LLM 一次；战力曲线 high 级问题写入 ctx，由闸门/单步重跑时
     ``inject_realm_fix_hint=True`` 注入修正提示后再手动重试。
     """
+    from app.services.bootstrap.fanqie_realm_policy import hydrate_fanqie_power_ctx
+
+    hydrate_fanqie_power_ctx(ctx)
     system, prompt_base = build_volumes_prompt(project, ctx)
     # 白话直白（番茄纯爽文）：番茄线已改走本通用 Step 9 出卷骨架，卷级燃点/高潮描述
     # 也要为直白正文服务，避免在卷纲层就写得文绉绉，与章纲/正文的 plain 约束对齐。

@@ -297,7 +297,7 @@ def get_writing_config(
         "min_overall_score": 6.0,
         "min_subscribe_intent": 6.0,
         "max_rewrite_attempts": 3,
-        "pre_write_warning_enabled": False,
+        "pre_write_warning_enabled": True,
     }
     stored = (project.extra or {}).get("writing_config") or {}
     merged = {**defaults, **stored}

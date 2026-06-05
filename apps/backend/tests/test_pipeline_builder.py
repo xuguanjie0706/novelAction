@@ -1,0 +1,52 @@
+"""Bootstrap PipelineBuilder 单元测试。"""
+from __future__ import annotations
+
+import pytest
+
+from app.services.bootstrap.pipeline.builder import CORE_NODES, _resolve_active_keys
+from app.services.bootstrap.pipeline.styles import STYLE_REGISTRY
+
+
+def test_sequential_includes_core_and_gates():
+    keys = _resolve_active_keys(STYLE_REGISTRY["sequential"])
+    assert "positioning_general" in keys
+    assert "gate_positioning" in keys
+    assert "power_systems" in keys
+    assert "project" in keys
+    assert "consistency" in keys
+    assert "fanqie_contrast" not in keys
+
+
+def test_fanqie_skips_power_systems_and_uses_power_ladder():
+    keys = _resolve_active_keys(STYLE_REGISTRY["fanqie"])
+    assert "power_ladder" in keys
+    assert "power_systems" not in keys
+    assert "signal_audit" in keys
+    assert "consistency" not in keys
+    assert "consistency_scan" in keys
+    assert "volumes_fanqie" in keys
+    assert "volumes" not in keys
+
+
+def test_fanfic_replaces_characters_and_power():
+    keys = _resolve_active_keys(STYLE_REGISTRY["fanfic"])
+    assert "canon_power" in keys
+    assert "canon_characters" in keys
+    assert "power_systems" not in keys
+    assert "characters" not in keys
+    assert "factions" in keys
+    assert "canon_audit" in keys
+
+
+def test_fanfic_node_order_canon_before_golden_finger():
+    keys = _resolve_active_keys(STYLE_REGISTRY["fanfic"])
+    from app.services.bootstrap.pipeline.catalog import get_node
+
+    ordered = sorted(keys, key=lambda k: get_node(k).seq)
+    assert ordered.index("canon_pack") < ordered.index("golden_finger_fanfic")
+    assert ordered.index("golden_finger_fanfic") < ordered.index("canon_power")
+
+
+def test_core_nodes_frozenset():
+    assert "project" in CORE_NODES
+    assert "positioning_general" not in CORE_NODES

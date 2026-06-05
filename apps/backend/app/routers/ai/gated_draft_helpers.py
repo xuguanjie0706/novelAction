@@ -135,15 +135,16 @@ async def _run_pre_write_warning_inline(
         .limit(30)
         .all()
     )
-    foreshadow_lines = []
+    from app.services.ai.foreshadow_schedule_lock import build_foreshadow_ledger
+
     ch_no = chapter.sort_order or 0
-    for f in open_foreshadows:
-        code = f.code or "—"
-        overdue = "【⚠️已逾期】" if (f.planned_resolve_chapter and ch_no > 0 and f.planned_resolve_chapter <= ch_no) else ""
-        foreshadow_lines.append(
-            f"{overdue}{code} {f.title or ''} | 预计第{f.planned_resolve_chapter or '?'}章回收 | {(f.description or '')[:100]}"
-        )
-    foreshadow_ledger = "\n".join(foreshadow_lines)
+    mysteries = []
+    if isinstance(project.extra, dict):
+        mysteries = [
+            m for m in (project.extra.get("core_mysteries") or [])
+            if isinstance(m, dict)
+        ]
+    foreshadow_ledger = build_foreshadow_ledger(open_foreshadows, ch_no, mysteries)
 
     # 人物状态（含技能/道具）
     characters = db.query(Character).filter(Character.project_id == project_id).all()
@@ -222,8 +223,13 @@ async def _run_pre_write_warning_inline(
         build_chapter_lock_table,
         merge_lock_table_into_warn_result,
     )
+    from app.services.ai.foreshadow_schedule_lock import (
+        build_foreshadow_schedule_lock,
+        merge_foreshadow_schedule_into_warn_result,
+    )
 
     lock_table = build_chapter_lock_table(db, project_id, chapter)
+    fs_schedule = build_foreshadow_schedule_lock(db, project_id, chapter, outline_node)
 
     result = await svc.pre_write_warning(
         project_title=project.title,
@@ -238,8 +244,10 @@ async def _run_pre_write_warning_inline(
         phase=phase,
         transition_menu=transition_menu,
         chapter_lock_table_block=lock_table.get("prompt_block") or "",
+        foreshadow_schedule_block=fs_schedule.get("prompt_block") or "",
     )
     result = merge_lock_table_into_warn_result(result, lock_table)
+    result = merge_foreshadow_schedule_into_warn_result(result, fs_schedule)
     if _rag_log is not None:
         result = dict(result)
         result["rag_retrieval_log_id"] = str(_rag_log.id)
@@ -278,6 +286,24 @@ def _build_pre_warn_prompt_block(warn_result: dict) -> str:
         for fb in (clt.get("forbidden_replays") or [])[:6]:
             lines.append(f"  ⛔ 禁止：{fb}")
         for oc in (clt.get("outline_conflicts") or [])[:4]:
+            if isinstance(oc, dict) and oc.get("reason"):
+                lines.append(f"  ⚠️ 章纲冲突：{oc['reason']}")
+
+    fsl = warn_result.get("foreshadow_schedule_lock") or {}
+    if isinstance(fsl, dict) and fsl.get("has_schedule"):
+        lines.append(
+            f"\n▍伏笔日程锁定表（第{fsl.get('current_chapter_number')}章，优先级高于章纲 foreshadow）"
+        )
+        for t in (fsl.get("opening_teases") or [])[:3]:
+            if isinstance(t, dict) and t.get("detail"):
+                lines.append(f"  允许预告：{t.get('label')} — {str(t['detail'])[:160]}")
+        for a in (fsl.get("allowed_this_chapter") or [])[:5]:
+            if isinstance(a, dict):
+                lines.append(f"  本章应{'埋设' if a.get('op') == 'lay' else '加热'}：{a.get('name', '')}")
+        for f in (fsl.get("forbidden_early_plants") or [])[:6]:
+            if isinstance(f, dict):
+                lines.append(f"  ⛔ 第{f.get('planned_lay_chapter')}章才埋：{f.get('name', '')}")
+        for oc in (fsl.get("outline_conflicts") or [])[:3]:
             if isinstance(oc, dict) and oc.get("reason"):
                 lines.append(f"  ⚠️ 章纲冲突：{oc['reason']}")
 

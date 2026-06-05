@@ -1,12 +1,11 @@
 import type { WritingConfig } from '../api/client'
 
 /**
- * 是否应走 `/ai/gated-draft-stream`（写前预警 + 质检循环重写）。
- * 与 ChapterEditor、GenerationQueuePanel 路由判断保持一致。
+ * 是否应走 `/ai/gated-draft-stream`（质检循环重写）。
+ * 写前预警已在普通起草与门控起草路径均默认执行，不再作为路由条件。
  */
 export function shouldUseGatedDraft(cfg: WritingConfig | null | undefined): boolean {
   if (!cfg) return false
-  if (cfg.pre_write_warning_enabled) return true
   return (
     cfg.auto_quality_gate === true &&
     (cfg.min_overall_score > 0 || cfg.min_subscribe_intent > 0)

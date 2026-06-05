@@ -54,7 +54,6 @@ from app.services.ai.context_queries import (
 )
 from app.services.ai.context_assembler_helpers import (
     build_volume_progress,
-    fmt_outline_foreshadows,
 )
 from app.services.ai.draft_ctx_bridge import resolve_draft_bridge_context
 from app.services.ai.storyline_weave_engine import query_storyline_weave_context_block
@@ -356,7 +355,9 @@ async def assemble_full(
         outline_summary=outline_node.summary or "" if outline_node else "",
         outline_conflict=outline_node.conflict or "" if outline_node else "",
         outline_highlight=outline_node.highlight or "" if outline_node else "",
-        outline_foreshadow=fmt_outline_foreshadows(outline_node),
+        # 只读章纲原始规划文本（status=planned 的意图层）；
+        # 权威台账（status=open）由 continuity_context 的「未回收伏笔」区块承载，两者不再重叠。
+        outline_foreshadow=(outline_node.extra or {}).get("foreshadow", "") if outline_node else "",
         outline_power_milestone=outline_node.power_milestone or "" if outline_node else "",
         outline_emotional_tone=outline_node.emotional_tone or "" if outline_node else "",
         story_day=story_day_str,

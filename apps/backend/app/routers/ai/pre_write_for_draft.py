@@ -2,7 +2,7 @@
 写前预警 → 正文 prompt 注入（普通起笔与门控起笔共用）。
 
 设计动机：预警的首要消费者是写章模型，而非侧栏展示；普通 draft-assist/stream
-在开启 pre_write_warning_enabled 时也必须注入 pre_write_brief。
+每次起笔前必须执行并注入 pre_write_brief（无开关）。
 
 「重写本章」（replace_existing=True）时若本章已有落库的预警记录，则跳过主编审稿 LLM，
 直接复用历史 result 组装 pre_write_brief，避免重复耗时与简报漂移。
@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models import Chapter, PreWriteWarningRecord, Project
+from app.models import Chapter, OutlineNode, PreWriteWarningRecord, Project
 from app.services.ai_service import AIService
 
 # 复用路径：简报块除去固定标题后至少需有实质内容
@@ -38,6 +38,7 @@ def _pre_warn_done_payload(
         "risks": (warn_result.get("risks") or [])[:5],
         "reminders": (warn_result.get("reminders") or [])[:5],
         "chapter_lock_table": warn_result.get("chapter_lock_table") or {},
+        "foreshadow_schedule_lock": warn_result.get("foreshadow_schedule_lock") or {},
         "rag_retrieval_log_id": warn_result.get("rag_retrieval_log_id"),
         "record_id": record_id,
         "reused": reused,
@@ -76,20 +77,31 @@ def try_reuse_pre_write_brief_from_record(
         return None
     raw = rec.result
     warn_result = raw if isinstance(raw, dict) else {}
-    from app.services.ai.pre_write_warn_parse import has_usable_pre_write_body
+    if warn_result.get("parse_failed"):
+        return None
     from app.services.ai.chapter_lock_table import (
         build_chapter_lock_table,
         merge_lock_table_into_warn_result,
     )
+    from app.services.ai.foreshadow_schedule_lock import (
+        build_foreshadow_schedule_lock,
+        merge_foreshadow_schedule_into_warn_result,
+    )
 
     lock_table = build_chapter_lock_table(db, project_id, chapter)
     warn_result = merge_lock_table_into_warn_result(warn_result, lock_table)
+    outline_node = None
+    if chapter.outline_node_id:
+        outline_node = (
+            db.query(OutlineNode)
+            .filter(OutlineNode.id == chapter.outline_node_id)
+            .first()
+        )
+    fs_schedule = build_foreshadow_schedule_lock(db, project_id, chapter, outline_node)
+    warn_result = merge_foreshadow_schedule_into_warn_result(warn_result, fs_schedule)
 
-    if not has_usable_pre_write_body(warn_result):
-        return None
+    # 有落库记录即复用：跳过主编审稿 LLM，仅刷新程序生成的锁定表/日程表
     brief = _build_pre_warn_prompt_block(warn_result).strip()
-    if len(brief) < _MIN_REUSED_BRIEF_CHARS:
-        return None
     return brief, _pre_warn_done_payload(
         warn_result,
         record_id=str(rec.id),
@@ -125,14 +137,13 @@ async def resolve_pre_write_brief_for_draft(
     project: Project,
     project_id: str,
     svc: AIService,
-    enabled: bool,
     model_profile: str,
     llm_provider_id: str | None,
     persist_record: bool = True,
     reuse_if_exists: bool = False,
 ) -> tuple[str, list[dict[str, Any]]]:
     """
-    若开启写前预警，执行主编审稿并格式化为 draft_assist_stream 的 pre_write_brief。
+    执行主编审稿并格式化为 draft_assist_stream 的 pre_write_brief（每次起笔必跑）。
 
     Args:
         reuse_if_exists: 为 True 时（通常伴随整章重写），若本章已有预警落库则跳过 LLM 审稿并复用。
@@ -140,9 +151,6 @@ async def resolve_pre_write_brief_for_draft(
     Returns:
         (brief_block, side_events) — side_events 为 SSE JSON 载荷列表（pre_warn_* / rag_context）
     """
-    if not enabled:
-        return "", []
-
     # 延迟导入，避免 gated_draft_routes ↔ draft_routes 循环依赖（实现已迁至 helpers）
     from app.routers.ai.gated_draft_helpers import (
         _build_pre_warn_prompt_block,

@@ -156,6 +156,7 @@ def build_continuity_context(
         bridge_lines.append("伏笔必须有前因后果；不得凭空写角色已经知道未在前文出现的信息。")
 
     _ch_num = chapter.sort_order or 0
+    # status="open" 是复盘路径的唯一权威状态；"planned" 仅是章纲规划意图，不在此注入
     global_foreshadows = (
         db.query(Foreshadow)
         .filter(Foreshadow.project_id == project_id, Foreshadow.status == "open")
@@ -208,7 +209,9 @@ def build_continuity_context(
         "禁止事项：" + "；".join(ban_lines),
     ]
     if foreshadow_lines:
-        sections.insert(5, "⚠️未回收伏笔（必须可回收或持续铺垫，不得矛盾违背）：\n" +
+        # 「权威台账」标签：此处来源是复盘确认的 status=open 记录，是唯一事实来源
+        # 章纲伏笔规划意图（status=planned）在 draft_stream 的「本章伏笔规划意图」区块单独注入
+        sections.insert(5, "⚠️未回收伏笔【权威台账，复盘确认，以此为准】（必须可回收或持续铺垫，不得矛盾违背）：\n" +
                          "\n".join(f"  · {l}" for l in foreshadow_lines))
     return "\n".join(sections)
 

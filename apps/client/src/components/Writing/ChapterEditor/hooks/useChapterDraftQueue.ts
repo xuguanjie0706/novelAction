@@ -106,20 +106,16 @@ export function useChapterDraftQueue({
       if (!window.confirm('「重新生成本章」将按大纲替换当前正文；若有旧稿会在保存前自动留版本快照。确定继续？')) return
       const route = useAppStore.getState().aiBackendRoute
       const wc = writingConfig as {
-        pre_write_warning_enabled?: boolean
         auto_quality_gate?: boolean
         min_overall_score?: number
         min_subscribe_intent?: number
       } | null
       const useGated = shouldUseGatedDraft(writingConfig)
-      const gatedLabel = (() => {
-        const hasWarn = wc?.pre_write_warning_enabled === true
-        const hasGate = wc?.auto_quality_gate === true
-          && ((wc?.min_overall_score ?? 0) > 0 || (wc?.min_subscribe_intent ?? 0) > 0)
-        if (hasWarn && hasGate) return `预警+门控重写《${chapter.title}》`
-        if (hasWarn) return `写前预警重写《${chapter.title}》`
-        return `门控重写《${chapter.title}》`
-      })()
+      const hasGate = wc?.auto_quality_gate === true
+        && ((wc?.min_overall_score ?? 0) > 0 || (wc?.min_subscribe_intent ?? 0) > 0)
+      const gatedLabel = hasGate
+        ? `门控重写《${chapter.title}》`
+        : `重写《${chapter.title}》`
       addGenTask({
         type: useGated ? 'gated_rewrite_chapter' : 'rewrite_chapter',
         projectId,
@@ -131,15 +127,10 @@ export function useChapterDraftQueue({
           ...routeLlmProviderPayload(route),
         },
       })
-      const toastMsg = (() => {
-        const hasWarn = wc?.pre_write_warning_enabled === true
-        const warnReuseHint = hasWarn ? '（本章若已有预警记录将自动复用，跳过重复审稿）' : ''
-        if (!useGated) return `已加入 AI 队列：开始重写本章${warnReuseHint}`
-        const hasGate = wc?.auto_quality_gate === true
-        if (hasWarn && hasGate) return `已加入 AI 队列：写前预警 + 质量门控写作${warnReuseHint}`
-        if (hasWarn) return `已加入 AI 队列：写前预警写作（质检仅参考）${warnReuseHint}`
-        return '已加入 AI 队列：质量门控写作（自动质检+重写）'
-      })()
+      const warnReuseHint = '（本章若已有预警记录将自动复用，跳过重复审稿）'
+      const toastMsg = useGated
+        ? `已加入 AI 队列：写前预警 + 质量门控写作${warnReuseHint}`
+        : `已加入 AI 队列：写前预警 + 重写本章${warnReuseHint}`
       toast.success(toastMsg)
       setAiExtraPrompt('')
       return

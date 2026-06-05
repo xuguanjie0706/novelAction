@@ -31,6 +31,7 @@ class PreWriteWarnMixin:
         phase: str = "",
         transition_menu: str = "",
         chapter_lock_table_block: str = "",
+        foreshadow_schedule_block: str = "",
     ) -> dict:
         """写前预警：像三十年主编在落笔前把本章的「坑、约束、写法」全交代清楚。
 
@@ -84,7 +85,12 @@ class PreWriteWarnMixin:
         lock_part = (
             self._clip_context(chapter_lock_table_block, 2000, None, field_name="chapter_lock_table")
             if chapter_lock_table_block and chapter_lock_table_block.strip()
-            else "（第一章或无上章成稿，无锁定表）"
+            else "（第一章或无上章成稿，无情节锁定表）"
+        )
+        fs_schedule_part = (
+            self._clip_context(foreshadow_schedule_block, 2000, None, field_name="foreshadow_schedule")
+            if foreshadow_schedule_block and foreshadow_schedule_block.strip()
+            else "（无核心谜题日程表）"
         )
 
         prompt = f"""小说：《{project_title}》（{genre}）
@@ -93,6 +99,10 @@ class PreWriteWarnMixin:
 ══════════════════════════════════════
 【情节锁定表（程序生成，硬事实，优先级高于本章章纲字面）】
 {lock_part}
+
+══════════════════════════════════════
+【伏笔日程锁定表（程序生成，硬事实，优先级高于本章章纲 foreshadow 与 must_events）】
+{fs_schedule_part}
 
 ══════════════════════════════════════
 【本章计划（大纲五要素）】
@@ -118,8 +128,10 @@ class PreWriteWarnMixin:
 ══════════════════════════════════════
 请以「三十年主编」的视角完成以下六件事，**全部输出到 JSON**：
 
-⓪ 你必须以【情节锁定表】为准：若锁定表或「章纲冲突」与【本章计划】矛盾，risks 必须包含 critical 级 continuity，
-   must_events / writing_brief.opening_strategy 须按锁定表消化冲突，不得建议倒带重播上章已完成节拍。
+⓪ 你必须以【情节锁定表】与【伏笔日程锁定表】为准：
+   - 情节锁定表：若与【本章计划】矛盾，risks 须含 critical 级 continuity，不得倒带重播上章已完成节拍。
+   - 伏笔日程表：禁止提前完整埋设「未到埋设章」的核心谜题；must_events 不得违背「禁止提前完整埋设」清单；
+     开局承诺允许的「预告/钩子」除外（仅一声滴答、模糊异象等，不得写尽 lay_method 细节）。
 
 ① 主角状态锁定（protagonist_fact_sheet）
    核对上述资料，锁定本章开笔时主角的精确状态，AI 写正文必须严格遵守这份清单：

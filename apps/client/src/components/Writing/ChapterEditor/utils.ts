@@ -104,12 +104,62 @@ export function normalizePreWriteWarnResult(raw: unknown): PreWriteWarnResult {
           prev_tail_anchor: String((cltRaw as Record<string, unknown>).prev_tail_anchor ?? ''),
         }
       : undefined
+  const fslRaw = r.foreshadow_schedule_lock
+  const foreshadow_schedule_lock =
+    fslRaw && typeof fslRaw === 'object'
+      ? {
+          has_schedule: Boolean((fslRaw as Record<string, unknown>).has_schedule),
+          current_chapter_number: (fslRaw as Record<string, unknown>).current_chapter_number as
+            | number
+            | string
+            | null
+            | undefined,
+          forbidden_early_plants: Array.isArray((fslRaw as Record<string, unknown>).forbidden_early_plants)
+            ? ((fslRaw as Record<string, unknown>).forbidden_early_plants as unknown[]).map((item) => {
+                const it = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+                return {
+                  name: String(it.name ?? ''),
+                  planned_lay_chapter:
+                    typeof it.planned_lay_chapter === 'number' ? it.planned_lay_chapter : undefined,
+                  reason: String(it.reason ?? ''),
+                }
+              })
+            : [],
+          allowed_this_chapter: Array.isArray((fslRaw as Record<string, unknown>).allowed_this_chapter)
+            ? ((fslRaw as Record<string, unknown>).allowed_this_chapter as unknown[]).map((item) => {
+                const it = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+                return {
+                  name: String(it.name ?? ''),
+                  op: String(it.op ?? ''),
+                  detail: String(it.detail ?? ''),
+                }
+              })
+            : [],
+          opening_teases: Array.isArray((fslRaw as Record<string, unknown>).opening_teases)
+            ? ((fslRaw as Record<string, unknown>).opening_teases as unknown[]).map((item) => {
+                const it = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+                return { label: String(it.label ?? ''), detail: String(it.detail ?? '') }
+              })
+            : [],
+          outline_conflicts: Array.isArray((fslRaw as Record<string, unknown>).outline_conflicts)
+            ? ((fslRaw as Record<string, unknown>).outline_conflicts as unknown[]).map((c) => {
+                const cc = c && typeof c === 'object' ? (c as Record<string, unknown>) : {}
+                return {
+                  field: String(cc.field ?? ''),
+                  outline_text: String(cc.outline_text ?? ''),
+                  reason: String(cc.reason ?? ''),
+                }
+              })
+            : [],
+        }
+      : undefined
   return {
     ok,
     risk_count,
     risks,
     reminders,
     chapter_lock_table,
+    foreshadow_schedule_lock,
     protagonist_fact_sheet,
     writing_brief,
     must_events,

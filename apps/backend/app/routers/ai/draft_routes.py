@@ -187,22 +187,19 @@ async def draft_assist_stream(
         if rag_snapshot:
             yield f"data: {json.dumps(rag_snapshot, ensure_ascii=False)}\n\n"
 
-        pre_warn_brief_block = ""
-        if cfg_wm.get("pre_write_warning_enabled"):
-            pre_warn_brief_block, pre_warn_events = await resolve_pre_write_brief_for_draft(
-                db,
-                chapter=chapter,
-                project=project,
-                project_id=str(project_id),
-                svc=svc,
-                enabled=True,
-                model_profile=req.model_profile or "local",
-                llm_provider_id=str(req.llm_provider_id) if req.llm_provider_id else None,
-                persist_record=True,
-                reuse_if_exists=bool(req.replace_existing),
-            )
-            for payload in pre_warn_events:
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        pre_warn_brief_block, pre_warn_events = await resolve_pre_write_brief_for_draft(
+            db,
+            chapter=chapter,
+            project=project,
+            project_id=str(project_id),
+            svc=svc,
+            model_profile=req.model_profile or "local",
+            llm_provider_id=str(req.llm_provider_id) if req.llm_provider_id else None,
+            persist_record=True,
+            reuse_if_exists=bool(req.replace_existing),
+        )
+        for payload in pre_warn_events:
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
         try:
             async for chunk in svc.draft_assist_stream(

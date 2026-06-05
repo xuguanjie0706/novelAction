@@ -23,7 +23,6 @@ from operator import add
 from typing import Annotated, Any, Optional
 from typing_extensions import TypedDict
 
-from langgraph.graph import StateGraph, START, END
 from langgraph.config import get_config
 from langgraph.types import interrupt, Command
 
@@ -75,9 +74,18 @@ def get_fanfic_graph():
     return fanfic_graph
 
 
+def get_graph_for_mode(mode: str):
+    """按 BootstrapRun.mode 返回对应 CompiledGraph。"""
+    if mode == "fanqie":
+        return get_fanqie_graph()
+    if mode == "fanfic":
+        return get_fanfic_graph()
+    return get_bootstrap_graph()
+
+
 async def init_bootstrap_graph(pg_conn_string: str) -> None:
     """在 FastAPI startup 中调用：创建 psycopg3 异步连接池 + AsyncPostgresSaver，
-    建立 checkpoint 表（幂等），编译并注册全局 bootstrap_graph。
+    建立 checkpoint 表（幂等），按 STYLE_REGISTRY 编译三套 CompiledGraph。
 
     Args:
         pg_conn_string: PostgreSQL DSN，例如 "postgresql://user:pw@host:5432/db"。
@@ -87,10 +95,9 @@ async def init_bootstrap_graph(pg_conn_string: str) -> None:
 
     from psycopg_pool import AsyncConnectionPool
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    from app.services.bootstrap.graph_fanqie import _build_fanqie_graph
-    from app.services.bootstrap.graph_fanfic import _build_fanfic_graph
+    from app.services.bootstrap.pipeline import build_graph
+    from app.services.bootstrap.pipeline.styles import STYLE_REGISTRY
 
-    # autocommit=True 是 LangGraph checkpointer 的强制要求
     _pg_pool = AsyncConnectionPool(
         conninfo=pg_conn_string,
         open=False,
@@ -99,14 +106,19 @@ async def init_bootstrap_graph(pg_conn_string: str) -> None:
     await _pg_pool.open()
 
     checkpointer = AsyncPostgresSaver(_pg_pool)
-    # 幂等建表（langgraph_checkpoints 等），首次部署或重启均安全
     await checkpointer.setup()
 
-    bootstrap_graph = _build_graph(checkpointer)
-    fanqie_graph = _build_fanqie_graph(checkpointer)
-    fanfic_graph = _build_fanfic_graph(checkpointer)
+    bootstrap_graph = build_graph(
+        STYLE_REGISTRY["sequential"], checkpointer, state_type=BootstrapState,
+    )
+    fanqie_graph = build_graph(
+        STYLE_REGISTRY["fanqie"], checkpointer, state_type=BootstrapState,
+    )
+    fanfic_graph = build_graph(
+        STYLE_REGISTRY["fanfic"], checkpointer, state_type=BootstrapState,
+    )
     logger.info(
-        "bootstrap_graph / fanqie_graph / fanfic_graph 初始化完成（AsyncPostgresSaver）"
+        "bootstrap_graph / fanqie_graph / fanfic_graph 初始化完成（PipelineBuilder + AsyncPostgresSaver）"
     )
 
 
@@ -349,74 +361,3 @@ async def node_opening_contract(s, c=None): return await _run_step(s, c, "openin
 async def node_core_mysteries(s, c=None):   return await _run_step(s, c, "core_mysteries",   "预分配全书核心谜题...", "_gen_core_mysteries")    # noqa: E501
 
 
-# ──────────────────────────────────────────────────────
-# 构建 StateGraph
-# ──────────────────────────────────────────────────────
-
-def _build_graph(checkpointer) -> StateGraph:
-    from app.services.bootstrap.graph_nodes import (
-        node_characters, node_skills_items, node_volumes,
-        node_consistency, node_emotion_villain, node_memory_relations,
-    )
-    from app.services.bootstrap.graph_gates import (
-        node_gate_characters, node_gate_power_systems, node_gate_volumes,
-    )
-    from app.services.bootstrap.graph_fanqie_enhance import (
-        node_fanqie_contrast, node_fanqie_golden_finger,
-        node_fanqie_face_slap, node_fanqie_rhythm, node_fanqie_audit,
-    )
-    g = StateGraph(BootstrapState)
-    for name, fn in [
-        ("positioning",          node_positioning),
-        ("gate",                 node_gate),
-        ("project",              node_project),
-        # ── 番茄增强（pace_type=fast 时执行，否则跳过）──
-        ("fanqie_contrast",      node_fanqie_contrast),
-        ("fanqie_golden_finger", node_fanqie_golden_finger),
-        ("fanqie_face_slap",     node_fanqie_face_slap),
-        # ── 标准步骤（续）──
-        ("power_systems",        node_power_systems),
-        ("gate_power_systems",   node_gate_power_systems),
-        ("factions",             node_factions),
-        ("storylines",           node_storylines),
-        ("antagonist_ladder",    node_antagonist_ladder),
-        ("characters",           node_characters),
-        ("gate_characters",      node_gate_characters),
-        ("skills_items",         node_skills_items),
-        ("settings",             node_settings),
-        ("volumes",              node_volumes),
-        ("gate_volumes",         node_gate_volumes),
-        ("emotion_villain",      node_emotion_villain),
-        # ── 番茄增强（卷骨架之后）──
-        ("fanqie_rhythm",        node_fanqie_rhythm),
-        ("fanqie_audit",         node_fanqie_audit),
-        # ── 标准步骤（续）──
-        ("memory_relations",     node_memory_relations),
-        ("core_mysteries",       node_core_mysteries),
-        ("opening_contract",     node_opening_contract),
-        ("consistency",          node_consistency),
-    ]:
-        g.add_node(name, fn)
-
-    chain = [
-        START, "positioning", "gate", "project",
-        # 番茄增强三步（pace_type != fast 时 no-op）
-        "fanqie_contrast", "fanqie_golden_finger", "fanqie_face_slap",
-        # 标准步骤
-        "power_systems", "gate_power_systems", "factions", "storylines",
-        "antagonist_ladder", "characters", "gate_characters", "skills_items", "settings",
-        "volumes", "gate_volumes",
-        "emotion_villain",
-        # 番茄增强两步（pace_type != fast 时 no-op）
-        "fanqie_rhythm", "fanqie_audit",
-        # 标准步骤（续）
-        "memory_relations", "core_mysteries",
-        "opening_contract", "consistency", END,
-    ]
-    for a, b in zip(chain, chain[1:]):
-        g.add_edge(a, b)
-
-    return g.compile(
-        checkpointer=checkpointer,
-        interrupt_before=["gate"],
-    )

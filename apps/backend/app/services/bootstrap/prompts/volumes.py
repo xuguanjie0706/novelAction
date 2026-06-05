@@ -100,7 +100,9 @@ def build_volumes_prompt(project: Project, ctx: dict) -> tuple[str, str]:
             positioning_block = "\n【立项定位（每卷必须贯彻）】\n" + "\n".join(_pos_lines) + "\n"
 
     kit_block = get_genre_kit_block(ctx)
-    fanfic_block = build_fanfic_volumes_block(ctx)
+    from app.services.bootstrap.pipeline.hook_context import collect_step_hooks
+
+    fanfic_block = collect_step_hooks("volumes", ctx) or build_fanfic_volumes_block(ctx)
     entity_block = build_volume_entity_prompt_block(ctx)
     roster_block = build_antagonist_ladder_prompt_block(ctx, n_volumes)
     protagonist_progression_block = build_protagonist_progression_prompt_block(ctx, n_volumes)

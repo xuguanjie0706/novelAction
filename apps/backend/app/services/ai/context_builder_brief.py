@@ -262,19 +262,34 @@ def build_plot_dossier_context(db: Session, project_id: str, chapter: Chapter, l
             parts.append(f"连续性备注={notes}")
         index_lines.append("；".join(parts))
 
+    from app.services.ai.foreshadow_schedule_lock import planned_lay_chapter
+
     foreshadow_rows = (
         db.query(Foreshadow)
         .filter(Foreshadow.project_id == project_id)
         .order_by(Foreshadow.priority.desc(), Foreshadow.created_at.asc())
         .all()
     )
+    from app.models import Project
+
+    mysteries_by_name: dict[str, dict] = {}
+    proj = db.query(Project).filter(Project.id == project_id).first()
+    if proj and isinstance(proj.extra, dict):
+        for m in proj.extra.get("core_mysteries") or []:
+            if isinstance(m, dict) and (m.get("name") or "").strip():
+                mysteries_by_name[(m.get("name") or "").strip()] = m
     foreshadow_lines = []
     for f in foreshadow_rows[:30]:
         parts = [f.code or "F-?", f.title, f"状态={f.status}"]
+        planned = planned_lay_chapter(f, mysteries_by_name)
+        if planned:
+            parts.append(f"计划埋=第{planned}章")
         if f.laid_chapter_number:
-            parts.append(f"埋点=第{f.laid_chapter_number}章")
+            parts.append(f"实际埋=第{f.laid_chapter_number}章")
+        if f.planned_resolve_chapter:
+            parts.append(f"计划回收=第{f.planned_resolve_chapter}章")
         if f.resolved_chapter_number:
-            parts.append(f"回收=第{f.resolved_chapter_number}章")
+            parts.append(f"实际回收=第{f.resolved_chapter_number}章")
         if f.description:
             parts.append(f"说明={truncate(f.description, 200)}")
         foreshadow_lines.append("；".join(parts))
@@ -323,7 +338,11 @@ def build_plot_dossier_context(db: Session, project_id: str, chapter: Chapter, l
     if index_lines:
         sections.append("章节索引（情节档案）：\n" + "\n".join(f"- {line}" for line in index_lines))
     if foreshadow_lines:
-        sections.append("伏笔档案（含已回收/未回收）：\n" + "\n".join(f"- {line}" for line in foreshadow_lines))
+        # status 语义：planned=章纲规划意图（非权威）；open=复盘确认已埋（权威）；resolved=复盘确认已收
+        sections.append(
+            "伏笔档案（含已回收/未回收）【status: planned=章纲规划, open=复盘确认已埋, resolved=已回收】：\n"
+            + "\n".join(f"- {line}" for line in foreshadow_lines)
+        )
     if storyline_lines:
         sections.append("故事线档案（活跃中）：\n" + "\n".join(f"- {line}" for line in storyline_lines))
     return "\n\n".join(sections)

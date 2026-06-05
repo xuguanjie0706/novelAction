@@ -111,15 +111,22 @@ def schedule_auto_resume_for_run(run_id: str) -> None:
         if not run:
             return
         gd = run.gate_data if isinstance(run.gate_data, dict) else {}
-        if run.mode == "fanfic":
-            from app.services.bootstrap.graph_fanfic import resume_bootstrap_fanfic as resume_fn
-            mode = "fanfic"
-        elif run.mode == "fanqie":
-            from app.services.bootstrap.graph_fanqie import resume_bootstrap_fanqie as resume_fn
-            mode = "fanqie"
-        else:
-            from app.services.bootstrap.graph import resume_bootstrap as resume_fn
-            mode = run.mode or "sequential"
+        from app.services.bootstrap.graph import get_graph_for_mode
+        from app.services.bootstrap.pipeline.runner import resume_pipeline
+
+        mode = run.mode or "sequential"
+        graph = get_graph_for_mode(mode)
+
+        async def resume_fn(
+            rid: str, payload: dict, *, model_profile: str, llm_provider_id, user_id,
+        ) -> None:
+            await resume_pipeline(
+                graph, rid, payload,
+                model_profile=model_profile,
+                llm_provider_id=llm_provider_id,
+                user_id=user_id,
+            )
+
         schedule_auto_resume_if_needed(
             str(run.id),
             mode=mode,

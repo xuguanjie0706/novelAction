@@ -59,6 +59,7 @@ export default function OutlineIntuitivePane({
   return (
     <IntuitiveModeShell
       volume={intuitiveVolume}
+      allVolumes={volumeNodes}
       projectId={projectId}
       projectExtra={projectExtra}
       aiBackendRoute={aiBackendRoute}

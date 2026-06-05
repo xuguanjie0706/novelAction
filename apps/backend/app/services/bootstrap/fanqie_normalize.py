@@ -213,14 +213,18 @@ def normalize_opening_volume(
 
     extra = dict(vol.extra or {})
     tags = rhythm.get("chapter_tags") if isinstance(rhythm, dict) else []
-    planned = 50
-    if isinstance(tags, list) and tags:
-        ch_nums = [
-            int(t["ch"]) for t in tags
-            if isinstance(t, dict) and t.get("ch") is not None
-        ]
-        if ch_nums:
-            planned = max(planned, max(ch_nums))
+    existing_planned = extra.get("planned_chapters")
+    if isinstance(existing_planned, int) and 15 <= existing_planned <= 80:
+        planned = existing_planned
+    else:
+        planned = 50
+        if isinstance(tags, list) and tags:
+            ch_nums = [
+                int(t["ch"]) for t in tags
+                if isinstance(t, dict) and t.get("ch") is not None
+            ]
+            if ch_nums:
+                planned = max(planned, max(ch_nums))
     extra["planned_chapters"] = planned
 
     beats: list[dict] = list(extra.get("beat_highlights") or [])
@@ -250,10 +254,13 @@ def normalize_opening_volume(
             vol.highlight = preview[:_TEXT_MAX]
 
     if isinstance(tags, list) and tags:
-        skeleton = " → ".join(
-            f"第{t.get('ch')}·{t.get('type', '?')}"
-            for t in tags[:12]
-            if isinstance(t, dict)
+        from app.services.bootstrap.rhythm_pacing import refresh_opening_volume_pacing_skeleton
+
+        planned_ch = extra.get("planned_chapters") or planned
+        skeleton = refresh_opening_volume_pacing_skeleton(
+            extra.get("pacing_skeleton") or "",
+            tags,
+            preview_chapters=int(planned_ch) if planned_ch else planned,
         )
         if skeleton:
             extra["pacing_skeleton"] = skeleton
@@ -596,8 +603,23 @@ def converge_fanqie_project(db: Session, project: Project, ctx: dict | None = No
         .order_by(OutlineNode.sort_order)
         .first()
     )
+    volumes = (
+        db.query(OutlineNode)
+        .filter(
+            OutlineNode.project_id == project.id,
+            OutlineNode.node_type == "volume",
+        )
+        .order_by(OutlineNode.sort_order)
+        .all()
+    )
+    vol = volumes[0] if volumes else None
     if vol:
         normalize_opening_volume(vol, project, ctx)
+        db.commit()
+
+    from app.services.bootstrap.volume_chapter_starts import reconcile_volume_planned_from_starts
+
+    if reconcile_volume_planned_from_starts(volumes):
         db.commit()
 
     sync_power_ladder_to_power_system(db, project)

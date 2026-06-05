@@ -155,6 +155,12 @@ async def _run_quality_check_inline(
         "emotional_resonance", "subscribe_intent",
     ]
 
+    from app.services.ai.foreshadow_schedule_lock import (
+        audit_early_foreshadow_plants,
+        build_foreshadow_schedule_lock,
+        merge_early_plant_audit_into_qc_result,
+    )
+
     result = await svc.quality_check(
         chapter_content=chapter.content,
         chapter_title=chapter.title,
@@ -173,6 +179,10 @@ async def _run_quality_check_inline(
         plot_dossier_context=plot_dossier_ctx,
         writing_style=resolve_project_writing_style(project),
     )
+
+    fs_lock = build_foreshadow_schedule_lock(db, project_id, chapter, node)
+    early_violations = audit_early_foreshadow_plants(chapter.content or "", fs_lock)
+    result = merge_early_plant_audit_into_qc_result(result, early_violations)
 
     # 写库（复用 quality_routes 逻辑）
     chapter.last_quality_score = result.get("overall_score")
@@ -225,6 +235,10 @@ def _check_passed(
         fs = float((dims.get("face_slap_payoff") or {}).get("score") or 0)
         if fs < min_fs:
             failing.append(f"face_slap_payoff({fs:.1f}<{min_fs}，本章为爽点结算/高潮硬约束章)")
+
+    early = qc_result.get("foreshadow_early_plant_violations") or []
+    if early:
+        failing.append(f"foreshadow_early_plant({len(early)}处提前完整埋设)")
 
     return (len(failing) == 0), failing
 

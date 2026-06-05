@@ -310,17 +310,16 @@ async def pre_write_warning(
         .limit(30)
         .all()
     )
-    foreshadow_lines = []
-    for f in open_foreshadows:
-        code = f.code or "—"
-        overdue = ""
-        if f.planned_resolve_chapter and req.chapter_number > 0:
-            if f.planned_resolve_chapter <= req.chapter_number:
-                overdue = "【⚠️已逾期】"
-        foreshadow_lines.append(
-            f"{overdue}{code} {f.title or ''} | 预计第{f.planned_resolve_chapter or '?'}章回收 | {(f.description or '')[:100]}"
-        )
-    foreshadow_ledger = "\n".join(foreshadow_lines)
+    from app.services.ai.foreshadow_schedule_lock import build_foreshadow_ledger
+
+    mysteries = []
+    if isinstance(project.extra, dict):
+        mysteries = [
+            m for m in (project.extra.get("core_mysteries") or [])
+            if isinstance(m, dict)
+        ]
+    ch_no_ledger = req.chapter_number if req.chapter_number > 0 else (chapter.sort_order or 0)
+    foreshadow_ledger = build_foreshadow_ledger(open_foreshadows, ch_no_ledger, mysteries)
 
     # 加载人物状态（含技能与持有物）
     characters = db.query(Character).filter(Character.project_id == project_id).all()
@@ -401,8 +400,13 @@ async def pre_write_warning(
         build_chapter_lock_table,
         merge_lock_table_into_warn_result,
     )
+    from app.services.ai.foreshadow_schedule_lock import (
+        build_foreshadow_schedule_lock,
+        merge_foreshadow_schedule_into_warn_result,
+    )
 
     lock_table = build_chapter_lock_table(db, project_id, chapter)
+    fs_schedule = build_foreshadow_schedule_lock(db, project_id, chapter, outline_node)
 
     result = await svc.pre_write_warning(
         project_title=project.title,
@@ -416,8 +420,10 @@ async def pre_write_warning(
         outline_context=outline_context,
         phase=phase,
         chapter_lock_table_block=lock_table.get("prompt_block") or "",
+        foreshadow_schedule_block=fs_schedule.get("prompt_block") or "",
     )
     result = merge_lock_table_into_warn_result(result, lock_table)
+    result = merge_foreshadow_schedule_into_warn_result(result, fs_schedule)
 
     ch_no = req.chapter_number if req.chapter_number > 0 else (chapter.sort_order or 0)
     profile = req.model_profile if req.model_profile in ("local", "gemini") else "local"

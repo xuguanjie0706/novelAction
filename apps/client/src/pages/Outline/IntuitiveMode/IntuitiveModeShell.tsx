@@ -13,6 +13,7 @@ import type { InsightTimelineEntry } from './intuitiveTypes'
 
 interface Props {
   volume: OutlineNode
+  allVolumes?: OutlineNode[]
   projectId: string
   aiBackendRoute: string
   projectExtra?: Record<string, unknown>
@@ -32,6 +33,7 @@ interface Props {
 
 export default function IntuitiveModeShell({
   volume,
+  allVolumes,
   projectId,
   projectExtra,
   aiBackendRoute,
@@ -48,7 +50,10 @@ export default function IntuitiveModeShell({
   onVolExpandProgress,
   onVolExpandEnd,
 }: Props) {
-  const bundle = useMemo(() => buildIntuitiveBundle(volume), [volume])
+  const bundle = useMemo(
+    () => buildIntuitiveBundle(volume, { allVolumes }),
+    [volume, allVolumes],
+  )
   const [activeChapter, setActiveChapter] = useState<number | null>(
     bundle.chapters.length > 0 ? 1 : null,
   )

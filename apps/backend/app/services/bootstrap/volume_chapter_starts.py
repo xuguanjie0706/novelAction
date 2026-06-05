@@ -17,6 +17,28 @@ def planned_chapters_value(raw: Any, default: int = 30) -> int:
     return min(n, 80)
 
 
+def reconcile_volume_planned_from_starts(volumes: list[Any]) -> int:
+    """用下一卷 chapter_start_global 反推本卷 planned_chapters，修复 rhythm 覆盖卷长。"""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    vols = sorted(volumes, key=lambda v: getattr(v, "sort_order", 0) or 0)
+    updated = 0
+    for i, vol in enumerate(vols[:-1]):
+        ex = dict(getattr(vol, "extra", None) or {})
+        start = ex.get("chapter_start_global")
+        next_ex = getattr(vols[i + 1], "extra", None) or {}
+        next_start = next_ex.get("chapter_start_global")
+        if not isinstance(start, int) or not isinstance(next_start, int) or next_start <= start:
+            continue
+        inferred = next_start - start
+        if 15 <= inferred <= 80 and ex.get("planned_chapters") != inferred:
+            ex["planned_chapters"] = inferred
+            vol.extra = ex
+            flag_modified(vol, "extra")
+            updated += 1
+    return updated
+
+
 def compute_chapter_starts(planned_list: list[int]) -> list[int]:
     """按各卷 planned_chapters 累加，返回每卷第 1 章的全书章号。"""
     starts: list[int] = []

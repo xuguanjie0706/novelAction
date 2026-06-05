@@ -62,9 +62,8 @@ def merge_writing_config(project: Project, override: dict | None) -> dict:
     cfg["min_overall_score"] = max(0.0, min(10.0, float(cfg["min_overall_score"])))
     cfg["min_subscribe_intent"] = max(0.0, min(10.0, float(cfg["min_subscribe_intent"])))
     cfg["max_rewrite_attempts"] = max(1, min(5, int(cfg["max_rewrite_attempts"])))
-    cfg["pre_write_warning_enabled"] = bool(
-        cfg.get("pre_write_warning_enabled", _WRITING_CONFIG_DEFAULTS["pre_write_warning_enabled"])
-    )
+    # 写前预警无开关：始终开启（忽略存量 writing_config 中的 false）
+    cfg["pre_write_warning_enabled"] = True
     cfg["block_on_consistency_issues"] = bool(cfg.get("block_on_consistency_issues", False))
     cfg["block_on_realm_mismatch"] = bool(cfg.get("block_on_realm_mismatch", False))
     cfg["enforce_face_slap_payoff_when_hook_required"] = bool(

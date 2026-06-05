@@ -32,12 +32,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from langgraph.graph import StateGraph, START, END
-from langgraph.types import interrupt, Command
+from langgraph.types import interrupt
 
-from app.database import SessionLocal
 from app.models import Project
-from app.models.bootstrap_run import BootstrapRun
 from app.services.bootstrap.graph_ctx import sanitize_bootstrap_ctx
 from app.services.bootstrap.graph import (
     BootstrapState,
@@ -46,10 +43,6 @@ from app.services.bootstrap.graph import (
     _resolve_config,
     _state_run_id,
     emit,
-    subscribe,
-    unsubscribe,
-    _push,
-    _handle_run_error,
     get_fanqie_graph,
 )
 from app.services.bootstrap.json_once import BootstrapStepError
@@ -409,52 +402,7 @@ async def node_audit(state: BootstrapState, config: dict | None = None) -> dict:
 
 
 # ──────────────────────────────────────────────────────
-# 构建 Fanqie StateGraph
-# ──────────────────────────────────────────────────────
-
-def _build_fanqie_graph(checkpointer) -> StateGraph:
-    g = StateGraph(BootstrapState)
-    for name, fn in [
-        ("fanqie_positioning", node_fanqie_positioning), ("gate", node_fanqie_gate),
-        ("project",            node_project),
-        ("contrast_design",    node_contrast),    ("golden_finger",   node_golden_finger),
-        ("face_slap_map",      node_face_slap),   ("power_ladder",    node_power_ladder),
-        ("ctx_bridge",         node_ctx_bridge),
-        ("factions",           node_factions),    ("storylines",      node_storylines),
-        ("antagonist_ladder",  node_antagonist_ladder),
-        ("characters",         node_characters),  ("gate_characters", node_gate_characters),
-        ("skills_items",       node_skills_items),("settings",        node_settings),
-        ("volumes",            node_volumes),     ("gate_volumes",    node_gate_volumes),
-        ("emotion_villain",    node_emotion_villain), ("rhythm_map",  node_rhythm),
-        ("memory_relations",   node_memory_relations),
-        ("core_mysteries",     node_core_mysteries), ("opening_contract", node_opening_contract),
-        ("consistency_scan",   node_consistency_scan), ("signal_audit", node_audit),
-    ]:
-        g.add_node(name, fn)
-
-    chain = [
-        START,
-        "fanqie_positioning", "gate", "project",
-        "contrast_design", "golden_finger", "face_slap_map", "power_ladder", "ctx_bridge",
-        "factions", "storylines", "antagonist_ladder",
-        "characters", "gate_characters", "skills_items", "settings",
-        "volumes", "gate_volumes",
-        "emotion_villain", "rhythm_map",
-        "memory_relations", "core_mysteries", "opening_contract",
-        "consistency_scan", "signal_audit",
-        END,
-    ]
-    for a, b in zip(chain, chain[1:]):
-        g.add_edge(a, b)
-
-    return g.compile(
-        checkpointer=checkpointer,
-        interrupt_before=["gate"],
-    )
-
-
-# ──────────────────────────────────────────────────────
-# 后台任务入口
+# 后台任务入口（委托 pipeline.runner）
 # ──────────────────────────────────────────────────────
 
 async def run_bootstrap_fanqie(
@@ -462,97 +410,37 @@ async def run_bootstrap_fanqie(
     model_profile: str, llm_provider_id, user_id,
     writing_style: str = "plain",
 ) -> None:
-    """番茄模式后台任务入口；writing_style 默认 plain（番茄小白直白底线）。"""
-    fanqie_graph = get_fanqie_graph()
-    db = SessionLocal()
-    try:
-        run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
-        if run:
-            run.status = "running"
-            db.commit()
-        _ws = str(writing_style or "").strip().lower()
-        if _ws not in ("plain", "standard", "dense"):
-            _ws = "plain"
-        initial: BootstrapState = {
-            "run_id": run_id, "logline": logline, "premise": premise,
-            "target_words": target_words, "positioning": {}, "project_id": None,
-            "ctx": {"writing_style": _ws}, "completed_steps": [], "errors": [],
-        }
-        config = {"configurable": {
-            "thread_id": run_id, "db": db,
-            "model_profile": model_profile,
-            "llm_provider_id": llm_provider_id,
-            "user_id": user_id,
-        }}
-        await fanqie_graph.ainvoke(initial, config=config)
-        run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
-        if not run or run.status != "awaiting_gate":
-            _push(run_id, {"event": "__stream_end__"})
-        else:
-            from app.services.bootstrap.gate_auto import schedule_auto_resume_for_run
-            schedule_auto_resume_for_run(run_id)
-    except asyncio.CancelledError:
-        emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")
-        _push(run_id, {"event": "__stream_end__"})
-        raise
-    except Exception as exc:
-        logger.exception("Fanqie bootstrap run %s failed", run_id)
-        _handle_run_error(db, run_id, exc)
-        _push(run_id, {"event": "__stream_end__"})
-    finally:
-        db.close()
+    from app.services.bootstrap.pipeline.runner import run_pipeline
+    from app.services.bootstrap.pipeline.styles import STYLE_REGISTRY
+
+    await run_pipeline(
+        get_fanqie_graph(),
+        STYLE_REGISTRY["fanqie"],
+        run_id,
+        logline=logline,
+        premise=premise,
+        target_words=target_words,
+        model_profile=model_profile,
+        llm_provider_id=llm_provider_id,
+        user_id=user_id,
+        writing_style=writing_style,
+    )
 
 
 async def resume_bootstrap_fanqie(
     run_id: str, resume_payload: dict, *,
     model_profile: str, llm_provider_id, user_id,
 ) -> None:
-    """从 AsyncPostgresSaver checkpoint 继续番茄图执行。"""
-    from app.services.bootstrap.gate_auto import resume_lock
-    async with resume_lock(run_id):
-        await _resume_bootstrap_fanqie_impl(
-            run_id, resume_payload,
-            model_profile=model_profile,
-            llm_provider_id=llm_provider_id,
-            user_id=user_id,
-        )
+    from app.services.bootstrap.pipeline.runner import resume_pipeline
 
-
-async def _resume_bootstrap_fanqie_impl(
-    run_id: str, resume_payload: dict, *,
-    model_profile: str, llm_provider_id, user_id,
-) -> None:
-    fanqie_graph = get_fanqie_graph()
-    db = SessionLocal()
-    try:
-        run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
-        if run:
-            run.status = "running"
-            db.commit()
-        config = {"configurable": {
-            "thread_id": run_id, "db": db,
-            "model_profile": model_profile,
-            "llm_provider_id": llm_provider_id,
-            "user_id": user_id,
-        }}
-        await fanqie_graph.ainvoke(Command(resume=dict(resume_payload)), config=config)
-    except asyncio.CancelledError:
-        emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")
-        raise
-    except Exception as exc:
-        logger.exception("Fanqie bootstrap resume %s failed", run_id)
-        _handle_run_error(db, run_id, exc)
-    finally:
-        try:
-            run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
-            if run and run.status in ("done", "failed", "cancelled"):
-                _push(run_id, {"event": "__stream_end__"})
-            elif run and run.status == "awaiting_gate":
-                from app.services.bootstrap.gate_auto import schedule_auto_resume_for_run
-                schedule_auto_resume_for_run(run_id)
-        except Exception:
-            pass
-        db.close()
+    await resume_pipeline(
+        get_fanqie_graph(),
+        run_id,
+        resume_payload,
+        model_profile=model_profile,
+        llm_provider_id=llm_provider_id,
+        user_id=user_id,
+    )
 
 
 # ──────────────────────────────────────────────────────

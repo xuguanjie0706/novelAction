@@ -93,6 +93,9 @@ def coerce_pre_write_warning_from_dict(data: dict) -> dict:
         "chapter_lock_table": data.get("chapter_lock_table")
         if isinstance(data.get("chapter_lock_table"), dict)
         else {},
+        "foreshadow_schedule_lock": data.get("foreshadow_schedule_lock")
+        if isinstance(data.get("foreshadow_schedule_lock"), dict)
+        else {},
     }
 
 
@@ -131,6 +134,7 @@ def empty_pre_write_warning_error(exc: Exception, response: str) -> dict:
             "realm_bridge": dict(_EMPTY_BRIDGE),
         },
         "chapter_lock_table": {},
+        "foreshadow_schedule_lock": {},
         "error": str(exc),
         "raw": (response or "")[:1500],
         "parse_failed": True,
@@ -154,5 +158,10 @@ def has_usable_pre_write_body(result: dict | None) -> bool:
         return True
     clt = coerced.get("chapter_lock_table") or {}
     if isinstance(clt, dict) and clt.get("has_prev") and (clt.get("locked_beats") or clt.get("forbidden_replays")):
+        return True
+    fsl = coerced.get("foreshadow_schedule_lock") or {}
+    if isinstance(fsl, dict) and fsl.get("has_schedule") and (
+        fsl.get("forbidden_early_plants") or fsl.get("allowed_this_chapter")
+    ):
         return True
     return False

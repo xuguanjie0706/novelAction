@@ -92,7 +92,7 @@ class DraftStreamMixin:
         reader_promise_context: str = "",
         # 写前简报（由 pre_write_warning 生成）：主角状态锁定 + 本章写法指导 + 必发事件 + 幻觉预防。
         # 独立于 user_prompt（800字上限），享有 2500 字专属预算，位置优先于"作者补充要求"。
-        # 仅在门控写作且 pre_write_warning_enabled=True 时由 gated_draft_routes 填入；
+        # 由 draft_routes / gated_draft_routes 在每次起笔前填入；
         # 普通 draft-assist/stream 调用传空字符串即可（默认值）。
         pre_write_brief: str = "",
         # 空间连续性约束（由 gated_draft_routes._build_location_context 生成）：
@@ -490,7 +490,7 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
             extra = f"\n\n【作者补充要求】\n{self._clip_context(user_prompt, 800, 4000)}"
 
         # 写前简报：独立 2500 字预算，优先级高于"作者补充要求"。
-        # 由门控写作路径在 pre_write_warning_enabled=True 时注入；普通续写为空。
+        # 由起草路径在写前预警完成后注入；无预警结果时为空。
         pre_write_brief_part = ""
         if pre_write_brief and pre_write_brief.strip():
             pre_write_brief_part = (
@@ -558,7 +558,7 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
 核心事件：{outline_summary or "（未填写）"}
 人物变化：{outline_conflict or "（未填写）"}
 章末方向：{outline_highlight or "（未填写）"}{milestone_part}{tone_part}
-{f"伏笔管理：{outline_foreshadow}" if outline_foreshadow else ""}{manifest_constraint}{outline_empty_fallback}
+{f"本章伏笔规划意图（章纲预设）：{outline_foreshadow}【注：此为规划，权威台账见上方「未回收伏笔」区块】" if outline_foreshadow else ""}{manifest_constraint}{outline_empty_fallback}
 {scene_blueprint_part}{pre_write_brief_part}
 {task_line}{extra}
 

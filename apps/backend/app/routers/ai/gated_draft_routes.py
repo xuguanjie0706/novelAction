@@ -11,7 +11,7 @@ gated_draft_routes.py — 质量门控写作端点（薄壳编排层）
 
 SSE 协议（JSON lines，prefix: ``data: ``）：
   gate_config       — 循环开始前推送生效配置（含 block_on_consistency_issues、hook_mandate_active 等）
-  pre_warn_running  — 写前预警开始（仅当 pre_write_warning_enabled=true）
+  pre_warn_running  — 写前预警开始（每次起笔必跑）
   pre_warn_done     — 写前预警完成，附 risk_count / ok / protagonist_fact_sheet / writing_brief
   attempt_start     — 本轮起笔开始（strategy: initial | patch | full_rewrite）
   text              — 正文片段（与普通 draft-assist 格式完全一致）
@@ -158,28 +158,25 @@ async def gated_draft_stream(
         # 而 gated 始终 replace_existing=True，draft_assist_stream 内部不读 existing_content。
         # 在路由层预先构建 draft_ctx，与写前硬门（一致性/境界）共用同一份上下文。
 
-        # ── 写前预警（pre_write_warning_enabled=True；整章重写时优先复用落库记录）──
+        # ── 写前预警（每次起笔必跑；整章重写时优先复用落库记录）──
         # 将预警结果格式化为「写前简报」块，通过 draft_assist_stream 的专属参数
         # pre_write_brief 注入（独立 2500 字预算），不拼入 user_prompt（上限 800 字）。
         # user_prompt_str 只保留用户/作者的补充指令，保持语义干净。
         # 后续重写轮仍沿用同一份 pre_warn_brief_block（状态锁定在整轮写作期间不变）。
-        pre_warn_brief_block: str = ""
-        if cfg["pre_write_warning_enabled"]:
-            db.refresh(chapter)
-            pre_warn_brief_block, pre_warn_events = await resolve_pre_write_brief_for_draft(
-                db,
-                chapter=chapter,
-                project=project,
-                project_id=str(project_id),
-                svc=svc,
-                enabled=True,
-                model_profile=req.model_profile or "local",
-                llm_provider_id=str(req.llm_provider_id) if req.llm_provider_id else None,
-                persist_record=True,
-                reuse_if_exists=bool(req.replace_existing),
-            )
-            for payload in pre_warn_events:
-                yield _sse(payload)
+        db.refresh(chapter)
+        pre_warn_brief_block, pre_warn_events = await resolve_pre_write_brief_for_draft(
+            db,
+            chapter=chapter,
+            project=project,
+            project_id=str(project_id),
+            svc=svc,
+            model_profile=req.model_profile or "local",
+            llm_provider_id=str(req.llm_provider_id) if req.llm_provider_id else None,
+            persist_record=True,
+            reuse_if_exists=bool(req.replace_existing),
+        )
+        for payload in pre_warn_events:
+            yield _sse(payload)
 
         for attempt in range(1, cfg["max_rewrite_attempts"] + 1):
             # ── 决定本轮策略 ───────────────────────────────────────────

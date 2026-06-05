@@ -161,6 +161,43 @@ export default function WarnPanel({
                 : `发现 ${warnResult.risk_count} 处风险，建议先修正`}
           </div>
 
+          {/* ── 伏笔日程锁定表（第 1 章起即可生效）── */}
+          {warnResult.foreshadow_schedule_lock?.has_schedule && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-2.5 space-y-1.5">
+              <p className="text-[10px] font-semibold text-amber-900 uppercase tracking-wide flex items-center gap-1">
+                <ShieldCheck size={10} />
+                伏笔日程锁定表
+                {warnResult.foreshadow_schedule_lock.current_chapter_number != null && (
+                  <span className="font-normal normal-case text-amber-800">
+                    （第{warnResult.foreshadow_schedule_lock.current_chapter_number}章）
+                  </span>
+                )}
+              </p>
+              {(warnResult.foreshadow_schedule_lock.opening_teases ?? []).map((t, i) => (
+                <p key={`tease-${i}`} className="text-xs text-amber-900 pl-2 leading-relaxed">
+                  · 允许预告：{t.label}
+                  {t.detail ? ` — ${t.detail.slice(0, 160)}${t.detail.length > 160 ? '…' : ''}` : ''}
+                </p>
+              ))}
+              {(warnResult.foreshadow_schedule_lock.allowed_this_chapter ?? []).map((a, i) => (
+                <p key={`allow-${i}`} className="text-xs text-emerald-800 pl-2 leading-relaxed">
+                  · 本章应{a.op === 'lay' ? '埋设' : '加热'}：{a.name}
+                  {a.detail ? ` — ${a.detail.slice(0, 120)}` : ''}
+                </p>
+              ))}
+              {(warnResult.foreshadow_schedule_lock.forbidden_early_plants ?? []).map((f, i) => (
+                <p key={`forbid-fs-${i}`} className="text-xs text-rose-700 pl-2 leading-relaxed">
+                  ⛔ 第{f.planned_lay_chapter}章才埋：{f.name}
+                </p>
+              ))}
+              {(warnResult.foreshadow_schedule_lock.outline_conflicts ?? []).map((c, i) => (
+                <p key={`fsc-${i}`} className="text-xs text-amber-800 pl-2 leading-relaxed">
+                  ⚠️ {c.reason || c.outline_text}
+                </p>
+              ))}
+            </div>
+          )}
+
           {/* ── 情节锁定表（程序生成，先于主编预警）── */}
           {warnResult.chapter_lock_table?.has_prev && (
             <div className="rounded-lg border border-violet-200 bg-violet-50/70 p-2.5 space-y-1.5">

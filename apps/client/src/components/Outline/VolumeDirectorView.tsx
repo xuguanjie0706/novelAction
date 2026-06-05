@@ -321,7 +321,7 @@ export function VolumeDirectorPanel({
       {d.pacingSkeleton && (
         <ReadBlock
           label="节奏骨架"
-          sublabel={d.chapterStartGlobal > 1 ? '全书章段（由本卷内序号换算）' : '全卷快慢分布'}
+          sublabel="章段节奏（本卷内章号；第2卷起展示为全书章号）"
           accent="gray"
         >
           <span className="flex items-center gap-1.5 text-xs">

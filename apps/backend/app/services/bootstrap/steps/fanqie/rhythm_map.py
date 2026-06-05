@@ -46,7 +46,10 @@ async def gen_rhythm_map(svc: Any, project: Project, ctx: dict) -> dict:
 - progress（推进：剧情发展，有信息量但无爽点）
 - transition（过渡：连接性章节，尽量少用）
 
-硬约束：连续 transition 不超过2章；big_win 间隔不超过15章。
+硬约束：
+- 连续 transition 不超过2章；连续 progress 不超过2章（第3章起须有小爽或大爽）
+- big_win 间隔不超过12章；禁止连续2章以上 small_win
+- 禁止机械交替（progress→small_win→big_win 循环套模板）；须按剧情阶段成段分布
 
 第二部分：生成3-5个剧情储量池弧线（备用支线，主线卡壳时可插入）。
 
@@ -100,7 +103,19 @@ async def gen_rhythm_map(svc: Any, project: Project, ctx: dict) -> dict:
         validate=_validate,
     )
 
-    data["auto_dry_spells"] = _detect_dry_spells(data.get("chapter_tags") or [])
+    from app.services.bootstrap.rhythm_pacing import (
+        detect_dry_spells,
+        repair_rhythm_tags,
+    )
+
+    raw_tags = data.get("chapter_tags") or []
+    repaired, repair_notes = repair_rhythm_tags(raw_tags)
+    if repaired:
+        data["chapter_tags"] = repaired
+    if repair_notes:
+        data["rhythm_repair_notes"] = repair_notes
+
+    data["auto_dry_spells"] = detect_dry_spells(data.get("chapter_tags") or [])
 
     extra = dict(project.extra or {})
     extra["rhythm_map"] = data
@@ -114,22 +129,3 @@ async def gen_rhythm_map(svc: Any, project: Project, ctx: dict) -> dict:
     return data
 
 
-def _detect_dry_spells(tags: list) -> list[str]:
-    """检测连续 transition 超2章的区间，返回警告列表。"""
-    warnings = []
-    streak = 0
-    streak_start = 0
-    for item in tags:
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") == "transition":
-            if streak == 0:
-                streak_start = item.get("ch", 0)
-            streak += 1
-            if streak > 2:
-                warnings.append(
-                    f"第{streak_start}-{item.get('ch', '?')}章连续过渡{streak}章，需补充爽点"
-                )
-        else:
-            streak = 0
-    return warnings

@@ -58,12 +58,27 @@ export type ChapterLockTable = {
   prev_tail_anchor?: string
 }
 
+/** 伏笔日程锁定表（core_mysteries + opening_contract，第 1 章起生效） */
+export type ForeshadowScheduleLock = {
+  has_schedule: boolean
+  current_chapter_number?: number | string | null
+  forbidden_early_plants?: Array<{
+    name?: string
+    planned_lay_chapter?: number
+    reason?: string
+  }>
+  allowed_this_chapter?: Array<{ name?: string; op?: string; detail?: string }>
+  opening_teases?: Array<{ label?: string; detail?: string }>
+  outline_conflicts?: Array<{ field?: string; outline_text?: string; reason?: string }>
+}
+
 export type PreWriteWarnResult = {
   ok: boolean
   risk_count: number
   risks: Array<{ type: string; severity: string; description: string; suggested_fix: string }>
   reminders: string[]
   chapter_lock_table?: ChapterLockTable
+  foreshadow_schedule_lock?: ForeshadowScheduleLock
   /** 主角状态锁定：境界/位置/可用技能/持有道具/禁止项 */
   protagonist_fact_sheet?: {
     realm: string

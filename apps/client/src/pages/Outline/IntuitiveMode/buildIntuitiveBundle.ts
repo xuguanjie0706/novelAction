@@ -4,6 +4,10 @@
 import type { LinterIssueRow } from '../../../components/Outline/VolumeLinterPanel'
 import { linterIssueHeading } from '../../../components/Outline/linterDisplay'
 import type { OutlineNode, OutlinePlanQualityReport } from '../../../types'
+import {
+  chapterStartForVolume,
+  shiftPacingSkeletonDisplay,
+} from '../../../utils/volumeChapterStarts'
 import type {
   InsightSeverity,
   InsightTimelineEntry,
@@ -37,6 +41,7 @@ function buildTimeline(
   volume: OutlineNode,
   linterIssues: LinterIssueRow[],
   quality: OutlinePlanQualityReport | undefined,
+  allVolumes?: OutlineNode[],
 ): InsightTimelineEntry[] {
   const entries: InsightTimelineEntry[] = []
 
@@ -91,13 +96,15 @@ function buildTimeline(
 
   const extra = volume.extra ?? {}
   if (extra.pacing_skeleton && typeof extra.pacing_skeleton === 'string') {
+    const startGlobal = chapterStartForVolume(volume, allVolumes)
+    const raw = extra.pacing_skeleton as string
     entries.push({
       id: 'volume-pacing',
       kind: 'volume_meta',
       chapterNumber: null,
       severity: 'info',
       title: '卷节奏骨架',
-      message: extra.pacing_skeleton as string,
+      message: shiftPacingSkeletonDisplay(raw, startGlobal),
     })
   }
 
@@ -111,7 +118,11 @@ function buildTimeline(
   return entries
 }
 
-export function buildIntuitiveBundle(volume: OutlineNode): IntuitiveVolumeBundle {
+export function buildIntuitiveBundle(
+  volume: OutlineNode,
+  options?: { allVolumes?: OutlineNode[] },
+): IntuitiveVolumeBundle {
+  const allVolumes = options?.allVolumes
   const children = [...(volume.children ?? [])].sort((a, b) => a.sort_order - b.sort_order)
   const linterIssues = (volume.extra?.linter_issues as LinterIssueRow[] | undefined) ?? []
   const summary = (volume.extra?.linter_summary as Record<string, number> | undefined) ?? {}
@@ -152,7 +163,7 @@ export function buildIntuitiveBundle(volume: OutlineNode): IntuitiveVolumeBundle
   return {
     volume,
     chapters,
-    timeline: buildTimeline(volume, linterIssues, quality),
+    timeline: buildTimeline(volume, linterIssues, quality, allVolumes),
     stats,
     qualityReport: quality,
   }

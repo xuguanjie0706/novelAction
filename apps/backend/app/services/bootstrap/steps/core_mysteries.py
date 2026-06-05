@@ -122,16 +122,18 @@ async def gen_core_mysteries(svc: Any, project, ctx: dict) -> list[dict]:
         if not name or not description:
             continue
         try:
+            lay_ch = m.get("lay_chapter")
             fs = Foreshadow(
                 project_id=project.id,
                 title=name[:200],
                 description=f"【核心谜题】{name}：{description}",
-                laid_chapter_number=m.get("lay_chapter"),
+                laid_chapter_number=None,
                 planned_resolve_chapter=m.get("reveal_chapter"),
                 status="open",
                 foreshadow_type=m.get("mystery_type", "hook"),
                 extra={
                     "mystery_name": name,
+                    "planned_lay_chapter": lay_ch,
                     "why_readers_care": m.get("why_readers_care", ""),
                     "lay_method": m.get("lay_method", ""),
                     "heat_chapters": m.get("heat_chapters", []),

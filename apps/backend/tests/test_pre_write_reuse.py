@@ -84,6 +84,16 @@ def test_try_reuse_returns_brief_when_record_has_writing_brief():
     assert evt["risk_count"] >= 1
 
 
-def test_try_reuse_returns_none_when_brief_too_thin():
+def test_try_reuse_skips_llm_when_record_exists_even_if_thin():
+    """重新生成：有落库记录即复用，不因简报过短再调主编审稿 LLM。"""
     db = _FakeDb(_FakeRecord("rec-2", {"ok": True, "risk_count": 0}))
+    out = try_reuse_pre_write_brief_from_record(db, project_id="p1", chapter_id="c1")
+    assert out is not None
+    _, evt = out
+    assert evt["reused"] is True
+    assert evt["record_id"] == "rec-2"
+
+
+def test_try_reuse_returns_none_when_parse_failed():
+    db = _FakeDb(_FakeRecord("rec-3", {"ok": False, "parse_failed": True, "error": "json"}))
     assert try_reuse_pre_write_brief_from_record(db, project_id="p1", chapter_id="c1") is None

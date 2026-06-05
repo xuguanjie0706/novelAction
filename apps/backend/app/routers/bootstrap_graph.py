@@ -44,19 +44,12 @@ from app.models.bootstrap_run import BootstrapRun
 from app.models.user import User
 from app.services.bootstrap.graph import (
     emit,
-    resume_bootstrap,
-    run_bootstrap,
+    get_graph_for_mode,
     subscribe,
     unsubscribe,
 )
-from app.services.bootstrap.graph_fanqie import (
-    resume_bootstrap_fanqie,
-    run_bootstrap_fanqie,
-)
-from app.services.bootstrap.graph_fanfic import (
-    resume_bootstrap_fanfic,
-    run_bootstrap_fanfic,
-)
+from app.services.bootstrap.pipeline.runner import resume_pipeline, run_pipeline
+from app.services.bootstrap.pipeline.styles import get_style
 from app.schemas.bootstrap_fanfic_positioning import try_validate_fanfic_positioning
 from app.schemas.bootstrap_fanqie_positioning import try_validate_fanqie_positioning
 from app.schemas.bootstrap_positioning import try_validate_positioning
@@ -206,30 +199,31 @@ async def create_run(
     db.refresh(run)
     run_id = str(run.id)
 
-    if req.mode == "fanfic":
-        _run_fn = run_bootstrap_fanfic
-    elif req.mode == "fanqie":
-        _run_fn = run_bootstrap_fanqie
-    else:
-        _run_fn = run_bootstrap
+    style = get_style(req.mode)
     _effective_ws = req.writing_style
     if req.mode in ("fanqie", "fanfic") and _effective_ws == "standard":
         _effective_ws = "plain"
-    _run_kwargs: dict = {
-        "logline": req.logline,
-        "premise": req.premise or "",
-        "target_words": req.target_words,
-        "model_profile": req.model_profile,
-        "llm_provider_id": req.llm_provider_id,
-        "user_id": current_user.id,
-        "writing_style": _effective_ws,
-    }
+    extra_ctx = None
     if req.mode == "fanfic" and req.fanfic_meta:
-        _run_kwargs["fanfic_meta"] = req.fanfic_meta.model_dump()
-    task = asyncio.create_task(
-        _run_fn(run_id, **_run_kwargs),
-        name=f"bootstrap-{req.mode}-{run_id[:8]}",
-    )
+        extra_ctx = {"fanfic_meta": req.fanfic_meta.model_dump()}
+    graph = get_graph_for_mode(req.mode)
+
+    async def _run() -> None:
+        await run_pipeline(
+            graph,
+            style,
+            run_id,
+            logline=req.logline,
+            premise=req.premise or "",
+            target_words=req.target_words,
+            model_profile=req.model_profile,
+            llm_provider_id=req.llm_provider_id,
+            user_id=current_user.id,
+            writing_style=_effective_ws,
+            extra_ctx=extra_ctx,
+        )
+
+    task = asyncio.create_task(_run(), name=f"bootstrap-{req.mode}-{run_id[:8]}")
     _track_task(run_id, task)
     return {"run_id": run_id, "mode": req.mode}
 
@@ -397,20 +391,20 @@ async def resume_run(
             detail=f"Run is in status '{run.status}', expected 'awaiting_gate' or 'awaiting_retry'",
         )
 
-    if run.mode == "fanfic":
-        _resume_fn = resume_bootstrap_fanfic
-    elif run.mode == "fanqie":
-        _resume_fn = resume_bootstrap_fanqie
-    else:
-        _resume_fn = resume_bootstrap
-    task = asyncio.create_task(
-        _resume_fn(
+    graph = get_graph_for_mode(run.mode or "sequential")
+
+    async def _resume() -> None:
+        await resume_pipeline(
+            graph,
             run_id,
             _build_resume_payload(run, req),
             model_profile=req.model_profile,
             llm_provider_id=req.llm_provider_id,
             user_id=current_user.id,
-        ),
+        )
+
+    task = asyncio.create_task(
+        _resume(),
         name=f"bootstrap-resume-{run.mode}-{run_id[:8]}",
     )
     _track_task(run_id, task)

@@ -92,12 +92,10 @@ export async function runGatedRewriteChapter(
 
       // 结构化事件处理
       if (ev === 'gate_config') {
-        const warnEnabled = obj.pre_write_warning_enabled === true
         const hookOn = obj.hook_mandate_active === true
         const fsEn = obj.enforce_face_slap_payoff_when_hook_required === true
         const blk = obj.block_on_consistency_issues === true || obj.block_on_realm_mismatch === true
-        const extras: string[] = []
-        if (warnEnabled) extras.push('写前预警已开启')
+        const extras: string[] = ['写前预警']
         if (hookOn && fsEn) extras.push('爽点结算章将卡 face_slap_payoff')
         if (blk) extras.push('写前硬门已开启')
         const extraStr = extras.length ? ` · ${extras.join(' · ')}` : ''

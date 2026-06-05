@@ -12,12 +12,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from langgraph.graph import StateGraph, START, END
-from langgraph.types import interrupt, Command
+from langgraph.types import interrupt
 
-from app.database import SessionLocal
 from app.models import Project
-from app.models.bootstrap_run import BootstrapRun
 from app.services.bootstrap.graph_ctx import sanitize_bootstrap_ctx
 from app.services.bootstrap.graph import (
     BootstrapState,
@@ -26,8 +23,6 @@ from app.services.bootstrap.graph import (
     _resolve_config,
     _state_run_id,
     emit,
-    _push,
-    _handle_run_error,
     get_fanfic_graph,
 )
 from app.services.bootstrap.steps.project import gen_project
@@ -254,136 +249,44 @@ async def node_audit(s, c=None):
     return patch
 
 
-def _build_fanfic_graph(checkpointer):
-    g = StateGraph(BootstrapState)
-    for name, fn in [
-        ("fanfic_positioning", node_fanfic_positioning),
-        ("gate", node_fanfic_gate),
-        ("project", node_project),
-        ("canon_pack", node_canon_pack),
-        ("deviation_contract", node_deviation),
-        ("entry_hook", node_entry_hook),
-        ("golden_finger", node_golden_finger),
-        ("face_slap_map", node_face_slap),
-        ("canon_power", node_canon_power),
-        ("canon_characters", node_canon_characters),
-        ("volumes", node_volumes),
-        ("rhythm_map", node_rhythm),
-        ("canon_audit", node_audit),
-    ]:
-        g.add_node(name, fn)
-    chain = [
-        START, "fanfic_positioning", "gate", "project",
-        "canon_pack", "deviation_contract", "entry_hook",
-        "golden_finger", "face_slap_map", "canon_power",
-        "canon_characters", "volumes", "rhythm_map", "canon_audit", END,
-    ]
-    for a, b in zip(chain, chain[1:]):
-        g.add_edge(a, b)
-    return g.compile(checkpointer=checkpointer, interrupt_before=["gate"])
-
-
 async def run_bootstrap_fanfic(
     run_id: str, *, logline: str, premise: str, target_words: int,
     model_profile: str, llm_provider_id, user_id,
     writing_style: str = "plain",
     fanfic_meta: dict | None = None,
 ) -> None:
-    fanfic_graph = get_fanfic_graph()
-    db = SessionLocal()
-    try:
-        run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
-        if run:
-            run.status = "running"
-            db.commit()
-        _ws = str(writing_style or "").strip().lower()
-        if _ws not in ("plain", "standard", "dense"):
-            _ws = "plain"
-        initial: BootstrapState = {
-            "run_id": run_id, "logline": logline, "premise": premise,
-            "target_words": target_words, "positioning": {}, "project_id": None,
-            "ctx": {
-                "writing_style": _ws,
-                "fanfic_meta": fanfic_meta or {},
-            },
-            "completed_steps": [], "errors": [],
-        }
-        config = {"configurable": {
-            "thread_id": run_id, "db": db,
-            "model_profile": model_profile,
-            "llm_provider_id": llm_provider_id,
-            "user_id": user_id,
-        }}
-        await fanfic_graph.ainvoke(initial, config=config)
-        run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
-        if not run or run.status not in ("awaiting_gate", "awaiting_retry"):
-            _push(run_id, {"event": "__stream_end__"})
-        else:
-            from app.services.bootstrap.gate_auto import schedule_auto_resume_for_run
-            schedule_auto_resume_for_run(run_id)
-    except asyncio.CancelledError:
-        emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")
-        _push(run_id, {"event": "__stream_end__"})
-        raise
-    except Exception as exc:
-        logger.exception("Fanfic bootstrap run %s failed", run_id)
-        _handle_run_error(db, run_id, exc)
-        _push(run_id, {"event": "__stream_end__"})
-    finally:
-        db.close()
+    from app.services.bootstrap.pipeline.runner import run_pipeline
+    from app.services.bootstrap.pipeline.styles import STYLE_REGISTRY
+
+    await run_pipeline(
+        get_fanfic_graph(),
+        STYLE_REGISTRY["fanfic"],
+        run_id,
+        logline=logline,
+        premise=premise,
+        target_words=target_words,
+        model_profile=model_profile,
+        llm_provider_id=llm_provider_id,
+        user_id=user_id,
+        writing_style=writing_style,
+        extra_ctx={"fanfic_meta": fanfic_meta or {}},
+    )
 
 
 async def resume_bootstrap_fanfic(
     run_id: str, resume_payload: dict, *,
     model_profile: str, llm_provider_id, user_id,
 ) -> None:
-    from app.services.bootstrap.gate_auto import resume_lock
+    from app.services.bootstrap.pipeline.runner import resume_pipeline
 
-    async with resume_lock(run_id):
-        await _resume_bootstrap_fanfic_impl(
-            run_id, resume_payload,
-            model_profile=model_profile,
-            llm_provider_id=llm_provider_id,
-            user_id=user_id,
-        )
-
-
-async def _resume_bootstrap_fanfic_impl(
-    run_id: str, resume_payload: dict, *,
-    model_profile: str, llm_provider_id, user_id,
-) -> None:
-    fanfic_graph = get_fanfic_graph()
-    db = SessionLocal()
-    try:
-        run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
-        if run:
-            run.status = "running"
-            db.commit()
-        config = {"configurable": {
-            "thread_id": run_id, "db": db,
-            "model_profile": model_profile,
-            "llm_provider_id": llm_provider_id,
-            "user_id": user_id,
-        }}
-        await fanfic_graph.ainvoke(Command(resume=dict(resume_payload)), config=config)
-    except asyncio.CancelledError:
-        emit(run_id, "cancelled", db, persist_status="cancelled", message="用户已取消生成")
-        raise
-    except Exception as exc:
-        logger.exception("Fanfic bootstrap resume %s failed", run_id)
-        _handle_run_error(db, run_id, exc)
-    finally:
-        try:
-            run = db.query(BootstrapRun).filter(BootstrapRun.id == run_id).first()
-            if run and run.status in ("done", "failed", "cancelled"):
-                _push(run_id, {"event": "__stream_end__"})
-            elif run and run.status == "awaiting_gate":
-                from app.services.bootstrap.gate_auto import schedule_auto_resume_for_run
-                schedule_auto_resume_for_run(run_id)
-            # awaiting_retry：保持 SSE 订阅，等待用户 retry_step
-        except Exception:
-            pass
-        db.close()
+    await resume_pipeline(
+        get_fanfic_graph(),
+        run_id,
+        resume_payload,
+        model_profile=model_profile,
+        llm_provider_id=llm_provider_id,
+        user_id=user_id,
+    )
 
 
 def _to_generic_positioning(fanfic_pos: dict, meta: dict) -> dict:

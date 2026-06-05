@@ -159,36 +159,16 @@ export default function WritingConfigPanel({ projectId }: { projectId: string })
             {/* 分隔线 */}
             <div className="border-t border-gray-100 pt-1" />
 
-            {/* 写前预警开关 */}
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1">
-                <p className="text-sm font-medium text-gray-800 flex items-center gap-1.5">
-                  写前预警
-                  <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 border border-rose-200">
-                    实验性
-                  </span>
-                </p>
-                <p className="mt-0.5 text-xs text-gray-500 leading-relaxed">
-                  开启后，每次 AI 生成本章正文前自动生成写前简报（主角状态锁定、开篇/冲突/钩子写法、必发事件、幻觉预防），
-                  <strong className="font-medium text-gray-700">优先注入写章 prompt 约束正文</strong>；侧栏可查阅同一份记录。
-                </p>
-                <p className="mt-1 text-xs text-amber-600">
-                  ⚠️ 会额外消耗一次 AI 调用，小模型/本地模型效果有限，推荐配合 Gemini 线路使用。
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => save({ pre_write_warning_enabled: !cfg.pre_write_warning_enabled })}
-                className={`relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none ${
-                  cfg.pre_write_warning_enabled ? 'bg-rose-400' : 'bg-gray-200'
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
-                    cfg.pre_write_warning_enabled ? 'translate-x-6' : 'translate-x-1'
-                  }`}
-                />
-              </button>
+            {/* 写前预警（默认开启，无开关） */}
+            <div className="rounded-lg border border-rose-100 bg-rose-50/50 px-3 py-2.5">
+              <p className="text-sm font-medium text-gray-800">写前预警</p>
+              <p className="mt-0.5 text-xs text-gray-500 leading-relaxed">
+                每次 AI 生成本章正文前自动执行主编审稿（主角状态锁定、伏笔日程、必发事件等），
+                结果注入写章 prompt；侧栏可查阅同一份记录。
+              </p>
+              <p className="mt-1 text-xs text-amber-700">
+                每次起笔额外消耗一次 AI 调用；推荐配合远程大模型线路。
+              </p>
             </div>
           </>
         )}

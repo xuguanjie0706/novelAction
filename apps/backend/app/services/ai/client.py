@@ -89,19 +89,11 @@ class ClientMixin:
             )
         if self._client:
             return self._client
-        import httpx
-        import openai
+        from app.services.llm_http_client import create_async_openai_client
 
-        timeout = httpx.Timeout(
-            connect=settings.LLM_HTTP_CONNECT_TIMEOUT,
-            read=settings.LLM_HTTP_READ_TIMEOUT,
-            write=120.0,
-            pool=30.0,
-        )
-        self._client = openai.AsyncOpenAI(
+        self._client = create_async_openai_client(
             base_url=self.base_url,
             api_key=self.api_key,
-            timeout=timeout,
         )
         return self._client
 

@@ -87,7 +87,7 @@ export interface FanficStartMeta {
 
 export interface StartParams {
   logline: string
-  mode: 'sequential' | 'fanqie' | 'fanfic'
+  mode: 'sequential' | 'fanqie' | 'fanfic' | 'xianxia'
   targetWords: number
   modelProfile: string
   llmProviderId?: string | null
@@ -169,7 +169,19 @@ const FANFIC_STEP_KEYS: StepKey[] = [
   'canon_characters', 'volumes', 'rhythm_map', 'canon_audit',
 ]
 
+// 玄幻修仙直白（原生）：通用串行序列，power_systems→power_ladder，并插入 golden_finger
+const XIANXIA_STEP_KEYS: StepKey[] = [
+  'positioning', 'project',
+  'power_ladder', 'golden_finger',
+  'factions', 'storylines', 'antagonist_ladder', 'characters',
+  'skills', 'items', 'settings',
+  'volumes', 'emotion_arc', 'villain_arc',
+  'memory', 'relations', 'core_mysteries',
+  'opening_contract', 'consistency',
+]
+
 function getStepKeys(mode: StartParams['mode']): StepKey[] {
+  if (mode === 'xianxia') return XIANXIA_STEP_KEYS
   if (mode === 'fanqie') return FANQIE_STEP_KEYS
   if (mode === 'fanfic') return FANFIC_STEP_KEYS
   return SEQ_STEP_KEYS
@@ -623,7 +635,7 @@ export function useBootstrapStream() {
 
       // 根据快照中的 mode 还原步骤列表与 ref
       const runMode: StartParams['mode'] =
-        (run.mode === 'fanqie' || run.mode === 'fanfic') ? run.mode : 'sequential'
+        (run.mode === 'fanqie' || run.mode === 'fanfic' || run.mode === 'xianxia') ? run.mode : 'sequential'
       currentModeRef.current = runMode
       setSteps(getStepKeys(runMode).map(k => makeStep(k)))
       setActiveLogline((run.logline || opts?.loglineHint || '').trim())

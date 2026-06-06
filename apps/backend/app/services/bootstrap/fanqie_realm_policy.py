@@ -54,11 +54,20 @@ def hydrate_fanqie_power_ctx(ctx: dict) -> dict:
 
     start_t = ladder.get("protagonist_start_tier")
     end_t = ladder.get("protagonist_end_tier")
+    axis_kind = (ladder.get("axis_kind") or "social").strip() or "social"
+    realm_axis_name = (ladder.get("realm_axis_name") or "").strip()
+    if axis_kind == "cultivation":
+        axis_system_name = realm_axis_name[:48] if realm_axis_name else "境界主轴"
+        axis_summary_label = realm_axis_name[:24] if realm_axis_name else "境界主轴"
+    else:
+        axis_system_name = "社会权力阶梯"
+        axis_summary_label = "社会阶梯"
+
     ctx["power_level_names"] = names
     ctx["power_level_registry"] = registry
     ctx["power_systems_full"] = [{
         "axis_role": "primary",
-        "name": "社会权力阶梯",
+        "name": axis_system_name,
         "levels": levels,
         "protagonist_current_rank": int(start_t) if isinstance(start_t, int) and start_t > 0 else 1,
         "protagonist_end_rank": int(end_t) if isinstance(end_t, int) and end_t > 0 else len(names),
@@ -66,7 +75,7 @@ def hydrate_fanqie_power_ctx(ctx: dict) -> dict:
     }]
     ctx.setdefault(
         "power_summary",
-        "主轴（社会阶梯）：" + " → ".join(names),
+        f"主轴（{axis_summary_label}）：" + " → ".join(names),
     )
     return ctx
 
@@ -87,8 +96,18 @@ def primary_level_names_from_ctx_or_db(ctx: dict | None, db: Any, project_id: st
     return primary_level_names(pss) if pss else []
 
 
-def build_fanqie_realm_discipline_block(level_names: list[str]) -> str:
-    """写章/复盘/预警共用的境界铁律块。"""
+def build_fanqie_realm_discipline_block(
+    level_names: list[str],
+    axis_kind: str = "social",
+) -> str:
+    """写章/复盘/预警共用的境界铁律块。
+
+    Args:
+        level_names: 合法主轴大境名（低→高）。
+        axis_kind:   ``"social"``（默认，行为不变）或 ``"cultivation"``（修仙轴）。
+            修仙轴下措辞改为「只禁本书主轴外的套话境名」，避免误伤正文里合理的
+            修仙术语（灵气/破境/心魔劫等非境名词）；社会轴行为 100% 不变。
+    """
     if not level_names:
         return ""
     ladder_line = " → ".join(level_names)
@@ -97,6 +116,17 @@ def build_fanqie_realm_discipline_block(level_names: list[str]) -> str:
         if t and t not in ladder_line and t not in "".join(level_names)
     ]
     banned_sample = "、".join(banned[:12]) if banned else "筑基、金丹、元婴、化神等"
+    if axis_kind == "cultivation":
+        return (
+            "【番茄·修仙主轴境界铁律（全书唯一合法大境，须与 PowerSystem 一致）】\n"
+            f"合法大境（低→高，只能使用下列名称或其小境写法，如「{level_names[0]}初期」）：\n"
+            f"  {ladder_line}\n"
+            f"禁止使用「本书主轴之外」的公版套话境名（如 {banned_sample}）作为人物修为档位；"
+            "但「灵气、破境、心魔劫、灵根、丹药」等非境名的修仙术语正常使用。\n"
+            "小境写法：在合法大境后加「初期/中期/后期/圆满」（如「淬体境后期」）。\n"
+            "破境须连续、不可跳级；破境时须交代异象或代价。\n"
+            "复盘与写章：人物境界变化必须能映射到上述某一档大境。"
+        )
     return (
         "【番茄·主轴境界铁律（全书唯一合法大境，须与 PowerSystem 一致）】\n"
         f"合法大境（低→高，只能使用下列名称或其小境写法，如「{level_names[0]}初期」）：\n"
@@ -116,14 +146,20 @@ def build_fanqie_realm_discipline_for_project(db: Any, project_id: str, ctx: dic
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project or not is_fanqie_project(project, ctx):
         return ""
+    extra = project.extra if isinstance(project.extra, dict) else {}
+    axis_kind = (
+        (ctx or {}).get("fanqie_axis_kind")
+        or extra.get("fanqie_axis_kind")
+        or (extra.get("power_ladder") or {}).get("axis_kind")
+        or "social"
+    )
     names = primary_level_names_from_ctx_or_db(ctx, db, project_id)
     if not names:
         tmp: dict = dict(ctx or {})
-        extra = project.extra if isinstance(project.extra, dict) else {}
         tmp.setdefault("power_ladder", extra.get("power_ladder"))
         hydrate_fanqie_power_ctx(tmp)
         names = tmp.get("power_level_names") or []
-    return build_fanqie_realm_discipline_block(names)
+    return build_fanqie_realm_discipline_block(names, axis_kind=axis_kind)
 
 
 def normalize_realm_label_for_primary_axis(

@@ -94,21 +94,28 @@ def _build_signal_audit_by_rules(ctx: dict) -> dict:
         "fix": None if hook_pass else "补全 contrast_design.initial_state_headline 或 fanqie_positioning.algo_hook",
     }
 
+    # 基础 5 项用于 0-100 评分（保持既有量纲不变）
     checks = (genre_check, gf_check, slap_check, density_check, hook_check)
-    overall_pass = all(c.get("pass") for c in checks)
-    overall_score = min(100, sum(20 for c in checks if c.get("pass")) + (5 if overall_pass else 0))
+    overall_score = min(100, sum(20 for c in checks if c.get("pass")) + (5 if all(c.get("pass") for c in checks) else 0))
 
-    critical_fixes = []
-    for key, label, chk in (
-        ("genre", "类型信号", genre_check),
-        ("gf", "金手指时机", gf_check),
-        ("slap", "首次打脸", slap_check),
-        ("density", "爽感密度", density_check),
-        ("hook", "算法钩子", hook_check),
-    ):
-        if not chk.get("pass") and chk.get("issue"):
-            critical_fixes.append(f"[{label}] {chk['issue']}")
-    critical_fixes = critical_fixes[:3]
+    # 修仙轴专属校验（境界单调性 + 破境密度），社会轴下返回空
+    cultivation_extra = _build_cultivation_checks(ctx)
+
+    overall_pass = all(c.get("pass") for c in checks) and all(
+        c.get("pass") for c in cultivation_extra.values()
+    )
+
+    fix_sources = [
+        ("类型信号", genre_check), ("金手指时机", gf_check),
+        ("首次打脸", slap_check), ("爽感密度", density_check), ("算法钩子", hook_check),
+        ("境界单调性", cultivation_extra.get("realm_monotonic_check")),
+        ("破境密度", cultivation_extra.get("breakthrough_density_check")),
+    ]
+    critical_fixes = [
+        f"[{label}] {chk['issue']}"
+        for label, chk in fix_sources
+        if isinstance(chk, dict) and not chk.get("pass") and chk.get("issue")
+    ][:4]
 
     return {
         "genre_signal_check": genre_check,
@@ -116,12 +123,56 @@ def _build_signal_audit_by_rules(ctx: dict) -> dict:
         "first_slap_timing_check": slap_check,
         "satisfaction_density_check": density_check,
         "hook_quality_check": hook_check,
+        **cultivation_extra,
         "overall_pass": overall_pass,
         "overall_score": overall_score,
         "critical_fixes": critical_fixes,
         "algo_optimization_tips": [] if overall_pass else ["规则审计未全通过，请按 critical_fixes 修正规划产物"],
         "_generated_by": "rule",
     }
+
+
+def _build_cultivation_checks(ctx: dict) -> dict:
+    """修仙轴专属规则校验：境界单调性 + 破境密度。社会轴下返回空 dict。"""
+    ladder = ctx.get("power_ladder") or {}
+    axis_kind = (ladder.get("axis_kind") or ctx.get("fanqie_axis_kind") or "social")
+    if axis_kind != "cultivation":
+        return {}
+
+    # 1) 境界单调性：大境 tier 严格递增、主角 start < end
+    tiers: list[int] = []
+    for item in ladder.get("social_ladder") or []:
+        if isinstance(item, dict) and isinstance(item.get("tier"), int):
+            tiers.append(item["tier"])
+    start_t = ladder.get("protagonist_start_tier")
+    end_t = ladder.get("protagonist_end_tier")
+    monotonic = bool(tiers) and tiers == sorted(tiers) and len(set(tiers)) == len(tiers)
+    span_ok = isinstance(start_t, int) and isinstance(end_t, int) and start_t < end_t
+    realm_pass = monotonic and span_ok and len(tiers) >= 8
+    realm_check = {
+        "pass": realm_pass,
+        "realm_count": len(tiers),
+        "issue": None if realm_pass else "境界主轴非严格递增 / 大境不足8档 / 主角起止境界未拉开",
+        "fix": None if realm_pass else "重生成 cultivation_ladder：8-12 大境 tier 递增，start_tier<end_tier",
+    }
+
+    # 2) 破境密度：前50章金手指升级（=破境）锚点 ≥3 次
+    gf = ctx.get("golden_finger") or {}
+    bp_count = 0
+    for stage in gf.get("upgrade_stages") or []:
+        ch = _first_int(str(stage.get("chapter_range", "")))
+        if ch and 1 <= ch <= 50:
+            bp_count += 1
+    density_pass = bp_count >= 3
+    bp_check = {
+        "pass": density_pass,
+        "breakthrough_in_first_50": bp_count,
+        "threshold": 3,
+        "issue": None if density_pass else f"前50章破境锚点仅{bp_count}次，修仙线缺破境爽点",
+        "fix": None if density_pass else "在 golden_finger.upgrade_stages 中把破境节点前移到前50章，至少3次",
+    }
+
+    return {"realm_monotonic_check": realm_check, "breakthrough_density_check": bp_check}
 
 
 async def gen_signal_audit(svc: Any, project: Project, ctx: dict) -> dict:
@@ -150,6 +201,8 @@ def _collect_issues(audit: dict) -> list[dict]:
         ("first_slap_timing_check", "首次打脸时机"),
         ("satisfaction_density_check", "爽感密度"),
         ("hook_quality_check", "算法钩子质量"),
+        ("realm_monotonic_check", "境界单调性"),
+        ("breakthrough_density_check", "破境密度"),
     ):
         check = audit.get(key, {})
         if isinstance(check, dict) and not check.get("pass", True):

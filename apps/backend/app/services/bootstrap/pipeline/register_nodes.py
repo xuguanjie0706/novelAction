@@ -134,6 +134,46 @@ def _register_all() -> None:
     # signal_audit 已内置写 consistency_issues，consistency_scan 节点已移除（-1 LLM）
     register_node(NodeSpec(key="signal_audit", fn=fanqie_audit, seq=950, label="执行番茄算法双校验..."))
 
+    # ── 玄幻修仙直白线（mode=xianxia，从零原生拓扑）──────────────
+    # 题材语义层全部原生（立项/金手指/境界契约/世界/卷骨架），
+    # 中立持久化步骤（project/factions/characters/storylines/memory/mysteries/
+    # opening_contract/consistency）复用通用线（非番茄）；最终图中零番茄节点。
+    from app.services.bootstrap.graph_xianxia import (
+        node_cultivation_contract,
+        node_golden_finger_xianxia,
+        node_volumes_xianxia,
+        node_world_xianxia,
+        node_xianxia_gate,
+        node_xianxia_positioning,
+    )
+
+    register_node(NodeSpec(
+        key="positioning_xianxia", fn=node_xianxia_positioning, seq=100,
+        graph_id="positioning", is_positioning=True,
+    ))
+    register_node(NodeSpec(
+        key="gate_positioning_xianxia", fn=node_xianxia_gate, seq=150,
+        graph_id="gate", interrupt_before=True,
+    ))
+    register_node(NodeSpec(
+        key="cultivation_contract", fn=node_cultivation_contract, seq=304,
+        label="构建修仙境界主轴 + 境界预算契约...", replaces="power_systems",
+    ))
+    register_node(NodeSpec(
+        key="golden_finger_xianxia", fn=node_golden_finger_xianxia, seq=306,
+        label="设计修仙金手指（咬合境界轴）...",
+    ))
+    register_node(NodeSpec(
+        key="settings_xianxia", fn=node_world_xianxia, seq=710,
+        graph_id="settings", replaces="settings",
+        label="生成修仙世界设定卡...",
+    ))
+    register_node(NodeSpec(
+        key="volumes_xianxia", fn=node_volumes_xianxia, seq=800,
+        graph_id="volumes", replaces="volumes",
+        label="规划卷骨架（境界预算契约硬执行）...",
+    ))
+
     # ── 同人线 ───────────────────────────────────────────────
     from app.services.bootstrap.graph_fanfic import (
         node_audit as fanfic_audit,

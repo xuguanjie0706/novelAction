@@ -218,9 +218,19 @@ async def node_fanqie_formula(s, c=None):
     from app.services.bootstrap.steps.fanqie.fanqie_formula import gen_fanqie_formula
     return await _fanqie_step(s, c, "fanqie_formula", "设计爽文公式（落差+金手指+打脸地图）...", gen_fanqie_formula)
 
-async def node_power_ladder(s, c=None):
+async def _gen_power_axis(svc, project, ctx):
+    """境界轴分发：修仙→cultivation_ladder，其余→通用 power_ladder（社会阶梯）。"""
+    from app.services.bootstrap.fanqie_axis import is_xianxia_archetype
+
+    if is_xianxia_archetype(ctx):
+        from app.services.bootstrap.steps.fanqie.cultivation_ladder import gen_cultivation_ladder
+        return await gen_cultivation_ladder(svc, project, ctx)
     from app.services.bootstrap.steps.fanqie.power_ladder import gen_power_ladder
-    return await _fanqie_step(s, c, "power_ladder", "构建权力阶梯（最小化世界观）...", gen_power_ladder)
+    return await gen_power_ladder(svc, project, ctx)
+
+
+async def node_power_ladder(s, c=None):
+    return await _fanqie_step(s, c, "power_ladder", "构建境界主轴 / 权力阶梯...", _gen_power_axis)
 
 
 async def node_ctx_bridge(state: BootstrapState, config: dict | None = None) -> dict:

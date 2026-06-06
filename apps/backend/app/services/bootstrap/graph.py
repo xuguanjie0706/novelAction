@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 bootstrap_graph = None  # type: ignore[assignment]
 fanqie_graph = None     # type: ignore[assignment]
 fanfic_graph = None     # type: ignore[assignment]
+xianxia_graph = None    # type: ignore[assignment]
 _pg_pool = None         # AsyncConnectionPool，供优雅关闭使用
 
 
@@ -75,12 +76,23 @@ def get_fanfic_graph():
     return fanfic_graph
 
 
+def get_xianxia_graph():
+    """返回已初始化的 xianxia_graph（番茄·玄幻修仙直白拓扑）。"""
+    if xianxia_graph is None:
+        raise RuntimeError(
+            "xianxia_graph 尚未初始化，请确认 init_bootstrap_graph() 已在 startup 中被 await。"
+        )
+    return xianxia_graph
+
+
 def get_graph_for_mode(mode: str):
     """按 BootstrapRun.mode 返回对应 CompiledGraph。"""
     if mode == "fanqie":
         return get_fanqie_graph()
     if mode == "fanfic":
         return get_fanfic_graph()
+    if mode == "xianxia":
+        return get_xianxia_graph()
     return get_bootstrap_graph()
 
 
@@ -92,7 +104,7 @@ async def init_bootstrap_graph(pg_conn_string: str) -> None:
         pg_conn_string: PostgreSQL DSN，例如 "postgresql://user:pw@host:5432/db"。
                         psycopg3 直接接受标准 DSN，无需 +psycopg 前缀。
     """
-    global bootstrap_graph, fanqie_graph, fanfic_graph, _pg_pool
+    global bootstrap_graph, fanqie_graph, fanfic_graph, xianxia_graph, _pg_pool
 
     from psycopg_pool import AsyncConnectionPool
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -118,20 +130,25 @@ async def init_bootstrap_graph(pg_conn_string: str) -> None:
     fanfic_graph = build_graph(
         STYLE_REGISTRY["fanfic"], checkpointer, state_type=BootstrapState,
     )
+    xianxia_graph = build_graph(
+        STYLE_REGISTRY["xianxia"], checkpointer, state_type=BootstrapState,
+    )
     logger.info(
-        "bootstrap_graph / fanqie_graph / fanfic_graph 初始化完成（PipelineBuilder + AsyncPostgresSaver）"
+        "bootstrap_graph / fanqie_graph / fanfic_graph / xianxia_graph 初始化完成"
+        "（PipelineBuilder + AsyncPostgresSaver）"
     )
 
 
 async def close_bootstrap_graph() -> None:
     """在 FastAPI shutdown 中调用，优雅关闭连接池。"""
-    global bootstrap_graph, fanqie_graph, fanfic_graph, _pg_pool
+    global bootstrap_graph, fanqie_graph, fanfic_graph, xianxia_graph, _pg_pool
     if _pg_pool is not None:
         await _pg_pool.close()
         _pg_pool = None
     bootstrap_graph = None
     fanqie_graph = None
     fanfic_graph = None
+    xianxia_graph = None
     logger.info("bootstrap_graph pg_pool 已关闭")
 
 

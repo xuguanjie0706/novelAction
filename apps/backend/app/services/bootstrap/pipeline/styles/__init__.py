@@ -46,6 +46,29 @@ STYLE_REGISTRY: dict[str, StyleConfig] = {
         skip_core=frozenset({"opening_contract", "consistency"}),
     ),
 
+    "xianxia": StyleConfig(
+        style_id="xianxia",
+        display_name="玄幻修仙直白（原生）",
+        # 从零原生拓扑：题材语义层全部修仙原生，中立持久化步骤复用通用线（非番茄）。
+        # 最终图中零番茄节点。canonical-first，无需 converge：cultivation 已 sync PowerSystem，
+        # volumes_xianxia 已落卷级 rank，opening_contract/consistency 用通用 CORE 节点收尾。
+        nodes=[
+            "positioning_xianxia",       # A 立项：修仙第一性原理（数值爬升引擎，非打脸）
+            "gate_positioning_xianxia",  # A 立项确认闸门
+            # project：通用 CORE（读 ctx.positioning，中立）
+            "cultivation_contract",      # B 境界主轴 + 境界预算契约（replaces power_systems）
+            "golden_finger_xianxia",     # B 金手指（咬合境界轴）
+            # factions / storylines / antagonist_ladder：通用 CORE（吃修仙 ctx）
+            "gate_characters",           # C 人物确认闸门
+            "settings_xianxia",          # C 修仙世界设定卡（replaces settings）
+            "volumes_xianxia",           # D 契约执行式卷骨架（replaces volumes）
+            "gate_volumes",              # D 卷质量闸门
+            # E emotion_villain / memory_relations / core_mysteries / opening_contract：通用 CORE
+            # G consistency：通用 CORE（emit complete 收尾）
+        ],
+        default_writing_style="plain",
+    ),
+
     "fanfic": StyleConfig(
         style_id="fanfic",
         display_name="同人",

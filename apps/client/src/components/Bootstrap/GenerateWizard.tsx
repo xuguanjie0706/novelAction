@@ -51,7 +51,7 @@ interface Props {
   onRecoverConsumed?: () => void
 }
 
-type Mode = 'sequential' | 'fanqie' | 'fanfic'
+type Mode = 'sequential' | 'fanqie' | 'fanfic' | 'xianxia'
 
 /** 弹层（默认正常提交） vs 全屏工作台（默认恢复 run） */
 type BootstrapShell = 'modal' | 'workspace'
@@ -227,7 +227,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
   /** 切换生成方案；番茄线默认白话直白，与后端 fanqie→plain 兜底一致。 */
   function selectMode(next: Mode) {
     setMode(next)
-    if (next === 'fanqie' || next === 'fanfic') setWritingStyle('plain')
+    if (next === 'fanqie' || next === 'fanfic' || next === 'xianxia') setWritingStyle('plain')
   }
 
   // ── 开始生成 ─────────────────────────────────────────────────
@@ -507,7 +507,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
             {/* 生成方案 */}
             <div>
               <label className="text-sm font-medium text-gray-700 block mb-2">生成方案</label>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <button
                   onClick={() => selectMode('sequential')}
                   className={clsx(
@@ -561,6 +561,25 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                   </div>
                   <div className="text-xs text-gray-500 leading-relaxed">
                     填原著名，AI 生成梗概三选一；穿书/重生/AU + 原著约束 + 番茄爽点节奏。
+                  </div>
+                </button>
+                <button
+                  onClick={() => selectMode('xianxia')}
+                  className={clsx(
+                    'p-3 rounded-xl border-2 text-left transition-all',
+                    mode === 'xianxia'
+                      ? 'border-emerald-400 bg-emerald-50'
+                      : 'border-gray-100 hover:border-emerald-200'
+                  )}
+                >
+                  <div className="text-sm font-semibold text-gray-800 mb-1">
+                    ⚔️ 玄幻修仙直白
+                    {mode === 'xianxia' && (
+                      <span className="ml-2 text-xs bg-emerald-500 text-white px-1.5 py-0.5 rounded-full">已选</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500 leading-relaxed">
+                    修仙原生管线：升级流立项 + 金手指咬合境界轴 + 境界预算契约硬执行（逐卷锁窗口，杜绝「第一卷修满」），白话直给。
                   </div>
                 </button>
               </div>

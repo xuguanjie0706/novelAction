@@ -305,7 +305,16 @@ def build_draft_power_context_from_db(db: Any, project_id: Any) -> str:
     from app.services.bootstrap.fanqie_realm_policy import build_fanqie_realm_discipline_block
 
     if project and is_fanqie_project(project):
-        fanqie_block = build_fanqie_realm_discipline_block(ctx.get("power_level_names") or [])
+        _extra = project.extra if isinstance(project.extra, dict) else {}
+        _axis_kind = (
+            (ctx or {}).get("fanqie_axis_kind")
+            or _extra.get("fanqie_axis_kind")
+            or (_extra.get("power_ladder") or {}).get("axis_kind")
+            or "social"
+        )
+        fanqie_block = build_fanqie_realm_discipline_block(
+            ctx.get("power_level_names") or [], axis_kind=_axis_kind,
+        )
         if fanqie_block:
             parts.append(fanqie_block)
     return "\n\n".join(parts)

@@ -366,16 +366,34 @@ def sync_power_ladder_to_power_system(db: Session, project: Project) -> PowerSys
     if not levels:
         return existing
 
+    axis_kind = (ladder.get("axis_kind") or "social").strip() or "social"
+    realm_axis_name = (ladder.get("realm_axis_name") or "").strip()
+    ps_name = (
+        realm_axis_name[:48]
+        if axis_kind == "cultivation" and realm_axis_name
+        else f"{(project.title or '本书')[:24]}·修炼阶梯"
+    )
+    breakthrough = (
+        (ladder.get("breakthrough_signature") or "").strip()
+        if axis_kind == "cultivation"
+        else ""
+    ) or (ladder.get("power_visualization") or "").strip() or None
     payload = {
-        "name": f"{(project.title or '本书')[:24]}·修炼阶梯",
+        "name": ps_name,
         "system_type": "cultivation",
         "description": (ladder.get("world_core_rule") or "").strip(),
         "levels": levels,
         "protagonist_current_rank": ladder.get("protagonist_start_tier") or 1,
         "protagonist_end_rank": ladder.get("protagonist_end_tier") or len(levels),
-        "breakthrough_condition": (ladder.get("power_visualization") or "").strip() or None,
+        "breakthrough_condition": breakthrough,
         "special_rules": (ladder.get("wealth_visualization") or "").strip() or None,
-        "extra": {"source": "fanqie_power_ladder"},
+        "extra": {
+            "source": "fanqie_power_ladder",
+            "axis_kind": axis_kind,
+            "sub_realm_segments": ladder.get("sub_realm_segments")
+            or ["初期", "中期", "后期", "圆满"],
+            "realm_axis_name": realm_axis_name or None,
+        },
     }
 
     if existing:

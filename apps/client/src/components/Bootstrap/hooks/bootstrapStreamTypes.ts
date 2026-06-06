@@ -79,7 +79,7 @@ export interface FanficStartMeta {
 
 export interface StartParams {
   logline: string
-  mode: 'sequential' | 'fanqie' | 'fanfic'
+  mode: 'sequential' | 'fanqie' | 'fanfic' | 'xianxia'
   targetWords: number
   modelProfile: string
   llmProviderId?: string | null
@@ -162,7 +162,19 @@ export const FANFIC_STEP_KEYS: StepKey[] = [
   'canon_characters', 'volumes', 'rhythm_map', 'canon_audit',
 ]
 
+// 玄幻修仙直白（原生）：通用串行序列，power_systems→power_ladder（境界主轴+契约），并插入 golden_finger。
+export const XIANXIA_STEP_KEYS: StepKey[] = [
+  'positioning', 'project',
+  'power_ladder', 'golden_finger',
+  'factions', 'storylines', 'antagonist_ladder', 'characters',
+  'skills', 'items', 'settings',
+  'volumes', 'emotion_arc', 'villain_arc',
+  'memory', 'relations', 'core_mysteries',
+  'opening_contract', 'consistency',
+]
+
 export function getStepKeys(mode: StartParams['mode']): StepKey[] {
+  if (mode === 'xianxia') return XIANXIA_STEP_KEYS
   if (mode === 'fanqie') return FANQIE_STEP_KEYS
   if (mode === 'fanfic') return FANFIC_STEP_KEYS
   return SEQ_STEP_KEYS

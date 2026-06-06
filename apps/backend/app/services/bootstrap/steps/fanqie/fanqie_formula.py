@@ -76,17 +76,40 @@ async def gen_fanqie_formula(svc: Any, project: Project, ctx: dict) -> dict:
     archetype = fanqie_pos.get("genre_archetype", "")
     satisfaction = fanqie_pos.get("core_satisfaction", "")
 
+    # 修仙类型：金手指脉络与落差语境切修仙版，避免都市味污染世界观
+    from app.services.bootstrap.fanqie_axis import is_xianxia_archetype
+    from app.services.bootstrap.prompts.cultivation_ladder_prompt import FINGER_TYPES_XIANXIA
+
+    _xianxia = is_xianxia_archetype(ctx)
+    finger_types = FINGER_TYPES_XIANXIA if _xianxia else _FINGER_TYPES
+    headline_example = (
+        "'外门杂役弟子，灵根被测出三品废材，被未婚妻当众退婚、扔下灵脉断崖'"
+        if _xianxia
+        else "'上门女婿，被丈母娘当众撕毁结婚证，老婆提出离婚'"
+    )
+    finger_name_example = (
+        "「吞天魔功」「万古丹炉」「噬灵戒」"
+        if _xianxia
+        else "「战神传承」「至尊系统」「神农空间」"
+    )
+    extra_law = (
+        "\n修仙铁律：落差与打脸全部锚定「境界差」——主角因境界低被碾压，靠金手指越级翻盘；"
+        "金手指与升级路线须落在境界主轴上（破境=爽点），禁止把财富/社会身份当主线爽感。"
+        if _xianxia
+        else ""
+    )
+
     prompt = f"""小说：《{ctx['project_title']}》
 类型公式：{archetype}
 核心爽感：{satisfaction}
 创意：{ctx['logline']}
 
-番茄开局铁律：主角初始状态越惨越好，金手指触发必须在800字内，首次打脸不超过第5章。
+番茄开局铁律：主角初始状态越惨越好，金手指触发必须在800字内，首次打脸不超过第5章。{extra_law}
 
 请一次性设计完整的「爽文公式」，返回 JSON：
 {{
   "protagonist_name": "全书POV主角姓名（2~4字，禁止用萧凡/萧炎式替身名，后文所有步骤沿用此名）",
-  "initial_state_headline": "一句话概括主角当前处境（必须含具体身份+具体羞辱事件，如：'上门女婿，被丈母娘当众撕毁结婚证，老婆提出离婚'，禁止用'穷困潦倒'这类模糊词）",
+  "initial_state_headline": "一句话概括主角当前处境（必须含具体身份+具体羞辱事件，如：{headline_example}，禁止用'穷困潦倒'这类模糊词）",
   "humiliation_scenes": [
     "具体羞辱场景1（可发生在第1章开头，含人物+地点+羞辱方式，20字内）",
     "具体羞辱场景2（可发生在第1章中段，比场景1更狠，20字内）"
@@ -98,8 +121,8 @@ async def gen_fanqie_formula(svc: Any, project: Project, ctx: dict) -> dict:
   "contrast_ratio_note": "落差说明：从什么状态到什么状态（30字内）",
 
   "golden_finger": {{
-    "finger_type": "从以下选一种：{_FINGER_TYPES}",
-    "finger_name": "金手指的具体称呼（如：「战神传承」「至尊系统」「神农空间」）",
+    "finger_type": "从以下选一种：{finger_types}",
+    "finger_name": "金手指的具体称呼（如：{finger_name_example}）",
     "mechanism": "核心机制：怎么运作，触发条件，升级规则（2-3句话）",
     "activation_trigger": "第一次激活的精确触发条件（必须与上方 trigger_event 一致）",
     "constraint": "金手指的限制/代价（不能让主角纯无敌，要有张力，1句话）",

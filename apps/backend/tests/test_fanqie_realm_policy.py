@@ -19,6 +19,26 @@ def test_hydrate_fanqie_power_ctx_sets_one_based_ranks():
     hydrate_fanqie_power_ctx(ctx)
     assert ctx["power_level_names"] == ["边陲小城弃民", "帝国宗门天骄"]
     assert ctx["power_level_registry"]["边陲小城弃民"]["rank"] == 1
+    assert ctx["power_systems_full"][0]["name"] == "社会权力阶梯"
+    assert ctx["power_summary"].startswith("主轴（社会阶梯）：")
+
+
+def test_hydrate_cultivation_axis_labels():
+    ctx = {
+        "power_ladder": {
+            "axis_kind": "cultivation",
+            "realm_axis_name": "九转归元道",
+            "social_ladder": [
+                {"tier": 1, "name": "淬体境"},
+                {"tier": 2, "name": "凝元境"},
+            ],
+            "protagonist_start_tier": 1,
+            "protagonist_end_tier": 2,
+        },
+    }
+    hydrate_fanqie_power_ctx(ctx)
+    assert ctx["power_systems_full"][0]["name"] == "九转归元道"
+    assert ctx["power_summary"].startswith("主轴（九转归元道）：")
 
 
 def test_normalize_rejects_cultivation_term():

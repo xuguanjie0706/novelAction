@@ -94,13 +94,14 @@ class StartRequest(BaseModel):
     - ``sequential``：通用串行流程（默认），适合起点/晋江向或自定义题材
     - ``fanqie``：番茄专属流程，把平台算法逻辑硬编码进生成管道（金手指优先/打脸地图/开局五章工程）
     - ``fanfic``：同人·番茄，必填原著名与梗概，支持穿书/重生/AU
+    - ``xianxia``：番茄·玄幻修仙直白，境界进度由「境界预算契约」硬执行（杜绝第一卷修满）
     """
     logline: str
     premise: Optional[str] = ""
     target_words: int = 1_200_000
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
-    mode: Literal["sequential", "fanqie", "fanfic"] = "sequential"
+    mode: Literal["sequential", "fanqie", "fanfic", "xianxia"] = "sequential"
     fanfic_meta: Optional[FanficStartMeta] = None
     auto_mode: bool = False
     # 写作风格档位（作者建书时一次性选择，全书贯彻）：
@@ -201,7 +202,7 @@ async def create_run(
 
     style = get_style(req.mode)
     _effective_ws = req.writing_style
-    if req.mode in ("fanqie", "fanfic") and _effective_ws == "standard":
+    if req.mode in ("fanqie", "fanfic", "xianxia") and _effective_ws == "standard":
         _effective_ws = "plain"
     extra_ctx = None
     if req.mode == "fanfic" and req.fanfic_meta:
@@ -506,6 +507,11 @@ def _build_resume_payload(run: BootstrapRun, req: ResumeRequest) -> dict:
             raise HTTPException(status_code=422, detail="缺少有效的 positioning，无法通过立项闸门")
         if run.mode == "fanfic":
             normalized, err = try_validate_fanfic_positioning(raw)
+        elif run.mode == "xianxia":
+            from app.schemas.bootstrap_xianxia_positioning import (
+                try_validate_xianxia_positioning,
+            )
+            normalized, err = try_validate_xianxia_positioning(raw)
         elif run.mode == "fanqie":
             normalized, err = try_validate_fanqie_positioning(raw)
         else:

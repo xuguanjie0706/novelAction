@@ -177,27 +177,6 @@ export default function OutlinePage() {
     }
   }
 
-  const handleAddChild = async (parent: OutlineNode, e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!projectId) return
-    const childType = 'chapter_plan'
-    const titleMap: Record<string, string> = { chapter_plan: '新章节' }
-    try {
-      const res = await outlineApi.create(projectId, {
-        parent_id: parent.id,
-        node_type: childType,
-        title: titleMap[childType],
-        sort_order: parent.children?.length ?? 0,
-      })
-      setExpanded(prev => new Set([...prev, parent.id]))
-      reload()
-      setSelected(res.data)
-      toast.success('已创建')
-    } catch {
-      toast.error('创建失败')
-    }
-  }
-
   // ── 全量生成 → 派发到队列 ─────────────────────────────────
   const handleDispatchFullGen = (params: {
     scale_hint: string
@@ -412,7 +391,6 @@ export default function OutlinePage() {
         onToggleExpand={toggleExpand}
         onSelect={setSelected}
         onOpenChapter={openChapterFromNode}
-        onAddChild={handleAddChild}
         onDelete={handleDelete}
         onReload={reload}
         onClearSelection={() => setSelected(null)}

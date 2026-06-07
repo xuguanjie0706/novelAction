@@ -193,6 +193,8 @@ async def assemble_full(
     )
     continuity_context = build_continuity_context(
         db=db, project_id=project_id, chapter=chapter, outline_node=outline_node,
+        # 出场人物的境界/位置/状态已在上方 character_summary 卡片，continuity 只补「近期行踪」轨迹
+        onstage_names={c.name for c in characters if c.name},
     )
     draft_bridge_context = resolve_draft_bridge_context(
         db, project_id, chapter, project, outline_node, prev_chapter, prev_tail,

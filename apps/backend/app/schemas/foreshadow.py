@@ -17,7 +17,7 @@ class ForeshadowBase(BaseModel):
     planned_resolve_chapter: Optional[int] = None
     planned_action: str = Field(default="resolve", pattern="^(resolve|develop)$")
 
-    status: str = Field(default="open", pattern="^(open|resolved|dropped)$")
+    status: str = Field(default="open", pattern="^(planned|open|resolved|dropped)$")
     priority: int = Field(default=3, ge=1, le=5)
     extra: Optional[dict[str, Any]] = None
 
@@ -39,7 +39,7 @@ class ForeshadowUpdate(BaseModel):
     planned_resolve_chapter: Optional[int] = None
     planned_action: Optional[str] = Field(default=None, pattern="^(resolve|develop)$")
 
-    status: Optional[str] = Field(default=None, pattern="^(open|resolved|dropped)$")
+    status: Optional[str] = Field(default=None, pattern="^(planned|open|resolved|dropped)$")
     priority: Optional[int] = Field(default=None, ge=1, le=5)
     extra: Optional[dict[str, Any]] = None
 

@@ -43,6 +43,17 @@ async def gen_opening_contract(svc: Any, project: Project, ctx: dict) -> dict:
     except Exception:
         contract = {}
 
+    return finalize_opening_contract(svc, project, ctx, contract, genre)
+
+
+def finalize_opening_contract(
+    svc: Any, project: Project, ctx: dict, contract: dict, genre: str
+) -> dict:
+    """开局承诺产物统一收尾：玄幻净化 → 落库 → 写 ctx → 种 ReaderPromise。
+
+    供独立步骤与合并节点（promise_seeds_xianxia）共用，使「无事实承诺」schema 与
+    里程碑播种逻辑只此一处，不随合并漂移。
+    """
     if contract and is_xuanhuan_like_genre(genre):
         cleaned: dict = {}
         for key, val in contract.items():

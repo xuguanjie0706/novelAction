@@ -4,14 +4,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sqlalchemy.orm.attributes import flag_modified
-
 from app.models import Project
-from app.services.bootstrap.antagonist_roster import (
-    LADDER_EXTRA_KEY,
-    format_ladder_summary,
-    normalize_antagonist_ladder,
-)
+from app.services.bootstrap.antagonist_roster import persist_ladder
 from app.services.bootstrap.context import get_genre_kit_block
 from app.services.bootstrap.prompts.character_naming import character_naming_constraints_for_prompt
 from app.services.bootstrap.parse import parse_json
@@ -94,19 +88,7 @@ async def gen_antagonist_ladder(svc: Any, project: Project, ctx: dict) -> list[d
     if not isinstance(data, list):
         data = data.get("antagonist_ladder", data.get("ladder", []))
 
-    ladder = normalize_antagonist_ladder(data, ctx, n_volumes)
-
-    try:
-        base = project.extra if isinstance(project.extra, dict) else {}
-        project.extra = {**base, LADDER_EXTRA_KEY: ladder}
-        flag_modified(project, "extra")
-        svc.db.commit()
-    except Exception:
-        logger.exception("antagonist_ladder 写库失败 project=%s", project.id)
-
-    ctx[LADDER_EXTRA_KEY] = ladder
-    ctx["antagonist_ladder_summary"] = format_ladder_summary(ladder)
-    ctx["volume_boss_names"] = [row.get("boss_name") for row in ladder if row.get("boss_name")]
+    ladder = persist_ladder(svc, project, ctx, data, n_volumes)
 
     logger.info(
         "bootstrap.antagonist_ladder 完成 project=%s 卷数=%d bosses=%s",

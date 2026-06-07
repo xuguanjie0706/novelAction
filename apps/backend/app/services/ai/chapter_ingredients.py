@@ -297,38 +297,24 @@ def _compute_foreshadow_ops(
     """计算本章伏笔操作指令。"""
     from app.models import Foreshadow
 
+    from app.services.ai.foreshadow_ref import append_foreshadow_op_from_ref
+
     ops: list[ForeshadowOp] = []
     seen_ids: set[str] = set()
 
     for fw_ref in (node.foreshadows_resolved or []):
-        fw_id = fw_ref.get("id") or fw_ref.get("foreshadow_id") or ""
-        if not fw_id or fw_id in seen_ids:
-            continue
-        fw = db.query(Foreshadow).filter(
-            Foreshadow.id == fw_id, Foreshadow.project_id == project_id
-        ).first()
-        if fw:
-            ops.append(ForeshadowOp(
-                foreshadow_id=str(fw.id), title=fw.title or "", op="resolve",
-                priority=fw.priority or 3, laid_chapter=fw.laid_chapter_number,
-                suggested_method=f"本章明确规划回收：{fw_ref.get('description', '')}",
-            ))
-            seen_ids.add(str(fw.id))
+        append_foreshadow_op_from_ref(
+            ops, seen_ids,
+            fw_ref=fw_ref, op="resolve", db=db, project_id=project_id,
+            method_prefix="本章明确规划回收：",
+        )
 
     for fw_ref in (node.foreshadows_laid or []):
-        fw_id = fw_ref.get("id") or fw_ref.get("foreshadow_id") or ""
-        if not fw_id or fw_id in seen_ids:
-            continue
-        fw = db.query(Foreshadow).filter(
-            Foreshadow.id == fw_id, Foreshadow.project_id == project_id
-        ).first()
-        if fw:
-            ops.append(ForeshadowOp(
-                foreshadow_id=str(fw.id), title=fw.title or "", op="lay",
-                priority=fw.priority or 3, laid_chapter=None,
-                suggested_method=f"本章规划埋下：{fw_ref.get('description', '')}",
-            ))
-            seen_ids.add(str(fw.id))
+        append_foreshadow_op_from_ref(
+            ops, seen_ids,
+            fw_ref=fw_ref, op="lay", db=db, project_id=project_id,
+            method_prefix="本章规划埋下：",
+        )
 
     hint_threshold = THRESHOLDS["FORESHADOW_HINT"]
     resolve_threshold = THRESHOLDS["FORESHADOW_RESOLVE"]

@@ -17,7 +17,8 @@ from app.services.llm_token_budgets import max_tokens_bootstrap_completion
 logger = logging.getLogger(__name__)
 
 
-async def gen_key_items(svc: Any, project: Project, ctx: dict):
+def build_key_items_prompt(project: Project, ctx: dict) -> tuple[str, str]:
+    """构建关键道具 prompt（供独立步骤与合并节点共用）。"""
     system = "你是网络小说世界构建专家。只返回JSON数组。"
     kit_block = get_genre_kit_block(ctx)
     char_id_hint = ", ".join(
@@ -59,7 +60,12 @@ status 只能是: intact / damaged / destroyed / lost / unknown
 选择对主线剧情影响最大的道具，包含主角核心战力道具和1~2个关键麦高芬道具。
 每件道具必须填写 plot_hook，不得留空。
 只返回JSON数组，不要说明文字。"""
+    return system, prompt
 
+
+async def gen_key_items(svc: Any, project: Project, ctx: dict):
+    """独立步骤：构建 prompt → 调用 → 落库。"""
+    system, prompt = build_key_items_prompt(project, ctx)
     raw = await svc._call_with_retry(
         system,
         prompt,
@@ -69,7 +75,11 @@ status 只能是: intact / damaged / destroyed / lost / unknown
     data = parse_json(raw)
     if not isinstance(data, list):
         data = data.get("items", [])
+    return persist_key_items(svc, project, ctx, data)
 
+
+def persist_key_items(svc: Any, project: Project, ctx: dict, data: list):
+    """落库关键道具（含持有人 UUID 校验/回退映射），供独立步骤与合并节点共用。"""
     char_name_to_id: dict = ctx.get("char_name_to_id", {})
     results = []
     for i, item in enumerate(data):

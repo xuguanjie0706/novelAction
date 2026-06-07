@@ -110,11 +110,18 @@ async def init_bootstrap_graph(pg_conn_string: str) -> None:
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from app.services.bootstrap.pipeline import build_graph
     from app.services.bootstrap.pipeline.styles import STYLE_REGISTRY
+    from app.utils.pg_connect import pg_connect_kwargs
 
     _pg_pool = AsyncConnectionPool(
         conninfo=pg_conn_string,
         open=False,
-        kwargs={"autocommit": True, "prepare_threshold": 0},
+        check=AsyncConnectionPool.check_connection,
+        max_idle=120,
+        kwargs={
+            "autocommit": True,
+            "prepare_threshold": 0,
+            **pg_connect_kwargs(),
+        },
     )
     await _pg_pool.open()
 

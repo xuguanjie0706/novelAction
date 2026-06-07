@@ -63,15 +63,26 @@ def sync_chapter_foreshadow(
         )
 
 
-def _keywords_overlap(a: str, b: str) -> bool:
+def _keywords_overlap(a: str, b: str, *, min_window: int = 4) -> bool:
+    """判断两段中文是否指向同一伏笔。
+
+    短名称（≤8 字）允许 2 字片段匹配；较长文本要求 ≥min_window 字，避免「真相」等泛词误关联。
+    """
     a, b = (a or "").strip(), (b or "").strip()
     if not a or not b:
         return False
-    if a in b or b in a:
+    short_mode = max(len(a), len(b)) <= 8
+    sub_min = 2 if short_mode else min_window
+    if len(a) >= sub_min and a in b:
         return True
-    for i in range(len(a) - 1):
-        if a[i : i + 2] in b:
-            return True
+    if len(b) >= sub_min and b in a:
+        return True
+    step = 1 if short_mode else 1
+    frag_len = 2 if short_mode else min_window
+    if len(a) >= frag_len:
+        for i in range(0, len(a) - frag_len + 1, step):
+            if a[i : i + frag_len] in b:
+                return True
     return False
 
 
@@ -160,6 +171,32 @@ def _link_lay_to_existing(fs, outline_node, chapter_number: int, theme_note: str
             planned_int,
         )
         return
+
+    # 核心谜题：章纲同步不得把「实际埋下章」推后到更晚章节（常见于关键词误匹配）
+    if extra.get("is_core_mystery"):
+        prior = extra.get("actually_laid_chapter") or fs.laid_chapter_number
+        try:
+            prior_int = int(prior) if prior is not None else None
+        except (TypeError, ValueError):
+            prior_int = None
+        if prior_int is not None and chapter_number > prior_int:
+            fs.extra = extra
+            flag_modified(fs, "extra")
+            logger.debug(
+                "伏笔[埋·关联] chapter=%d 晚于已记录第%d章，跳过覆盖埋设章",
+                chapter_number,
+                prior_int,
+            )
+            return
+        if planned_int and chapter_number > planned_int + 2:
+            fs.extra = extra
+            flag_modified(fs, "extra")
+            logger.debug(
+                "伏笔[埋·关联] chapter=%d 远超计划第%d章，跳过覆盖埋设章",
+                chapter_number,
+                planned_int,
+            )
+            return
 
     if not fs.laid_chapter_id:
         fs.laid_chapter_number = chapter_number

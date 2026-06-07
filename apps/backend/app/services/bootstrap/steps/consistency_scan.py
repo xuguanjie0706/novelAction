@@ -212,6 +212,17 @@ def _structural_precheck(svc: Any, project, ctx: dict) -> list[dict]:
     except Exception:
         logger.exception("consistency_scan 卷级实体预检跳过 project=%s", pid)
 
+    # 6. 开局承诺 ↔ roster：承诺击杀的目标若是后续卷 Boss → OC-LADDER 冲突
+    #    （开局承诺与大纲必然矛盾的设计性根因，bootstrap 期即捕获）
+    try:
+        from app.services.bootstrap.opening_contract_consistency import (
+            check_project_contract_consistency,
+        )
+
+        issues.extend(check_project_contract_consistency(project))
+    except Exception:
+        logger.exception("consistency_scan 承诺↔roster 预检跳过 project=%s", pid)
+
     return issues
 
 

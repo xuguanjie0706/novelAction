@@ -81,6 +81,32 @@ def test_merge_schedule_adds_critical_risk():
     assert out["ok"] is False
     assert out["foreshadow_schedule_lock"]["has_schedule"] is True
     assert any(r.get("severity") == "critical" for r in out["risks"])
+    assert len(out["risks"]) == 1
+    assert any("背景约束" in r for r in out["reminders"])
+
+
+def test_forbidden_early_not_duplicated_as_risks():
+    lock = {
+        "has_schedule": True,
+        "current_chapter_number": 1,
+        "forbidden_early_plants": [
+            {"name": "谜题A", "planned_lay_chapter": 5},
+            {"name": "谜题B", "planned_lay_chapter": 8},
+        ],
+        "allowed_this_chapter": [],
+        "opening_teases": [],
+        "outline_conflicts": [],
+    }
+    ai_risks = [{
+        "type": "foreshadow",
+        "severity": "high",
+        "description": "伏笔日程：「谜题A」计划第5章埋设，第1章不得完整写出。",
+    }]
+    warn = {"ok": False, "risk_count": 1, "risks": ai_risks, "reminders": []}
+    out = merge_foreshadow_schedule_into_warn_result(warn, lock)
+    assert out["risks"] == []
+    assert out["ok"] is True
+    assert any("背景约束" in r for r in out["reminders"])
 
 
 def test_keywords_overlap():

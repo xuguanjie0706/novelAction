@@ -29,6 +29,15 @@ from app.utils.auth import hash_password, verify_password, create_access_token
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def _find_user_by_email(db: Session, email: str) -> User | None:
+    normalized = _normalize_email(email)
+    return db.query(User).filter(User.email == normalized).first()
+
+
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def register(body: UserRegisterRequest, db: Session = Depends(get_db)) -> TokenResponse:
     """注册新账号。
@@ -43,22 +52,22 @@ def register(body: UserRegisterRequest, db: Session = Depends(get_db)) -> TokenR
     Raises:
         HTTPException 400: 邮箱已被注册。
     """
-    existing = db.query(User).filter(User.email == body.email).first()
-    if existing:
+    email = _normalize_email(body.email)
+    if _find_user_by_email(db, email):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="该邮箱已被注册",
+            detail="该邮箱已被注册，请直接登录",
         )
 
-    if not verify_login_code(db, body.email, body.email_code):
+    if not verify_login_code(db, email, body.email_code):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="邮箱验证码错误或已过期",
         )
 
-    username = body.username or body.email.split("@")[0]
+    username = body.username or email.split("@")[0]
     user = User(
-        email=body.email,
+        email=email,
         username=username,
         hashed_password=hash_password(body.password),
     )
@@ -99,7 +108,8 @@ def login(body: UserLoginRequest, db: Session = Depends(get_db)) -> TokenRespons
     Raises:
         HTTPException 401: 邮箱不存在或密码错误（统一返回同一错误消息，防枚举）。
     """
-    user = db.query(User).filter(User.email == body.email, User.is_active == True).first()
+    email = _normalize_email(body.email)
+    user = db.query(User).filter(User.email == email, User.is_active == True).first()
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -113,7 +123,14 @@ def login(body: UserLoginRequest, db: Session = Depends(get_db)) -> TokenRespons
 @router.post("/register/code/send", response_model=SendRegisterCodeResponse)
 def send_register_code(body: SendRegisterCodeRequest, db: Session = Depends(get_db)) -> SendRegisterCodeResponse:
     """发送邮箱注册验证码。"""
-    ok, expire_or_wait, dev_code = create_and_send_login_code(db, body.email)
+    email = _normalize_email(body.email)
+    if _find_user_by_email(db, email):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="该邮箱已被注册，请直接登录",
+        )
+
+    ok, expire_or_wait, dev_code = create_and_send_login_code(db, email)
     if not ok:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,

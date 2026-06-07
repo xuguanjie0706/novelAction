@@ -22,6 +22,7 @@ from app.schemas import OutlineNodeOut
 from app.services.ai_service import AIService
 from app.services.outline_planning import TARGET_CHAPTERS_PER_VOLUME, TARGET_WORDS_PER_CHAPTER
 from app.utils.chapter_numbering import normalize_chapter_plan_title
+from app.services.bootstrap.chapter_plan_guard import parent_has_chapter_plans
 from app.services.bootstrap.foreshadow_ops import prepare_chapter_foreshadow_for_node
 from app.services.bootstrap.foreshadow_sync import sync_chapter_foreshadow
 
@@ -218,6 +219,11 @@ def commit_expand(
     ).first()
     if not parent:
         raise HTTPException(404, "Parent node not found")
+    if parent_has_chapter_plans(db, parent.id):
+        raise HTTPException(
+            409,
+            "该节点已有章节计划。请使用卷旁的「展开章纲」或「重新生成章纲」，勿重复提交。",
+        )
 
     results = []
     project = db.query(Project).filter(Project.id == project_id).first()

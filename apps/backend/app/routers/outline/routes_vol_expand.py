@@ -26,6 +26,11 @@ from app.services.bootstrap.context_vol_expand import build_vol_expand_ctx
 from app.services.bootstrap.chapter_plan_batches import normalize_volume_planned_chapters
 from app.services.bootstrap.retry import call_with_retry
 from app.services.llm_token_budgets import max_tokens_vol_expand_chapters
+from app.services.bootstrap.chapter_plan_guard import (
+    clear_volume_expand_lock,
+    set_volume_expand_lock,
+    volume_expand_lock_active,
+)
 from app.services.bootstrap.steps.vol_chapter_plans import gen_vol_chapter_plans
 
 router = APIRouter()
@@ -298,6 +303,12 @@ async def expand_volume_chapters(
     if volume_node.node_type != "volume":
         raise HTTPException(422, f"节点类型必须为 volume，当前为 {volume_node.node_type!r}")
 
+    if volume_expand_lock_active(volume_node):
+        raise HTTPException(
+            409,
+            "该卷正在展开章纲，请等待当前任务完成后再试。",
+        )
+
     ctx, editorial_prompt_block = build_vol_expand_ctx(db, project, volume_node)
     from app.services.bootstrap.fanqie_volume_expand import prepare_volume_chapter_expand
 
@@ -320,6 +331,7 @@ async def expand_volume_chapters(
     chapter_from, chapter_to, seed_nodes = expand_plan
 
     async def stream() -> AsyncIterator[str]:
+        set_volume_expand_lock(db, volume_node)
         yield _sse("step_start", step="expand_chapters", volume_title=volume_node.title)
 
         try:
@@ -428,6 +440,9 @@ async def expand_volume_chapters(
 
         except Exception as exc:  # noqa: BLE001
             yield _sse("error", step="expand_chapters", message=str(exc))
+        finally:
+            db.refresh(volume_node)
+            clear_volume_expand_lock(db, volume_node)
 
         yield _sse("end")
 

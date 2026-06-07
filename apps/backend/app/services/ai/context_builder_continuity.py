@@ -3,7 +3,17 @@ context_builder_continuity.py — 连续性上下文构建
 
 职责：跨章事实账本、章节索引导航。
   build_continuity_context   → 人物状态/伏笔/承接点/禁止事项
-  build_chapter_index_context → 最近章节索引 + 未回收伏笔导航
+  build_chapter_index_context → 最近章节索引导航
+
+伏笔去重契约（2026-06）：开放伏笔（未回收）的**唯一权威来源**是本模块
+build_continuity_context 的「未回收伏笔【权威台账】」(Foreshadow status=open，
+复盘确认 + foreshadow_sync 幂等同步)。chapter_index / plot_dossier 不再重复注入
+开放伏笔，避免同一伏笔集多区块表示、增加模型对账负担与 token 浪费。
+
+人物状态去重契约（2026-06）：出场人物的当前境界/位置/状态由 context_assembler 的
+character_summary 卡片（format_character_block）承载；continuity 对出场人物仅补
+其独占的「近期行踪」轨迹（卡片只给单值当前位置），非出场人物才输出完整状态行。
+
   fmt_index_item             → 索引条目格式化工具（供 brief 模块共用）
 """
 
@@ -22,7 +32,6 @@ from app.models import (
     Foreshadow,
     MemoryChunk,
     OutlineNode,
-    PowerSystem,
     StoryLine,
 )
 from app.routers.ai.text_utils import plain_text, truncate
@@ -42,13 +51,40 @@ def fmt_index_item(item) -> str:
     return str(item)
 
 
+def _format_location_trail(c: Character) -> str:
+    """格式化角色「近期行踪」轨迹（地点逐章台账末 1-2 条）。
+
+    出场卡（format_character_block）只给单值「当前位置」，行踪轨迹仅由 continuity
+    承载，用于防跨章空间漂移（让写章 AI 知道角色"从哪来、为何在此"）。
+
+    Returns:
+        形如「第N章→地点（原因）；第M章→地点」的字符串；无台账时返回空串。
+    """
+    loc_extra = c.extra if isinstance(c.extra, dict) else {}
+    loc_hist = [h for h in (loc_extra.get("location_milestones") or []) if isinstance(h, dict)]
+    if not loc_hist:
+        return ""
+    return "；".join(
+        f"第{h.get('chapter_number')}章→{h.get('location')}"
+        + (f"（{truncate(h.get('reason'), 40)}）" if h.get("reason") else "")
+        for h in loc_hist[-2:]
+    )
+
+
 def build_continuity_context(
     db: Session,
     project_id: str,
     chapter: Chapter,
     outline_node: Optional[OutlineNode],
+    onstage_names: Optional[set[str]] = None,
 ) -> str:
-    """生成前的跨章事实账本：状态、伏笔、承接点、禁止事项。"""
+    """生成前的跨章事实账本：状态、伏笔、承接点、禁止事项。
+
+    Args:
+        onstage_names: 本章出场人物名集合（来自 character_summary 卡片覆盖范围）。
+            对其中的角色，continuity 仅补「近期行踪」轨迹，不重复输出
+            境界/位置/状态（避免与卡片双份快照口径漂移）；为空时退回旧全量行为。
+    """
     prev_chapter = db.query(Chapter).filter(
         Chapter.project_id == project_id,
         Chapter.sort_order < chapter.sort_order,
@@ -60,11 +96,21 @@ def build_continuity_context(
         else 0
     )
 
+    onstage = onstage_names or set()
     characters = db.query(Character).filter(
         Character.project_id == project_id
     ).order_by(Character.role, Character.name).all()
     char_lines = []
     for c in characters[:10]:
+        trail = _format_location_trail(c)
+        # 出场人物：当前境界/序号/位置/状态已由【本章出场人物】卡片
+        # （context_assembler 的 character_summary）承载，此处不重复以免双份快照口径漂移；
+        # 仅补 continuity 独占的「近期行踪」轨迹（卡片只给单值当前位置）。无轨迹则整行跳过。
+        if c.name in onstage:
+            if trail:
+                char_lines.append(f"{c.name}、近期行踪[{trail}]")
+            continue
+        # 非出场人物：卡片未覆盖，输出完整跨章状态行
         parts = [f"{c.name}"]
         if c.role:
             parts.append(f"身份={c.role}")
@@ -74,29 +120,14 @@ def build_continuity_context(
             parts.append(f"境界序号={c.realm_rank}")
         if c.current_location:
             parts.append(f"当前位置={c.current_location}")
-        # 近期行踪（地点逐章台账末1-2条）：让写章 AI 知道角色"从哪来、为何在此"，
-        # 跨章位置跳转若无对应移动记录即为漂移，须在正文交代过程。
-        _loc_extra = c.extra if isinstance(c.extra, dict) else {}
-        _loc_hist = [h for h in (_loc_extra.get("location_milestones") or []) if isinstance(h, dict)]
-        if _loc_hist:
-            _tail = _loc_hist[-2:]
-            _trail = "；".join(
-                f"第{h.get('chapter_number')}章→{h.get('location')}"
-                + (f"（{truncate(h.get('reason'), 40)}）" if h.get("reason") else "")
-                for h in _tail
-            )
-            if _trail:
-                parts.append(f"近期行踪[{_trail}]")
+        if trail:
+            parts.append(f"近期行踪[{trail}]")
         if c.current_status and c.current_status != "alive":
             parts.append(f"状态={c.current_status}")
         char_lines.append("、".join(parts))
 
-    power_systems = db.query(PowerSystem).filter(
-        PowerSystem.project_id == project_id
-    ).order_by(PowerSystem.sort_order).all()
-    from app.services.bootstrap.power_registry import build_draft_power_context_from_db
-    power_block = build_draft_power_context_from_db(db, project_id)
-    power_lines = [power_block] if power_block and power_block != "（未设定境界体系）" else []
+    # 注：力量体系不在此注入——已由 context_assembler 的 power_systems_context
+    # （power_part，写章 prompt 必注入）承载，continuity 重复一份属冗余，2026-06 移除。
 
     recent_chapters = db.query(Chapter).filter(
         Chapter.project_id == project_id,
@@ -201,7 +232,6 @@ def build_continuity_context(
     sections = [
         f"截至第{previous_chapter_number}章事实表（用于生成第{current_chapter_number}章）：",
         "人物状态：" + ("；".join(char_lines) if char_lines else "无"),
-        "力量体系：" + ("；".join(power_lines) if power_lines else "无"),
         "最近章节：" + ("；".join(recent_lines) if recent_lines else "无"),
         "记忆/伏笔：" + ("；".join(memory_lines) if memory_lines else "无"),
         "故事线进度：" + ("；".join(storyline_lines) if storyline_lines else "无"),
@@ -211,13 +241,19 @@ def build_continuity_context(
     if foreshadow_lines:
         # 「权威台账」标签：此处来源是复盘确认的 status=open 记录，是唯一事实来源
         # 章纲伏笔规划意图（status=planned）在 draft_stream 的「本章伏笔规划意图」区块单独注入
-        sections.insert(5, "⚠️未回收伏笔【权威台账，复盘确认，以此为准】（必须可回收或持续铺垫，不得矛盾违背）：\n" +
+        # 插入位置：紧跟「记忆/伏笔」(index 3) 之后、「故事线进度」之前 → index 4
+        sections.insert(4, "⚠️未回收伏笔【权威台账，复盘确认，以此为准】（必须可回收或持续铺垫，不得矛盾违背）：\n" +
                          "\n".join(f"  · {l}" for l in foreshadow_lines))
     return "\n".join(sections)
 
 
 def build_chapter_index_context(db: Session, project_id: str, chapter: Chapter) -> str:
-    """最近章节索引 + 未回收伏笔，作为连续生成的主干导航。"""
+    """最近章节索引，作为连续生成的主干导航。
+
+    注：未回收伏笔不再在此注入——开放伏笔的唯一权威来源统一为
+    build_continuity_context 的「未回收伏笔【权威台账】」(Foreshadow status=open)，
+    见模块顶「伏笔去重契约」。
+    """
     recent_rows = (
         db.query(ChapterIndex, Chapter)
         .join(Chapter, Chapter.id == ChapterIndex.chapter_id)
@@ -248,36 +284,7 @@ def build_chapter_index_context(db: Session, project_id: str, chapter: Chapter) 
             parts.append(f"连续性风险={notes}")
         recent_lines.append("；".join(parts))
 
-    all_rows = (
-        db.query(ChapterIndex, Chapter)
-        .join(Chapter, Chapter.id == ChapterIndex.chapter_id)
-        .filter(
-            ChapterIndex.project_id == project_id,
-            Chapter.project_id == project_id,
-            Chapter.sort_order < chapter.sort_order,
-        )
-        .order_by(Chapter.sort_order)
-        .all()
-    )
-    resolved_descriptions = {
-        fmt_index_item(item)
-        for idx, _ch in all_rows
-        for item in (idx.actual_foreshadows_resolved or [])
-        if fmt_index_item(item)
-    }
-    open_foreshadows = []
-    for idx, ch in all_rows:
-        num = display_chapter_number(ch.title, ch.sort_order)
-        for item in (idx.actual_foreshadows_laid or []):
-            desc = fmt_index_item(item)
-            status = item.get("status") if isinstance(item, dict) else ""
-            if not desc or desc in resolved_descriptions or status == "resolved":
-                continue
-            open_foreshadows.append(f"第{num}章：{desc}")
-
     sections = []
     if recent_lines:
         sections.append("最近章节索引：\n" + "\n".join(recent_lines))
-    if open_foreshadows:
-        sections.append("全量未回收伏笔：\n" + "\n".join(open_foreshadows[-12:]))
     return "\n\n".join(sections)

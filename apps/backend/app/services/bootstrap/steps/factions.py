@@ -63,8 +63,17 @@ villain_timeline 对 antagonist 类势力为必填，要求具体到"第X卷前�
     if not isinstance(data, list):
         data = data.get("factions", [])
 
+    results = persist_factions(svc, project, data)
+    set_faction_ctx(ctx, results)
+    return results
+
+
+def persist_factions(svc: Any, project: Project, data: list) -> list:
+    """把势力 JSON 列表落库为 Faction 行（供独立步骤与合并节点共用）。"""
     results = []
     for i, item in enumerate(data):
+        if not isinstance(item, dict):
+            continue
         f = Faction(
             project_id=project.id,
             name=item.get("name", f"势力{i+1}"),
@@ -93,17 +102,19 @@ villain_timeline 对 antagonist 类势力为必填，要求具体到"第X卷前�
         results.append(f)
 
     svc.db.commit()
+    return results
 
+
+def set_faction_ctx(ctx: dict, results: list) -> None:
+    """把势力结果写入 ctx（faction_summary / names / id 映射 / villain_timelines）。"""
     ctx["faction_summary"] = "、".join(
         f"{f.name}（{f.alignment}，{f.extra.get('active_period','')}期）"
         for f in results
     )
     ctx["faction_names"] = [f.name for f in results]
     ctx["faction_name_to_id"] = {f.name: str(f.id) for f in results}
-    villain_timelines = [
+    ctx["villain_timelines"] = [
         f"{f.name}：{f.extra.get('villain_timeline', '')}"
         for f in results
         if f.alignment == "antagonist" and f.extra.get("villain_timeline", "").strip()
     ]
-    ctx["villain_timelines"] = villain_timelines
-    return results

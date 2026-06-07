@@ -11,7 +11,7 @@ export interface Foreshadow {
   resolved_chapter_number?: number
   planned_resolve_chapter?: number
   planned_action?: 'resolve' | 'develop'
-  status: 'open' | 'resolved' | 'dropped'
+  status: 'planned' | 'open' | 'resolved' | 'dropped'
   priority: number
   created_at: string
   updated_at?: string

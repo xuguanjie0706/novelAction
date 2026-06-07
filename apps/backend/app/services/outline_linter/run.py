@@ -13,6 +13,7 @@ from app.services.outline_linter.chapter_index import build_volume_start_map
 from app.services.outline_linter.helpers import chapter_from_node
 from app.services.outline_linter.repair_hints import build_repair_seed
 from app.services.outline_linter.rules_chapter import lint_chapters
+from app.services.outline_linter.rules_lifecycle import run_lifecycle_rules
 from app.services.outline_linter.rules_mysteries import lint_core_mysteries
 from app.services.outline_linter.rules_promises import (
     lint_opening_contract_rp,
@@ -121,6 +122,14 @@ def run_volume_linter(
             report.issues.extend(
                 lint_opening_contract_rp(snapshots, opening_contract)
             )
+    # 跨卷角色生命周期硬校验（死而复死 / 死后出场 / 阵营硬切 / 击杀承诺超窗）。
+    # 自建全书事件时间轴，失败不得污染整卷 linter。
+    try:
+        report.issues.extend(run_lifecycle_rules(
+            db, project, volume_node, volume_start_global=volume_start_global,
+        ))
+    except Exception:
+        logger.warning("run_lifecycle_rules 跳过（不影响其余 linter）", exc_info=True)
     report.finalize_status()
     return report
 

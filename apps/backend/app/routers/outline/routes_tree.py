@@ -92,6 +92,16 @@ def get_protagonist_realm_timeline(project_id: str, db: Session = Depends(get_db
 
 @router.post("/", response_model=OutlineNodeOut, status_code=201)
 def create_node(project_id: str, payload: OutlineNodeCreate, db: Session = Depends(get_db)):
+    if payload.node_type == "chapter_plan" and payload.parent_id:
+        parent = db.query(OutlineNode).filter(
+            OutlineNode.id == payload.parent_id,
+            OutlineNode.project_id == project_id,
+        ).first()
+        if parent and parent.node_type in ("volume", "arc"):
+            raise HTTPException(
+                422,
+                "章节计划须由 AI「展开章纲」生成，不支持手动创建。",
+            )
     node = OutlineNode(project_id=project_id, **payload.model_dump())
     db.add(node)
     db.commit()

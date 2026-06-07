@@ -60,43 +60,26 @@ async def node_skills_items(state: BootstrapState, config: dict | None = None) -
     while True:
         emit(run_id, "step_start", db, step="skills", label="生成核心功法技能...")
         emit(run_id, "step_start", db, step="items", label="生成关键道具法宝...")
+        # Step 6+7 合并为一次 LLM 调用（gen_skills_items 内含缺失回退）。
+        from app.services.bootstrap.steps.skills_items import gen_skills_items
         try:
-            results = await asyncio.wait_for(
-                asyncio.gather(
-                    svc._gen_key_skills(project, ctx),
-                    svc._gen_key_items(project, ctx),
-                    return_exceptions=True,
-                ),
-                timeout=240.0,
+            skills, items = await asyncio.wait_for(
+                gen_skills_items(svc, project, ctx),
+                timeout=300.0,
             )
         except asyncio.TimeoutError:
-            msg = "功法/道具并行生成超时，请重试"
+            msg = "功法/道具生成超时，请重试"
             user = await pause_for_step_retry(state, config, step="skills", message=msg, ctx=ctx)
             if user_wants_step_retry(user):
                 continue
             return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "skills_items", "reason": "timeout"}]}
-
-        failed: list[tuple[str, BaseException]] = []
-        for step_name, res in (("skills", results[0]), ("items", results[1])):
-            if isinstance(res, BaseException):
-                emit(
-                    run_id, "error", db, step=step_name,
-                    message=f"生成失败：{format_llm_error_message(res)}",
-                )
-                failed.append((step_name, res))
-
-        if failed:
-            step_name, res = failed[0]
-            msg = format_llm_error_message(res)
-            user = await pause_for_step_retry(
-                state, config, step=step_name, message=msg, ctx=ctx, emit_error=False,
-            )
+        except Exception as exc:
+            msg = format_llm_error_message(exc)
+            user = await pause_for_step_retry(state, config, step="skills", message=msg, ctx=ctx)
             if user_wants_step_retry(user):
                 continue
-            return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": step_name, "reason": msg}]}
+            return {"ctx": sanitize_bootstrap_ctx(ctx), "errors": [{"step": "skills_items", "reason": msg}]}
 
-        skills = results[0] if not isinstance(results[0], BaseException) else []
-        items = results[1] if not isinstance(results[1], BaseException) else []
         emit(run_id, "step_done", db, step="skills", count=len(skills))
         emit(run_id, "step_done", db, step="items", count=len(items))
         return {"ctx": sanitize_bootstrap_ctx(ctx), "completed_steps": ["skills", "items"]}

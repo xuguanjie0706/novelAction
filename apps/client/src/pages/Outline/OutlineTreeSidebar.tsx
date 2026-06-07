@@ -2,7 +2,7 @@
  * @file 大纲树侧栏
  */
 import {
-  ChevronRight, ChevronDown, Plus, Trash2, Sparkles,
+  ChevronRight, ChevronDown, Trash2, Sparkles,
 } from 'lucide-react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
@@ -22,7 +22,6 @@ export interface OutlineTreeSidebarProps {
   onToggleExpand: (id: string) => void
   onSelect: (node: OutlineNode) => void
   onOpenChapter: (node: OutlineNode) => void
-  onAddChild: (parent: OutlineNode, e: React.MouseEvent) => void
   onDelete: (node: OutlineNode, e: React.MouseEvent) => void
   onReload: () => void
   onClearSelection: () => void
@@ -45,7 +44,6 @@ export default function OutlineTreeSidebar({
   onToggleExpand,
   onSelect,
   onOpenChapter,
-  onAddChild,
   onDelete,
   onReload,
   onClearSelection,
@@ -57,8 +55,6 @@ export default function OutlineTreeSidebar({
   const renderNode = (node: OutlineNode, depth = 0) => {
     const isOpen = expanded.has(node.id)
     const hasChildren = node.children?.length > 0
-    const canHaveChildren = node.node_type !== 'chapter_plan'
-
     return (
       <div key={node.id} className={node.node_type === 'volume' ? 'relative' : undefined}>
         <div
@@ -95,15 +91,6 @@ export default function OutlineTreeSidebar({
             />
           )}
           <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
-            {canHaveChildren && (
-              <button
-                title="添加子节点"
-                onClick={e => onAddChild(node, e)}
-                className="p-0.5 rounded text-gray-400 hover:text-blue-500 hover:bg-blue-50"
-              >
-                <Plus size={11} />
-              </button>
-            )}
             <button
               title="删除"
               onClick={e => onDelete(node, e)}
@@ -169,7 +156,7 @@ export default function OutlineTreeSidebar({
         {outlineTree.length === 0 && (
           <div className="text-center py-8">
             <p className="text-xs text-gray-400">暂无大纲</p>
-            <p className="text-[11px] text-gray-300 mt-1">点击「全量生成」或右上角 + 新建卷</p>
+            <p className="text-[11px] text-gray-300 mt-1">点击「全部生成」由 AI 创建卷与章纲</p>
           </div>
         )}
       </div>

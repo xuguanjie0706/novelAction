@@ -58,15 +58,19 @@ STYLE_REGISTRY: dict[str, StyleConfig] = {
             # project：通用 CORE（读 ctx.positioning，中立）
             "cultivation_contract",      # B 境界主轴 + 境界预算契约（replaces power_systems）
             "golden_finger_xianxia",     # B 金手指（咬合境界轴）
-            # factions / storylines / antagonist_ladder：通用 CORE（吃修仙 ctx）
+            "factions_antagonist_xianxia",  # C 势力+卷级对立面合并（replaces factions，吞 antagonist_ladder，-1 LLM）
+            # storylines：通用 CORE（吃修仙 ctx）
             "gate_characters",           # C 人物确认闸门
             "settings_xianxia",          # C 修仙世界设定卡（replaces settings）
             "volumes_xianxia",           # D 契约执行式卷骨架（replaces volumes）
             "gate_volumes",              # D 卷质量闸门
-            # E emotion_villain / memory_relations / core_mysteries / opening_contract：通用 CORE
+            # E emotion_villain / memory_relations：通用 CORE
+            "promise_seeds_xianxia",     # F 核心谜题+开局承诺合并（replaces core_mysteries，吞 opening_contract，-1 LLM）
             # G consistency：通用 CORE（emit complete 收尾）
         ],
         default_writing_style="plain",
+        # antagonist_ladder / opening_contract 已被两个合并节点吞并，排除其独立 CORE 节点
+        skip_core=frozenset({"antagonist_ladder", "opening_contract"}),
     ),
 
     "fanfic": StyleConfig(

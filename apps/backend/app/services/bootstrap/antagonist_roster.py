@@ -137,6 +137,29 @@ def format_ladder_summary(ladder: list[dict]) -> str:
     return " | ".join(parts)
 
 
+def persist_ladder(
+    svc: Any, project: Any, ctx: dict, raw_data: Any, n_volumes: int
+) -> list[dict]:
+    """归一化 roster → 落库 Project.extra → 写 ctx（供独立步骤与合并节点共用）。"""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    ladder = normalize_antagonist_ladder(raw_data, ctx, n_volumes)
+    try:
+        base = project.extra if isinstance(project.extra, dict) else {}
+        project.extra = {**base, LADDER_EXTRA_KEY: ladder}
+        flag_modified(project, "extra")
+        svc.db.commit()
+    except Exception:
+        logger.exception("antagonist_ladder 写库失败 project=%s", project.id)
+
+    ctx[LADDER_EXTRA_KEY] = ladder
+    ctx["antagonist_ladder_summary"] = format_ladder_summary(ladder)
+    ctx["volume_boss_names"] = [
+        row.get("boss_name") for row in ladder if row.get("boss_name")
+    ]
+    return ladder
+
+
 def build_antagonist_ladder_prompt_block(ctx: dict, n_volumes: int) -> str:
     """Step 9 注入：卷级 Boss 只能从 roster 选取。"""
     ladder: list[dict] = list(ctx.get("antagonist_ladder") or [])

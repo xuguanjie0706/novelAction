@@ -43,8 +43,25 @@ async def gen_core_mysteries(svc: Any, project, ctx: dict) -> list[dict]:
     Returns:
         核心谜题列表，同时写入 Project.extra['core_mysteries']。
     """
-    from app.models import Foreshadow
+    system, prompt = build_core_mysteries_prompt(ctx)
 
+    try:
+        raw = await svc._call_with_retry(
+            system, prompt, max_tokens=max_tokens_bootstrap_completion(), task="bootstrap.core_mysteries"
+        )
+        mysteries = parse_json(raw)
+        if not isinstance(mysteries, list):
+            mysteries = []
+    except Exception:
+        mysteries = []
+
+    persist_core_mysteries(svc, project, mysteries)
+    set_core_mysteries_ctx(ctx, mysteries)
+    return mysteries
+
+
+def build_core_mysteries_prompt(ctx: dict) -> tuple[str, str]:
+    """构建核心谜题生成的 system + user prompt（供独立步骤与合并节点共用）。"""
     system = (
         "你是有30年经验的网络小说总编辑，深知：好的伏笔是读者追更的隐形绳索。"
         "只返回 JSON 数组，不要任何解释文字。"
@@ -55,7 +72,6 @@ async def gen_core_mysteries(svc: Any, project, ctx: dict) -> list[dict]:
     protagonist = ctx.get("protagonist", "主角")
     char_names = ctx.get("char_names", [])
     storyline_summary = ctx.get("storyline_summary", "（未设定）")
-    positioning = ctx.get("positioning") or {}
     villain_arc_summary = ctx.get("villain_arc_summary", "（未设定）")
 
     prompt = f"""小说：《{ctx.get('project_title', '')}》（{ctx.get('genre', '')}）
@@ -104,25 +120,21 @@ async def gen_core_mysteries(svc: Any, project, ctx: dict) -> list[dict]:
 6. lay_method 必须是具体可写的场景细节，禁止"暗示"/"隐约提到"这种废话
 只返回JSON数组，不要解释。"""
 
-    try:
-        raw = await svc._call_with_retry(
-            system, prompt, max_tokens=max_tokens_bootstrap_completion(), task="bootstrap.core_mysteries"
-        )
-        mysteries = parse_json(raw)
-        if not isinstance(mysteries, list):
-            mysteries = []
-    except Exception:
-        mysteries = []
+    return system, prompt
 
-    # 写 Foreshadow 表（每条谜题一条记录）
-    saved_mysteries: list[dict] = []
+
+def persist_core_mysteries(svc: Any, project, mysteries: list[dict]) -> None:
+    """写 Foreshadow 表 + Project.extra['core_mysteries']（供独立步骤与合并节点共用）。"""
+    from app.models import Foreshadow
+
     for m in mysteries:
+        if not isinstance(m, dict):
+            continue
         name = (m.get("name") or "").strip()
         description = (m.get("description") or "").strip()
         if not name or not description:
             continue
         try:
-            lay_ch = m.get("lay_chapter")
             fs = Foreshadow(
                 project_id=project.id,
                 title=name[:200],
@@ -133,7 +145,7 @@ async def gen_core_mysteries(svc: Any, project, ctx: dict) -> list[dict]:
                 foreshadow_type=m.get("mystery_type", "hook"),
                 extra={
                     "mystery_name": name,
-                    "planned_lay_chapter": lay_ch,
+                    "planned_lay_chapter": m.get("lay_chapter"),
                     "why_readers_care": m.get("why_readers_care", ""),
                     "lay_method": m.get("lay_method", ""),
                     "heat_chapters": m.get("heat_chapters", []),
@@ -145,7 +157,6 @@ async def gen_core_mysteries(svc: Any, project, ctx: dict) -> list[dict]:
                 },
             )
             svc.db.add(fs)
-            saved_mysteries.append({**m, "_foreshadow_id": None})  # id after flush
         except Exception:
             logger.exception("核心谜题写 Foreshadow 表失败（name=%s）", name)
 
@@ -154,7 +165,6 @@ async def gen_core_mysteries(svc: Any, project, ctx: dict) -> list[dict]:
     except Exception:
         logger.exception("核心谜题 flush 失败")
 
-    # 写 Project.extra
     try:
         base = project.extra if isinstance(project.extra, dict) else {}
         project.extra = {**base, "core_mysteries": mysteries}
@@ -163,12 +173,13 @@ async def gen_core_mysteries(svc: Any, project, ctx: dict) -> list[dict]:
     except Exception:
         pass
 
-    # ctx 摘要
-    if mysteries:
-        ctx["core_mysteries"] = mysteries
-        ctx["core_mysteries_summary"] = "、".join(
-            f"{m.get('name', '?')}(埋第{m.get('lay_chapter','?')}章→揭第{m.get('reveal_chapter','?')}章)"
-            for m in mysteries[:6]
-        )
 
-    return mysteries
+def set_core_mysteries_ctx(ctx: dict, mysteries: list[dict]) -> None:
+    """写 ctx['core_mysteries'] / ['core_mysteries_summary']。"""
+    if not mysteries:
+        return
+    ctx["core_mysteries"] = mysteries
+    ctx["core_mysteries_summary"] = "、".join(
+        f"{m.get('name', '?')}(埋第{m.get('lay_chapter','?')}章→揭第{m.get('reveal_chapter','?')}章)"
+        for m in mysteries[:6]
+    )

@@ -316,8 +316,50 @@ def format_foreshadow_schedule_prompt_block(lock: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _schedule_background_reminder(lock: dict[str, Any]) -> str:
+    """将远期「未到埋设章」谜题压缩为一条背景提醒，避免逐条占满 risks。"""
+    forbidden = lock.get("forbidden_early_plants") or []
+    if not forbidden:
+        return ""
+    ch = lock.get("current_chapter_number")
+    names = [(f.get("name") or "").strip() for f in forbidden if isinstance(f, dict)]
+    names = [n for n in names if n]
+    if not names:
+        return ""
+    if len(names) <= 3:
+        detail = "、".join(f"「{n}」" for n in names)
+    else:
+        detail = f"{len(names)}条核心谜题（详见下方伏笔日程表）"
+    return (
+        f"背景约束：{detail}计划埋设章晚于第{ch}章，"
+        "本章勿完整写出其 lay_method 细节。"
+    )
+
+
+def _is_schedule_echo_risk(risk: dict[str, Any], lock: dict[str, Any]) -> bool:
+    """过滤 AI 复述伏笔日程背景约束的条目（已在日程表区块展示）。"""
+    desc = (risk.get("description") or "").strip()
+    if not desc:
+        return False
+    if desc.startswith("伏笔日程：") and "不得完整写出" in desc:
+        return True
+    if "禁止提前完整埋设" in desc or "禁止完整埋设" in desc:
+        return True
+    if "不得完整写出" in desc and risk.get("type") == "foreshadow":
+        if "章纲" not in desc and "冲突" not in desc and "漏" not in desc:
+            return True
+    for c in lock.get("outline_conflicts") or []:
+        reason = (c.get("reason") or "").strip()
+        if reason and (reason in desc or desc in reason):
+            return True
+    if risk.get("type") == "foreshadow" and re.search(r"计划第\d+章", desc):
+        if "章纲" not in desc and "冲突" not in desc and "漏" not in desc and "误收" not in desc:
+            return True
+    return False
+
+
 def merge_foreshadow_schedule_into_warn_result(warn_result: dict, lock: dict[str, Any]) -> dict:
-    """将伏笔日程表并入预警结果，并把章纲冲突提升为 risks。"""
+    """将伏笔日程表并入预警结果；仅章纲冲突进 risks，远期日程进 reminders。"""
     out = dict(warn_result)
     out["foreshadow_schedule_lock"] = {
         "has_schedule": lock.get("has_schedule", False),
@@ -328,7 +370,16 @@ def merge_foreshadow_schedule_into_warn_result(warn_result: dict, lock: dict[str
         "outline_conflicts": lock.get("outline_conflicts") or [],
     }
     risks = list(out.get("risks") or [])
+    reminders = [str(x).strip() for x in (out.get("reminders") or []) if x and str(x).strip()]
+    existing_desc: set[str] = set()
+    existing_rem = set(reminders)
+
+    risks = [
+        r for r in risks
+        if isinstance(r, dict) and not _is_schedule_echo_risk(r, lock)
+    ]
     existing_desc = {str(r.get("description", ""))[:120] for r in risks if isinstance(r, dict)}
+
     for c in lock.get("outline_conflicts") or []:
         desc = c.get("reason", "")
         if not desc or desc[:120] in existing_desc:
@@ -344,29 +395,19 @@ def merge_foreshadow_schedule_into_warn_result(warn_result: dict, lock: dict[str
         )
         existing_desc.add(desc[:120])
 
-    for item in lock.get("forbidden_early_plants") or []:
-        name = item.get("name", "")
-        lay = item.get("planned_lay_chapter")
-        if not name or not lay:
-            continue
-        desc = (
-            f"伏笔日程：「{name}」计划第{lay}章埋设，"
-            f"第{lock.get('current_chapter_number')}章不得完整写出。"
-        )
-        if desc[:120] in existing_desc:
-            continue
-        risks.append({
-            "type": "foreshadow",
-            "severity": "high",
-            "description": desc,
-            "suggested_fix": "正文仅可留模糊暗示；完整细节留到计划章。",
-        })
-        existing_desc.add(desc[:120])
+    bg = _schedule_background_reminder(lock)
+    if bg and bg not in existing_rem:
+        reminders.append(bg)
+        existing_rem.add(bg)
 
-    out["risks"] = risks[:18]
+    out["reminders"] = reminders[:12]
+    out["risks"] = risks[:15]
     out["risk_count"] = len(out["risks"])
-    if any(r.get("severity") in ("high", "critical") for r in out["risks"] if isinstance(r, dict)):
-        out["ok"] = False
+    out["ok"] = not any(
+        r.get("severity") in ("high", "critical")
+        for r in out["risks"]
+        if isinstance(r, dict)
+    )
     return out
 
 

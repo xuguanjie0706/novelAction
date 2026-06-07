@@ -101,6 +101,7 @@ export default function ForeshadowForm({ initial = {}, onSave, onCancel }: Fores
             value={status}
             onChange={e => setStatus(e.target.value as Foreshadow['status'])}
           >
+            <option value="planned">章纲规划</option>
             <option value="open">未回收</option>
             <option value="resolved">已回收</option>
             <option value="dropped">已放弃</option>

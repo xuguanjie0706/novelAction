@@ -140,6 +140,38 @@ async def node_world_xianxia(s, c=None):
     )
 
 
+async def node_factions_antagonist_xianxia(s, c=None):
+    """合并节点：势力体系 + 卷级对立面 roster 一次 LLM 生成。
+
+    replaces 通用 factions；并经 StyleConfig.skip_core 吞并 antagonist_ladder
+    （-1 次 LLM 调用）。Boss 与势力同响应共生，结构上消除 Boss 挂靠不存在势力的冲突。
+    """
+    from app.services.bootstrap.steps.xianxia.factions_antagonist_xianxia import (
+        gen_factions_antagonist_xianxia,
+    )
+
+    return await _fanqie_step(
+        s, c, "factions", "生成势力体系 + 卷级对立面（合并·Boss挂靠真实势力）...",
+        gen_factions_antagonist_xianxia,
+    )
+
+
+async def node_promise_seeds_xianxia(s, c=None):
+    """合并节点：核心谜题 + 开局追读承诺一次 LLM 生成。
+
+    replaces 通用 core_mysteries；并经 StyleConfig.skip_core 吞并 opening_contract
+    （-1 次 LLM 调用）。复用 CORE 通用 schema，保住「无事实承诺」+ OC-LADDER 约束。
+    """
+    from app.services.bootstrap.steps.xianxia.promise_seeds_xianxia import (
+        gen_promise_seeds_xianxia,
+    )
+
+    return await _fanqie_step(
+        s, c, "promise_seeds", "预置核心谜题 + 开局追读承诺（合并）...",
+        gen_promise_seeds_xianxia,
+    )
+
+
 async def node_cultivation_contract(state: BootstrapState, config: dict | None = None) -> dict:
     """境界主轴 + 境界预算契约（replaces power_systems）。"""
     from app.services.bootstrap.steps.xianxia.cultivation_contract import (

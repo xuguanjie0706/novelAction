@@ -290,7 +290,21 @@ export default function LoginPage() {
 
               {error && (
                 <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600">
-                  {error}
+                  <p>{error}</p>
+                  {error.includes('已被注册') && mode === 'register' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode('login')
+                        setError(null)
+                        setEmailCode('')
+                        setDevCodeHint(null)
+                      }}
+                      className="mt-2 font-medium text-amber-700 underline underline-offset-2 hover:text-amber-800"
+                    >
+                      切换到登录
+                    </button>
+                  )}
                 </div>
               )}
 

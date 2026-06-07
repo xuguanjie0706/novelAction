@@ -140,7 +140,9 @@ def _register_all() -> None:
     # opening_contract/consistency）复用通用线（非番茄）；最终图中零番茄节点。
     from app.services.bootstrap.graph_xianxia import (
         node_cultivation_contract,
+        node_factions_antagonist_xianxia,
         node_golden_finger_xianxia,
+        node_promise_seeds_xianxia,
         node_volumes_xianxia,
         node_world_xianxia,
         node_xianxia_gate,
@@ -162,6 +164,20 @@ def _register_all() -> None:
     register_node(NodeSpec(
         key="golden_finger_xianxia", fn=node_golden_finger_xianxia, seq=306,
         label="设计修仙金手指（咬合境界轴）...",
+    ))
+    # 合并：factions + antagonist_ladder → 一次 LLM（-1 调用）。
+    # replaces=factions 占其槽位；antagonist_ladder 由 StyleConfig.skip_core 排除。
+    register_node(NodeSpec(
+        key="factions_antagonist_xianxia", fn=node_factions_antagonist_xianxia, seq=500,
+        graph_id="factions", replaces="factions",
+        label="生成势力体系 + 卷级对立面（合并）...",
+    ))
+    # 合并：core_mysteries + opening_contract → 一次 LLM（-1 调用）。
+    # replaces=core_mysteries 占其槽位；opening_contract 由 StyleConfig.skip_core 排除。
+    register_node(NodeSpec(
+        key="promise_seeds_xianxia", fn=node_promise_seeds_xianxia, seq=915,
+        graph_id="promise_seeds", replaces="core_mysteries",
+        label="预置核心谜题 + 开局追读承诺（合并）...",
     ))
     register_node(NodeSpec(
         key="settings_xianxia", fn=node_world_xianxia, seq=710,

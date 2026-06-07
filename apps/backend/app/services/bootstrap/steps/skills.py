@@ -60,7 +60,8 @@ def _build_char_realm_hint(ctx: dict, *, db=None, project_id: str | None = None)
     )
 
 
-async def gen_key_skills(svc: Any, project: Project, ctx: dict):
+def build_key_skills_prompt(svc: Any, project: Project, ctx: dict) -> tuple[str, str]:
+    """构建功法技能 prompt（供独立步骤与合并节点共用）。"""
     system = "你是网络小说世界构建专家。只返回JSON数组。"
     kit_block = get_genre_kit_block(ctx)
     char_id_hint = ", ".join(
@@ -111,7 +112,12 @@ grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
 选择对故事最重要的技能，包含主角核心战技和1~2个反派标志性技能。
 每个技能必须填写 plot_hook，不得留空。
 只返回JSON数组，不要说明文字。"""
+    return system, prompt
 
+
+async def gen_key_skills(svc: Any, project: Project, ctx: dict):
+    """独立步骤：构建 prompt → 调用 → 落库。"""
+    system, prompt = build_key_skills_prompt(svc, project, ctx)
     raw = await svc._call_with_retry(
         system,
         prompt,
@@ -121,7 +127,11 @@ grade 只能是: mortal / earth / sky / profound / saint / divine / supreme
     data = parse_json(raw)
     if not isinstance(data, list):
         data = data.get("skills", [])
+    return persist_key_skills(svc, project, ctx, data)
 
+
+def persist_key_skills(svc: Any, project: Project, ctx: dict, data: list):
+    """落库功法技能（含 UUID 校验与境界 rank 过滤），供独立步骤与合并节点共用。"""
     # 预构建 char_id → realm_rank 速查表，用于落库前过滤境界不足的分配
     _char_rank_by_id: dict[str, int] = {}
     _char_realm_by_id: dict[str, str] = {}

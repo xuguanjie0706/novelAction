@@ -46,3 +46,10 @@ def test_title_from_text_truncates_long_description():
     title = _title_from_text(long_desc)
     assert len(title) <= 200
     assert title.endswith("…")
+
+
+def test_keywords_overlap_avoids_short_false_positive():
+    from app.services.bootstrap.foreshadow_sync import _keywords_overlap
+
+    assert not _keywords_overlap("天生灵根的真相", "陆沉发现断路之战真相")
+    assert _keywords_overlap("天生灵根的真相", "天生灵根并非天赋而是封印")

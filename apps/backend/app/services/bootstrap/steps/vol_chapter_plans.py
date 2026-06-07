@@ -11,6 +11,7 @@ from app.services.bootstrap.chapter_plan_batches import (
     log_chapter_plan_batches,
     normalize_volume_planned_chapters,
 )
+from app.services.bootstrap.chapter_plan_guard import existing_chapter_sort_orders
 from app.services.bootstrap.foreshadow_ops import prepare_chapter_foreshadow_for_node
 from app.services.bootstrap.foreshadow_sync import sync_chapter_foreshadow
 from app.services.bootstrap.parse import parse_json
@@ -265,6 +266,7 @@ async def gen_vol_chapter_plans(
     written_block = fmt_written_summaries(written_summaries)
 
     all_results: list[OutlineNode] = list(seed_nodes or [])
+    occupied_sort_orders = existing_chapter_sort_orders(svc.db, volume_node.id)
     batch_errors: list[str] = ctx.setdefault("vol_chapter_batch_errors", [])
     char_name_to_id = ctx.get("char_name_to_id", {})
     storyline_ids_map = ctx.get("storyline_ids", {})
@@ -527,6 +529,15 @@ async def gen_vol_chapter_plans(
                 is_fanqie=is_fanqie,
             )
             expected_words_val = ai_words if isinstance(ai_words, int) and 1500 <= ai_words <= 4000 else dynamic_words
+            sort_order_val = ch_num - 1
+            if sort_order_val in occupied_sort_orders:
+                logger.warning(
+                    "跳过重复章纲写入 project=%s volume=%s sort_order=%d",
+                    project.id,
+                    volume_node.id,
+                    sort_order_val,
+                )
+                continue
             fs_ops, fs_laid, fs_resolved, _ = prepare_chapter_foreshadow_for_node(item)
             node = OutlineNode(
                 project_id=project.id,
@@ -546,11 +557,12 @@ async def gen_vol_chapter_plans(
                 foreshadows_laid=fs_laid or None,
                 foreshadows_resolved=fs_resolved or None,
                 expected_words=expected_words_val,
-                sort_order=ch_num - 1,
+                sort_order=sort_order_val,
                 extra=_build_chapter_extra(item, is_fanqie),
             )
             svc.db.add(node)
             svc.db.flush()  # 让 node.id 可用，伏笔同步需要引用它
+            occupied_sort_orders.add(sort_order_val)
             sync_chapter_foreshadow(svc.db, project.id, node, ch_num)
             all_results.append(node)
 

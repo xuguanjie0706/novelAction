@@ -19,8 +19,12 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
 def _hash_code(email: str, code: str) -> str:
-    payload = f"{email.lower().strip()}:{code}".encode("utf-8")
+    payload = f"{_normalize_email(email)}:{code}".encode("utf-8")
     key = settings.EMAIL_LOGIN_CODE_SALT.encode("utf-8")
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
@@ -51,6 +55,7 @@ def _send_email_code(email: str, code: str, expire_minutes: int) -> bool:
 
 def create_and_send_login_code(db: Session, email: str) -> tuple[bool, int, str | None]:
     """创建并发送（或开发态回显）邮箱登录验证码。"""
+    email = _normalize_email(email)
     now = _now_utc()
     cooldown = timedelta(seconds=settings.EMAIL_LOGIN_CODE_COOLDOWN_SECONDS)
 
@@ -89,6 +94,7 @@ def create_and_send_login_code(db: Session, email: str) -> tuple[bool, int, str 
 
 def verify_login_code(db: Session, email: str, code: str) -> bool:
     """校验验证码并标记已使用。"""
+    email = _normalize_email(email)
     now = _now_utc()
     record = (
         db.query(EmailLoginCode)

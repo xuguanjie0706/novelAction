@@ -19,13 +19,20 @@ export function displayChapterNumber(title?: string, sortOrder?: number): number
 }
 
 // ── 伏笔状态 ─────────────────────────────────────────────────────────────────
-export const STATUS_LABEL: Record<string, string> = { open: '未回收', resolved: '已回收', dropped: '已放弃' }
+export const STATUS_LABEL: Record<string, string> = {
+  planned: '章纲规划',
+  open: '未回收',
+  resolved: '已回收',
+  dropped: '已放弃',
+}
 export const STATUS_COLOR: Record<string, string> = {
+  planned: 'bg-sky-100 text-sky-700 border-sky-200',
   open: 'bg-amber-100 text-amber-700 border-amber-200',
   resolved: 'bg-green-100 text-green-700 border-green-200',
   dropped: 'bg-gray-100 text-gray-400 border-gray-200',
 }
 export const STATUS_ICON: Record<string, React.ReactNode> = {
+  planned: React.createElement(Circle, { size: 12 }),
   open: React.createElement(Circle, { size: 12 }),
   resolved: React.createElement(CheckCircle, { size: 12 }),
   dropped: React.createElement(XCircle, { size: 12 }),

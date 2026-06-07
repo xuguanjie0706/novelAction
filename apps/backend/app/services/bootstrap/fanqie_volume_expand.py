@@ -8,6 +8,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import OutlineNode, Project
+from app.services.bootstrap.chapter_plan_guard import (
+    count_unique_chapter_plans,
+    dedupe_volume_chapter_plans,
+)
 from app.services.bootstrap.fanqie_normalize import (
     is_fanqie_project,
     upsert_opening_chapter_plans,
@@ -93,6 +97,8 @@ def prepare_volume_chapter_expand(
             OutlineNode.node_type == "chapter_plan",
         ).delete(synchronize_session=False)
         db.commit()
+    else:
+        dedupe_volume_chapter_plans(db, volume.id)
 
     planned = normalize_volume_planned_chapters(
         (volume.extra or {}).get("planned_chapters"),
@@ -102,8 +108,9 @@ def prepare_volume_chapter_expand(
     if existing:
         normalize_legacy_opening_sort_orders(existing)
         db.commit()
+        existing = _existing_chapter_plans(db, volume.id)
 
-    if existing and len(existing) >= planned and not force:
+    if existing and count_unique_chapter_plans(existing) >= planned and not force:
         return None
 
     if not existing:

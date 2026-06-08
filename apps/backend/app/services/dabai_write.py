@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from dabai.golden_finger_bind import is_awakening_chapter, prose_bind_instructions
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 
 _SYSTEM = (
@@ -27,9 +28,18 @@ def build_prose_prompt(project: DabaiProject, ch: DabaiChapterOutline) -> tuple[
     """据项目设定 + 本章爽点节拍章纲，构造正文写作 (system, user)。"""
     gf = project.golden_finger or {}
     ladder = project.power_ladder or {}
-    levels = "、".join(x.get("name", "") for x in (ladder.get("levels") or [])[:7])
+    level_list = ladder.get("levels") or []
+    levels = "、".join(x.get("name", "") for x in level_list[:7])
     chars = "、".join(c.name for c in project.characters[:8])
     target = ch.expected_words or 2000
+    # 境界脊柱：本章主角境界（正文不得低于/乱跳）
+    realm_name = next((l.get("name") for l in level_list
+                       if int(l.get("rank", -1)) == (ch.realm_rank or -1)), None)
+    realm_block = (
+        f"\n本章主角境界：第{ch.realm_rank}档「{realm_name}」"
+        "——正文里主角的修为/战力须与此一致，★禁止写回更低境界、禁止本章内乱跳档★。\n"
+        if ch.realm_rank and realm_name else ""
+    )
     witnesses = "、".join(ch.witnesses or []) or "围观众人"
     # 文风对标：从对标分析的 style_profile 取特征，让正文文风同向（禁抄原句）
     sp = (project.benchmark or {}).get("style_profile") or {}
@@ -43,23 +53,34 @@ def build_prose_prompt(project: DabaiProject, ch: DabaiChapterOutline) -> tuple[
         f"\n文风对标（贴这个风格写，但★禁止照抄任何对标作品的原句/情节★）：{style_line}\n"
         if style_line else ""
     )
+    ch_dict = {
+        "chapter_number": ch.chapter_number,
+        "title": ch.title,
+        "yinbao": ch.yinbao,
+        "end_hook": ch.end_hook,
+        "shuang_type": ch.shuang_type,
+    }
+    bind_block = ""
+    if is_awakening_chapter(ch_dict, golden_finger_name=gf.get("name", "")):
+        bind_block = prose_bind_instructions(gf_name=gf.get("name", ""))
     user = (
         f"《{project.title or project.logline}》\n"
         f"金手指：{gf.get('name', '')}（{gf.get('core_ability', '')}）\n"
         f"境界阶梯：{levels}\n"
         f"可用人物：{chars}\n"
-        f"{style_block}\n"
+        f"{style_block}{realm_block}{bind_block}\n"
         f"【本章爽点节拍（第{ch.chapter_number}章 {ch.title or ''}）】\n"
         f"  爽点类型：{ch.shuang_type or ''}\n"
         f"  憋屈铺垫：{ch.yaqu_setup or ''}\n"
+        f"  转折扳机：{ch.emotion_turn or '（未给，按②自行设计一个触发点过渡）'}\n"
         f"  引爆方式：{ch.yinbao or ''}\n"
         f"  爽感落点：{ch.shuang_payoff or ''}（见证者：{witnesses}）\n"
         f"  章末钩子：{ch.end_hook or ''}\n\n"
         f"按上面的节拍把第{ch.chapter_number}章正文写出来，目标约 {target} 字。\n"
         "推进顺序（务必带上情绪过渡，别硬跳）：\n"
         "  ① 先写憋屈铺垫，让读者替主角憋着（别拖）；\n"
-        "  ② 给一个『情绪扳机』——主角从隐忍到出手的那一下转变，要有触发点"
-        "（一句挑衅、一个细节、一段闪念、一声金手指提示），一两句即可；\n"
+        "  ② 按上面的【转折扳机】写情绪过渡——主角从隐忍到出手的那一下转变，"
+        "要落实章纲给的那个触发点（别另起一个），一两句即可；\n"
         "  ③ 金手指引爆爽点；\n"
         "  ④ 见证者反应分级递进（愣住→怀疑→震惊→心服/恐惧），不要瞬间翻脸；\n"
         "  ⑤ 末段落在章末钩子上。\n"
@@ -79,9 +100,11 @@ def mock_prose(project: DabaiProject, ch: DabaiChapterOutline) -> list[str]:
     return [
         f"　　{ch.yaqu_setup or '又一次被人当众奚落'}。林凡攥紧了拳头，喉咙发紧，却还是把那口气咽了下去。\n\n",
         f"　　“就你也配？”{who}的讥讽像针一样扎过来。\n\n",
-        # ② 情绪扳机：内心转变 + 触发点（铺垫，而非硬跳）
+        # ② 金手指绑定：疑→证→择（非秒信）
         "　　他本想再忍。可耳边那句“也配”，忽然和母亲临终前那个不甘的眼神重叠在了一起。\n\n"
-        f"　　就在这一瞬，识海里，{gf}的提示音轻轻一响。林凡缓缓抬起头，眼神里的隐忍，一点点变成了冷。\n\n",
+        f"　　识海里忽然一响，像有人在他脑子里敲了一下。林凡第一反应不是狂喜——是诈尸了吗？\n\n"
+        f"　　锁链跟着轻轻一颤，竟松了半分。林凡喉头发紧，哑着嗓子在心里挤出两个字：「……绑定。」\n\n"
+        f"　　下一瞬，{gf}的提示音彻底亮起。他缓缓抬起头，眼神里的隐忍，一点点变成了冷。\n\n",
         # ③ 引爆
         f"　　{ch.yinbao or '一道力量自丹田奔涌而出'}——下一瞬，{ch.shuang_payoff or '全场寂静'}。\n\n",
         # ④ 见证者反应分级递进

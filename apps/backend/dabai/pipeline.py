@@ -29,6 +29,23 @@ _SETTING_STEPS = {
     "factions", "characters", "storylines", "volumes",
 }
 
+# 合并步：carrier 一次 LLM 调用同时产出多个 ctx 键；derived 复用同次结果，不再调 LLM。
+# 合并动机：同类设定本就是一次连续推理，拆多次既费 token 又容易彼此对不齐。
+_MERGE_CARRIERS: dict[str, tuple[str, ...]] = {
+    "benchmark": ("benchmark", "positioning"),       # 对标分析 + 立项定位
+    "golden_finger": ("golden_finger", "power_ladder"),  # 金手指 + 境界阶梯（力量体系）
+    "factions": ("factions", "characters"),          # 势力 + 人物（阵营卡司）
+}
+_MERGE_DERIVED: dict[str, str] = {
+    derived: carrier
+    for carrier, keys in _MERGE_CARRIERS.items()
+    for derived in keys if derived != carrier
+}
+
+
+def _count(data) -> int:
+    return len(data) if isinstance(data, list) else 1
+
 
 def _slug(text: str) -> str:
     keep = "".join(c for c in text if c.isalnum() or c in "一二三四五六七八九十")[:16]
@@ -57,11 +74,21 @@ async def aiter_bootstrap(cfg: DabaiConfig, call: CallFn) -> AsyncIterator[dict]
     for step in cfg.active_steps():
         yield {"event": "step_start", "step": step}
         try:
-            if step in _SETTING_STEPS:
+            if step in _MERGE_CARRIERS:
+                # 合并步：一次 LLM 调用产出本组所有键，拆进 ctx
+                combined = await steps.run_step(step, ctx, call, cfg)
+                for key in _MERGE_CARRIERS[step]:
+                    ctx[key] = combined.get(key)
+                yield {"event": "step_done", "step": step,
+                       "data": ctx[step], "count": _count(ctx[step])}
+            elif step in _MERGE_DERIVED:
+                # 已随 carrier 一次产出，不再单独调 LLM（共用同一次推理）
+                data = ctx.get(step)
+                yield {"event": "step_done", "step": step, "data": data, "count": _count(data)}
+            elif step in _SETTING_STEPS:
                 data = await steps.run_step(step, ctx, call, cfg)
                 ctx[step] = data
-                yield {"event": "step_done", "step": step, "data": data,
-                       "count": len(data) if isinstance(data, list) else 1}
+                yield {"event": "step_done", "step": step, "data": data, "count": _count(data)}
             elif step == "chapter_outlines":
                 vols = ctx.get("volumes") or []
                 if not vols:
@@ -83,7 +110,18 @@ async def aiter_bootstrap(cfg: DabaiConfig, call: CallFn) -> AsyncIterator[dict]
     report = None
     chapters = ctx.get("chapter_outlines")
     if chapters:
-        report = linter.lint_chapters(chapters, cfg).as_dict()
+        vols = ctx.get("volumes") or []
+        levels = (ctx.get("power_ladder") or {}).get("levels") or []
+        ranks = [int(l.get("rank", 0)) for l in levels if str(l.get("rank", "")).strip()]
+        v1 = vols[0] if vols else {}
+        gf_name = (ctx.get("golden_finger") or {}).get("name", "")
+        report = linter.lint_chapters(
+            chapters, cfg,
+            realm_max=max(ranks) if ranks else None,
+            realm_range=(v1.get("realm_start_rank"), v1.get("realm_end_rank")),
+            volumes=vols,
+            golden_finger_name=gf_name,
+        ).as_dict()
         yield {"event": "linter_done", "data": report}
 
     yield {"event": "bootstrap_end", "ctx": ctx,

@@ -10,6 +10,7 @@ export interface DabaiChapter {
   title: string
   shuang_type: string          // 一等公民：本章爽点类型
   yaqu_setup: string           // 憋屈势能
+  emotion_turn?: string        // 转折拍：情绪扳机
   yinbao: string               // 引爆
   shuang_payoff: string        // 爽感量化（须有观众）
   witnesses: string[]          // 见证者/被打脸者
@@ -18,6 +19,7 @@ export interface DabaiChapter {
   involved_characters: string[]
   is_big_beat: boolean         // 大爆点
   expected_words: number
+  realm_rank?: number | null   // 主角本章境界档（全书单调不减）
   content?: string | null      // 正文（写作期填充）
   status?: string              // planned / written
 }
@@ -31,6 +33,8 @@ export interface DabaiVolume {
   big_beats: string[]
   volume_climax: string
   end_hook: string
+  realm_start_rank?: number | null
+  realm_end_rank?: number | null
 }
 
 export interface DabaiLinterIssue {
@@ -49,12 +53,30 @@ export interface DabaiLinterReport {
   issues?: DabaiLinterIssue[]
 }
 
+export interface DabaiBenchmarkBook {
+  title: string
+  why_comparable?: string
+  core_appeal?: string
+  setting_motif?: string
+  style_note?: string
+}
+
+export interface DabaiBenchmark {
+  topic?: string
+  reference_books?: DabaiBenchmarkBook[]
+  style_profile?: Record<string, string>
+  setting_conventions?: string[]
+  tropes_to_use?: string[]
+  pitfalls_to_avoid?: string[]
+}
+
 export interface DabaiProjectDetail {
   id: string
   logline: string
   title: string | null
   status: string
   mock: boolean
+  benchmark: DabaiBenchmark
   positioning: Record<string, unknown>
   golden_finger: Record<string, unknown>
   power_ladder: { name?: string; levels?: Array<{ rank: number; name: string; desc: string }> }
@@ -107,6 +129,7 @@ export type DabaiStreamEvent =
 
 /** 8 步中文标签（进度展示）。 */
 export const DABAI_STEP_LABELS: Record<string, string> = {
+  benchmark: '对标分析',
   positioning: '立项定位',
   golden_finger: '金手指',
   power_ladder: '境界阶梯',

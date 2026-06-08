@@ -4,8 +4,9 @@
  * 数据来源：props.detail（由 useDabaiGenerate 提供）。无编辑能力（生成+展示+质检）。
  */
 import type { ReactNode } from 'react'
-import { Flame, Star, Sparkles, ShieldAlert, Users, GitBranch, Layers, Zap, PenLine } from 'lucide-react'
-import type { DabaiProjectDetail, DabaiChapter, DabaiLinterReport } from '../../types/dabai'
+import { Flame, Star, Sparkles, ShieldAlert, Users, GitBranch, Layers, Zap, PenLine, BookMarked } from 'lucide-react'
+import type { DabaiProjectDetail, DabaiChapter, DabaiLinterReport, DabaiBenchmark } from '../../types/dabai'
+import DabaiBeatMap from './DabaiBeatMap'
 
 const SHUANG_COLOR: Record<string, string> = {
   打脸: 'bg-rose-100 text-rose-700', 升级: 'bg-amber-100 text-amber-700',
@@ -60,7 +61,10 @@ function LinterBadge({ report }: { report: DabaiLinterReport }) {
   )
 }
 
-function ChapterRow({ ch, onWrite }: { ch: DabaiChapter; onWrite?: (ch: DabaiChapter) => void }) {
+function ChapterRow(
+  { ch, onWrite, realmName }:
+  { ch: DabaiChapter; onWrite?: (ch: DabaiChapter) => void; realmName?: (r?: number | null) => string },
+) {
   const color = SHUANG_COLOR[ch.shuang_type] ?? 'bg-gray-100 text-gray-600'
   const written = ch.status === 'written'
   return (
@@ -74,6 +78,11 @@ function ChapterRow({ ch, onWrite }: { ch: DabaiChapter; onWrite?: (ch: DabaiCha
             <Star size={11} fill="currentColor" />大爆点
           </span>
         )}
+        {ch.realm_rank ? (
+          <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600">
+            {realmName?.(ch.realm_rank) || `境界${ch.realm_rank}档`}
+          </span>
+        ) : null}
         {onWrite && (
           <button
             type="button"
@@ -89,10 +98,50 @@ function ChapterRow({ ch, onWrite }: { ch: DabaiChapter; onWrite?: (ch: DabaiCha
       </div>
       <div className="mt-2 grid gap-1 text-xs text-gray-500 sm:grid-cols-[auto_1fr]">
         <span className="text-gray-400">憋屈</span><span>{ch.yaqu_setup}</span>
+        {ch.emotion_turn ? (<><span className="text-violet-400">转折</span><span>{ch.emotion_turn}</span></>) : null}
         <span className="text-rose-400">爽点</span><span className="text-gray-700">{ch.shuang_payoff}</span>
         <span className="text-gray-400">钩子</span><span>{ch.end_hook}</span>
       </div>
     </div>
+  )
+}
+
+const STYLE_LABELS: Record<string, string> = {
+  sentence_style: '句式', pacing: '节奏', dialogue_density: '对话密度',
+  shuang_cadence: '爽点节奏', narration_voice: '腔调',
+}
+
+function BenchmarkCard({ bm }: { bm: DabaiBenchmark }) {
+  if (!bm || !(bm.reference_books?.length || bm.style_profile)) return null
+  const sp = bm.style_profile ?? {}
+  return (
+    <Card icon={<BookMarked size={15} className="text-amber-500" />}
+          title={`对标分析${bm.topic ? ` · ${bm.topic}` : ''}`}>
+      {bm.reference_books?.length ? (
+        <div className="mb-3 space-y-1.5">
+          {bm.reference_books.map((b, i) => (
+            <div key={i} className="text-sm">
+              <span className="font-semibold text-gray-800">{b.title}</span>
+              {b.core_appeal && <span className="text-gray-500"> · {b.core_appeal}</span>}
+              {b.style_note && <span className="text-xs text-gray-400"> ｜文笔：{b.style_note}</span>}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {Object.keys(sp).length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {Object.entries(STYLE_LABELS).filter(([k]) => sp[k]).map(([k, label]) => (
+            <span key={k} className="rounded-full bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
+              {label}：{sp[k]}
+            </span>
+          ))}
+        </div>
+      )}
+      {bm.pitfalls_to_avoid?.length ? (
+        <div className="mt-3 text-xs text-rose-500">避坑：{bm.pitfalls_to_avoid.join('、')}</div>
+      ) : null}
+      <p className="mt-2 text-[11px] text-gray-300">仅借鉴题材特征，不复制任何作品原文</p>
+    </Card>
   )
 }
 
@@ -101,6 +150,11 @@ export default function DabaiResult(
 ) {
   const levels = detail.power_ladder?.levels ?? []
   const report = detail.linter_report ?? {}
+  const realmName = (r?: number | null) => {
+    if (!r) return ''
+    const lv = levels.find((l) => l.rank === r)
+    return lv ? `${lv.name}` : `境界${r}档`
+  }
   return (
     <div className="space-y-4">
       <section className="rounded-2xl border border-amber-100 bg-white p-5 shadow-sm">
@@ -115,6 +169,8 @@ export default function DabaiResult(
           <p className="mt-2 text-xs text-rose-500">⚠ 失败步骤：{detail.failed_steps.join('、')}</p>
         )}
       </section>
+
+      <BenchmarkCard bm={detail.benchmark} />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card icon={<Sparkles size={15} className="text-amber-500" />} title="立项定位">
@@ -141,6 +197,8 @@ export default function DabaiResult(
           ))}
         </div>
       </Card>
+
+      <DabaiBeatMap detail={detail} />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Card icon={<ShieldAlert size={15} className="text-amber-500" />} title={`势力 ${detail.factions.length}`}>
@@ -172,6 +230,11 @@ export default function DabaiResult(
             <div key={v.volume_number} className="rounded-xl border border-gray-100 p-3 text-sm">
               <div className="font-semibold text-gray-900">{v.title}
                 <span className="ml-2 rounded bg-gray-100 px-1.5 text-xs text-gray-500">{v.phase}</span>
+                {v.realm_start_rank ? (
+                  <span className="ml-2 rounded bg-indigo-50 px-1.5 text-xs text-indigo-600">
+                    境界 {realmName(v.realm_start_rank)}→{realmName(v.realm_end_rank)}
+                  </span>
+                ) : null}
               </div>
               <div className="mt-1 text-xs text-gray-500">高潮：{v.volume_climax}</div>
             </div>
@@ -183,7 +246,7 @@ export default function DabaiResult(
             title={`章纲 · 爽点节拍器（${detail.chapter_outlines.length} 章，无 choice_cost）`}>
         <div className="space-y-2">
           {detail.chapter_outlines.map((ch) => (
-            <ChapterRow key={ch.chapter_number} ch={ch} onWrite={onWrite} />
+            <ChapterRow key={ch.chapter_number} ch={ch} onWrite={onWrite} realmName={realmName} />
           ))}
         </div>
       </Card>

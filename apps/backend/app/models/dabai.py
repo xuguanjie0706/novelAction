@@ -148,6 +148,9 @@ class DabaiVolume(Base):
     big_beats = Column(JSON, default=list)               # 本卷大爆点
     volume_climax = Column(Text)                         # 卷末高潮
     end_hook = Column(Text)                              # 卷末钩子
+    # ── 境界脊柱（主角本卷境界区间，对应 power_ladder.levels.rank）──
+    realm_start_rank = Column(Integer)                   # 卷初主角境界档
+    realm_end_rank = Column(Integer)                     # 卷末主角境界档（≥start，跨卷单调）
 
     project = relationship("DabaiProject", back_populates="volumes")
 
@@ -173,6 +176,7 @@ class DabaiChapterOutline(Base):
     # ── 爽点节拍器四拍（本表核心）──────────────────────────────────────────────
     shuang_type = Column(String(40))                     # 一等公民：本章爽点类型
     yaqu_setup = Column(Text)                            # 憋屈势能（前置弹簧）
+    emotion_turn = Column(Text)                          # 转折拍：情绪扳机（从X情绪→靠什么触发→转到Y情绪）
     yinbao = Column(Text)                                # 引爆：怎么反转
     shuang_payoff = Column(Text)                         # 爽感量化（须有观众）
     witnesses = Column(JSON, default=list)               # 见证者/被打脸者
@@ -182,6 +186,7 @@ class DabaiChapterOutline(Base):
     involved_characters = Column(JSON, default=list)
     is_big_beat = Column(Boolean, default=False)         # 大爆点
     expected_words = Column(Integer, default=2000)
+    realm_rank = Column(Integer)                         # 主角本章境界档（指向 power_ladder.levels.rank；全书单调不减）
 
     # ── 正文（写作期填充）──────────────────────────────────────────────────────
     content = Column(Text)                               # 生成的章节正文

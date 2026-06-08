@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from dabai.config import DabaiConfig
+from dabai.golden_finger_bind import bind_ladder_emotion_turn_hint
 
 PROTAGONIST = "林凡"
 
@@ -122,14 +123,20 @@ def _volumes(cfg: DabaiConfig) -> list[dict]:
     phases = ["opening", "rising", "rising", "turning", "dark_hour", "climax"]
     titles = ["新手村·退婚打脸", "外门崛起·吞噬扬名", "宗门大比·一鸣惊人",
               "万妖谷·猎宝结仇", "李家清算·至暗反击", "噬天惊变·身世揭晓"]
+    max_rank = len(_POWER_LADDER["levels"])  # 7
     vols = []
     for i in range(cfg.volume_count):
         idx = min(i, len(titles) - 1)
+        # 境界区间：跨卷单调、首尾相接、封顶 max_rank
+        rs = min(i + 1, max_rank)
+        re_ = min(i + 2, max_rank)
         vols.append({
             "volume_number": i + 1,
             "title": f"第{i + 1}卷 {titles[idx]}",
             "phase": phases[min(i, len(phases) - 1)],
             "planned_chapters": cfg.volume_chapters,
+            "realm_start_rank": rs,
+            "realm_end_rank": re_,
             "big_beats": [
                 "当众打脸悔婚的李天骄，一战扬名",
                 "吞噬稀有妖丹越级突破，震惊外门",
@@ -179,11 +186,17 @@ def _chapter_outlines(cfg: DabaiConfig) -> list[dict]:
         setup = setups[i % len(setups)]
         wit = witnesses_cycle[i % len(witnesses_cycle)]
         payoff = _payoff_for(st, wit, ch)
+        emotion_turn = (
+            bind_ladder_emotion_turn_hint("万物吞噬系统")
+            if ch <= 2 else
+            "从隐忍咽气→对方一句更狠的羞辱戳中底线（触发）→眼神冷下、动了真火"
+        )
         chapters.append({
             "chapter_number": ch,
             "title": _title_for(st, ch),
             "shuang_type": st,
             "yaqu_setup": setup,
+            "emotion_turn": emotion_turn,
             "yinbao": f"林凡借吞噬系统{_yinbao_for(st)}，瞬间扭转局面",
             "shuang_payoff": payoff,
             "witnesses": wit,
@@ -192,6 +205,8 @@ def _chapter_outlines(cfg: DabaiConfig) -> list[dict]:
             "involved_characters": [PROTAGONIST] + wit,
             "is_big_beat": is_big,
             "expected_words": 2300 if is_big else 2000,
+            # 第1卷境界区间[1,2]：前 2/3 在第1档，后段升到第2档（单调不减）
+            "realm_rank": 1 if ch <= (n * 2) // 3 else 2,
         })
         prev_prev, prev_type = prev_type, st
     return chapters
@@ -241,12 +256,10 @@ def get(step: str, cfg: DabaiConfig, meta: dict | None = None) -> Any:
         be = int(meta.get("batch_end", len(full)))
         return [c for c in full if bs <= c["chapter_number"] <= be]
     table = {
-        "benchmark": lambda: _BENCHMARK,
-        "positioning": lambda: _POSITIONING,
-        "golden_finger": lambda: _GOLDEN_FINGER,
-        "power_ladder": lambda: _POWER_LADDER,
-        "factions": lambda: _FACTIONS,
-        "characters": lambda: _CHARACTERS,
+        # 合并步：carrier 一次返回本组两块
+        "benchmark": lambda: {"benchmark": _BENCHMARK, "positioning": _POSITIONING},
+        "golden_finger": lambda: {"golden_finger": _GOLDEN_FINGER, "power_ladder": _POWER_LADDER},
+        "factions": lambda: {"factions": _FACTIONS, "characters": _CHARACTERS},
         "storylines": lambda: _STORYLINES,
         "volumes": lambda: _volumes(cfg),
     }

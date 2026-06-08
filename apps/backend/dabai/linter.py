@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from dabai.config import DabaiConfig
+from dabai.golden_finger_bind import is_awakening_chapter, lint_bind_ladder
 
 # 套话黑名单（end_hook 命中即判废话）
 _HOOK_CLICHES = ("悬念丛生", "让人期待", "敬请期待", "精彩继续", "欲知后事", "扣人心弦")
@@ -75,10 +76,60 @@ def _has_witness(ch: dict) -> bool:
     return any(k in payoff for k in ("当着", "当众", "众人", "全场", "围观", "面前"))
 
 
-def lint_chapters(chapters: list[dict], cfg: DabaiConfig) -> LinterReport:
-    """对一卷章纲跑全部大白文规则。"""
+def _lint_realm(chapters, add, realm_max, realm_range, volumes) -> None:
+    """境界脊柱闸门：REALM-01 回退（阻断）/02 越界/03 跳出卷区间/04 卷间不单调。"""
+    lo, hi = (realm_range or (None, None))
+    prev = None
+    for ch in chapters:
+        num = ch.get("chapter_number")
+        rr = ch.get("realm_rank")
+        if not isinstance(rr, int):
+            add(Issue("REALM-02", "high", num, "缺 realm_rank——本章主角境界未锚定",
+                      "给本章标主角境界档（指向境界体系数字）"))
+            continue
+        if prev is not None and rr < prev:
+            add(Issue("REALM-01", "critical", num,
+                      f"境界回退：第{num}章 realm_rank={rr} < 上一章 {prev}",
+                      "境界只能升不能降；改为 ≥ 上一章档位"))
+        if rr < 1 or (realm_max and rr > realm_max):
+            add(Issue("REALM-02", "high", num,
+                      f"realm_rank={rr} 越界（体系 1~{realm_max or '?'}）", "落回体系档位范围内"))
+        if (lo and rr < lo) or (hi and rr > hi):
+            add(Issue("REALM-03", "medium", num,
+                      f"realm_rank={rr} 跳出本卷区间[{lo}~{hi}]", "本卷境界须落在卷区间内"))
+        prev = max(prev, rr) if prev is not None else rr
+
+    # REALM-04：卷间区间单调、首尾相接
+    if volumes:
+        ordered = sorted(volumes, key=lambda v: v.get("volume_number", 0))
+        last_end = None
+        for v in ordered:
+            s, e = v.get("realm_start_rank"), v.get("realm_end_rank")
+            if isinstance(s, int) and isinstance(e, int) and e < s:
+                add(Issue("REALM-04", "medium", None,
+                          f"第{v.get('volume_number')}卷区间逆序({s}>{e})", "卷末档 ≥ 卷初档"))
+            if last_end is not None and isinstance(s, int) and s < last_end:
+                add(Issue("REALM-04", "medium", None,
+                          f"第{v.get('volume_number')}卷起点{s} < 上卷终点{last_end}（境界回退）",
+                          "下一卷起点应 ≥ 上一卷终点"))
+            if isinstance(e, int):
+                last_end = e
+
+
+def lint_chapters(
+    chapters: list[dict], cfg: DabaiConfig, *,
+    realm_max: int | None = None,
+    realm_range: tuple[int | None, int | None] | None = None,
+    volumes: list[dict] | None = None,
+    golden_finger_name: str = "",
+) -> LinterReport:
+    """对一卷章纲跑全部大白文规则（含境界脊柱 REALM 闸门）。
+
+    realm_max:   境界体系最高档；realm_range: 本卷 (start,end) 区间；volumes: 卷列表（跨卷单调检查）。
+    """
     report = LinterReport()
     add = report.issues.append
+    _lint_realm(chapters, add, realm_max, realm_range, volumes)
 
     # ── 逐章规则 ──────────────────────────────────────────────────────────────
     for ch in chapters:
@@ -99,6 +150,22 @@ def lint_chapters(chapters: list[dict], cfg: DabaiConfig) -> LinterReport:
         if not ch.get("yaqu_setup", "").strip():
             add(Issue("DB-04", "high", num, "yaqu_setup 为空——爽点没有前置憋屈弹簧",
                       "补一句谁在压主角/什么不公"))
+        # DB-09 high：缺转折拍——情绪会硬跳
+        et = ch.get("emotion_turn", "").strip()
+        if not et:
+            add(Issue("DB-09", "high", num, "emotion_turn 为空——从憋屈到引爆缺『转折拍』，正文会情绪硬跳",
+                      "补情绪扳机：从X情绪→靠什么触发→转到Y情绪"))
+        elif "触发" not in et and "→" not in et and "听到" not in et and "看到" not in et:
+            add(Issue("DB-09", "medium", num, "emotion_turn 没有明确触发点——情绪转折缺扳机",
+                      "写清楚靠什么具体触发（一句话/一个细节/一声提示）"))
+        # DB-10 high：金手指觉醒章缺「疑→证→择」绑定节拍
+        if is_awakening_chapter(ch, golden_finger_name=golden_finger_name,
+                                golden_chapters=cfg.golden_chapters):
+            bind_msg = lint_bind_ladder(et)
+            if bind_msg:
+                add(Issue("DB-10", "high", num,
+                          "金手指觉醒章 emotion_turn 缺绑定节拍——正文易写成秒接受系统",
+                          bind_msg))
         # DB-05 high：章末钩子缺失/套话
         hook = ch.get("end_hook", "").strip()
         if not hook:

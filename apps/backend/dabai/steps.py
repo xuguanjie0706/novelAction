@@ -60,16 +60,47 @@ def _tail_of(batch: list[dict]) -> str:
     return (last.get("end_hook") or last.get("shuang_payoff") or "").strip()
 
 
+def _realm_max(ctx: dict) -> int | None:
+    levels = (ctx.get("power_ladder") or {}).get("levels") or []
+    ranks = [int(l.get("rank", 0)) for l in levels if str(l.get("rank", "")).strip()]
+    return max(ranks) if ranks else None
+
+
+def _enforce_realm(batch: list[dict], running: int, vr_hi: int | None, rmax: int | None) -> int:
+    """境界脊柱硬保证：本批每章 realm_rank 单调不减、不超卷末/体系上限。
+
+    模型若回退或漏填，直接拉到当前档（写库数据永不回退）。返回更新后的 running。
+    """
+    cap = min([x for x in (vr_hi, rmax) if x] or [10 ** 9])
+    for ch in batch:
+        rr = ch.get("realm_rank")
+        rr = rr if isinstance(rr, int) and rr >= running else running
+        rr = min(rr, cap)
+        ch["realm_rank"] = rr
+        running = rr
+    return running
+
+
 async def aiter_chapter_batches(
     ctx: dict, call: CallFn, cfg: DabaiConfig, target_volume: dict,
 ) -> AsyncIterator[tuple[list[dict], int, int]]:
-    """逐批生成目标卷章纲，yield (batch_chapters, batch_start, batch_end)。批间硬承接。"""
+    """逐批生成目标卷章纲，yield (batch_chapters, batch_start, batch_end)。
+
+    批间承接两条线：① 爽点钩子(prev_tail)；② 境界脊柱(realm_floor，单调不减、写库强保证)。
+    """
     planned = int(target_volume.get("planned_chapters", cfg.volume_chapters))
     ctx["_target_volume"] = target_volume
+    rmax = _realm_max(ctx)
+    vr_lo = target_volume.get("realm_start_rank") or 1
+    vr_hi = target_volume.get("realm_end_rank") or rmax
     accumulated: list[dict] = []
     prev_tail = ""
+    running = int(vr_lo)  # 主角当前境界档，跨批延续
     for bs, be in _batch_ranges(planned, cfg.chapter_batch_size):
-        ctx["_batch"] = {"batch_start": bs, "batch_end": be, "prev_tail": prev_tail}
+        ctx["_batch"] = {
+            "batch_start": bs, "batch_end": be,
+            "prev_tail": prev_tail, "realm_floor": running,
+        }
         batch = await run_step(
             "chapter_outlines", ctx, call, cfg,
             meta={"batch_start": bs, "batch_end": be},
@@ -78,6 +109,7 @@ async def aiter_chapter_batches(
             batch = []
         for i, ch in enumerate(batch):
             ch["chapter_number"] = len(accumulated) + i + 1
+        running = _enforce_realm(batch, running, vr_hi, rmax)  # 写库前强制单调
         accumulated.extend(batch)
         prev_tail = _tail_of(batch)
         yield batch, bs, be

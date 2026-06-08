@@ -142,14 +142,18 @@ def _detail(p: DabaiProject) -> dict:
         "volumes": [{"id": str(v.id), "volume_number": v.volume_number, "title": v.title,
                      "phase": v.phase, "planned_chapters": v.planned_chapters,
                      "big_beats": v.big_beats or [], "volume_climax": v.volume_climax,
-                     "end_hook": v.end_hook} for v in p.volumes],
+                     "end_hook": v.end_hook,
+                     "realm_start_rank": v.realm_start_rank, "realm_end_rank": v.realm_end_rank}
+                    for v in p.volumes],
         "chapter_outlines": [{
             "id": str(c.id), "chapter_number": c.chapter_number, "title": c.title,
-            "shuang_type": c.shuang_type, "yaqu_setup": c.yaqu_setup, "yinbao": c.yinbao,
+            "shuang_type": c.shuang_type, "yaqu_setup": c.yaqu_setup,
+            "emotion_turn": c.emotion_turn, "yinbao": c.yinbao,
             "shuang_payoff": c.shuang_payoff, "witnesses": c.witnesses or [],
             "end_hook": c.end_hook, "new_info_count": c.new_info_count,
             "involved_characters": c.involved_characters or [],
             "is_big_beat": c.is_big_beat, "expected_words": c.expected_words,
+            "realm_rank": c.realm_rank,
             "content": c.content, "status": c.status or "planned",
         } for c in p.chapter_outlines],
     }

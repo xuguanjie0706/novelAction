@@ -94,6 +94,8 @@ class DabaiPersister:
                 planned_chapters=int(v.get("planned_chapters", self.cfg.volume_chapters)),
                 big_beats=v.get("big_beats") or [],
                 volume_climax=v.get("volume_climax"), end_hook=v.get("end_hook"),
+                realm_start_rank=v.get("realm_start_rank"),
+                realm_end_rank=v.get("realm_end_rank"),
             )
             self.db.add(row)
             rows.append(row)
@@ -110,12 +112,14 @@ class DabaiPersister:
                 project_id=p.id, volume_id=self.first_volume_id,
                 chapter_number=int(ch.get("chapter_number", self._chapter_seq)),
                 title=ch.get("title"), shuang_type=ch.get("shuang_type"),
-                yaqu_setup=ch.get("yaqu_setup"), yinbao=ch.get("yinbao"),
+                yaqu_setup=ch.get("yaqu_setup"), emotion_turn=ch.get("emotion_turn"),
+                yinbao=ch.get("yinbao"),
                 shuang_payoff=ch.get("shuang_payoff"), witnesses=ch.get("witnesses") or [],
                 end_hook=ch.get("end_hook"), new_info_count=int(ch.get("new_info_count", 1)),
                 involved_characters=ch.get("involved_characters") or [],
                 is_big_beat=bool(ch.get("is_big_beat", False)),
                 expected_words=int(ch.get("expected_words", 2000)),
+                realm_rank=ch.get("realm_rank"),
             ))
         self.db.commit()
         return self._chapter_seq

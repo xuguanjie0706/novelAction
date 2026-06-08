@@ -18,6 +18,7 @@ CHAPTER_FIELDS = {
     "title": str,
     "shuang_type": str,        # 一等公民：本章爽点类型
     "yaqu_setup": str,         # 憋屈势能（爽点前置弹簧）
+    "emotion_turn": str,       # 转折拍：情绪扳机（从X情绪→靠什么触发→转到Y情绪）
     "yinbao": str,             # 引爆：怎么反转
     "shuang_payoff": str,      # 爽感量化（必须有观众/见证者）
     "witnesses": list,         # 见证者/被打脸者名单
@@ -26,12 +27,14 @@ CHAPTER_FIELDS = {
     "involved_characters": list,
     "is_big_beat": bool,       # 是否大爆点
     "expected_words": int,
+    "realm_rank": int,         # 主角本章境界档（全书单调不减）
 }
 
 STEP_CONTRACT: dict[str, dict[str, Any]] = {
     "benchmark": {
+        # 合并步：一次调用产出 benchmark + positioning 两块
         "shape": "object",
-        "required": ["topic", "reference_books", "style_profile"],
+        "required": ["benchmark", "positioning"],
     },
     "positioning": {
         "shape": "object",
@@ -39,21 +42,14 @@ STEP_CONTRACT: dict[str, dict[str, Any]] = {
                      "golden_three_strategy", "pace_type", "taboo_lines"],
     },
     "golden_finger": {
+        # 合并步：一次调用产出 golden_finger + power_ladder（力量体系）
         "shape": "object",
-        "required": ["name", "type", "core_ability", "upgrade_mechanism",
-                     "shuang_engine", "restriction"],
-    },
-    "power_ladder": {
-        "shape": "object",
-        "required": ["name", "levels"],
+        "required": ["golden_finger", "power_ladder"],
     },
     "factions": {
-        "shape": "list",
-        "item_required": ["name", "stance", "role"],
-    },
-    "characters": {
-        "shape": "list",
-        "item_required": ["name", "role", "tier"],
+        # 合并步：一次调用产出 factions + characters（阵营卡司）
+        "shape": "object",
+        "required": ["factions", "characters"],
     },
     "storylines": {
         "shape": "list",
@@ -110,6 +106,7 @@ def normalize_chapter(item: dict, idx: int, default_words: int = 2000) -> dict:
     out["title"] = (item.get("title") or f"第{idx + 1}章").strip()
     out["shuang_type"] = (item.get("shuang_type") or "").strip()
     out["yaqu_setup"] = (item.get("yaqu_setup") or "").strip()
+    out["emotion_turn"] = (item.get("emotion_turn") or "").strip()
     out["yinbao"] = (item.get("yinbao") or "").strip()
     out["shuang_payoff"] = (item.get("shuang_payoff") or "").strip()
     out["end_hook"] = (item.get("end_hook") or "").strip()
@@ -118,12 +115,24 @@ def normalize_chapter(item: dict, idx: int, default_words: int = 2000) -> dict:
     out["new_info_count"] = _coerce_int(item.get("new_info_count"), 1)
     out["is_big_beat"] = bool(item.get("is_big_beat", False))
     out["expected_words"] = _coerce_int(item.get("expected_words"), default_words)
+    rr = item.get("realm_rank")
+    out["realm_rank"] = _coerce_int(rr, 0) if rr not in (None, "") else None
     return out
 
 
+def _normalize_volume(v: dict) -> dict:
+    """卷级容错：境界区间矫正为整数（缺省 None，交由 linter / 后续补齐）。"""
+    for k in ("realm_start_rank", "realm_end_rank"):
+        val = v.get(k)
+        v[k] = _coerce_int(val, 0) if val not in (None, "") else None
+    return v
+
+
 def normalize_step(step: str, data: Any) -> Any:
-    """步骤级归一化入口。当前仅章纲需要深度容错，其余直接透传。"""
+    """步骤级归一化入口。章纲/卷需要境界字段容错，其余直接透传。"""
     if step == "chapter_outlines" and isinstance(data, list):
         return [normalize_chapter(it if isinstance(it, dict) else {}, i)
                 for i, it in enumerate(data)]
+    if step == "volumes" and isinstance(data, list):
+        return [_normalize_volume(v) if isinstance(v, dict) else v for v in data]
     return data

@@ -64,6 +64,7 @@ export default function DabaiWritePanel({
             <div className="mb-2 font-semibold text-gray-700">爽点节拍章纲</div>
             <dl className="space-y-2 text-gray-600">
               <Row k="憋屈" v={chapter.yaqu_setup} />
+              <Row k="转折" v={chapter.emotion_turn} />
               <Row k="引爆" v={chapter.yinbao} />
               <Row k="爽点" v={chapter.shuang_payoff} />
               <Row k="见证者" v={(chapter.witnesses ?? []).join('、')} />

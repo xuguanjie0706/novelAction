@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 from dabai.config import DabaiConfig
+from dabai.golden_finger_bind import chapter_outline_bind_block
 
 _SYS_BASE = (
     "你是有15年经验的番茄/七猫大白文主编，专精移动端碎片化爽文。\n"
@@ -70,30 +71,45 @@ def _benchmark_block(ctx: dict) -> str:
 
 # ── 各步 user prompt 构造 ────────────────────────────────────────────────────
 def benchmark(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
+    """合并步：一次调用同时产出『对标分析』+『立项定位』（定位须对齐对标）。
+
+    返回 JSON 顶层含 benchmark / positioning 两个子对象，pipeline 拆成两个 ctx 键。
+    """
     system = (
-        "你是网文市场分析编辑，熟悉番茄/起点/七猫各题材的热门作品与套路。\n"
-        "基于题材给出对标分析，帮助后续创作对齐市场。\n"
+        "你是网文市场分析 + 选题编辑，熟悉番茄/起点/七猫各题材的热门作品与套路。\n"
+        "请先做对标分析，再据此为本书做立项定位（定位必须对齐对标特征，不要自说自话）。\n"
         "★合规要求：只描述作品可借鉴的『特征』（卖点、套路、设定母题、文笔风格），"
         "严禁抄录任何作品的原文段落、具体情节或人物原名作为输出内容。\n"
         "只返回 JSON。"
     )
     user = (
         f"题材 / 一句话创意：{ctx['logline']}\n\n"
-        "给出 3-5 本同题材的对标作品分析（用你已知的有代表性的作品；只描述特征）。返回 JSON：\n"
+        "返回 JSON（顶层两块：benchmark 对标分析、positioning 立项定位，"
+        "positioning 要从 benchmark 推导而来）：\n"
         "{\n"
-        '  "topic": "提炼出的题材标签（如 系统流/吞噬流/赘婿打脸）",\n'
-        '  "reference_books": [\n'
-        '    {"title": "书名", "why_comparable": "为何对标", "core_appeal": "核心卖点/爽点",\n'
-        '     "setting_motif": "设定母题(金手指/世界观套路)", "style_note": "文笔特征(句式/节奏/叙事腔调)"}\n'
-        "  ],\n"
-        '  "style_profile": {\n'
-        '    "sentence_style": "句式(长短句/口语化程度)", "pacing": "节奏",\n'
-        '    "dialogue_density": "对话密度", "shuang_cadence": "爽点节奏(几章一爆)",\n'
-        '    "narration_voice": "叙事腔调"\n'
+        '  "benchmark": {\n'
+        '    "topic": "题材标签（如 系统流/吞噬流/赘婿打脸）",\n'
+        '    "reference_books": [\n'
+        '      {"title": "书名", "why_comparable": "为何对标", "core_appeal": "核心卖点/爽点",\n'
+        '       "setting_motif": "设定母题(金手指/世界观套路)", "style_note": "文笔特征(句式/节奏/腔调)"}\n'
+        "    ],\n"
+        '    "style_profile": {"sentence_style": "句式", "pacing": "节奏",\n'
+        '      "dialogue_density": "对话密度", "shuang_cadence": "爽点节奏(几章一爆)",\n'
+        '      "narration_voice": "叙事腔调"},\n'
+        '    "setting_conventions": ["该题材常见设定套路 2-4 条"],\n'
+        '    "tropes_to_use": ["值得用的爽点/桥段套路"],\n'
+        '    "pitfalls_to_avoid": ["容易翻车/读者反感的点"]\n'
         "  },\n"
-        '  "setting_conventions": ["该题材常见设定套路 2-4 条"],\n'
-        '  "tropes_to_use": ["值得用的爽点/桥段套路"],\n'
-        '  "pitfalls_to_avoid": ["容易翻车/读者反感的点"]\n'
+        '  "positioning": {\n'
+        '    "target_audience": "目标读者画像（对齐对标读者）",\n'
+        '    "shuang_pool": ["主打爽点类型 5-7 个，从 打脸/升级/获宝/扮猪吃虎/装逼/群嘲反转/收小弟/救场/扬名 选"],\n'
+        '    "face_slap_frequency": "打脸/爽点频率（呼应对标 shuang_cadence）",\n'
+        '    "golden_three_strategy": "黄金三章策略：第1章蓄憋屈、第2章金手指登场、第3章第一次大打脸",\n'
+        '    "pace_type": "fast",\n'
+        '    "emotional_arc": "情绪闭环节律（憋屈→反击→扬名）",\n'
+        '    "taboo_lines": ["3 条硬禁忌（可吸收对标 pitfalls_to_avoid）"],\n'
+        '    "writing_style": "plain"\n'
+        "  }\n"
         "}"
     )
     return system, user
@@ -119,69 +135,57 @@ def positioning(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
 
 
 def golden_finger(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
+    """合并步：一次产出 金手指 + 境界阶梯（两者同属力量体系，须自洽）。"""
     user = (
         f"{_ctx_brief(ctx)}\n"
         + _benchmark_block(ctx) + "\n"
-        "设计本书的金手指（大白文的爽点引擎，必须当章见效、能持续产出爽点）。"
-        "可借鉴对标的设定母题，但要有自己的差异化。返回 JSON：\n"
+        "一次设计好本书的【力量体系】——金手指 + 与之匹配的境界阶梯。"
+        "金手指要当章见效、能持续产出爽点；境界要清晰可数、和金手指的升级机制自洽。"
+        "可借鉴对标设定母题，但要差异化。返回 JSON（两块）：\n"
         "{\n"
-        '  "name": "金手指名称",\n'
-        '  "type": "类型（系统/吞噬/重生/天赋/老爷爷/签到…可组合）",\n'
-        '  "core_ability": "核心能力（一句话说清主角靠它能干什么）",\n'
-        '  "upgrade_mechanism": "怎么靠它变强（量化的升级路径，便于读者数着爽）",\n'
-        '  "shuang_engine": "怎么持续产生爽点（越强的敌人/越稀有的宝越爽 在哪体现）",\n'
-        '  "restriction": "限制（防止主角无敌到没张力，但不能是会劝退读者的长期代价）",\n'
-        '  "signature_lines": ["1-2句标志性提示音/口头禅"]\n'
-        "}"
-    )
-    return _SYS_BASE, user
-
-
-def power_ladder(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
-    user = (
-        f"{_ctx_brief(ctx)}\n"
-        + _benchmark_block(ctx) + "\n"
-        "设计清晰可数的境界阶梯（升级爽的标尺，名字要好记、层级要分明）。返回 JSON：\n"
-        "{\n"
-        '  "name": "体系名称",\n'
-        '  "levels": [\n'
-        '    {"rank": 1, "name": "境界名", "desc": "一句话特征+突破条件"}\n'
-        "  ]\n"
+        '  "golden_finger": {\n'
+        '    "name": "金手指名称",\n'
+        '    "type": "类型（系统/吞噬/重生/天赋/老爷爷/签到…可组合）",\n'
+        '    "core_ability": "核心能力（一句话）",\n'
+        '    "upgrade_mechanism": "怎么靠它变强（量化升级路径，且要呼应下面的境界阶梯）",\n'
+        '    "shuang_engine": "怎么持续产生爽点（越强越稀有越爽 在哪体现）",\n'
+        '    "restriction": "限制（防无敌没张力，但不能是劝退读者的长期代价）",\n'
+        '    "signature_lines": ["1-2句标志性提示音/口头禅"]\n'
+        "  },\n"
+        '  "power_ladder": {\n'
+        '    "name": "体系名称",\n'
+        '    "levels": [{"rank": 1, "name": "境界名", "desc": "一句话特征+突破条件"}]\n'
+        "  }\n"
         "}\n"
-        "要求 6-8 个大境界，rank 从 1 递增。"
+        "境界要求 6-8 个大境界，rank 从 1 递增。"
     )
     return _SYS_BASE, user
 
 
 def factions(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
+    """合并步：一次产出 势力 + 人物（阵营卡司，人物须落在势力里、关系自洽）。"""
     user = (
-        f"{_ctx_brief(ctx)}\n\n"
-        "设计 3-5 个势力。大白文势力的作用是『提供压迫主角的土壤』和『打脸对象的来源』。返回 JSON 数组：\n"
-        "[\n"
-        "  {\n"
-        '    "name": "势力名",\n'
-        '    "stance": "主角方/压迫方/中立资源/神秘势力",\n'
-        '    "role": "在爽点循环里扮演什么（谁压迫主角、谁是打脸靶子土壤）",\n'
-        '    "power_tier": "最高战力档",\n'
-        '    "note": "前期/后期作用"\n'
-        "  }\n"
-        "]"
-    )
-    return _SYS_BASE, user
-
-
-def characters(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
-    user = (
-        f"{_ctx_brief(ctx)}\n\n"
-        "设计核心人物。大白文必须有：1个扮猪吃虎的主角、1个以上前期打脸对象、1个女主、若干工具人配角。返回 JSON 数组：\n"
-        "[\n"
-        "  {\n"
-        '    "name": "姓名", "role": "主角/打脸对象/女主/导师/工具人配角",\n'
-        '    "tier": "核心/配角",\n'
-        '    "start_realm": "起始境界", "persona": "性格（一句话）",\n'
-        '    "function": "在爽点循环里的功能（打脸靶子/救场/感情锚点/埋钩子）"\n'
-        "  }\n"
-        "]\n"
+        f"{_ctx_brief(ctx)}\n"
+        + _benchmark_block(ctx) + "\n"
+        "一次设计好本书的【阵营卡司】——势力 + 人物，两者要咬合："
+        "人物要分属设计好的势力，打脸对象要来自压迫方势力。返回 JSON（两块）：\n"
+        "{\n"
+        '  "factions": [\n'
+        "    {\n"
+        '      "name": "势力名", "stance": "主角方/压迫方/中立资源/神秘势力",\n'
+        '      "role": "在爽点循环里扮演什么（谁压迫主角、谁是打脸靶子土壤）",\n'
+        '      "power_tier": "最高战力档", "note": "前期/后期作用"\n'
+        "    }\n"
+        "  ],\n"
+        '  "characters": [\n'
+        "    {\n"
+        '      "name": "姓名", "role": "主角/打脸对象/女主/导师/工具人配角",\n'
+        '      "tier": "核心/配角", "start_realm": "起始境界", "persona": "性格（一句话）",\n'
+        '      "function": "在爽点循环里的功能（打脸靶子/救场/感情锚点/埋钩子）"\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+        "势力 3-5 个；人物必须含：1个扮猪吃虎的主角、≥1个前期打脸对象、1个女主、若干工具人；"
         "主角额外带 desire（最强欲望）、wound（憋屈来源）、golden_finger 字段。"
     )
     return _SYS_BASE, user
@@ -196,11 +200,23 @@ def storylines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
     return _SYS_BASE, user
 
 
+def _ladder_block(ctx: dict) -> str:
+    """境界体系档位清单（供卷/章对齐 realm rank）。"""
+    levels = (ctx.get("power_ladder") or {}).get("levels") or []
+    if not levels:
+        return ""
+    items = "　".join(f"{l.get('rank')}={l.get('name')}" for l in levels)
+    return f"\n【境界体系档位（realm_rank 必须用这里的数字）】{items}\n"
+
+
 def volumes(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
+    levels = (ctx.get("power_ladder") or {}).get("levels") or []
+    max_rank = max((int(l.get("rank", 0)) for l in levels), default=cfg.volume_count + 1)
     user = (
-        f"{_ctx_brief(ctx)}\n\n"
+        f"{_ctx_brief(ctx)}\n"
+        + _ladder_block(ctx) + "\n"
         f"把全书拆成 {cfg.volume_count} 卷，每卷 {cfg.volume_chapters} 章。"
-        "每卷给出爽点大节拍与卷末高潮。返回 JSON 数组：\n"
+        "每卷给出爽点大节拍、卷末高潮，以及【主角境界区间】。返回 JSON 数组：\n"
         "[\n"
         "  {\n"
         '    "volume_number": 1, "title": "第1卷 卷名",\n'
@@ -208,9 +224,14 @@ def volumes(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         f'    "planned_chapters": {cfg.volume_chapters},\n'
         '    "big_beats": ["本卷2-3个大爆点（打脸/越级/夺宝）"],\n'
         '    "volume_climax": "卷末高潮（最大的一次打脸或翻盘）",\n'
-        '    "end_hook": "卷末钩子（勾下一卷）"\n'
+        '    "end_hook": "卷末钩子（勾下一卷）",\n'
+        '    "realm_start_rank": 1, "realm_end_rank": 2\n'
         "  }\n"
         "]\n"
+        "★境界硬规则★：realm_start_rank / realm_end_rank 用上面档位的数字；"
+        f"全书从第1卷起单调上升，最高不超过 {max_rank}；"
+        "每卷 realm_end_rank ≥ realm_start_rank；下一卷 realm_start_rank = 上一卷 realm_end_rank（首尾相接，禁止回退）；"
+        "开局卷升幅要小（1-2 档），别一卷暴涨。\n"
         "第1卷必须是新手村开局：退婚/被辱→觉醒金手指→当众打脸扬名。"
     )
     return _SYS_BASE, user
@@ -235,13 +256,33 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
             f"「{prev_tail[:120]}」。本批第{bs}章 yaqu_setup 必须顺着它起，"
             "不得另起炉灶、不得回到已解决的旧危机。\n"
         )
+    # 境界脊柱：本卷区间 + 本批起步 floor（禁止回退）
+    vr_lo = vol.get("realm_start_rank")
+    vr_hi = vol.get("realm_end_rank")
+    realm_floor = batch.get("realm_floor")  # 上一批末章境界档
+    realm_block = ""
+    if vr_lo or vr_hi or realm_floor:
+        floor = realm_floor or vr_lo or 1
+        realm_block = (
+            "\n【境界脊柱（硬约束，违反即判 REALM 回退）】\n"
+            f"  本卷主角境界区间：第 {vr_lo or '?'} 档 → 第 {vr_hi or '?'} 档。\n"
+            f"  本批起步：主角已在第 {floor} 档，本批每章 realm_rank ★只能 ≥ {floor}★、"
+            "且全批单调不减、不得超过本卷 realm_end_rank。\n"
+            "  境界提升要循序渐进（通常几章升一档），禁止忽高忽低、禁止写回低境界。\n"
+        )
     system = _SYS_BASE + (
         "\n\n【章纲专项 · 爽点节拍器】\n"
         "本任务的核心不是『欲望-障碍-选择-代价』那套精品文链路——"
         "★明确禁止给主角的爽点强加代价/后遗症★。大白文的章是：\n"
-        "憋屈势能(yaqu_setup) → 爽点引爆(yinbao) → 爽感反馈(shuang_payoff，必须有观众) → 强钩子(end_hook)。\n"
-        "先在脑中排好整卷的爽点类型序列（相邻章不重复、强度阶梯上升、黄金三章必有强爽点），再逐章展开。"
+        "憋屈势能(yaqu_setup) → 【转折拍 emotion_turn：情绪扳机】 → 爽点引爆(yinbao) → "
+        "爽感反馈(shuang_payoff，必须有观众) → 强钩子(end_hook)。\n"
+        "★转折拍是关键★：从憋屈到引爆之间必须有一个『扳机』——主角情绪从隐忍/被动 靠一个具体触发点"
+        "（一句羞辱、一个细节、一段闪念、一声金手指提示）转到出手/反击，"
+        "这样正文才不会情绪硬跳。金手指首次觉醒章还须写清『疑→证→择』绑定节拍（见下方硬约束）。"
+        "先排好整卷爽点序列，再逐章展开。"
     )
+    gf_name = (ctx.get("golden_finger") or {}).get("name", "")
+    bind_block = chapter_outline_bind_block(gf_name) if bs <= cfg.golden_chapters else ""
     user = (
         f"{_ctx_brief(ctx)}\n"
         + _benchmark_block(ctx) + "\n"
@@ -249,7 +290,8 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         f"生成第 {bs}～{be} 章章纲（本批 {batch_count} 章）。\n"
         f"本卷大爆点：{vol.get('big_beats')}\n本卷卷末高潮：{vol.get('volume_climax')}\n"
         f"可用人物：{chars}\n可用爽点类型：{pool}\n"
-        + carry +
+        + _ladder_block(ctx)
+        + carry + realm_block + bind_block +
         "硬约束：\n"
         f"1. 黄金前 {cfg.golden_chapters} 章（仅当本批含第1章时）：第1章蓄憋屈+留金手指钩子，第2章金手指见效，第3章第一次当众大打脸。\n"
         "2. 相邻两章 shuang_type 不得相同；每 "
@@ -263,6 +305,7 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         f'  "chapter_number": {bs}, "title": "第X章 标题(≤10字)",\n'
         '  "shuang_type": "本章爽点类型(从可用类型选)",\n'
         '  "yaqu_setup": "憋屈势能：谁在压主角/什么不公",\n'
+        '  "emotion_turn": "转折拍：从【情绪】→【触发】→【情绪】；金手指觉醒章须含疑→证→择（如 从恍惚→疑为鬼叫→倒计时/锁链松→赌命提取）",\n'
         '  "yinbao": "引爆：主角怎么靠金手指反转",\n'
         '  "shuang_payoff": "爽感量化：当着谁的面、爽在哪、对方什么反应",\n'
         '  "witnesses": ["见证者/被打脸者(≥1人)"],\n'
@@ -270,8 +313,11 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         '  "new_info_count": 1,\n'
         '  "involved_characters": ["出场人物(用已知人物名)"],\n'
         '  "is_big_beat": false,\n'
-        '  "expected_words": 2000\n'
-        "}"
+        '  "expected_words": 2000,\n'
+        '  "realm_rank": 1\n'
+        "}\n"
+        "★realm_rank★ = 本章结束时主角的境界档（用上面体系数字）；本批内单调不减、"
+        "落在本卷区间内、不得低于本批起步档。"
     )
     return system, user
 
@@ -279,11 +325,11 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
 # ── 分发 ─────────────────────────────────────────────────────────────────────
 _BUILDERS = {
     "benchmark": benchmark,
-    "positioning": positioning,
+    # 注：positioning / power_ladder / characters 为合并步的 derived 键，
+    # 由 carrier（benchmark / golden_finger / factions）一次产出，不单独 build。
+    "positioning": positioning,  # 保留以兼容潜在的拆分调用，pipeline 实际不调用
     "golden_finger": golden_finger,
-    "power_ladder": power_ladder,
     "factions": factions,
-    "characters": characters,
     "storylines": storylines,
     "volumes": volumes,
     "chapter_outlines": chapter_outlines,

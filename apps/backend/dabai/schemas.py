@@ -29,6 +29,10 @@ CHAPTER_FIELDS = {
 }
 
 STEP_CONTRACT: dict[str, dict[str, Any]] = {
+    "benchmark": {
+        "shape": "object",
+        "required": ["topic", "reference_books", "style_profile"],
+    },
     "positioning": {
         "shape": "object",
         "required": ["target_audience", "shuang_pool", "face_slap_frequency",

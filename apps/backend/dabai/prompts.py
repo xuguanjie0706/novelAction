@@ -43,10 +43,66 @@ def _ctx_brief(ctx: dict) -> str:
     return "\n".join(parts)
 
 
+def _benchmark_block(ctx: dict) -> str:
+    """对标分析注入块：下游各步对齐对标特征（但禁止照抄任何作品情节/原句）。"""
+    bm = ctx.get("benchmark") or {}
+    if not bm:
+        return ""
+    books = "、".join(b.get("title", "") for b in (bm.get("reference_books") or [])[:5])
+    sp = bm.get("style_profile") or {}
+    style = "｜".join(
+        f"{k}:{sp[k]}" for k in
+        ("sentence_style", "pacing", "dialogue_density", "shuang_cadence", "narration_voice")
+        if sp.get(k)
+    )
+    conv = "、".join(bm.get("setting_conventions") or [])
+    tropes = "、".join(bm.get("tropes_to_use") or [])
+    pit = "、".join(bm.get("pitfalls_to_avoid") or [])
+    return (
+        "\n【对标分析（生成须对齐这些特征；★只借鉴特征，禁止照抄任何作品的情节/人物/原句★）】\n"
+        f"  对标书：{books}\n"
+        + (f"  风格画像：{style}\n" if style else "")
+        + (f"  设定套路：{conv}\n" if conv else "")
+        + (f"  可用套路：{tropes}\n" if tropes else "")
+        + (f"  避坑：{pit}\n" if pit else "")
+    )
+
+
 # ── 各步 user prompt 构造 ────────────────────────────────────────────────────
+def benchmark(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
+    system = (
+        "你是网文市场分析编辑，熟悉番茄/起点/七猫各题材的热门作品与套路。\n"
+        "基于题材给出对标分析，帮助后续创作对齐市场。\n"
+        "★合规要求：只描述作品可借鉴的『特征』（卖点、套路、设定母题、文笔风格），"
+        "严禁抄录任何作品的原文段落、具体情节或人物原名作为输出内容。\n"
+        "只返回 JSON。"
+    )
+    user = (
+        f"题材 / 一句话创意：{ctx['logline']}\n\n"
+        "给出 3-5 本同题材的对标作品分析（用你已知的有代表性的作品；只描述特征）。返回 JSON：\n"
+        "{\n"
+        '  "topic": "提炼出的题材标签（如 系统流/吞噬流/赘婿打脸）",\n'
+        '  "reference_books": [\n'
+        '    {"title": "书名", "why_comparable": "为何对标", "core_appeal": "核心卖点/爽点",\n'
+        '     "setting_motif": "设定母题(金手指/世界观套路)", "style_note": "文笔特征(句式/节奏/叙事腔调)"}\n'
+        "  ],\n"
+        '  "style_profile": {\n'
+        '    "sentence_style": "句式(长短句/口语化程度)", "pacing": "节奏",\n'
+        '    "dialogue_density": "对话密度", "shuang_cadence": "爽点节奏(几章一爆)",\n'
+        '    "narration_voice": "叙事腔调"\n'
+        "  },\n"
+        '  "setting_conventions": ["该题材常见设定套路 2-4 条"],\n'
+        '  "tropes_to_use": ["值得用的爽点/桥段套路"],\n'
+        '  "pitfalls_to_avoid": ["容易翻车/读者反感的点"]\n'
+        "}"
+    )
+    return system, user
+
+
 def positioning(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
     user = (
-        f"一句话创意：{ctx['logline']}\n\n"
+        f"一句话创意：{ctx['logline']}\n"
+        + _benchmark_block(ctx) + "\n"
         "为这本大白文做立项定位。返回 JSON 对象：\n"
         "{\n"
         '  "target_audience": "目标读者画像（平台/年龄/口味）",\n'
@@ -64,8 +120,10 @@ def positioning(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
 
 def golden_finger(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
     user = (
-        f"{_ctx_brief(ctx)}\n\n"
-        "设计本书的金手指（大白文的爽点引擎，必须当章见效、能持续产出爽点）。返回 JSON：\n"
+        f"{_ctx_brief(ctx)}\n"
+        + _benchmark_block(ctx) + "\n"
+        "设计本书的金手指（大白文的爽点引擎，必须当章见效、能持续产出爽点）。"
+        "可借鉴对标的设定母题，但要有自己的差异化。返回 JSON：\n"
         "{\n"
         '  "name": "金手指名称",\n'
         '  "type": "类型（系统/吞噬/重生/天赋/老爷爷/签到…可组合）",\n'
@@ -81,7 +139,8 @@ def golden_finger(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
 
 def power_ladder(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
     user = (
-        f"{_ctx_brief(ctx)}\n\n"
+        f"{_ctx_brief(ctx)}\n"
+        + _benchmark_block(ctx) + "\n"
         "设计清晰可数的境界阶梯（升级爽的标尺，名字要好记、层级要分明）。返回 JSON：\n"
         "{\n"
         '  "name": "体系名称",\n'
@@ -163,6 +222,19 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
     n = vol.get("planned_chapters", cfg.volume_chapters)
     pool = "、".join(cfg.shuang_pool)
     chars = "、".join(c.get("name", "") for c in ctx.get("characters", []))
+    # 分批信息（由 iter_chapter_batches 注入 ctx['_batch']）
+    batch = ctx.get("_batch", {})
+    bs = int(batch.get("batch_start", 1))
+    be = int(batch.get("batch_end", n))
+    prev_tail = (batch.get("prev_tail") or "").strip()
+    batch_count = be - bs + 1
+    carry = ""
+    if prev_tail:
+        carry = (
+            f"\n【上一批结尾（硬性承接）】上一批最后一章的爽点收尾/钩子是："
+            f"「{prev_tail[:120]}」。本批第{bs}章 yaqu_setup 必须顺着它起，"
+            "不得另起炉灶、不得回到已解决的旧危机。\n"
+        )
     system = _SYS_BASE + (
         "\n\n【章纲专项 · 爽点节拍器】\n"
         "本任务的核心不是『欲望-障碍-选择-代价』那套精品文链路——"
@@ -171,21 +243,24 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         "先在脑中排好整卷的爽点类型序列（相邻章不重复、强度阶梯上升、黄金三章必有强爽点），再逐章展开。"
     )
     user = (
-        f"{_ctx_brief(ctx)}\n\n"
-        f"为《{vol.get('title', '第1卷')}》（phase={vol.get('phase')}）生成 {n} 章章纲。\n"
+        f"{_ctx_brief(ctx)}\n"
+        + _benchmark_block(ctx) + "\n"
+        f"为《{vol.get('title', '第1卷')}》（phase={vol.get('phase')}，全卷共 {n} 章）"
+        f"生成第 {bs}～{be} 章章纲（本批 {batch_count} 章）。\n"
         f"本卷大爆点：{vol.get('big_beats')}\n本卷卷末高潮：{vol.get('volume_climax')}\n"
-        f"可用人物：{chars}\n可用爽点类型：{pool}\n\n"
+        f"可用人物：{chars}\n可用爽点类型：{pool}\n"
+        + carry +
         "硬约束：\n"
-        f"1. 黄金前 {cfg.golden_chapters} 章：第1章蓄憋屈+留金手指钩子，第2章金手指见效，第3章第一次当众大打脸。\n"
+        f"1. 黄金前 {cfg.golden_chapters} 章（仅当本批含第1章时）：第1章蓄憋屈+留金手指钩子，第2章金手指见效，第3章第一次当众大打脸。\n"
         "2. 相邻两章 shuang_type 不得相同；每 "
         f"{cfg.big_beat_every} 章至少一个 is_big_beat=true 的大爆点。\n"
         "3. shuang_payoff 必须写明『当着谁的面、爽在哪』，witnesses 至少 1 人（爽点必须有观众）。\n"
         f"4. 每章 new_info_count ≤ {cfg.max_new_info_per_chapter}（一次只引入一个新设定/新人物/新名词）。\n"
         "5. end_hook 必须具体（更强敌人登场/更大机缘/打脸预告），禁用『悬念丛生』『让人期待』套话。\n"
         "6. 禁止给主角爽点强加 choice_cost / 后遗症 / 道德负担。\n\n"
-        f"返回 JSON 数组，{n} 个元素，每个：\n"
+        f"返回 JSON 数组，{batch_count} 个元素（第{bs}～{be}章），每个：\n"
         "{\n"
-        '  "chapter_number": 1, "title": "第X章 标题(≤10字)",\n'
+        f'  "chapter_number": {bs}, "title": "第X章 标题(≤10字)",\n'
         '  "shuang_type": "本章爽点类型(从可用类型选)",\n'
         '  "yaqu_setup": "憋屈势能：谁在压主角/什么不公",\n'
         '  "yinbao": "引爆：主角怎么靠金手指反转",\n'
@@ -203,6 +278,7 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
 
 # ── 分发 ─────────────────────────────────────────────────────────────────────
 _BUILDERS = {
+    "benchmark": benchmark,
     "positioning": positioning,
     "golden_finger": golden_finger,
     "power_ladder": power_ladder,

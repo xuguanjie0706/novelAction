@@ -38,6 +38,11 @@ from app.models.generation_job import GenerationJob
 from app.models.email_login_code import EmailLoginCode
 from app.models.outline_issue_log import OutlineIssueLog
 from app.models.quality_root_cause_log import QualityRootCauseLog
+# 大白文独立分支（dabai_* 表，与精品文主链路隔离）
+from app.models.dabai import (
+    DabaiProject, DabaiVolume, DabaiChapterOutline,
+    DabaiFaction, DabaiCharacter, DabaiStoryline,
+)
 
 __all__ = [
     "Project",
@@ -80,4 +85,10 @@ __all__ = [
     "EmailLoginCode",
     "OutlineIssueLog",
     "QualityRootCauseLog",
+    "DabaiProject",
+    "DabaiVolume",
+    "DabaiChapterOutline",
+    "DabaiFaction",
+    "DabaiCharacter",
+    "DabaiStoryline",
 ]

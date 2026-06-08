@@ -1,28 +1,32 @@
-"""编排薄壳：串联所有 step、累积上下文、跑 linter、落 JSON 产物。
+"""编排薄壳（异步）：串联 step、累积上下文、跑 linter、产出事件流 / JSON。
 
-薄壳只负责：步骤分发 + 上下文累积 + 异常处理 + 产物组装。
-不写业务 prompt（在 prompts.py）、不写校验细节（在 schemas.py / linter.py）。
+三个入口：
+  - aiter_bootstrap(cfg, call)：**异步生成器**，逐步 yield 事件（SSE 路由增量落库+流式）。
+  - collect_bootstrap(cfg, call)：消费事件流组装 BootstrapResult（非流式）。
+  - run_bootstrap(cfg)：同步封装（CLI），内部 asyncio.run + DabaiLLM 注入。
+
+`call` 是注入式异步调用器（见 steps.CallFn）。薄壳只做分发/累积/异常，不碰 DB、不写 prompt。
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, AsyncIterator
 
 from dabai import linter, steps
 from dabai.config import DabaiConfig
-from dabai.llm_client import DabaiLLM, LLMError
+from dabai.steps import CallFn, DabaiStepError
 
 logger = logging.getLogger("dabai.pipeline")
 
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 
-# 章纲步用特化入口，其余走通用 run_step
-_SPECIAL: dict[str, Callable] = {
-    "chapter_outlines": steps.run_chapter_outlines,
+_SETTING_STEPS = {
+    "benchmark", "positioning", "golden_finger", "power_ladder",
+    "factions", "characters", "storylines", "volumes",
 }
 
 
@@ -31,20 +35,68 @@ def _slug(text: str) -> str:
     return keep or "untitled"
 
 
-class BootstrapResult:
-    """一次运行的完整产物 + 事件日志。"""
+# ── 注入式调用器工厂 ─────────────────────────────────────────────────────────
+def dabai_llm_call(cfg: DabaiConfig) -> CallFn:
+    """mock / CLI：用 DabaiLLM（同步）包成异步 call。"""
+    from dabai.llm_client import DabaiLLM
+    llm = DabaiLLM(cfg)
 
+    async def call(step: str, system: str, user: str, meta: dict | None) -> Any:
+        return await asyncio.to_thread(llm.generate_json, step, system, user, meta)
+
+    return call
+
+
+# ── 异步事件生成器（流式核心）────────────────────────────────────────────────
+async def aiter_bootstrap(cfg: DabaiConfig, call: CallFn) -> AsyncIterator[dict]:
+    """逐步执行并 yield 事件（schema 见 README / 路由）。"""
+    ctx: dict[str, Any] = {"logline": cfg.logline}
+    failed: list[str] = []
+    yield {"event": "bootstrap_start", "steps": cfg.active_steps()}
+
+    for step in cfg.active_steps():
+        yield {"event": "step_start", "step": step}
+        try:
+            if step in _SETTING_STEPS:
+                data = await steps.run_step(step, ctx, call, cfg)
+                ctx[step] = data
+                yield {"event": "step_done", "step": step, "data": data,
+                       "count": len(data) if isinstance(data, list) else 1}
+            elif step == "chapter_outlines":
+                vols = ctx.get("volumes") or []
+                if not vols:
+                    raise DabaiStepError("章纲步缺少卷骨架")
+                all_ch: list[dict] = []
+                async for batch, bs, be in steps.aiter_chapter_batches(ctx, call, cfg, vols[0]):
+                    all_ch.extend(batch)
+                    yield {"event": "chapter_batch", "data": batch,
+                           "batch_start": bs, "batch_end": be}
+                ctx["chapter_outlines"] = all_ch
+                yield {"event": "step_done", "step": step, "data": all_ch,
+                       "count": len(all_ch)}
+        except DabaiStepError as exc:
+            failed.append(step)
+            yield {"event": "step_error", "step": step, "message": str(exc)}
+            logger.error("步骤 %s 失败，链路中断：%s", step, exc)
+            break
+
+    report = None
+    chapters = ctx.get("chapter_outlines")
+    if chapters:
+        report = linter.lint_chapters(chapters, cfg).as_dict()
+        yield {"event": "linter_done", "data": report}
+
+    yield {"event": "bootstrap_end", "ctx": ctx,
+           "linter_report": report, "failed_steps": failed}
+
+
+# ── 非流式产物 ────────────────────────────────────────────────────────────────
+class BootstrapResult:
     def __init__(self, cfg: DabaiConfig):
         self.cfg = cfg
         self.ctx: dict[str, Any] = {"logline": cfg.logline}
-        self.events: list[dict] = []
         self.linter_report: dict | None = None
         self.failed_steps: list[str] = []
-
-    def emit(self, event: str, **kw):
-        rec = {"event": event, "ts": round(time.time(), 3), **kw}
-        self.events.append(rec)
-        logger.info("%s %s", event, {k: v for k, v in kw.items() if k != "data"})
 
     def to_json(self) -> dict:
         return {
@@ -52,10 +104,11 @@ class BootstrapResult:
             "meta": {
                 "volume_count": self.cfg.volume_count,
                 "volume_chapters": self.cfg.volume_chapters,
-                "mock": self.cfg.mock,
-                "model": self.cfg.model,
+                "chapter_batch_size": self.cfg.chapter_batch_size,
+                "mock": self.cfg.mock, "model": self.cfg.model,
                 "failed_steps": self.failed_steps,
             },
+            "benchmark": self.ctx.get("benchmark"),
             "positioning": self.ctx.get("positioning"),
             "golden_finger": self.ctx.get("golden_finger"),
             "power_ladder": self.ctx.get("power_ladder"),
@@ -65,48 +118,27 @@ class BootstrapResult:
             "volumes": self.ctx.get("volumes"),
             "chapter_outlines": self.ctx.get("chapter_outlines"),
             "linter_report": self.linter_report,
-            "events": self.events,
         }
 
     def save(self) -> Path:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         path = OUTPUT_DIR / f"bootstrap_{_slug(self.cfg.logline)}.json"
-        path.write_text(
-            json.dumps(self.to_json(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        path.write_text(json.dumps(self.to_json(), ensure_ascii=False, indent=2),
+                        encoding="utf-8")
         return path
 
 
-def run_bootstrap(cfg: DabaiConfig) -> BootstrapResult:
-    """执行完整大白文 bootstrap 闭环。"""
+async def collect_bootstrap(cfg: DabaiConfig, call: CallFn) -> BootstrapResult:
+    """消费事件流组装 BootstrapResult（非流式 web / CLI 共用）。"""
     result = BootstrapResult(cfg)
-    llm = DabaiLLM(cfg)
-    result.emit("bootstrap_start", logline=cfg.logline, mock=cfg.mock,
-                steps=cfg.active_steps())
-
-    for step in cfg.active_steps():
-        result.emit("step_start", step=step)
-        try:
-            runner = _SPECIAL.get(step)
-            data = (runner(result.ctx, llm, cfg) if runner
-                    else steps.run_step(step, result.ctx, llm, cfg))
-            result.ctx[step] = data
-            count = len(data) if isinstance(data, list) else 1
-            result.emit("step_done", step=step, item_count=count)
-        except LLMError as exc:
-            result.failed_steps.append(step)
-            result.emit("step_error", step=step, message=str(exc))
-            logger.error("步骤 %s 失败，链路中断：%s", step, exc)
-            break
-
-    # ── 章纲 linter 闸门 ──────────────────────────────────────────────────────
-    chapters = result.ctx.get("chapter_outlines")
-    if chapters:
-        report = linter.lint_chapters(chapters, cfg)
-        result.linter_report = report.as_dict()
-        result.emit("linter_done", status=report.status,
-                    score=report.score(), issues=len(report.issues))
-
-    result.emit("bootstrap_end", failed=result.failed_steps)
+    async for ev in aiter_bootstrap(cfg, call):
+        if ev["event"] == "bootstrap_end":
+            result.ctx = ev["ctx"]
+            result.linter_report = ev.get("linter_report")
+            result.failed_steps = ev.get("failed_steps", [])
     return result
+
+
+def run_bootstrap(cfg: DabaiConfig) -> BootstrapResult:
+    """同步封装（CLI）：DabaiLLM 注入 + asyncio.run。"""
+    return asyncio.run(collect_bootstrap(cfg, dabai_llm_call(cfg)))

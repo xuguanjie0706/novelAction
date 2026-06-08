@@ -9,6 +9,7 @@ import { useAuthStore } from './store/authStore'
 
 const LoginPage = lazy(() => import('./pages/LoginPage'))
 const FanqiePage = lazy(() => import('./pages/FanqiePage'))
+const DabaiPage = lazy(() => import('./pages/DabaiPage'))
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage'))
 const BookshelfPage = lazy(() => import('./pages/BookshelfPage'))
 const ProjectDetailPage = lazy(() => import('./pages/ProjectDetailPage'))
@@ -144,6 +145,14 @@ export default function App() {
           element={
             <PrivateRoute>
               {withSuspense(<FanqiePage />)}
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/dabai"
+          element={
+            <PrivateRoute>
+              {withSuspense(<DabaiPage />)}
             </PrivateRoute>
           }
         />

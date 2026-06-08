@@ -13,6 +13,34 @@ from dabai.config import DabaiConfig
 
 PROTAGONIST = "林凡"
 
+_BENCHMARK = {
+    "topic": "系统流 / 吞噬流升级打脸",
+    "reference_books": [
+        {"title": "（对标·系统升级流代表作）", "why_comparable": "同为系统外挂+越级打脸",
+         "core_appeal": "数值化升级、当众打脸、扮猪吃虎", "setting_motif": "签到/吞噬式金手指 + 清晰境界阶梯",
+         "style_note": "短句多、对话密、节奏极快、解释直给"},
+        {"title": "（对标·吞噬流代表作）", "why_comparable": "吞噬万物获得力量的爽感引擎相同",
+         "core_appeal": "越强越稀有越爽、当众吞掉对手依仗", "setting_motif": "吞噬转化 + 反噬限制",
+         "style_note": "爽点前置、章末强钩子、口语化"},
+        {"title": "（对标·废柴逆袭流代表作）", "why_comparable": "开局退婚/被辱蓄憋屈再逆袭",
+         "core_appeal": "黄金三章打脸、扬名立威", "setting_motif": "宗门外门白眼 + 天才反派土壤",
+         "style_note": "憋屈—反击—扬名的三章情绪闭环"},
+    ],
+    "style_profile": {
+        "sentence_style": "短句为主、口语化、少环境描写",
+        "pacing": "极快，憋屈不拖、爽点前置",
+        "dialogue_density": "高，靠对话推进冲突",
+        "shuang_cadence": "每章一小爽点，每5章一大爆点",
+        "narration_voice": "贴主角的爽感视角，解释直给、不留白",
+    },
+    "setting_conventions": [
+        "金手指当章见效、可量化升级", "境界阶梯清晰可数(炼气→…)",
+        "开局退婚/被逐/被夺资源蓄憋屈", "天才反派当打脸靶子",
+    ],
+    "tropes_to_use": ["当众打脸", "扮猪吃虎", "越级吞噬碾压", "夺回遗物立威", "黄金三章定调"],
+    "pitfalls_to_avoid": ["主角窝囊超过一章", "金手指迟迟不见效", "一章塞太多新设定", "情绪硬跳无铺垫"],
+}
+
 _POSITIONING = {
     "target_audience": "16-28 岁男性，番茄/七猫移动端碎片化读者，偏好升级打脸爽文",
     "shuang_pool": ["打脸", "升级", "获宝", "扮猪吃虎", "装逼", "群嘲反转", "收小弟"],
@@ -204,8 +232,16 @@ def _hook_for(ch: int, n: int) -> str:
 
 
 # ── 分发表 ──────────────────────────────────────────────────────────────────
-def get(step: str, cfg: DabaiConfig) -> Any:
+def get(step: str, cfg: DabaiConfig, meta: dict | None = None) -> Any:
+    meta = meta or {}
+    if step == "chapter_outlines":
+        # 分批：按 meta 的 batch_start/batch_end 切片整卷 mock 章纲
+        full = _chapter_outlines(cfg)
+        bs = int(meta.get("batch_start", 1))
+        be = int(meta.get("batch_end", len(full)))
+        return [c for c in full if bs <= c["chapter_number"] <= be]
     table = {
+        "benchmark": lambda: _BENCHMARK,
         "positioning": lambda: _POSITIONING,
         "golden_finger": lambda: _GOLDEN_FINGER,
         "power_ladder": lambda: _POWER_LADDER,
@@ -213,7 +249,6 @@ def get(step: str, cfg: DabaiConfig) -> Any:
         "characters": lambda: _CHARACTERS,
         "storylines": lambda: _STORYLINES,
         "volumes": lambda: _volumes(cfg),
-        "chapter_outlines": lambda: _chapter_outlines(cfg),
     }
     if step not in table:
         raise KeyError(f"mock 无此步骤：{step}")

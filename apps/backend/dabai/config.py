@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 # ── 链路顺序（编排器按此串行执行；--stop-after 可截断）──────────────────────────
 PIPELINE_STEPS: list[str] = [
+    "benchmark",         # 对标分析（找对标书 + 抽文笔/设定特征，全链注入）
     "positioning",       # 立项定位
     "golden_finger",     # 金手指外挂（大白文爽点引擎）
     "power_ladder",      # 境界阶梯
@@ -23,6 +24,7 @@ PIPELINE_STEPS: list[str] = [
 
 # ── 任务级采样温度（爽文要稳定结构 + 一点跳脱，整体低于精品文）────────────────
 STEP_TEMPERATURE: dict[str, float] = {
+    "benchmark": 0.4,    # 对标分析要稳，少幻觉
     "positioning": 0.5,
     "golden_finger": 0.7,
     "power_ladder": 0.4,
@@ -43,6 +45,7 @@ class DabaiConfig:
     # 规模
     volume_count: int = 6           # 第一版卷数（卷骨架步会生成这么多卷）
     volume_chapters: int = 30       # 每卷章数（章纲步展开这么多章）
+    chapter_batch_size: int = 30    # 章纲分批大小（每批一次 LLM 调用，支持大卷、规避 token 上限）
     first_volume_only: bool = True  # 章纲默认只展开第 1 卷（懒展开，省 token）
     # 大白文调性
     shuang_pool: list[str] = field(default_factory=lambda: [

@@ -9,6 +9,7 @@ import {
   Home,
   Link2,
   Trash2,
+  Zap,
 } from 'lucide-react'
 import { HOME_WORD_GOAL } from '../../data/homeMock'
 
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
   { id: 'wallet', label: '我的钱包', icon: Coins },
   { id: 'trash', label: '回收站', icon: Trash2 },
   { id: 'fanqie', label: '我的番茄', icon: Flame },
+  { id: 'dabai', label: '大白文', icon: Zap },
 ]
 
 export default function HomeSidebar({ todayWords, onNavigate, activeId = 'home' }: HomeSidebarProps) {

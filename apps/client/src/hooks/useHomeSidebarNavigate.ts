@@ -14,6 +14,7 @@ type SidebarTarget =
   | 'wallet'
   | 'trash'
   | 'fanqie'
+  | 'dabai'
 
 type ProjectTabTarget = 'write' | 'memory' | 'characters' | 'outline'
 
@@ -74,6 +75,9 @@ export function useHomeSidebarNavigate({
         return
       case 'fanqie':
         navigate('/fanqie')
+        return
+      case 'dabai':
+        navigate('/dabai')
         return
       case 'trash':
         toast('回收站暂无内容')

@@ -1,29 +1,39 @@
-"""每步生成函数：组装 prompt → 调 LLM/mock → parse → normalize → validate（带 1 次重试）。
+"""每步生成函数（异步）：组装 prompt → await call() → normalize → validate（重试1次）。
 
-每个 run_step 是无状态自由函数，输入累积 ctx，输出该步产物（dict 或 list）。
-章纲步在调用前把目标卷塞进 ctx['_target_volume']。
+`call` 是注入的异步调用器，签名 `async (step, system, user, meta) -> 已解析JSON`：
+  - 真实 web 路径注入 AIService._call_ai 封装（继承计费/日志/采样）；
+  - mock / CLI 注入 DabaiLLM 封装。
+章纲步支持分批（每批一次 call），批间用上一批结尾硬承接。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from dabai import prompts, schemas
 from dabai.config import DabaiConfig
-from dabai.llm_client import DabaiLLM, LLMError
 
 logger = logging.getLogger("dabai.steps")
 
+# 注入式异步调用器类型
+CallFn = Callable[[str, str, str, dict | None], Awaitable[Any]]
 
-def run_step(step: str, ctx: dict, llm: DabaiLLM, cfg: DabaiConfig) -> Any:
-    """执行单步并返回归一化后的产物。失败重试 1 次，仍失败则抛 LLMError。"""
+
+class DabaiStepError(RuntimeError):
+    """步骤生成/校验失败。"""
+
+
+async def run_step(
+    step: str, ctx: dict, call: CallFn, cfg: DabaiConfig, meta: dict | None = None,
+) -> Any:
+    """执行单步并返回归一化后的产物。失败重试 1 次，仍失败则抛 DabaiStepError。"""
     system, user = prompts.build(step, ctx, cfg)
     last_err = ""
     for attempt in range(2):
         try:
-            raw = llm.generate_json(step, system, user)
-        except LLMError as exc:
+            raw = await call(step, system, user, meta)
+        except Exception as exc:  # noqa: BLE001
             last_err = str(exc)
             logger.warning("%s 调用失败(attempt=%d)：%s", step, attempt + 1, exc)
             continue
@@ -33,28 +43,43 @@ def run_step(step: str, ctx: dict, llm: DabaiLLM, cfg: DabaiConfig) -> Any:
             return data
         last_err = "；".join(errors[:5])
         logger.warning("%s 校验未过(attempt=%d)：%s", step, attempt + 1, last_err)
-        # 重试时把校验问题回灌到 prompt 末尾
         user = user + f"\n\n上次输出有问题，请修正后重新返回完整 JSON：{last_err}"
-    raise LLMError(f"{step} 连续 2 次失败：{last_err}")
+    raise DabaiStepError(f"{step} 连续 2 次失败：{last_err}")
 
 
-def run_chapter_outlines(ctx: dict, llm: DabaiLLM, cfg: DabaiConfig) -> list[dict]:
-    """章纲步特化入口：选定目标卷（默认第 1 卷）后调用 run_step。
+def _batch_ranges(planned: int, size: int) -> list[tuple[int, int]]:
+    """切分章节区间，如 (60,30) → [(1,30),(31,60)]。"""
+    size = max(5, size)
+    return [(s, min(s + size - 1, planned)) for s in range(1, planned + 1, size)]
 
-    懒展开理念：默认只展开 first volume；可由 cfg.first_volume_only 控制。
-    """
-    vols = ctx.get("volumes") or []
-    if not vols:
-        raise LLMError("章纲步缺少卷骨架（volumes 为空）")
-    target = vols[0]
-    ctx["_target_volume"] = target
-    chapters = run_step("chapter_outlines", ctx, llm, cfg)
-    # 截断/对齐到计划章数
-    n = int(target.get("planned_chapters", cfg.volume_chapters))
-    if len(chapters) > n:
-        chapters = chapters[:n]
-    # 章号重排，保证连续
-    for i, ch in enumerate(chapters):
-        ch["chapter_number"] = i + 1
+
+def _tail_of(batch: list[dict]) -> str:
+    if not batch:
+        return ""
+    last = batch[-1]
+    return (last.get("end_hook") or last.get("shuang_payoff") or "").strip()
+
+
+async def aiter_chapter_batches(
+    ctx: dict, call: CallFn, cfg: DabaiConfig, target_volume: dict,
+) -> AsyncIterator[tuple[list[dict], int, int]]:
+    """逐批生成目标卷章纲，yield (batch_chapters, batch_start, batch_end)。批间硬承接。"""
+    planned = int(target_volume.get("planned_chapters", cfg.volume_chapters))
+    ctx["_target_volume"] = target_volume
+    accumulated: list[dict] = []
+    prev_tail = ""
+    for bs, be in _batch_ranges(planned, cfg.chapter_batch_size):
+        ctx["_batch"] = {"batch_start": bs, "batch_end": be, "prev_tail": prev_tail}
+        batch = await run_step(
+            "chapter_outlines", ctx, call, cfg,
+            meta={"batch_start": bs, "batch_end": be},
+        )
+        if not isinstance(batch, list):
+            batch = []
+        for i, ch in enumerate(batch):
+            ch["chapter_number"] = len(accumulated) + i + 1
+        accumulated.extend(batch)
+        prev_tail = _tail_of(batch)
+        yield batch, bs, be
+    ctx.pop("_batch", None)
     ctx.pop("_target_volume", None)
-    return chapters

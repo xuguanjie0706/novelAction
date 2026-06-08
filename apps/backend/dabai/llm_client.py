@@ -21,6 +21,11 @@ class LLMError(RuntimeError):
     """LLM 调用 / 解析失败。"""
 
 
+def parse_json(raw: Any) -> Any:
+    """模块级 JSON 解析（剥 ```围栏 + 截取数组/对象）。供 AIService 桥接复用。"""
+    return DabaiLLM._parse_json(raw)
+
+
 class DabaiLLM:
     """轻量 LLM 封装。一个实例对应一次 bootstrap 运行。"""
 
@@ -31,22 +36,30 @@ class DabaiLLM:
             self._client = self._build_client()
 
     def _build_client(self):
-        if not self.config.base_url or not self.config.api_key:
+        if not self.config.base_url:
             raise LLMError(
-                "真实模式需要 DABAI_BASE_URL 与 DABAI_API_KEY；"
-                "或用 --mock 离线跑通。"
+                "真实模式缺少 base_url：经 API 调用时由所选模型/线路解析；"
+                "命令行直跑请设 DABAI_BASE_URL，或用 --mock 离线跑通。"
             )
         try:
             from openai import OpenAI
         except ImportError as exc:  # pragma: no cover
             raise LLMError("缺少 openai 包：pip install openai") from exc
-        return OpenAI(base_url=self.config.base_url, api_key=self.config.api_key)
+        return OpenAI(
+            base_url=self.config.base_url,
+            api_key=(self.config.api_key or "not-required"),
+        )
 
     # ── 对外主接口 ────────────────────────────────────────────────────────────
-    def generate_json(self, step: str, system: str, user: str) -> Any:
-        """调用 LLM（或 mock）并返回解析后的 JSON（dict 或 list）。"""
+    def generate_json(
+        self, step: str, system: str, user: str, meta: dict | None = None,
+    ) -> Any:
+        """调用 LLM（或 mock）并返回解析后的 JSON（dict 或 list）。
+
+        meta: 步骤级附加信息（如章纲分批的 batch_start/batch_end），mock 据此切片。
+        """
         if self.config.mock:
-            raw = mock_responses.get(step, self.config)
+            raw = mock_responses.get(step, self.config, meta or {})
         else:
             raw = self._call_real(step, system, user)
         return self._parse_json(raw)

@@ -168,6 +168,57 @@ def test_no_false_positive_on_legitimate_revive():
     assert not any("青羽" in i.message for i in issues)
 
 
+def test_declared_deaths_drive_lifecycle_when_regex_misses():
+    """结构化生死声明：正文无杀戮动词、正则抽不到，但 deaths 声明仍触发 LIFE-01。"""
+    rows = [
+        # 两章正文都不含杀戮动词，纯靠 declared_deaths
+        ChapterTextRow(2, "叶辰在乱战中倒下，再也没能起身", "n2",
+                       involved_character_ids=["su"], declared_deaths=["苏云"]),
+        ChapterTextRow(5, "尘埃落定，往事终成定局", "n5",
+                       involved_character_ids=["su"], declared_deaths=["苏云"]),
+    ]
+    appearances = {"su": [2, 5]}
+    timeline = build_timeline(_CHARS, rows)
+    issues = lint_lifecycle(timeline, appearances, window_lo=1, window_hi=30)
+    assert any(i.rule_id == "LIFE-01" for i in issues)
+
+
+def test_declared_revive_clears_death_no_false_positive():
+    """声明复活解除死亡：第2章死、第4章 revives 声明、第5章再死 → 不报 LIFE-01。"""
+    rows = [
+        ChapterTextRow(2, "苏云陨落", "n2", involved_character_ids=["su"], declared_deaths=["苏云"]),
+        ChapterTextRow(4, "苏云竟然回来了", "n4", involved_character_ids=["su"], declared_revives=["苏云"]),
+        ChapterTextRow(5, "苏云这次是真的去了", "n5", involved_character_ids=["su"], declared_deaths=["苏云"]),
+    ]
+    appearances = {"su": [2, 4, 5]}
+    timeline = build_timeline(_CHARS, rows)
+    issues = lint_lifecycle(timeline, appearances, window_lo=1, window_hi=30)
+    assert not any(i.rule_id == "LIFE-01" for i in issues)
+
+
+def test_life_issues_carry_chapter_number_for_repair():
+    """P1 修复回路：LIFE-01/02/ALIGN-01 须带本卷内章号，否则 build_repair_seed 会丢弃。
+
+    window_lo=31 模拟「本卷首章为全书第31章」：卷内章号 = 全书章号 - 31 + 1。
+    """
+    timeline, appearances = _report_timeline()
+    issues = lint_lifecycle(timeline, appearances, window_lo=31, window_hi=90)
+    by_rule = {i.rule_id: i for i in issues}
+    for rid in ("LIFE-01", "LIFE-02", "ALIGN-01"):
+        assert rid in by_rule, rid
+        iss = by_rule[rid]
+        assert isinstance(iss.chapter_number_in_volume, int)
+        assert iss.chapter_number_in_volume >= 1
+        assert iss.field  # 非空，供 repair 字段映射
+
+    from app.services.outline_linter.schemas import LinterReport
+    from app.services.outline_linter.repair_hints import build_repair_seed
+
+    seed = build_repair_seed(LinterReport(issues=issues))
+    # LIFE-01 再次死亡在全书第55章 → 卷内 55-31+1=25 章
+    assert 25 in seed["must_fix_chapter_numbers"]
+
+
 def test_kill_promise_window():
     timeline, _ = _report_timeline()
     promises = [{

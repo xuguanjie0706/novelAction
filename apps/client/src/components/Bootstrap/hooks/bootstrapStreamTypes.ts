@@ -79,7 +79,7 @@ export interface FanficStartMeta {
 
 export interface StartParams {
   logline: string
-  mode: 'sequential' | 'fanqie' | 'fanfic' | 'xianxia'
+  mode: 'sequential' | 'doupo' | 'fanfic' | 'xianxia'
   targetWords: number
   modelProfile: string
   llmProviderId?: string | null
@@ -137,22 +137,17 @@ export const SEQ_STEP_KEYS: StepKey[] = [
   'opening_contract', 'consistency',
 ]
 
-/** 番茄专属 Bootstrap 步骤列表（与通用线对齐，补全全部步骤）*/
-export const FANQIE_STEP_KEYS: StepKey[] = [
+/** 斗破·大白文玄幻线 Bootstrap 步骤列表（基于通用线；势力+卷级对立面合并为一个 factions 步事件；功法/法宝在人物后单独生成）*/
+export const DOUPO_STEP_KEYS: StepKey[] = [
   'positioning', 'project',
-  // Phase B：番茄创意设计
-  'contrast_design', 'golden_finger', 'face_slap_map', 'power_ladder',
-  // Phase C：世界构建（复用通用）
-  'factions', 'storylines', 'antagonist_ladder', 'characters',
-  'skills', 'items', 'settings',
-  // Phase D：卷骨架
-  'volumes',
-  // Phase E：节奏 + 情绪
-  'emotion_arc', 'villain_arc', 'rhythm_map',
-  // Phase F：记忆 / 伏笔 / 承诺
-  'memory', 'relations', 'core_mysteries', 'opening_contract',
-  // Phase G：校验
-  'consistency', 'signal_audit',
+  'power_systems',
+  'factions',
+  'storylines', 'characters',
+  'skills', 'items',
+  'settings',
+  'volumes', 'emotion_arc', 'villain_arc',
+  'memory', 'relations', 'core_mysteries',
+  'opening_contract', 'consistency',
 ]
 
 export const FANFIC_STEP_KEYS: StepKey[] = [
@@ -175,7 +170,7 @@ export const XIANXIA_STEP_KEYS: StepKey[] = [
 
 export function getStepKeys(mode: StartParams['mode']): StepKey[] {
   if (mode === 'xianxia') return XIANXIA_STEP_KEYS
-  if (mode === 'fanqie') return FANQIE_STEP_KEYS
+  if (mode === 'doupo') return DOUPO_STEP_KEYS
   if (mode === 'fanfic') return FANFIC_STEP_KEYS
   return SEQ_STEP_KEYS
 }

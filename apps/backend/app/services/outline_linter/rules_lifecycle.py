@@ -75,6 +75,10 @@ def lint_lifecycle(
     """
     issues: list[LinterIssue] = []
 
+    def _in_vol(global_ch: int) -> int:
+        """全书章号 → 本卷内章号（window_lo 即本卷首章全书章号）。供修复回路定位待修章。"""
+        return global_ch - window_lo + 1
+
     for char_id, events in timeline.items():
         if not events:
             continue
@@ -104,7 +108,8 @@ def lint_lifecycle(
                     f"（{d_prev.evidence}），第{d_cur.global_chapter}章再次被杀"
                     f"（{d_cur.evidence}），其间无复活/诈死交代"
                 ),
-                chapter_number_in_volume=None,
+                field="summary",
+                chapter_number_in_volume=_in_vol(d_cur.global_chapter),
                 node_id=d_cur.node_id,
                 suggestion=(
                     f"二选一：删除第{d_cur.global_chapter}章的再次死亡；"
@@ -138,7 +143,8 @@ def lint_lifecycle(
                         f"「{name}」已于第{first_death}章死亡，却出现在第{appear}章，"
                         f"其间无复活交代"
                     ),
-                    chapter_number_in_volume=None,
+                    field="summary",
+                    chapter_number_in_volume=_in_vol(appear),
                     suggestion=(
                         f"确认第{appear}章是否应有「{name}」；"
                         f"若需其登场，先补复活/诈死设定，否则替换为其他角色"
@@ -172,7 +178,8 @@ def lint_lifecycle(
                     f"（{ally.evidence}），第{death_after}章却被作为敌人/宿怨清算，"
                     f"其间无再叛/翻脸过渡"
                 ),
-                chapter_number_in_volume=None,
+                field="summary",
+                chapter_number_in_volume=_in_vol(death_after),
                 suggestion=(
                     f"在第{ally.global_chapter}—{death_after}章间补「{name}」"
                     f"再次倒戈/暴露真面目的过渡章；或改写其结局，避免主角滥杀盟友"

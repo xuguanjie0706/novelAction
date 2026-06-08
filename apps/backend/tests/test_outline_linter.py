@@ -365,3 +365,99 @@ def test_build_linter_fix_prompt_includes_neighbor_context():
     assert "身份暴露" in prompt
     assert "choice_cost" in prompt
 
+
+def test_cm_skips_heat_outside_current_volume():
+    """未展开卷上的 heat 章不在本卷 CM-02 中报错。"""
+    from app.services.outline_linter.rules_mysteries import lint_core_mysteries
+
+    chapters = [_ch(i) for i in range(1, 31)]
+    chapters[2].extra["foreshadow_ops"] = [
+        {"op": "lay", "name": "生母留下的血玉", "theme": "身世"},
+    ]
+    project_extra = {
+        "core_mysteries": [{
+            "name": "生母留下的血玉",
+            "mystery_type": "identity",
+            "lay_chapter": 3,
+            "heat_chapters": [85, 160],
+            "reveal_chapter": 255,
+        }],
+    }
+
+    issues = lint_core_mysteries(
+        None, "pid", chapters, volume_start_global=1, project_extra=project_extra,
+    )
+    assert not [i for i in issues if i.rule_id == "CM-02"]
+
+
+def test_cm_flags_lay_missing_in_current_volume():
+    from app.services.outline_linter.rules_mysteries import lint_core_mysteries
+
+    chapters = [_ch(i) for i in range(1, 31)]
+    project_extra = {
+        "core_mysteries": [{
+            "name": "被挖斗骨的诅咒",
+            "mystery_type": "reversal",
+            "lay_chapter": 6,
+            "heat_chapters": [42],
+            "reveal_chapter": 125,
+        }],
+    }
+
+    issues = lint_core_mysteries(
+        None, "pid", chapters, volume_start_global=1, project_extra=project_extra,
+    )
+    cm01 = [i for i in issues if i.rule_id == "CM-01"]
+    cm02 = [i for i in issues if i.rule_id == "CM-02"]
+    assert len(cm01) == 1
+    assert "被挖斗骨的诅咒" in cm01[0].message
+    assert len(cm02) == 0
+
+
+def test_cm_skips_heat_outside_current_volume():
+    """未展开卷上的 heat 章不在本卷 CM-02 中报错。"""
+    from app.services.outline_linter.rules_mysteries import lint_core_mysteries
+
+    chapters = [_ch(i) for i in range(1, 31)]
+    chapters[2].extra["foreshadow_ops"] = [
+        {"op": "lay", "name": "生母留下的血玉", "theme": "身世"},
+    ]
+    project_extra = {
+        "core_mysteries": [{
+            "name": "生母留下的血玉",
+            "mystery_type": "identity",
+            "lay_chapter": 3,
+            "heat_chapters": [85, 160],
+            "reveal_chapter": 255,
+        }],
+    }
+
+    issues = lint_core_mysteries(
+        None, "pid", chapters, volume_start_global=1, project_extra=project_extra,
+    )
+    assert not [i for i in issues if i.rule_id == "CM-02"]
+
+
+def test_cm_flags_lay_missing_in_current_volume():
+    from app.services.outline_linter.rules_mysteries import lint_core_mysteries
+
+    chapters = [_ch(i) for i in range(1, 31)]
+    project_extra = {
+        "core_mysteries": [{
+            "name": "被挖斗骨的诅咒",
+            "mystery_type": "reversal",
+            "lay_chapter": 6,
+            "heat_chapters": [42],
+            "reveal_chapter": 125,
+        }],
+    }
+
+    issues = lint_core_mysteries(
+        None, "pid", chapters, volume_start_global=1, project_extra=project_extra,
+    )
+    cm01 = [i for i in issues if i.rule_id == "CM-01"]
+    cm02 = [i for i in issues if i.rule_id == "CM-02"]
+    assert len(cm01) == 1
+    assert "被挖斗骨的诅咒" in cm01[0].message
+    assert len(cm02) == 0
+

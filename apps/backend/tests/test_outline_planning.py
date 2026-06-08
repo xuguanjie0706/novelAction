@@ -3,10 +3,15 @@ from app.services.outline_planning import (
     TARGET_CHAPTERS_PER_VOLUME,
     TARGET_WORDS_PER_CHAPTER,
     WORD_ESTIMATE_RANGE,
+    chapter_word_budget_for_phase,
     chunk_by_volume,
+    doupo_volume_chapter_plan,
     normalize_chapter_count,
     normalize_volume_plan,
+    resolve_chapter_expected_words,
+    resolve_draft_word_target,
     target_total_chapters,
+    words_to_plan,
 )
 import json
 import uuid
@@ -44,6 +49,21 @@ from app.models.storyline import StoryLine
 from app.models.world_setting import WorldSetting
 
 
+def test_doupo_volume_chapter_plan_first_volume_thirty_rest_sixty():
+    """斗破线：第1卷30章，中间卷60章，末卷取余；总和等于 words_to_plan 总章数。"""
+    tw = 1_200_000
+    base = words_to_plan(tw)
+    plan = doupo_volume_chapter_plan(tw)
+    quotas = plan["chapter_quotas"]
+
+    assert plan["total_volumes"] == base["total_volumes"]
+    assert plan["total_chapters"] == base["total_chapters"]
+    assert sum(quotas) == base["total_chapters"]
+    assert quotas[0] == MIN_CHAPTERS_PER_VOLUME
+    if len(quotas) >= 3:
+        assert quotas[1:-1] == [TARGET_CHAPTERS_PER_VOLUME] * (len(quotas) - 2)
+
+
 def test_normalize_chapter_count_rounds_to_thirty_chapter_units():
     assert normalize_chapter_count(15) == MIN_CHAPTERS_PER_VOLUME
     assert normalize_chapter_count(44) == MIN_CHAPTERS_PER_VOLUME
@@ -62,6 +82,24 @@ def test_scale_targets_match_long_novel_word_counts():
     assert target_total_chapters("medium") == 540
     assert target_total_chapters("long") == 660
     assert target_total_chapters("epic") == 870
+
+
+def test_resolve_chapter_expected_words_never_below_dynamic():
+    dynamic = chapter_word_budget_for_phase(
+        "opening", "fast", has_emotional_beat=True, is_fanqie=True,
+    )
+    assert dynamic >= 1900
+    assert resolve_chapter_expected_words(1500, dynamic, is_fanqie=True) == dynamic
+    assert resolve_chapter_expected_words(2400, dynamic, is_fanqie=True) == 2400
+
+
+def test_resolve_draft_word_target_opening_plain_floor():
+    assert resolve_draft_word_target(
+        1500, phase="opening", writing_style="plain", is_fanqie=True,
+    ) == 2100
+    assert resolve_draft_word_target(
+        2300, phase="rising", writing_style="plain", is_fanqie=True,
+    ) == 2300
 
 
 def test_medium_plan_is_lifted_to_nine_sixty_chapter_volumes():

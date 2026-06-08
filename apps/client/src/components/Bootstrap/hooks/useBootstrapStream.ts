@@ -87,7 +87,7 @@ export interface FanficStartMeta {
 
 export interface StartParams {
   logline: string
-  mode: 'sequential' | 'fanqie' | 'fanfic' | 'xianxia'
+  mode: 'sequential' | 'doupo' | 'fanfic' | 'xianxia'
   targetWords: number
   modelProfile: string
   llmProviderId?: string | null
@@ -144,22 +144,17 @@ const SEQ_STEP_KEYS: StepKey[] = [
   'opening_contract', 'consistency',
 ]
 
-/** 番茄专属 Bootstrap 步骤列表（与通用线对齐，补全全部步骤）*/
-const FANQIE_STEP_KEYS: StepKey[] = [
+/** 斗破·大白文玄幻线 Bootstrap 步骤列表（基于通用线；势力+卷级对立面合并为一个 factions 步事件；功法/法宝在人物后单独生成）*/
+const DOUPO_STEP_KEYS: StepKey[] = [
   'positioning', 'project',
-  // Phase B：番茄创意设计
-  'contrast_design', 'golden_finger', 'face_slap_map', 'power_ladder',
-  // Phase C：世界构建（复用通用）
-  'factions', 'storylines', 'antagonist_ladder', 'characters',
-  'skills', 'items', 'settings',
-  // Phase D：卷骨架
-  'volumes',
-  // Phase E：节奏 + 情绪
-  'emotion_arc', 'villain_arc', 'rhythm_map',
-  // Phase F：记忆 / 伏笔 / 承诺
-  'memory', 'relations', 'core_mysteries', 'opening_contract',
-  // Phase G：校验
-  'consistency', 'signal_audit',
+  'power_systems',                 // 单斗气主轴
+  'factions',                      // 势力 + 卷级对立面（合并，仅 emit 一个 factions 步事件）
+  'storylines', 'characters',
+  'skills', 'items',               // 人物后生成，精确挂人物 UUID
+  'settings',
+  'volumes', 'emotion_arc', 'villain_arc',
+  'memory', 'relations', 'core_mysteries',
+  'opening_contract', 'consistency',
 ]
 
 const FANFIC_STEP_KEYS: StepKey[] = [
@@ -182,7 +177,7 @@ const XIANXIA_STEP_KEYS: StepKey[] = [
 
 function getStepKeys(mode: StartParams['mode']): StepKey[] {
   if (mode === 'xianxia') return XIANXIA_STEP_KEYS
-  if (mode === 'fanqie') return FANQIE_STEP_KEYS
+  if (mode === 'doupo') return DOUPO_STEP_KEYS
   if (mode === 'fanfic') return FANFIC_STEP_KEYS
   return SEQ_STEP_KEYS
 }
@@ -356,9 +351,11 @@ export function useBootstrapStream() {
     }
   }, [])
 
-  /** 番茄图末步完成后拉取 run 快照收尾（兼容未 emit complete 的旧后端） */
+  /** 【遗留】番茄图末步（signal_audit）完成后拉取 run 快照收尾的兜底。
+   *  番茄线已下线、doupo/xianxia/sequential 均以 consistency + complete 正常收尾，
+   *  signal_audit 不再 emit，故此兜底实际不会触发；保留以兼容历史 run 重放。 */
   const tryFinalizeFanqieRun = useCallback(async () => {
-    if (streamCompleteRef.current || currentModeRef.current !== 'fanqie') return
+    if (streamCompleteRef.current) return
     const rid = runIdRef.current
     if (!rid) return
     try {
@@ -426,7 +423,8 @@ export function useBootstrapStream() {
       if (linterBlocked && (linterMsg || preview)) {
         setErrorMsg(linterMsg || String(preview))
       }
-      if (key === 'signal_audit' && currentModeRef.current === 'fanqie') {
+      if (key === 'signal_audit') {
+        // 番茄线已下线，signal_audit 不再 emit；保留兜底以兼容历史 run 重放
         void tryFinalizeFanqieRun()
       }
     } else if (event === 'error' || event === 'step_halted') {
@@ -635,7 +633,7 @@ export function useBootstrapStream() {
 
       // 根据快照中的 mode 还原步骤列表与 ref
       const runMode: StartParams['mode'] =
-        (run.mode === 'fanqie' || run.mode === 'fanfic' || run.mode === 'xianxia') ? run.mode : 'sequential'
+        (run.mode === 'doupo' || run.mode === 'fanfic' || run.mode === 'xianxia') ? run.mode : 'sequential'
       currentModeRef.current = runMode
       setSteps(getStepKeys(runMode).map(k => makeStep(k)))
       setActiveLogline((run.logline || opts?.loglineHint || '').trim())

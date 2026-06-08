@@ -44,28 +44,28 @@ def _resolve_realm_rank(
 
 
 def _fallback_boss_ranks(ctx: dict, n_volumes: int) -> list[tuple[int, int]]:
-    """每卷 (debut_rank, climax_rank) 兜底（主角卷末 +1，单调递增）。"""
+    """每卷 (debut_rank, climax_rank) 兜底，**0-based** 与 ``rank_map`` 一致。"""
     endpoints = compute_book_realm_endpoints(ctx)
     vol_ends = compute_vol_end_ranks(ctx, n_volumes)
     level_names: list[str] = list(ctx.get("power_level_names") or [])
     if not endpoints or not vol_ends or not level_names:
-        return [(0, 1)] * max(1, n_volumes)
+        return [(0, min(1, len(level_names) - 1))] * max(1, n_volumes)
 
-    book_start, end_rank, _ = endpoints
-    max_rank = len(level_names) - 1
+    book_start, end_rank, _ = endpoints  # 1-based（protagonist_progression）
+    max_idx = len(level_names) - 1
     pairs: list[tuple[int, int]] = []
     prev_climax = -1
     for i, protag_end in enumerate(vol_ends):
-        start_rank = book_start if i == 0 else vol_ends[i - 1]
-        climax = min(max(protag_end + 1, start_rank + 1), max_rank)
-        if climax <= prev_climax:
-            climax = min(prev_climax + 1, max_rank)
-        if climax < 0:
-            climax = min(i + 1, max_rank)
-        pairs.append((start_rank, climax))
-        prev_climax = climax
+        start_idx = (book_start - 1) if i == 0 else max(0, vol_ends[i - 1] - 1)
+        protag_end_idx = max(0, protag_end - 1)
+        climax_idx = min(max(protag_end_idx + 1, start_idx + 1), max_idx)
+        if climax_idx <= prev_climax:
+            climax_idx = min(prev_climax + 1, max_idx)
+        pairs.append((max(0, start_idx), climax_idx))
+        prev_climax = climax_idx
     if pairs:
-        pairs[-1] = (pairs[-1][0], max(pairs[-1][1], min(end_rank + 1, max_rank)))
+        end_idx = min(max(end_rank - 1, 0), max_idx)
+        pairs[-1] = (pairs[-1][0], max(pairs[-1][1], end_idx))
     return pairs
 
 
@@ -398,17 +398,34 @@ def lint_antagonist_roster_issues(
             continue
 
         char = char_by_name[expected_name]
-        peak = (char.extra or {}).get("peak_realm") if isinstance(char.extra, dict) else None
-        peak = peak or char.current_realm
-        peak_rank = _resolve_realm_rank(peak, rank_map, level_names, registry)
-        roster_rank = int(roster.get("realm_at_climax_rank", -1))
-        if roster_rank >= 0 and peak_rank >= 0 and peak_rank != roster_rank:
+        from app.services.bootstrap.character_planning import (
+            planning_peak_realm,
+            realms_equivalent,
+        )
+
+        peak = planning_peak_realm(char)
+        if not peak:
+            issues.append({
+                "severity": "medium",
+                "type": "planning_gap",
+                "description": (
+                    f"arc Boss「{expected_name}」缺少 peak_realm（规划对决境），"
+                    f"无法与第{vi + 1}卷登记表「{expected_realm}」对齐"
+                ),
+                "suggestion": f"在人物 extra.peak_realm 写入「{expected_realm}」",
+                "auto_detected": True,
+            })
+            continue
+
+        if expected_realm and not realms_equivalent(
+            peak, expected_realm, level_names=level_names, registry=registry,
+        ):
             issues.append({
                 "severity": "medium",
                 "type": "realm_mismatch",
                 "description": (
-                    f"人物「{expected_name}」peak 境界（rank={peak_rank}）"
-                    f"与登记表对决 rank={roster_rank} 不一致"
+                    f"人物「{expected_name}」peak_realm「{peak}」"
+                    f"与登记表对决境界「{expected_realm}」不一致"
                 ),
                 "suggestion": f"将人物 peak_realm 对齐为「{expected_realm}」",
                 "auto_detected": True,

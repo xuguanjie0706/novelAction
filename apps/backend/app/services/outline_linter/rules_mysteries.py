@@ -4,31 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.outline_linter.chapter_index import build_global_chapter_index
 from app.services.bootstrap.foreshadow_ops import mystery_op_covered
 from app.services.outline_linter.helpers import ChapterSnapshot
 from app.services.outline_linter.schemas import LinterIssue
-
-
-def _foreshadow_extra_for_global(
-    db: Any,
-    project_id: Any,
-    global_chapter: int,
-    node_to_global: dict[str, int],
-) -> dict:
-    from app.models import OutlineNode
-
-    for node in (
-        db.query(OutlineNode)
-        .filter(
-            OutlineNode.project_id == project_id,
-            OutlineNode.node_type == "chapter_plan",
-        )
-        .all()
-    ):
-        if node_to_global.get(str(node.id)) == global_chapter:
-            return dict(node.extra or {})
-    return {}
 
 
 def _chapter_snapshots_extra(chapters: list[ChapterSnapshot], global_start: int) -> dict[int, dict]:
@@ -36,6 +14,16 @@ def _chapter_snapshots_extra(chapters: list[ChapterSnapshot], global_start: int)
         global_start + ch.sort_order: dict(ch.extra or {})
         for ch in chapters
     }
+
+
+def _volume_global_chapters(
+    chapters: list[ChapterSnapshot],
+    volume_start_global: int,
+) -> set[int]:
+    """当前卷已展开 chapter_plan 对应的全书章号集合。"""
+    if not chapters:
+        return set()
+    return {volume_start_global + ch.sort_order for ch in chapters}
 
 
 def lint_core_mysteries(
@@ -46,13 +34,22 @@ def lint_core_mysteries(
     volume_start_global: int,
     project_extra: dict | None,
 ) -> list[LinterIssue]:
-    """校验 Project.extra.core_mysteries 与章纲伏笔字段。"""
+    """校验 Project.extra.core_mysteries 与当前卷已展开章纲的伏笔字段。
+
+    仅检查 lay / heat / resolve 章号落在本卷已展开 chapter_plan 范围内的条目，
+    未展开卷上的日程不在本卷 linter 中报错。
+    """
+    del db, project_id  # 卷内范围校验仅读当前 snapshots，不再跨卷查 DB
+
     issues: list[LinterIssue] = []
     mysteries = (project_extra or {}).get("core_mysteries") or []
     if not isinstance(mysteries, list) or not mysteries:
         return issues
 
-    node_to_global, max_global = build_global_chapter_index(db, project_id)
+    vol_globals = _volume_global_chapters(chapters, volume_start_global)
+    if not vol_globals:
+        return issues
+
     local_extra = _chapter_snapshots_extra(chapters, volume_start_global)
 
     has_identity = False
@@ -74,10 +71,8 @@ def lint_core_mysteries(
         if reveal:
             reveal_chapters.append(reveal)
 
-        if lay:
-            extra = local_extra.get(lay) or _foreshadow_extra_for_global(
-                db, project_id, lay, node_to_global
-            )
+        if lay and lay in vol_globals:
+            extra = local_extra.get(lay, {})
             if name and not mystery_op_covered(name, extra, "lay"):
                 issues.append(LinterIssue(
                     rule_id="CM-01",
@@ -91,11 +86,9 @@ def lint_core_mysteries(
                 ))
 
         for hc in heat_chapters:
-            if not isinstance(hc, int):
+            if not isinstance(hc, int) or hc not in vol_globals:
                 continue
-            extra = local_extra.get(hc) or _foreshadow_extra_for_global(
-                db, project_id, hc, node_to_global
-            )
+            extra = local_extra.get(hc, {})
             if name and not mystery_op_covered(name, extra, "heat"):
                 issues.append(LinterIssue(
                     rule_id="CM-02",
@@ -108,7 +101,13 @@ def lint_core_mysteries(
                     ),
                 ))
 
-        if lay and reveal and reveal < lay + 10:
+        if (
+            lay
+            and reveal
+            and lay in vol_globals
+            and reveal in vol_globals
+            and reveal < lay + 10
+        ):
             issues.append(LinterIssue(
                 rule_id="CM-03",
                 severity="critical",
@@ -117,10 +116,8 @@ def lint_core_mysteries(
                 suggestion="推迟揭晓章号或提前埋设章号，保证间隔至少10章",
             ))
 
-        if reveal and max_global > reveal:
-            extra = local_extra.get(reveal) or _foreshadow_extra_for_global(
-                db, project_id, reveal, node_to_global
-            )
+        if reveal and reveal in vol_globals:
+            extra = local_extra.get(reveal, {})
             if name and not mystery_op_covered(name, extra, "resolve"):
                 issues.append(LinterIssue(
                     rule_id="CM-04",
@@ -142,16 +139,16 @@ def lint_core_mysteries(
             suggestion="至少保留一条身份类核心谜题",
         ))
 
-    reveal_chapters.sort()
-    for i in range(1, len(reveal_chapters)):
-        if reveal_chapters[i] - reveal_chapters[i - 1] < 15:
+    reveals_in_vol = sorted(r for r in reveal_chapters if r in vol_globals)
+    for i in range(1, len(reveals_in_vol)):
+        if reveals_in_vol[i] - reveals_in_vol[i - 1] < 15:
             issues.append(LinterIssue(
                 rule_id="CM-06",
                 severity="low",
                 scope="volume",
                 message=(
                     f"两条核心谜题揭晓章相距仅 "
-                    f"{reveal_chapters[i] - reveal_chapters[i - 1]} 章（建议≥15）"
+                    f"{reveals_in_vol[i] - reveals_in_vol[i - 1]} 章（建议≥15）"
                 ),
                 suggestion="分散揭晓高潮",
             ))

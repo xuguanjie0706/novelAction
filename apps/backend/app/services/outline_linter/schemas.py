@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-LINTER_VERSION = "1.2.0"
+LINTER_VERSION = "1.2.1"
 
 
 @dataclass

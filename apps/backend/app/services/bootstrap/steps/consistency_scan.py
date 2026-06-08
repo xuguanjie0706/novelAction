@@ -254,7 +254,6 @@ async def gen_consistency_scan(svc: Any, project, ctx: dict) -> list:
 
     power_summary = ctx.get("power_summary", "（未设定）")
     faction_summary = ctx.get("faction_summary", "（未设定）")
-    char_realms = ctx.get("char_realms", {})
     char_names = ctx.get("char_names", [])
     skill_names = ctx.get("skill_names", [])
     item_names = ctx.get("item_names", [])
@@ -269,9 +268,9 @@ async def gen_consistency_scan(svc: Any, project, ctx: dict) -> list:
         if ladder:
             ladder_summary = format_ladder_summary(ladder)
 
-    char_realm_lines = "\n".join(
-        f"- {name}：境界={realm}" for name, realm in char_realms.items()
-    )
+    from app.services.bootstrap.character_planning import build_character_realm_audit_lines
+
+    char_realm_lines = build_character_realm_audit_lines(svc.db, project.id)
     hard_precheck_hint = ""
     if precheck_issues:
         hard_precheck_hint = (
@@ -300,7 +299,7 @@ async def gen_consistency_scan(svc: Any, project, ctx: dict) -> list:
 【势力档案摘要】
 {faction_summary}
 
-【人物+当前境界】
+【人物境界（现状 vs 规划）】
 {char_realm_lines or '（未设定）'}
 
 【人物列表】{', '.join(char_names)}
@@ -341,6 +340,13 @@ async def gen_consistency_scan(svc: Any, project, ctx: dict) -> list:
 4. 境界体系 protagonist_start_rank 与主角人物卡 current_realm 是否对应同一境界？
 5. 反派行动线与卷骨架 phase 标记是否对齐（反派明显占优的卷是否标记了 dark_hour/turning）？
 6. 各卷 volume_boss 是否与 antagonist_ladder / 人物库 arc 反派一致？Boss 动机是否与人物卡吻合？
+
+【境界分层铁律 — 禁止误报】
+- arc Boss 的 current_realm = 登场时境界（故事起点现状），允许低于本卷对决境。
+- extra.peak_realm / antagonist_ladder.realm_at_climax = 规划对决境；volume_boss_realm 须与登记表一致。
+- **不得**因 arc Boss 的 current_realm 低于 volume_boss_realm 而报 realm_mismatch。
+- 仅当 peak_realm 与登记表对决境界不一致，或 volume_boss_realm 与登记表不一致时，才报 realm_mismatch。
+
 如果没有发现矛盾，返回空数组 []。只返回JSON数组，不要任何解释。"""
 
     try:

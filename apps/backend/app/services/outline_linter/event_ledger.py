@@ -121,13 +121,20 @@ class LifecycleEvent:
 
 @dataclass
 class ChapterTextRow:
-    """供抽取器消费的章纲文本行（DB 无关，便于单测）。"""
+    """供抽取器消费的章纲文本行（DB 无关，便于单测）。
+
+    ``declared_deaths`` / ``declared_revives`` 为章纲结构化「生死声明」字段（角色名），
+    由作者/AI 显式填写。它们是**精确主信号**（无施害者/受害者歧义），与正文正则抽取
+    取**并集**——声明覆盖"明说了的"，正则兜底"写进正文却漏声明的"。
+    """
 
     global_chapter: int
     text: str
     node_id: str | None = None
     volume_index: int | None = None
     involved_character_ids: list[str] = field(default_factory=list)
+    declared_deaths: list[str] = field(default_factory=list)
+    declared_revives: list[str] = field(default_factory=list)
 
 
 def _evidence(text: str, start: int, end: int, pad: int = 8) -> str:
@@ -290,15 +297,78 @@ def extract_events_from_text(
     return out
 
 
+def _resolve_declared(
+    names: list[str] | None,
+    refs: list[CharacterRef],
+    event_type: str,
+) -> list[tuple[str, str, str, str]]:
+    """生死声明名单 → [(char_id, char_name, event_type, evidence)]（按角色名/别名匹配）。"""
+    if not names:
+        return []
+    by_name: dict[str, CharacterRef] = {}
+    for r in refs:
+        for nm in r.all_names():
+            by_name.setdefault(nm, r)
+    out: list[tuple[str, str, str, str]] = []
+    seen: set[str] = set()
+    for raw in names:
+        nm = (raw or "").strip()
+        if not nm:
+            continue
+        ref = by_name.get(nm)
+        if ref is None:  # 宽松包含匹配（声明名含已知名或反之）
+            for cand_nm, cand_ref in by_name.items():
+                if cand_nm in nm or nm in cand_nm:
+                    ref = cand_ref
+                    break
+        if ref is None or ref.id in seen:
+            continue
+        seen.add(ref.id)
+        out.append((ref.id, ref.name, event_type, f"声明:{nm}"))
+    return out
+
+
+def resolve_declared_events(
+    declared_deaths: list[str] | None,
+    declared_revives: list[str] | None,
+    characters: Iterable[CharacterRef],
+) -> list[tuple[str, str, str, str]]:
+    """把一章的结构化生死声明解析为事件元组（死亡 + 复活）。"""
+    refs = list(characters)
+    return (
+        _resolve_declared(declared_deaths, refs, EVENT_DEATH)
+        + _resolve_declared(declared_revives, refs, EVENT_REVIVE)
+    )
+
+
+def declared_from_extra(extra: Any) -> tuple[list[str], list[str]]:
+    """从 OutlineNode.extra 读出生死声明名单 (deaths_declared, revives_declared)。"""
+    e = extra if isinstance(extra, dict) else {}
+    deaths = [str(x).strip() for x in (e.get("deaths_declared") or []) if str(x).strip()]
+    revives = [str(x).strip() for x in (e.get("revives_declared") or []) if str(x).strip()]
+    return deaths, revives
+
+
 def build_timeline(
     characters: Iterable[CharacterRef],
     rows: Iterable[ChapterTextRow],
 ) -> dict[str, list[LifecycleEvent]]:
-    """构建 char_id → 按全书章号升序的事件列表。"""
+    """构建 char_id → 按全书章号升序的事件列表。
+
+    每章事件 = 正文正则抽取 ∪ 结构化生死声明，按 (char_id, event_type) 去重。
+    """
     chars = list(characters)
     timeline: dict[str, list[LifecycleEvent]] = {}
     for row in sorted(rows, key=lambda r: r.global_chapter):
-        for char_id, char_name, etype, evidence in extract_events_from_text(row.text, chars):
+        events = list(extract_events_from_text(row.text, chars))
+        events.extend(
+            resolve_declared_events(row.declared_deaths, row.declared_revives, chars)
+        )
+        seen_pair: set[tuple[str, str]] = set()
+        for char_id, char_name, etype, evidence in events:
+            if (char_id, etype) in seen_pair:
+                continue
+            seen_pair.add((char_id, etype))
             timeline.setdefault(char_id, []).append(
                 LifecycleEvent(
                     char_id=char_id,
@@ -398,6 +468,7 @@ def load_chapter_rows(db, project_id) -> list[ChapterTextRow]:
         g = node_to_global.get(str(node.id))
         if g is None:
             continue
+        decl_deaths, decl_revives = declared_from_extra(getattr(node, "extra", None))
         rows.append(
             ChapterTextRow(
                 global_chapter=g,
@@ -405,6 +476,8 @@ def load_chapter_rows(db, project_id) -> list[ChapterTextRow]:
                 node_id=str(node.id),
                 volume_index=vol_sort.get(str(node.parent_id)),
                 involved_character_ids=[str(x) for x in (node.involved_character_ids or [])],
+                declared_deaths=decl_deaths,
+                declared_revives=decl_revives,
             )
         )
     return rows

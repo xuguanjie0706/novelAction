@@ -13,6 +13,7 @@ from app.services.bootstrap.chapter_plan_batches import (
 )
 from app.services.bootstrap.chapter_plan_guard import existing_chapter_sort_orders
 from app.services.bootstrap.foreshadow_ops import prepare_chapter_foreshadow_for_node
+from app.services.bootstrap.steps.chapter_extra import build_chapter_extra
 from app.services.bootstrap.foreshadow_sync import sync_chapter_foreshadow
 from app.services.bootstrap.parse import parse_json
 from app.services.bootstrap.steps.phase_guidance import (
@@ -23,6 +24,7 @@ from app.services.llm_token_budgets import max_tokens_vol_expand_chapters
 from app.services.outline_planning import (
     build_book_budget_block,
     chapter_word_budget_for_phase,
+    resolve_chapter_expected_words,
     words_to_plan,
 )
 from app.services.xuanhuan_lexicon import (
@@ -30,9 +32,17 @@ from app.services.xuanhuan_lexicon import (
     is_xuanhuan_like_genre,
     sanitize_outline_chapter,
 )
+from app.services.bootstrap.chapter_plan_postcheck import build_batch_postcheck_retry_hint
+from app.services.bootstrap.life_ledger_expand import (
+    build_life_ledger_expand_block,
+    collect_prior_deaths,
+)
 from app.services.bootstrap.prompts.vol_chapter_plans_prompt import (
     build_carryover_seq_block,
+    build_chapter_beat_diversity_block,
     build_chapter_plan_generation_tail,
+    build_prev_batch_summary_block,
+    build_protagonist_psychology_block,
     fmt_storyline_names_block,
     fmt_written_summaries,
     plain_chapter_plan_addendum,
@@ -162,6 +172,11 @@ async def gen_vol_chapter_plans(
     quota_total_volumes = ctx.get("chapter_quota_total_volumes", plan["total_volumes"])
     quota_used = ctx.get("chapter_quota_used", 0)
 
+    from app.services.outline_linter.chapter_index import build_volume_start_map
+
+    vol_sort = int(volume_node.sort_order or 0)
+    volume_start_global = build_volume_start_map(svc.db, project.id).get(vol_sort, 1)
+
     vol_extra = volume_node.extra if isinstance(volume_node.extra, dict) else {}
     vol_prot_start = (vol_extra.get("protagonist_realm_start") or "").strip()
     vol_prot_end = (vol_extra.get("protagonist_realm_end") or "").strip()
@@ -203,37 +218,14 @@ async def gen_vol_chapter_plans(
     protagonist = ctx.get("protagonist", "主角")
     char_profiles = ctx.get("char_profiles", {})
 
-    # 主角心理档案（单独突出）
-    protag_psychology = ""
-    if protagonist in char_profiles:
-        p = char_profiles[protagonist]
-        if vol_prot_start or vol_prot_end:
-            realm_state = (
-                f"{vol_prot_start} → 本卷目标 {vol_prot_end}"
-                if vol_prot_start and vol_prot_end
-                else (vol_prot_end or vol_prot_start)
-            )
-        else:
-            realm_state = p.get("current_realm", "未知")
-        protag_psychology = (
-            f"\n【主角「{protagonist}」心理档案（章节行为的底层驱动器，最高优先级约束）】\n"
-            f"  境界状态：{realm_state} | 当前位置：{p.get('current_location', '未知')}\n"
-            f"  核心恐惧/创伤：{p.get('core_wound', '（未设定）')}\n"
-            f"  当前最强欲望：{p.get('current_desire', '（未设定）')}\n"
-            f"  价值观：{p.get('values', '（未设定）')}\n"
-            f"  人物弧线：{p.get('arc', '（未设定）')}\n"
-            f"  未暴露的秘密：{p.get('secrets', '（无）')}\n"
-        )
-        if vol_prot_end:
-            protag_psychology += (
-                f"  ⚠️ 本卷末主角须达到「{vol_prot_end}」；"
-                f"章纲 power_milestone 须在本卷内合理分配突破节点，禁止卷末仍停留在卷初境界。\n"
-            )
-        if vol_boss_realm:
-            protag_psychology += (
-                f"  ⚠️ 当卷 BOSS 境界「{vol_boss_realm}」；"
-                f"对决章节主角 effective 境界须接近卷末目标，禁止 rank 差距超过 2 档。\n"
-            )
+    # 主角心理档案（单独突出，prompt 拼装见 prompts 模块）
+    protag_psychology = build_protagonist_psychology_block(
+        protagonist,
+        char_profiles.get(protagonist),
+        vol_prot_start=vol_prot_start,
+        vol_prot_end=vol_prot_end,
+        vol_boss_realm=vol_boss_realm,
+    )
 
     # 人物阵容概览
     char_lines: list[str] = []
@@ -292,44 +284,38 @@ async def gen_vol_chapter_plans(
         if batch_start > 1:
             prev_vol_hook_block = ""
 
-        # 批次延续锚：传入前批完整大纲，确保第31章能真正承接第30章（而非仅看最后4章）
-        prev_summary = ""
-        last_batch_tail_cost = ""
-        if all_results:
-            full_lines: list[str] = []
-            for n in all_results:
-                ex = n.extra or {}
-                cost = ex.get("choice_cost", "")
-                end_hook = ex.get("end_hook", "")
-                want = ex.get("protagonist_want", "")
-                ch_num = n.sort_order + 1
-                # 紧凑单行：章号+标题+情感基调+摘要+代价/钩子
-                tail = cost or end_hook
-                full_lines.append(
-                    f"  第{ch_num}章《{n.title or ''}》"
-                    f"{('[' + n.emotional_tone + ']') if n.emotional_tone else ''}"
-                    f"  {n.summary or ''}｜欲望：{want}｜代价/钩子：{tail}"
-                )
-            last = all_results[-1]
-            last_ex = last.extra or {}
-            last_batch_tail_cost = (
-                last_ex.get("choice_cost", "")
-                or last_ex.get("end_hook", "")
-                or last.summary
-                or ""
-            )
-            prev_summary = (
-                f"\n【本卷前{len(all_results)}章完整大纲（续写须与之一脉相承）】\n"
-                + "\n".join(full_lines)
-                + f"\n  ⚠️ 本批第1章（第{batch_start}章）必须直接承接第{len(all_results)}章的结局："
-                f"「{last_batch_tail_cost[:120]}」，不得无视这个代价另起炉灶。"
-            )
+        # 批次延续锚：传入前批完整大纲，确保跨批/跨窗首章真正承接上一章（而非仅看末几章）
+        prev_summary, last_batch_tail_cost = build_prev_batch_summary_block(
+            all_results, batch_start,
+        )
 
         carryover_block = build_carryover_seq_block(
             batch_start=batch_start,
             batch_end=batch_end,
             last_batch_tail_cost=last_batch_tail_cost,
             protagonist_name=protagonist,
+        )
+
+        life_ledger_block = build_life_ledger_expand_block(
+            svc.db,
+            str(project.id),
+            prior_nodes=all_results,
+            volume_start_global=volume_start_global,
+            batch_start=batch_start,
+            batch_end=batch_end,
+        )
+        # 生成后确定性自检用：本批前已死且未复活的角色
+        life_char_refs, life_dead_before = collect_prior_deaths(
+            svc.db,
+            str(project.id),
+            prior_nodes=all_results,
+            volume_start_global=volume_start_global,
+            batch_start=batch_start,
+        )
+
+        beat_diversity_block = build_chapter_beat_diversity_block(
+            batch_start=batch_start,
+            batch_end=batch_end,
         )
 
         # 按章节区间注入细分节奏约束
@@ -424,6 +410,8 @@ async def gen_vol_chapter_plans(
             + phase_block             # 节奏约束
             + prev_summary            # 批次延续锚
             + carryover_block         # SEQ-01 章际衔接（本批内 + 跨批首章）
+            + life_ledger_block       # 角色生死账本 + 本批内 LIFE 自检
+            + beat_diversity_block    # 反同质化（对齐 duplicate_event QC）
             + budget_block            # 全书字数预算（防漂移）
             + fmt_storyline_names_block(storyline_ids_map)  # 精确故事线名映射（供 AI 原词填写）
             + build_chapter_plan_generation_tail(
@@ -436,10 +424,11 @@ async def gen_vol_chapter_plans(
 
         batch_data: list = []
         raw = ""
+        retry_hint = ""  # LIFE / CH-04 命中时注入定向修正提示（重试附加到 prompt 末尾）
         for gen_attempt in range(2):
             try:
                 raw = await svc._call_with_retry(
-                    system, prompt, task="bootstrap.vol_chapters",
+                    system, prompt + retry_hint, task="bootstrap.vol_chapters",
                     max_tokens=max_tokens_vol_expand_chapters(),
                 )
                 batch_data = parse_json(raw)
@@ -466,6 +455,30 @@ async def gen_vol_chapter_plans(
 
             actual_count = len(batch_data)
             if actual_count == batch_count:
+                if gen_attempt == 0:
+                    retry_hint, life_violations, cost_gaps = build_batch_postcheck_retry_hint(
+                        batch_data,
+                        batch_start=batch_start,
+                        char_refs=life_char_refs,
+                        dead_before=life_dead_before,
+                        volume_start_global=volume_start_global,
+                    )
+                    if retry_hint:
+                        if life_violations:
+                            logger.warning(
+                                "LIFE 卷内死而复死自检命中，注入修正提示重试 project=%s 卷=%s "
+                                "批次=%d-%d 违规=%d",
+                                project.id, volume_node.id, batch_start, batch_end,
+                                len(life_violations),
+                            )
+                        if cost_gaps:
+                            logger.warning(
+                                "CH-04 choice_cost 空字段自检命中，注入修正提示重试 project=%s 卷=%s "
+                                "批次=%d-%d 缺填=%s",
+                                project.id, volume_node.id, batch_start, batch_end,
+                                cost_gaps,
+                            )
+                        continue
                 break
             if gen_attempt == 0:
                 logger.warning(
@@ -528,7 +541,9 @@ async def gen_vol_chapter_plans(
                 volume_node.phase or "rising", pacing_val, has_slap, has_beat,
                 is_fanqie=is_fanqie,
             )
-            expected_words_val = ai_words if isinstance(ai_words, int) and 1500 <= ai_words <= 4000 else dynamic_words
+            expected_words_val = resolve_chapter_expected_words(
+                ai_words, dynamic_words, is_fanqie=is_fanqie,
+            )
             sort_order_val = ch_num - 1
             if sort_order_val in occupied_sort_orders:
                 logger.warning(
@@ -558,7 +573,7 @@ async def gen_vol_chapter_plans(
                 foreshadows_resolved=fs_resolved or None,
                 expected_words=expected_words_val,
                 sort_order=sort_order_val,
-                extra=_build_chapter_extra(item, is_fanqie),
+                extra=build_chapter_extra(item, is_fanqie),
             )
             svc.db.add(node)
             svc.db.flush()  # 让 node.id 可用，伏笔同步需要引用它
@@ -620,37 +635,3 @@ async def gen_vol_chapter_plans(
     ctx["chapter_quota_used"] = quota_used + max(0, len(all_results) - seed_count)
 
     return all_results
-
-
-def _build_chapter_extra(item: dict, is_fanqie: bool) -> dict:
-    """构建 OutlineNode.extra，番茄模式时追加爽感字段。"""
-    fs_ops, _, _, foreshadow_legacy = prepare_chapter_foreshadow_for_node(item)
-    base = {
-        "foreshadow": foreshadow_legacy,
-        "foreshadow_ops": fs_ops,
-        "promise_fulfilled": (item.get("promise_fulfilled") or "").strip(),
-        "end_hook": (item.get("end_hook") or "").strip(),
-        "has_face_slap": item.get("has_face_slap", False),
-        "has_emotional_beat": item.get("has_emotional_beat", False),
-        "protagonist_want": (item.get("protagonist_want") or "").strip(),
-        "protagonist_obstacle": (item.get("protagonist_obstacle") or "").strip(),
-        "protagonist_choice": (item.get("protagonist_choice") or "").strip(),
-        "choice_cost": (item.get("choice_cost") or "").strip(),
-        "villain_action": (item.get("villain_action") or "").strip(),
-        "supporting_spotlight": (item.get("supporting_spotlight") or "").strip(),
-        "reader_emotion_target": (item.get("reader_emotion_target") or "").strip(),
-        "bootstrap_generated": False,
-        "lazy_expanded": True,
-        "storyline_beat_ref": (item.get("storyline_beat_ref") or "").strip(),
-    }
-    if is_fanqie:
-        base.update({
-            "satisfaction_setup": (item.get("satisfaction_setup") or "").strip(),
-            "satisfaction_payoff": (item.get("satisfaction_payoff") or "").strip(),
-            "satisfaction_type": item.get("satisfaction_type") or None,
-            "next_chapter_bait": (item.get("next_chapter_bait") or "").strip(),
-            "face_slap_target": item.get("face_slap_target") or None,
-            "face_slap_audience": (item.get("face_slap_audience") or "").strip(),
-            "completion_risk": (item.get("completion_risk") or "").strip(),
-        })
-    return base

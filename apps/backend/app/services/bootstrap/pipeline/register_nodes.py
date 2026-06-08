@@ -63,76 +63,45 @@ def _register_all() -> None:
     register_node(NodeSpec(key="opening_contract", fn=node_opening_contract, seq=920, label="规划开局追读承诺..."))
     register_node(NodeSpec(key="consistency", fn=node_consistency, seq=940, label="全局一致性扫描..."))
 
-    # ── 番茄线 ───────────────────────────────────────────────
-    from app.services.bootstrap.graph_fanqie import (
-        node_antagonist_ladder as fanqie_antagonist_ladder,
-        node_audit as fanqie_audit,
-        node_ctx_bridge,
-        node_fanqie_formula,
-        node_fanqie_gate,
-        node_fanqie_positioning,
-        node_factions as fanqie_factions,
-        node_power_ladder,
-        node_project as fanqie_project,
-        node_promise_seeds as fanqie_promise_seeds,
-        node_rhythm as fanqie_rhythm,
-        node_settings as fanqie_settings,
-        node_storylines as fanqie_storylines,
-        node_volumes as fanqie_volumes,
+    # ── 斗破·大白文玄幻线（mode=doupo，基于通用线，零番茄耦合）────────────
+    # 番茄（fanqie）线已下线：其节点不再注册，graph_fanqie.py 文件保留为废弃存根。
+    # doupo 仅替换四处题材语义节点，其余复用上方通用 CORE。
+    from app.services.bootstrap.graph_doupo import (
+        node_doupo_factions_antagonist,
+        node_doupo_gate,
+        node_doupo_positioning,
+        node_doupo_power_axis,
+        node_doupo_world,
     )
+    from app.services.bootstrap.prompts.doupo_prompts import build_doupo_volumes_block
 
     register_node(NodeSpec(
-        key="positioning_fanqie", fn=node_fanqie_positioning, seq=100,
+        key="positioning_doupo", fn=node_doupo_positioning, seq=100,
         graph_id="positioning", is_positioning=True,
+        # 大纲质量增强：对共享 volumes 步骤挂斗破式 prompt hook（仅 doupo 图生效）
+        prompt_hooks=[PromptHook("volumes", build_doupo_volumes_block)],
     ))
     register_node(NodeSpec(
-        key="gate_positioning_fanqie", fn=node_fanqie_gate, seq=150,
+        key="gate_positioning_doupo", fn=node_doupo_gate, seq=150,
         graph_id="gate", interrupt_before=True,
     ))
-    register_node(NodeSpec(key="project_fanqie", fn=fanqie_project, seq=200, graph_id="project", replaces="project"))
-    # Phase B 合并：原 contrast_design + golden_finger_fanqie + face_slap_map_fanqie → fanqie_formula（-2 LLM）
     register_node(NodeSpec(
-        key="fanqie_formula", fn=node_fanqie_formula, seq=301,
-        label="设计爽文公式（落差+金手指+打脸地图）...",
+        key="power_axis_doupo", fn=node_doupo_power_axis, seq=400,
+        graph_id="power_systems", replaces="power_systems",
+        label="构建斗气阶位主轴（斗者→斗帝）...",
     ))
+    # 合并：势力 + 卷级对立面 一次 LLM（占 factions 槽，吞 antagonist_ladder）
+    # 功法/法宝改由通用 CORE skills_items 在人物后生成（精确挂 UUID），故 skip_core 不再排除 skills_items
     register_node(NodeSpec(
-        key="power_ladder", fn=node_power_ladder, seq=304,
-        label="构建权力阶梯（最小化世界观）...", replaces="power_systems",
-    ))
-    register_node(NodeSpec(key="ctx_bridge", fn=node_ctx_bridge, seq=305))
-    register_node(NodeSpec(
-        key="factions_fanqie", fn=fanqie_factions, seq=500,
+        key="factions_antagonist_doupo", fn=node_doupo_factions_antagonist, seq=500,
         graph_id="factions", replaces="factions",
+        label="生成势力 + 卷级对立面（合并·Boss挂靠真实势力）...",
     ))
     register_node(NodeSpec(
-        key="storylines_fanqie", fn=fanqie_storylines, seq=510,
-        graph_id="storylines", replaces="storylines",
-    ))
-    register_node(NodeSpec(
-        key="antagonist_ladder_fanqie", fn=fanqie_antagonist_ladder, seq=520,
-        graph_id="antagonist_ladder", replaces="antagonist_ladder",
-    ))
-    register_node(NodeSpec(
-        key="settings_fanqie", fn=fanqie_settings, seq=710,
+        key="settings_doupo", fn=node_doupo_world, seq=710,
         graph_id="settings", replaces="settings",
+        label="生成斗气大陆世界设定卡（精简6张）...",
     ))
-    register_node(NodeSpec(
-        key="volumes_fanqie", fn=fanqie_volumes, seq=800,
-        graph_id="volumes", replaces="volumes",
-    ))
-    register_node(NodeSpec(
-        key="rhythm_map_fanqie", fn=fanqie_rhythm, seq=870,
-        graph_id="rhythm_map", label="生成爽点节奏图（规则+LLM备用弧）...",
-    ))
-    # Phase F 合并：原 core_mysteries_fanqie + opening_contract_fanqie → promise_seeds_fanqie（-1 LLM）
-    # opening_contract 在 StyleConfig.skip_core 中排除，避免 CORE_NODES 重复注入
-    register_node(NodeSpec(
-        key="promise_seeds_fanqie", fn=fanqie_promise_seeds, seq=915,
-        graph_id="promise_seeds", replaces="core_mysteries",
-        label="预置谜题钩子 + 开局追读承诺...",
-    ))
-    # signal_audit 已内置写 consistency_issues，consistency_scan 节点已移除（-1 LLM）
-    register_node(NodeSpec(key="signal_audit", fn=fanqie_audit, seq=950, label="执行番茄算法双校验..."))
 
     # ── 玄幻修仙直白线（mode=xianxia，从零原生拓扑）──────────────
     # 题材语义层全部原生（立项/金手指/境界契约/世界/卷骨架），

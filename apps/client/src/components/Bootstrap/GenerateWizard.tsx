@@ -51,7 +51,7 @@ interface Props {
   onRecoverConsumed?: () => void
 }
 
-type Mode = 'sequential' | 'fanqie' | 'fanfic' | 'xianxia'
+type Mode = 'sequential' | 'doupo' | 'fanfic' | 'xianxia'
 
 /** 弹层（默认正常提交） vs 全屏工作台（默认恢复 run） */
 type BootstrapShell = 'modal' | 'workspace'
@@ -224,10 +224,10 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
     return '当前：远程（未配置）'
   }, [aiBackendRoute, llmOverview])
 
-  /** 切换生成方案；番茄线默认白话直白，与后端 fanqie→plain 兜底一致。 */
+  /** 切换生成方案；斗破/同人/修仙线默认白话直白，与后端 plain 兜底一致。 */
   function selectMode(next: Mode) {
     setMode(next)
-    if (next === 'fanqie' || next === 'fanfic' || next === 'xianxia') setWritingStyle('plain')
+    if (next === 'doupo' || next === 'fanfic' || next === 'xianxia') setWritingStyle('plain')
   }
 
   // ── 开始生成 ─────────────────────────────────────────────────
@@ -526,22 +526,22 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                   </div>
                 </button>
                 <button
-                  onClick={() => selectMode('fanqie')}
+                  onClick={() => selectMode('doupo')}
                   className={clsx(
                     'p-3 rounded-xl border-2 text-left transition-all',
-                    mode === 'fanqie'
+                    mode === 'doupo'
                       ? 'border-orange-400 bg-orange-50'
                       : 'border-gray-100 hover:border-orange-200'
                   )}
                 >
                   <div className="text-sm font-semibold text-gray-800 mb-1">
-                    🍅 番茄专属
-                    {mode === 'fanqie' && (
+                    🔥 斗破·大白文玄幻
+                    {mode === 'doupo' && (
                       <span className="ml-2 text-xs bg-orange-500 text-white px-1.5 py-0.5 rounded-full">已选</span>
                     )}
                   </div>
                   <div className="text-xs text-gray-500 leading-relaxed">
-                    金手指 + 打脸地图 + 爽点节奏图，卷纲在 Bootstrap、章纲进工作台按需展开。
+                    斗破苍穹式斗气大陆纯爽文：单斗气主轴 + 势力/功法/法宝三合一 + 精简设定，全程白话直给、禁修仙与上帝视角。
                   </div>
                 </button>
                 <button

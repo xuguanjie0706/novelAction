@@ -12,6 +12,7 @@ from app.services.bootstrap.antagonist_roster import (
     ladder_entry_by_name,
     ensure_ladder_characters,
 )
+from app.services.bootstrap.character_planning import normalize_roster_boss_characters
 from app.services.bootstrap.parse import parse_json, safe_int
 from app.services.bootstrap.power_registry import format_power_context_block, resolve_realm_in_registry
 from app.services.bootstrap.prompts.character_naming import character_naming_constraints_for_prompt
@@ -213,6 +214,8 @@ arc_stages 要求：每人至少 2 个成长阶段（主角 3-4 个；arc Boss 2
         results.append(c)
 
     results = ensure_ladder_characters(svc, project, ctx, results)
+    if normalize_roster_boss_characters(results, ctx):
+        svc.db.flush()
     svc.db.commit()
     ctx["char_names"] = [c.name for c in results]
     ctx["protagonist"] = next((c.name for c in results if c.role == "protagonist"), "主角")

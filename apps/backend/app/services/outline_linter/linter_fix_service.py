@@ -35,6 +35,10 @@ _RULE_TARGET_FIELDS: dict[str, list[str]] = {
     "CH-09": ["villain_action"],
     "SEQ-01": ["opening_hook", "core_event"],
     "SEQ-07": ["opening_hook"],
+    # 生死/阵营硬伤：改写「再次击杀/死后出场/盟友被清算」的核心事件与人物变化
+    "LIFE-01": ["core_event", "character_change"],
+    "LIFE-02": ["core_event", "character_change"],
+    "ALIGN-01": ["core_event", "character_change", "villain_action"],
 }
 
 _PATCH_FIELD_KEYS = (
@@ -116,8 +120,9 @@ def build_linter_fix_prompt(
 修复要求：
 1. 像总编辑改稿：结合上章代价/下章承接，给出具体叙事内容，不要写「待定」「悬念丛生」等占位。
 2. CH-04/SEQ-01/SEQ-07 必须让 choice_cost 与 opening_hook 形成可见因果链（下章开篇须承接上章代价关键词或后果）。
-3. 每个 patch 只改必要字段；未列出的字段不要输出。
-4. 字段必须是可直接替换的短文本（每条 15～80 字为宜）。
+3. LIFE-01/LIFE-02/ALIGN-01（生死/阵营硬伤）：把本章「再次击杀/死后出场」的对象改为已死角色的党羽、后继者或冒名者，或在 core_event/character_change 写明残魂/化身/假死/记忆闪回；禁止让已死角色复活当活人。盟友被清算（ALIGN-01）须先补「再叛/翻脸」过渡或改写结局。
+4. 每个 patch 只改必要字段；未列出的字段不要输出。
+5. 字段必须是可直接替换的短文本（每条 15～80 字为宜）。
 
 返回 JSON：
 {{

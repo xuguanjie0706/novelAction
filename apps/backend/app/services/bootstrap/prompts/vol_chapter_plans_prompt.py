@@ -2,6 +2,99 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+
+def build_prev_batch_summary_block(
+    prior_nodes: list[Any],
+    batch_start: int,
+) -> tuple[str, str]:
+    """本批起草前注入「本卷已生成全部章节」的紧凑总览（批/窗口间延续锚）。
+
+    确保新窗口第 1 章真正承接上一章结局，而非只看最后几章。
+
+    Args:
+        prior_nodes: 本卷已落库/已 flush 的 chapter_plan 节点（按章序）。
+        batch_start: 本批起始章号（1-based）。
+
+    Returns:
+        (prev_summary_block, last_batch_tail_cost) —— 后者供 carryover 块复用。
+    """
+    if not prior_nodes:
+        return "", ""
+    full_lines: list[str] = []
+    for n in prior_nodes:
+        ex = n.extra or {}
+        cost = ex.get("choice_cost", "")
+        end_hook = ex.get("end_hook", "")
+        want = ex.get("protagonist_want", "")
+        ch_num = n.sort_order + 1
+        tail = cost or end_hook
+        full_lines.append(
+            f"  第{ch_num}章《{n.title or ''}》"
+            f"{('[' + n.emotional_tone + ']') if n.emotional_tone else ''}"
+            f"  {n.summary or ''}｜欲望：{want}｜代价/钩子：{tail}"
+        )
+    last = prior_nodes[-1]
+    last_ex = last.extra or {}
+    last_batch_tail_cost = (
+        last_ex.get("choice_cost", "")
+        or last_ex.get("end_hook", "")
+        or last.summary
+        or ""
+    )
+    prev_summary = (
+        f"\n【本卷前{len(prior_nodes)}章完整大纲（续写须与之一脉相承）】\n"
+        + "\n".join(full_lines)
+        + f"\n  ⚠️ 本批第1章（第{batch_start}章）必须直接承接第{len(prior_nodes)}章的结局："
+        f"「{last_batch_tail_cost[:120]}」，不得无视这个代价另起炉灶。"
+    )
+    return prev_summary, last_batch_tail_cost
+
+
+def build_protagonist_psychology_block(
+    protagonist: str,
+    profile: dict | None,
+    *,
+    vol_prot_start: str = "",
+    vol_prot_end: str = "",
+    vol_boss_realm: str = "",
+) -> str:
+    """主角心理档案块（章节行为的底层驱动器，最高优先级约束）。
+
+    ``profile`` 为空（主角不在 char_profiles 中）时返回空串。
+    """
+    if not profile:
+        return ""
+    if vol_prot_start or vol_prot_end:
+        realm_state = (
+            f"{vol_prot_start} → 本卷目标 {vol_prot_end}"
+            if vol_prot_start and vol_prot_end
+            else (vol_prot_end or vol_prot_start)
+        )
+    else:
+        realm_state = profile.get("current_realm", "未知")
+    block = (
+        f"\n【主角「{protagonist}」心理档案（章节行为的底层驱动器，最高优先级约束）】\n"
+        f"  境界状态：{realm_state} | 当前位置：{profile.get('current_location', '未知')}\n"
+        f"  核心恐惧/创伤：{profile.get('core_wound', '（未设定）')}\n"
+        f"  当前最强欲望：{profile.get('current_desire', '（未设定）')}\n"
+        f"  价值观：{profile.get('values', '（未设定）')}\n"
+        f"  人物弧线：{profile.get('arc', '（未设定）')}\n"
+        f"  未暴露的秘密：{profile.get('secrets', '（无）')}\n"
+    )
+    if vol_prot_end:
+        block += (
+            f"  ⚠️ 本卷末主角须达到「{vol_prot_end}」；"
+            f"章纲 power_milestone 须在本卷内合理分配突破节点，禁止卷末仍停留在卷初境界。\n"
+        )
+    if vol_boss_realm:
+        block += (
+            f"  ⚠️ 当卷 BOSS 境界「{vol_boss_realm}」；"
+            f"对决章节主角 effective 境界须接近卷末目标，禁止 rank 差距超过 2 档。\n"
+        )
+    return block
+
 
 def plain_chapter_plan_addendum() -> str:
     """白话直白（番茄纯爽文）章纲层硬约束块。
@@ -93,6 +186,29 @@ def build_carryover_seq_block(
     )
 
 
+def build_chapter_beat_diversity_block(*, batch_start: int, batch_end: int) -> str:
+    """相邻章节拍差异化（对齐 QC duplicate_event / embedding 相似度检测）。"""
+    return (
+        f"\n【章节拍差异化 · 反同质化（第{batch_start}～{batch_end}章，输出 JSON 前逐对自检）】\n"
+        "质检会对 title + core_event + character_change + end_hook 做语义相似度比对；"
+        "卷内任意两章 cosine≥0.78 即判 duplicate_event。你必须主动拉开差异：\n"
+        "1. 禁止连续两章完成同一类目标（如连续「觉醒→觉醒→觉醒」或「吞噬→破境→跃迁」三连）；"
+        "每章 protagonist_want 须换类型：受压迫/首次反击/立威/拿资源/结盟/被追杀/破局 等至少轮换其一。\n"
+        "2. core_event 的「结果」须换场景+换对手+换手段："
+        "禁止相邻章都用「震惊全场/秒杀/实力跃迁/破境一重」等同质套话。\n"
+        "3. character_change 须写不同维度（认知/关系/地位/境界/心理），"
+        "禁止相邻章都写「主角变强/众人震惊」。\n"
+        "4. end_hook 须换悬念机制（新敌人/新秘密/新代价/倒计时/背叛预告），"
+        "禁止连续章都用「全场震惊/强者登场」式收尾。\n"
+        "5. 开局前5章递进模板（opening 卷须遵守）："
+        "第1章=极端压迫与不公；第2章=能力初现+新代价（非重复第1章）；"
+        "第3章=首次小胜/小反击（换场景换对手，非再写一遍觉醒）；"
+        "第4-5章=后果发酵+新威胁升级，不得回到「再度觉醒/再度绝境」。\n"
+        "6. 自检：对本批内每一对相邻章 (N, N+1)，若 title 或 core_event 含相同核心动词"
+        "（觉醒/吞噬/破境/跃迁/秒杀/震惊），必须先改其中一章再输出 JSON。\n"
+    )
+
+
 def build_chapter_plan_generation_tail(
     *,
     batch_start: int,
@@ -148,10 +264,17 @@ def build_chapter_plan_generation_tail(
             "12. involved_characters 只能使用上方已知人物名，不要发明新名字\n"
             "13. 玄幻/仙侠：core_event/opening_hook 等字段禁止现代 STEM/商业用语"
             "（逆向工程、解析改良、工业化、市场调研、畅销榜等），须用古风修仙表达\n"
+            "14. 🔴 角色生死（LIFE）：遵守上方「角色生死账本」与「本批内自检」——"
+            "已死角色禁止在更后章节再次当活人被击杀或列入 involved_characters；"
+            "需要立威时换用新配角或写爪牙/后继者，不得复用已死亡者姓名。"
+            "凡有角色死亡/复活的章节，必须在该章 deaths/revives 数组如实列出对应角色名"
+            "（机器据此做确定性校验，漏填等同于制造硬伤）\n"
+            "15. 🔴 章节拍差异化：遵守上方「反同质化」块——相邻章禁止重复同一核心动词/同一爽点类型；"
+            "须递进而非「同一目标反复完成」\n"
             "只返回 JSON 数组，不要任何解释文字。"
         )
 
-    default_words = 1800 if is_fanqie else 2200
+    default_words = 2100 if is_fanqie else 2200
 
     return (
         f"\n\n# 生成要求\n"
@@ -173,6 +296,10 @@ def build_chapter_plan_generation_tail(
         '    "core_event": "核心事件：必须是 protagonist_choice 的直接后果，格式「因[choice]→[result]」（≤60字）",\n'
         '    "character_change": "谁的认知/处境/关系发生了不可逆变化（≤30字，不能只写外部变化）",\n'
         '    "end_hook": "章末钩子：读完最后一句停不下来的原因（≤30字，禁用「悬念丛生」「让读者期待」等废话，必须具体手法）",\n'
+        "\n"
+        "    // ── 角色生死声明（结构化，一致性硬校验主信号，必须如实填写）──\n"
+        '    "deaths": ["本章【确实死亡】的角色名（只写死者本人，施害者不要写；无则填空数组 []）"],\n'
+        '    "revives": ["本章【复活/诈死现身/借尸还魂/查明未死】的角色名（无则填空数组 []）"],\n'
         "\n"
         "    // ── 伏笔与承诺管理（结构化 ops，禁止再用埋[…] 自由文本）──\n"
         '    "foreshadow_ops": [\n'

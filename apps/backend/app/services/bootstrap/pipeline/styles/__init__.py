@@ -19,31 +19,30 @@ STYLE_REGISTRY: dict[str, StyleConfig] = {
         default_writing_style="standard",
     ),
 
-    "fanqie": StyleConfig(
-        style_id="fanqie",
-        display_name="番茄",
+    # 番茄（fanqie）线已下线：从 STYLE_REGISTRY / mode 枚举 / 前端选项移除，
+    # graph_fanqie.py 等文件保留为废弃存根（同人/修仙线仍复用其中的纯工具函数）。
+    # 取而代之的是「斗破·大白文玄幻」线，见下方 "doupo"。
+
+    "doupo": StyleConfig(
+        style_id="doupo",
+        display_name="斗破·大白文玄幻",
+        # 完全基于通用（sequential）线：复用通用 project / storylines / characters /
+        # skills_items / volumes / memory / mysteries / opening_contract / consistency，
+        # 仅替换三处题材语义节点 + 合并势力/对立面，并对共享 volumes 挂大纲质量增强 hook。零番茄耦合。
         nodes=[
-            "positioning_fanqie",       # Phase A: 算法立项
-            "gate_positioning_fanqie",  # Phase A: 确认闸门
-            "project_fanqie",           # Phase A: 项目创建
-            "fanqie_formula",           # Phase B: 爽文公式（合并：落差+金手指+打脸地图）
-            "power_ladder",             # Phase B: 权力阶梯
-            "ctx_bridge",               # Phase B: 番茄ctx→通用ctx桥接
-            "factions_fanqie",          # Phase C: 势力体系
-            "storylines_fanqie",        # Phase C: 故事线
-            "antagonist_ladder_fanqie", # Phase C: 卷级对立面
-            "gate_characters",          # Phase C: 人物确认闸门
-            "settings_fanqie",          # Phase C: 世界观设定（精简3张）
-            "volumes_fanqie",           # Phase D: 卷级骨架
-            "gate_volumes",             # Phase D: 卷质量闸门
-            "rhythm_map_fanqie",        # Phase E: 节奏图（规则+LLM备用弧）
-            "promise_seeds_fanqie",     # Phase F: 谜题钩子+开局承诺（合并）
-            "signal_audit",             # Phase G: 番茄算法双校验（含consistency）
+            "positioning_doupo",          # Step0 斗气大陆纯爽文立项（禁修仙/禁上帝视角）
+            "gate_positioning_doupo",     # Step0 确认闸门
+            "power_axis_doupo",           # Step2 单斗气主轴（replaces 修仙多轴 power_systems）
+            "gate_power_systems",         # Step2 斗气主轴确认闸门
+            "factions_antagonist_doupo",  # Step3+4.5 势力+卷级对立面 一次LLM（replaces factions，吞 antagonist_ladder）
+            "gate_characters",            # 人物确认闸门（功法/法宝在其后由 CORE skills_items 生成，精确挂 UUID）
+            "settings_doupo",             # Step8 精简斗气大陆世界卡（replaces settings，6张）
+            "gate_volumes",               # 卷质量闸门
         ],
         default_writing_style="plain",
-        # opening_contract 已合并进 promise_seeds_fanqie，从 CORE_NODES 中排除
-        # consistency 已由 signal_audit 内置处理，无需独立节点
-        skip_core=frozenset({"opening_contract", "consistency"}),
+        # antagonist_ladder 已并入 factions_antagonist_doupo，从 CORE_NODES 中排除；
+        # skills_items 保留为 CORE（人物后生成，精确挂 UUID）。
+        skip_core=frozenset({"antagonist_ladder"}),
     ),
 
     "xianxia": StyleConfig(

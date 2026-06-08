@@ -68,6 +68,40 @@ def words_to_plan(target_words: int) -> dict:
     }
 
 
+def doupo_volume_chapter_plan(target_words: int) -> dict:
+    """斗破线卷章配额：与 ``words_to_plan`` 共用总章数/总卷数，按卷拆分 planned_chapters。
+
+    规则（斗破/大白文爽文推荐）：
+    - **第 1 卷 30 章**：开局钩子密、节奏快，不宜拖长；
+    - **第 2～N-1 卷各 60 章**：与 ``TARGET_CHAPTERS_PER_VOLUME`` 一致；
+    - **末卷**：剩余章数（可能 >60，如全书仅 2 卷时第二卷会偏长）。
+
+    各卷之和严格等于 ``total_chapters``。
+    """
+    tw = max(int(target_words or 1_200_000), MIN_CHAPTERS_PER_VOLUME * TARGET_WORDS_PER_CHAPTER)
+    base = words_to_plan(tw)
+    total_chapters = base["total_chapters"]
+    n = base["total_volumes"]
+
+    if n <= 1:
+        quotas = [total_chapters]
+    elif n == 2:
+        first = min(MIN_CHAPTERS_PER_VOLUME, total_chapters - MIN_CHAPTERS_PER_VOLUME)
+        quotas = [first, total_chapters - first]
+    else:
+        quotas = [MIN_CHAPTERS_PER_VOLUME]
+        quotas.extend([TARGET_CHAPTERS_PER_VOLUME] * (n - 2))
+        last = total_chapters - sum(quotas)
+        if last < MIN_CHAPTERS_PER_VOLUME:
+            deficit = MIN_CHAPTERS_PER_VOLUME - last
+            quotas[-1] = max(MIN_CHAPTERS_PER_VOLUME, quotas[-1] - deficit)
+            last = total_chapters - sum(quotas)
+        quotas.append(last)
+
+    assert sum(quotas) == total_chapters, (quotas, total_chapters, tw)
+    return {**base, "target_words": tw, "chapter_quotas": quotas}
+
+
 def target_total_chapters_from_words(target_words: int) -> int:
     """直接返回总章数下限（用于 normalize_volume_plan）。"""
     return words_to_plan(target_words)["total_chapters"]
@@ -207,6 +241,45 @@ def chapter_word_budget_for_phase(
     emotion_mod = 200 if has_emotional_beat else 0
 
     return min(3500, max(1800, base + pacing_mod + slap_mod + emotion_mod))
+
+
+def resolve_chapter_expected_words(
+    ai_words: object,
+    dynamic_words: int,
+    *,
+    is_fanqie: bool = False,
+) -> int:
+    """章纲落库字数：``chapter_word_budget_for_phase`` 为下限，AI 可更高但不得压低。
+
+    设计动机：番茄 prompt 仍常输出 1500 级 expected_words；若直接采用会导致
+    plain 写章正文系统性偏短。动态预算已含 phase/pacing/爽点修正，取 max 对齐。
+    """
+    lo = 1900 if is_fanqie else 1800
+    hi = 4000
+    if isinstance(ai_words, int) and lo <= ai_words <= hi:
+        return max(ai_words, dynamic_words)
+    return dynamic_words
+
+
+def resolve_draft_word_target(
+    word_target: int,
+    *,
+    phase: str = "",
+    writing_style: str = "standard",
+    is_fanqie: bool = False,
+) -> int:
+    """写章正文字数目标：章纲 expected_words 与阶段/风格硬下限取 max。
+
+    plain + opening 叠加后仍常低于 prompt 要求；此处统一抬升，避免「要 1900 写出 1100」。
+    """
+    base = max(1900 if is_fanqie else 1800, int(word_target or TARGET_WORDS_PER_CHAPTER))
+    phase_norm = (phase or "").strip().lower()
+    style = (writing_style or "standard").strip().lower()
+    if phase_norm == "opening":
+        base = max(base, 2100 if style == "plain" else 2200)
+    elif style == "plain":
+        base = max(base, 2000)
+    return base
 
 
 def build_book_budget_block(

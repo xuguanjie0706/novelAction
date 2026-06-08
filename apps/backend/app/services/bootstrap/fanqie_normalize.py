@@ -117,7 +117,7 @@ def build_chapter_extra(
     *,
     first_slap_ch: int = 3,
 ) -> dict:
-    """与 vol_chapter_plans._build_chapter_extra 对齐的番茄开局 extra。"""
+    """与 steps/chapter_extra.build_chapter_extra 对齐的番茄开局 extra。"""
     summary = build_chapter_summary(ch)
     obstacle = build_chapter_conflict(ch) or ""
     struct = ch.get("structure") if isinstance(ch.get("structure"), dict) else {}

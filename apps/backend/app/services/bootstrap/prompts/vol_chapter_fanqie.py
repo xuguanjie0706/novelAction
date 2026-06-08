@@ -43,10 +43,10 @@ def fanqie_json_extra_fields() -> str:
 def fanqie_word_budget_hint() -> str:
     """番茄字数预算参考（替换标准版）。"""
     return (
-        "（expected_words 番茄参考：opening≈1500-1800，rising≈1700-2000，turning≈1800-2000，"
-        "dark_hour≈1800-2000，climax≈2000-2200，ending≈1600-1800；"
-        "番茄硬上限2200字，硬下限1400字。"
-        "有打脸/大爽点+100，fast 节奏-100。请按章节实际情况填写。）\n\n"
+        "（expected_words 番茄参考：opening≈2000-2400，rising≈2200-2500，turning≈2300-2600，"
+        "dark_hour≈2300-2600，climax≈2500-2800，ending≈2000-2300；"
+        "硬上限2800字，硬下限1900字（plain 直白风格下低于 1900 正文易严重缩水）。"
+        "有打脸/大爽点+150，fast 节奏-100。请按章节实际情况填写，禁止全卷同一数字。）\n\n"
     )
 
 
@@ -69,7 +69,7 @@ def fanqie_editorial_laws(chk_from: int, batch_end: int) -> str:
         "7. 禁止连续2章纯铺垫（satisfaction_type 连续2章为 null）\n"
         "8. 金手指/系统每8章内至少展示1次升级或新功能\n"
         "9. core_event 必须是 protagonist_choice 的直接后果，不能为空\n"
-        "10. expected_words 严格控制在 1400-2200 范围内（番茄硬约束）\n"
+        "10. expected_words 严格控制在 1900-2800 范围内（番茄硬约束，opening 章不得低于 2000）\n"
         "11. has_face_slap=true 时，face_slap_target 不能为 null\n"
         "12. involved_characters 只能使用已知人物名，不要发明新名字\n"
         "13. next_chapter_bait 不能与 end_hook 重复（两者侧重不同：end_hook 是悬念手法，bait 是读者心理）\n"

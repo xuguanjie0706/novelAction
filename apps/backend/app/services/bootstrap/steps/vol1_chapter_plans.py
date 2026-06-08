@@ -32,6 +32,7 @@ from app.services.llm_token_budgets import max_tokens_vol1_chapter_plans
 from app.services.outline_planning import (
     build_book_budget_block,
     chapter_word_budget_for_phase,
+    resolve_chapter_expected_words,
     words_to_plan,
 )
 from app.utils.chapter_numbering import normalize_chapter_plan_title
@@ -338,7 +339,9 @@ async def gen_vol1_chapter_plans(svc: Any, project: Project, volumes: list, ctx:
             dynamic_words = chapter_word_budget_for_phase(
                 vol1.phase or "opening", pacing_val, has_slap, has_beat
             )
-            expected_words_val = ai_words if isinstance(ai_words, int) and 1500 <= ai_words <= 4000 else dynamic_words
+            expected_words_val = resolve_chapter_expected_words(
+                ai_words, dynamic_words, is_fanqie=False,
+            )
             fs_ops, fs_laid, fs_resolved, fs_legacy = prepare_chapter_foreshadow_for_node(item)
             node = OutlineNode(
                 project_id=project.id,

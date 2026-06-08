@@ -36,6 +36,7 @@ from app.services.xuanhuan_lexicon import (
     is_xuanhuan_like_genre,
 )
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
+from app.services.outline_planning import resolve_draft_word_target
 
 from app.services.ai.guardrails import genre_guardrail_text
 
@@ -132,15 +133,34 @@ class DraftStreamMixin:
         )
         large_context = self._large_context_enabled()
 
-        # ── 阶段化 system prompt：开篇/起飞/转折/至暗/高潮/收束 各有侧重 ────────────
+        # ── 写作风格 / 番茄节奏（须在阶段简报与字数目标之前解析）────────────────
+        writing_style = "standard"
+        is_fanqie_pace = False
+        if positioning and isinstance(positioning, dict):
+            _ws = str(positioning.get("writing_style") or "").strip().lower()
+            if _ws in ("plain", "standard", "dense"):
+                writing_style = _ws
+            is_fanqie_pace = str(positioning.get("pace_type") or "").strip().lower() == "fast"
+
         phase_norm = (phase or "").strip().lower()
+        full_target = resolve_draft_word_target(
+            int(word_target or 2300),
+            phase=phase_norm,
+            writing_style=writing_style,
+            is_fanqie=is_fanqie_pace,
+        )
+        cont_target_lo = max(1000, round(full_target * 0.5))
+        cont_target_hi = max(1400, round(full_target * 0.7))
+
+        # ── 阶段化 system prompt：开篇/起飞/转折/至暗/高潮/收束 各有侧重 ────────────
         phase_brief_map = {
             "opening": (
                 "【当前卷阶段：开局期 / 新手村】\n"
                 "- 钩子密度高：每 800-1000 字至少一个张力点（疑问、压迫、伏笔、冲突）\n"
                 "- 信息密度高：开篇 200 字内必须落地世界、主角状态、核心痛点\n"
                 "- 爽点节奏：3 章一小爽，禁止纯铺垫章；当章必须有可被读者复述的「高光瞬间」\n"
-                "- 字数偏短（建议 ±200 字内贴近 2200 字），节奏要紧；忌用大段心理流水账\n"
+                f"- 节奏要紧、信息要密，但须写满本章字数目标（约{full_target}字±200），"
+                "禁止为求短而省略场景与爽点展开；忌用大段心理流水账\n"
                 "- 文本比例参考：对话 40% / 行动场景 40% / 心理独白 20%（对话段视觉上更轻，利于追读）"
             ),
             "rising": (
@@ -203,11 +223,7 @@ class DraftStreamMixin:
 
         # ── 写作风格档位（作者建书时选定，全书贯彻；存于 Project.extra.positioning.writing_style）──
         # plain=白话直白（降低阅读门槛，小白友好）/ standard=默认 / dense=老白文。
-        writing_style = "standard"
-        if positioning and isinstance(positioning, dict):
-            _ws = str(positioning.get("writing_style") or "").strip().lower()
-            if _ws in ("plain", "standard", "dense"):
-                writing_style = _ws
+        # （writing_style / is_fanqie_pace 已在上方解析）
 
         # ── system 瘦身：只保留身份 + 核心原则；硬约束（钩子/严禁/截图/POV/quota）下沉到 ──
         # ── user prompt 末尾的「写作前最后重读」块，紧贴生成指令，遵从率显著高于堆在 system 顶部 ──
@@ -254,7 +270,8 @@ class DraftStreamMixin:
                 "- 因果讲清楚：关键转折给读者一句「为什么会这样」的交代，不要靠读者自己脑补。\n"
                 "- 允许适度复述：可以用一两句简短回顾前情，帮读者跟上，不必怕重复。\n"
                 "- 一次只抛一个新设定：同一段里不要同时塞多个新概念、新人物、新地名。\n"
-                "- 用词口语化：少用生僻字和古奥词藻，优先选读者一眼认得的常用词。"
+                "- 用词口语化：少用生僻字和古奥词藻，优先选读者一眼认得的常用词。\n"
+                f"- 篇幅底线：本章正文须达到约{full_target}字（±200），白话直白不等于短章。"
             )
         elif writing_style == "dense":
             readability_brief = (
@@ -358,18 +375,13 @@ C) 反转档：前文铺垫，章末或中段一句颠覆读者判断的话
         final_reminder += (
             "\n\n▍配角配额：本章在场命名角色 ≤ 主1 + 核心配角3 + 反派2 + 师长2；"
             "多余角色合并或用无名路人（如「一名弟子」「路人」）处理。"
+            f"\n\n▍字数硬约束：本章正文须达到约{full_target}字（允许±200），"
+            "不足视为不合格；不得用省略号、一笔带过或「此后省略」式压缩情节。"
         )
         # （白话直白模式的松绑已在上方「严禁清单」分叉时整段替换，无需再追加补充块）
         # 境界锁定块追加到最后（紧贴生成指令，召回率最高）
         if realm_lock_block:
             final_reminder += realm_lock_block
-
-        # 根据大纲 word_target 动态计算续写字数
-        # 下限 1900：存量章纲的 expected_words 仍是旧低预算（番茄 ~1500），靠这里抬升，
-        # 使「整体加长」对已展开章节在写正文时也生效，而非只对未来章纲。
-        full_target = max(1900, int(word_target or 2300))
-        cont_target_lo = max(1000, round(full_target * 0.5))
-        cont_target_hi = max(1400, round(full_target * 0.7))
 
         if replace_existing:
             task_line = (

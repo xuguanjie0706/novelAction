@@ -19,7 +19,7 @@ export default function DabaiWritePage() {
     loadState,
     syncing,
     unsyncedCount,
-    planRows,
+    volumeGroups,
     activeChapter,
     activePlan,
     activeBeat,
@@ -70,7 +70,7 @@ export default function DabaiWritePage() {
   return (
     <div className="flex h-full min-h-0">
       <DabaiWriteSidebar
-        planRows={planRows}
+        volumeGroups={volumeGroups}
         activeChapterId={activeChapterId}
         unsyncedCount={unsyncedCount}
         syncing={syncing}

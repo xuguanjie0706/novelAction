@@ -376,6 +376,20 @@ logline
 - [x] 卷级结构化战力时间轴（`/outline/power-timeline` + 创作端「战力轴」页）
 - [x] **地点逐章台账 + 空间防漂移**（2026-06）：`Character.extra.location_milestones` 逐章记录位置变化与移动原因（`location_change_reason`）；复盘双路径透传 + 可编辑「移动原因」框；写章注入「近期行踪」与空间连续性硬约束。地点入库仍走复盘期 `location_debrief.enrich_new_locations`（queue_auto 经 `chapter-debrief` 已触发，非 Bootstrap/势力生成期）
 
+### 大白文（dabai）写章上下文链路（2026-06-10 重修）
+
+> 背景：dabai 正文衔接差的三个根因均为**静默失效 bug**，已修复：
+> ① `debrief_apply.py` 调用不存在的 `chapter.chapter_number` → 复盘一直 AttributeError 被路由层吞掉，图谱/向量记忆从未写入；
+> ② `build_graph_context_block` 用字面量「主角」做 Neo4j key → 图上下文恒空，且 Cypher 未按 chapter 取最新事实；
+> ③ `neo4j_client` 只读 `os.getenv`，而 pydantic-settings 的 .env 不注入 os.environ → 裸跑时图谱恒关闭（`NEO4J_*` 已声明进 `config.py` Settings）。
+
+- **写章上下文**：`services/dabai/draft_context.py`（新）统一组装四块注入：图谱主角状态（最新境界/位置/近3次行踪/敌对）→ 前情提要（近3章一句话摘要+上章末钩子）→ pgvector 语义记忆（五拍要素做 query，落 `RagRetrievalLog` source=draft_context）→ 出场人物（witnesses）状态（图谱优先、Character 表兜底）。任一源失败只降级该块，不阻塞写章。
+- **复盘幂等**：dabai 复盘记忆带 tag `dabai_debrief`，重跑先删同章同 tag 旧记忆；graph_facts 缺 chapter 字段自动补章号；提取 prompt 注入标准人名清单（禁「主角」代称，保证图谱 key 一致）。
+- **prompt 顺序**：全局状态→前情→记忆→人物→上章结尾(600字)→五拍→任务；system 增加衔接硬约束（承接末钩子、位置变化须交代移动、以「当前状态」块为准）。
+- **质检 v2**（`services/dabai/quality_check.py`）：规则层（DBC-01 境界倒退仍是唯一阻断）+ LLM 层（task=`dabai.quality` 低温 JSON：衔接 continuity / 五拍逐项 pass·partial·miss / 钩子强度，只出 DBQ-01~04 warning 与 ≤3 条可执行建议，禁文采类）；综合分=衔接40%+五拍40%+钩子20%；LLM 失败降级规则报告（`llm_status`）。gated 写章流与 `/ai/dabai-consistency-check`（升级支持 mode=rules|full + 模型线路）均走此入口。
+- **复盘端点**：`POST /ai/dabai-debrief`（独立于主链路 chapter-debrief 两步流，单步提取+落库，幂等可重跑）；`GET /ai/memory` 支持 `chapter_id` 过滤。采样档：`dabai.quality` 0.2 / `dabai.debrief` 0.25。
+- **DabaiWrite UI**（2026-06-10 二批）：侧栏分卷折叠（卷头已写/总数、待写/已写筛选、自动展开+滚动定位当前章）；`DabaiInlineProgress` 编辑器内联生成进度（读全局 genQueue 当前章任务 progress，不另起 SSE）；`DabaiDebriefPanel` 复盘/记忆侧栏（一键复盘、图谱同步状态徽章、本章记忆列表）；`DabaiConsistencyBanner` v2 渲染衔接/五拍/钩子分数与修改建议（兼容旧报告）。
+
 ## 待完成功能
 
 - [x] **ReaderPromise 深度闭环**（2026-05-21，三层兑现机制已落地）：

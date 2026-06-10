@@ -27,6 +27,33 @@ function collectChapterPlans(nodes: OutlineNode[], out: OutlineNode[] = []): Out
   return out.sort((a, b) => a.sort_order - b.sort_order)
 }
 
+/** 卷分组：volume 节点 → 其子树内的 dabai 章纲；卷外散章归入 volume=null 组。 */
+export interface DabaiVolumeGroup {
+  volume: OutlineNode | null
+  plans: OutlineNode[]
+}
+
+function groupPlansByVolume(tree: OutlineNode[]): DabaiVolumeGroup[] {
+  const groups: DabaiVolumeGroup[] = []
+  const seen = new Set<string>()
+  const volumes: OutlineNode[] = []
+  const walkVolumes = (nodes: OutlineNode[]) => {
+    for (const n of nodes) {
+      if (n.node_type === 'volume') volumes.push(n)
+      else if (n.children?.length) walkVolumes(n.children)
+    }
+  }
+  walkVolumes(tree)
+  for (const vol of volumes.sort((a, b) => a.sort_order - b.sort_order)) {
+    const plans = collectChapterPlans(vol.children ?? [])
+    plans.forEach(p => seen.add(p.id))
+    if (plans.length) groups.push({ volume: vol, plans })
+  }
+  const orphan = collectChapterPlans(tree).filter(p => !seen.has(p.id))
+  if (orphan.length) groups.push({ volume: null, plans: orphan })
+  return groups
+}
+
 export function useDabaiWritePage(projectId: string | undefined) {
   const {
     chapters, setChapters, upsertChapter,
@@ -154,11 +181,21 @@ export function useDabaiWritePage(projectId: string | undefined) {
     [chapterPlans, chapterByNodeId, realmLevels],
   )
 
+  /** 卷分组视图（侧栏折叠导航用），行结构与 planRows 一致 */
+  const volumeGroups = useMemo(() => {
+    const rowByPlanId = new Map(planRows.map(r => [r.plan.id, r]))
+    return groupPlansByVolume(outlineTree).map(g => ({
+      volume: g.volume,
+      rows: g.plans.map(p => rowByPlanId.get(p.id)).filter((r): r is typeof planRows[number] => !!r),
+    }))
+  }, [outlineTree, planRows])
+
   return {
     loadState,
     syncing,
     unsyncedCount,
     planRows,
+    volumeGroups,
     activeChapter,
     activePlan,
     activeBeat,

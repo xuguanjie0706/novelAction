@@ -54,6 +54,7 @@ from app.services.ai.context_queries import (
 )
 from app.services.ai.context_assembler_helpers import (
     build_volume_progress,
+    inject_vol_world_map,
 )
 from app.services.ai.draft_ctx_bridge import resolve_draft_bridge_context
 from app.services.ai.storyline_weave_engine import query_storyline_weave_context_block
@@ -274,6 +275,8 @@ async def assemble_full(
     writing_brief_context = append_volume_beat_draft_brief(
         _vol_for_beats, outline_node, writing_brief_context,
     )
+
+    writing_brief_context = inject_vol_world_map(_vol_for_beats, writing_brief_context)
 
     # 爽点结算章硬约束
     _face_slap = (positioning_value or {}).get("face_slap_pattern") or ""

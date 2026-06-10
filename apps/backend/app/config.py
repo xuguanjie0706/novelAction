@@ -99,6 +99,12 @@ class Settings(BaseSettings):
     CHARACTER_PORTRAIT_WEBP_QUALITY: int = 85
     CHARACTER_PORTRAIT_AVATAR_EDGE: int = 256
 
+    # ── Neo4j 图存储（dabai 章末总结 → 人物关系/境界/空间图谱）──────
+    # NEO4J_URI 留空 = 关闭图谱功能，读写两侧均静默降级（不阻塞写章/复盘）。
+    NEO4J_URI: Optional[str] = None
+    NEO4J_USER: str = "neo4j"
+    NEO4J_PASSWORD: str = "novelaction"
+
     # App
     SECRET_KEY: str = "change-me-in-production"
     DEBUG: bool = True

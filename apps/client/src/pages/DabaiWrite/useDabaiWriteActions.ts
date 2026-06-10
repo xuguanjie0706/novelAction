@@ -1,9 +1,10 @@
 /**
  * useDabaiWriteActions — 大白文写作页 AI 队列（走后端 dabai 专线）
  */
+import { useState } from 'react'
 import toast from 'react-hot-toast'
 import { aiApi, chaptersApi } from '../../api/client'
-import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload } from '../../store'
+import { useAppStore, modelProfileFromRoute, llmProviderIdFromRoute, routeLlmProviderPayload } from '../../store'
 import type { Chapter } from '../../types'
 import { shouldUseGatedDraft } from '../../utils/writingConfigGate'
 import type { WritingConfig } from '../../api/client'
@@ -51,18 +52,35 @@ export function useDabaiWriteActions(
     )
   }
 
+  const [checking, setChecking] = useState(false)
+
+  /** 质检 v2：规则一致性 + LLM 衔接/五拍/钩子（mode=full）。 */
   const runConsistencyCheck = async () => {
-    if (!chapter) return
+    if (!chapter || checking) return
+    setChecking(true)
     try {
-      await aiApi.dabaiConsistencyCheck(projectId, chapter.id)
+      const route = useAppStore.getState().aiBackendRoute
+      await aiApi.dabaiConsistencyCheck(projectId, chapter.id, {
+        mode: 'full',
+        model_profile: modelProfileFromRoute(route),
+        llm_provider_id: llmProviderIdFromRoute(route),
+      })
       const chRes = await chaptersApi.get(projectId, chapter.id)
       upsertChapter(chRes.data)
-      const passed = chRes.data.last_quality_report?.consistency_pass !== false
-      toast.success(passed ? '设定一致性通过' : '发现一致性问题，见上方提示')
+      const report = chRes.data.last_quality_report as { consistency_pass?: boolean; warnings?: unknown[] } | null
+      const passed = report?.consistency_pass !== false
+      const warnCount = report?.warnings?.length ?? 0
+      toast.success(
+        !passed ? '发现阻断问题，见上方提示'
+        : warnCount > 0 ? `质检完成：${warnCount} 条提醒`
+        : '质检通过',
+      )
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : '校验失败')
+    } finally {
+      setChecking(false)
     }
   }
 
-  return { generateChapter, runConsistencyCheck, chapterBusy }
+  return { generateChapter, runConsistencyCheck, chapterBusy, checking }
 }

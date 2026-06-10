@@ -37,6 +37,46 @@ from app.services.bootstrap.context_vol_tier345 import (
 )
 
 
+def _build_vol_world_map_block(volume_node: OutlineNode) -> str:
+    """从 OutlineNode.extra.world_map 构建卷舞台地图 prompt 块。
+
+    dabai Bootstrap gen_volumes_map_dabai 写入此字段；其他模式无此字段，返回空串。
+    world_map 结构：{region_name, locations: [{name, type, controller, danger}],
+                     travel_spine: [...], map_note}
+    """
+    extra = volume_node.extra or {}
+    wm = extra.get("world_map")
+    if not isinstance(wm, dict) or not wm:
+        return ""
+
+    region = (wm.get("region_name") or "").strip()
+    map_note = (wm.get("map_note") or "").strip()
+    locs: list = wm.get("locations") or []
+    spine: list = wm.get("travel_spine") or []
+
+    lines: list[str] = [f"\n【本卷舞台地图：{region or '未命名区域'}】"]
+    if map_note:
+        lines.append(f"  背景说明：{map_note}")
+    if spine:
+        lines.append(f"  行进主轴：{'→'.join(str(s) for s in spine)}")
+    if locs:
+        loc_descs = []
+        for loc in locs:
+            if not isinstance(loc, dict) or not loc.get("name"):
+                continue
+            parts = [loc["name"]]
+            if loc.get("controller"):
+                parts.append(f"（控制方：{loc['controller']}）")
+            danger = loc.get("danger", "")
+            if danger in ("dangerous", "forbidden"):
+                parts.append(f"[{danger}]")
+            loc_descs.append("".join(parts))
+        if loc_descs:
+            lines.append(f"  关键地点：{'、'.join(loc_descs)}")
+    lines.append("  ⚠ 本卷章纲中所有场景地点必须在上述区域范围内或明确交代迁移原因。")
+    return "\n".join(lines)
+
+
 def build_vol_expand_ctx(
     db: Session,
     project: Project,
@@ -140,6 +180,9 @@ def build_vol_expand_ctx(
         if fanfic_blk:
             fanqie_block = (fanqie_block + fanfic_blk) if fanqie_block else fanfic_blk
 
+    # ── 卷舞台地图块（dabai 专属）──────────────────────────────────────────────
+    map_block = _build_vol_world_map_block(volume_node)
+
     # ── 组合 editorial_prompt_block ────────────────────────────────────────────
     genre_kit_block = (ctx.get("genre_kit_prompt") or "").strip()
     if genre_kit_block and not genre_kit_block.startswith("\n"):
@@ -148,6 +191,7 @@ def build_vol_expand_ctx(
     editorial_blocks = [
         b for b in [
             positioning_block, genre_kit_block, power_block, world_block,
+            map_block,     # 本卷舞台地图（region_name / locations / travel_spine）
             fanqie_block,  # 番茄增强（落差/金手指/打脸/节奏图）
             volumes_block, prev_vol_ending_block,
             emotion_arc_block, villain_arc_block, core_mysteries_block,

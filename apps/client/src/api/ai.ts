@@ -20,14 +20,52 @@ export const llmApi = {
 // ── AI ────────────────────────────────────────────────
 export const aiApi = {
   qualityCheck: (pid: string, data: any) => api.post(`/projects/${pid}/ai/quality-check`, data),
-  dabaiConsistencyCheck: (pid: string, chapterId: string) =>
+  dabaiConsistencyCheck: (
+    pid: string,
+    chapterId: string,
+    opts?: { mode?: 'rules' | 'full'; model_profile?: 'local' | 'gemini'; llm_provider_id?: string },
+  ) =>
     api.post<{
       consistency_pass?: boolean
       overall_score?: number
       blockers?: { rule_id: string; message: string }[]
       warnings?: { rule_id: string; message: string }[]
       status?: string
-    }>(`/projects/${pid}/ai/dabai-consistency-check`, { chapter_id: chapterId }),
+      llm_status?: string
+      llm?: {
+        continuity_score?: number
+        continuity_issue?: string
+        beats?: Record<string, string>
+        beat_issues?: string[]
+        beat_score?: number
+        hook_score?: number
+        hook_issue?: string
+        suggestions?: string[]
+      }
+    }>(`/projects/${pid}/ai/dabai-consistency-check`, {
+      chapter_id: chapterId,
+      mode: opts?.mode ?? 'full',
+      model_profile: opts?.model_profile ?? 'gemini',
+      ...(opts?.llm_provider_id ? { llm_provider_id: opts.llm_provider_id } : {}),
+    }),
+  dabaiDebrief: (
+    pid: string,
+    chapterId: string,
+    opts?: { model_profile?: 'local' | 'gemini'; llm_provider_id?: string },
+  ) =>
+    api.post<{
+      chapter_id: string
+      graph_sync: { status: string; applied: number; message?: string }
+      graph_fact_count: number
+      vector_count: number
+      stale_deleted: number
+      warnings: string[]
+      memories: { title?: string; memory_type?: string; importance?: number }[]
+    }>(`/projects/${pid}/ai/dabai-debrief`, {
+      chapter_id: chapterId,
+      model_profile: opts?.model_profile ?? 'gemini',
+      ...(opts?.llm_provider_id ? { llm_provider_id: opts.llm_provider_id } : {}),
+    }, { timeout: DEBRIEF_REQUEST_TIMEOUT_MS }),
   generateWorldSettings: (
     pid: string,
     data: {
@@ -94,10 +132,11 @@ export const aiApi = {
     if (llmProviderId) q.set('llm_provider_id', llmProviderId)
     return api.post(`/projects/${pid}/ai/extract-memory?${q.toString()}`)
   },
-  listMemory: (pid: string, params?: { type?: string; sort_by?: string }) => {
+  listMemory: (pid: string, params?: { type?: string; sort_by?: string; chapter_id?: string }) => {
     const q = new URLSearchParams()
     if (params?.type) q.set('memory_type', params.type)
     if (params?.sort_by) q.set('sort_by', params.sort_by)
+    if (params?.chapter_id) q.set('chapter_id', params.chapter_id)
     const qs = q.toString()
     return api.get(`/projects/${pid}/ai/memory${qs ? `?${qs}` : ''}`)
   },

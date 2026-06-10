@@ -180,7 +180,7 @@ if ! wait_for_postgres; then
   echo ""
   echo "  若使用本仓库 Docker 数据库："
   echo "    colima start                    # 若 Docker 报 docker.sock 不存在"
-  echo "    docker-compose up -d postgres redis"
+  echo "    docker-compose up -d postgres redis neo4j"
   echo "    docker ps                       # 确认 0.0.0.0:5432->5432 已映射"
   echo ""
   echo "  数据库就绪后重新执行: ./restart.sh"

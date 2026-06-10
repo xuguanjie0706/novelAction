@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Chapter, Project
 from app.services.ai.service import AIService
+from app.services.dabai.draft_context import build_dabai_draft_context
 from app.services.dabai.draft_prompt import build_dabai_draft_prompt
 from app.services.dabai.outline_plan import resolve_chapter_plan
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
@@ -52,10 +53,15 @@ async def stream_dabai_chapter_draft(
     replace_existing: bool = False,
     stream_log_context: dict | None = None,
 ) -> AsyncGenerator[str, None]:
-    """流式生成 dabai 正文（纯文本 chunk）。"""
+    """流式生成 dabai 正文（纯文本 chunk）。
+
+    上下文：图谱主角状态 + 近章前情 + pgvector 记忆 + 出场人物状态 + 上章结尾，
+    由 ``build_dabai_draft_context`` 组装（各源独立降级，不阻塞写章）。
+    """
     plan = resolve_chapter_plan(db, project_id, chapter)
     expected = int((plan.expected_words if plan else None) or 2000)
     prev_tail = _prev_chapter_tail(db, project_id, chapter) if (chapter.sort_order or 0) > 0 else ""
+    draft_ctx = await build_dabai_draft_context(db, project, chapter, plan)
 
     system, prompt = build_dabai_draft_prompt(
         project,
@@ -64,6 +70,7 @@ async def stream_dabai_chapter_draft(
         prev_chapter_tail=prev_tail,
         user_prompt=user_prompt,
         replace_existing=replace_existing,
+        context=draft_ctx,
     )
     ctx = {"operation": "dabai_draft_stream", "bootstrap_mode": "dabai"}
     if stream_log_context:

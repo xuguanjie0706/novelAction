@@ -2,9 +2,38 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.models import OutlineNode
+
+logger = logging.getLogger(__name__)
+
+
+def inject_vol_world_map(volume_node: OutlineNode | None, context: str) -> str:
+    """将卷舞台地图块追加到写章上下文。
+
+    dabai Bootstrap 在 OutlineNode.extra.world_map 写入地图数据；
+    其他模式该字段不存在，安全返回原 context 不变。
+
+    Args:
+        volume_node: 卷级 OutlineNode（chapter_plan 的 parent），允许 None。
+        context:     当前 writing_brief_context 字符串。
+
+    Returns:
+        追加地图块后的上下文字符串。
+    """
+    if volume_node is None:
+        return context
+    try:
+        from app.services.bootstrap.context_vol_expand import _build_vol_world_map_block
+        blk = _build_vol_world_map_block(volume_node)
+        if blk:
+            return context + "\n" + blk
+    except Exception:
+        logger.warning("inject_vol_world_map 失败（不影响写章）", exc_info=True)
+    return context
 
 
 def fmt_outline_foreshadows(node: OutlineNode | None) -> str:

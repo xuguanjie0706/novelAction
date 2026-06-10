@@ -10,26 +10,46 @@ logger = logging.getLogger(__name__)
 _driver = None
 
 
+def _neo4j_uri() -> str:
+    """连接串：settings（读 .env）优先，环境变量兜底。
+
+    ⚠️ 旧版只读 os.getenv —— pydantic-settings 读取的 .env 并不会注入 os.environ，
+    导致裸跑（restart.sh）时即使 .env 配了 NEO4J_URI 也静默降级为关闭。
+    """
+    try:
+        from app.config import settings
+        if (settings.NEO4J_URI or "").strip():
+            return settings.NEO4J_URI.strip()
+    except Exception:
+        pass
+    return (os.getenv("NEO4J_URI") or "").strip()
+
+
+def _neo4j_auth() -> tuple[str, str]:
+    try:
+        from app.config import settings
+        return settings.NEO4J_USER, settings.NEO4J_PASSWORD
+    except Exception:
+        return (
+            os.getenv("NEO4J_USER", "neo4j"),
+            os.getenv("NEO4J_PASSWORD", "novelaction"),
+        )
+
+
 def neo4j_enabled() -> bool:
-    return bool((os.getenv("NEO4J_URI") or "").strip())
+    return bool(_neo4j_uri())
 
 
 def get_driver():
     global _driver
     if _driver is not None:
         return _driver
-    uri = (os.getenv("NEO4J_URI") or "").strip()
+    uri = _neo4j_uri()
     if not uri:
         return None
     try:
         from neo4j import GraphDatabase
-        _driver = GraphDatabase.driver(
-            uri,
-            auth=(
-                os.getenv("NEO4J_USER", "neo4j"),
-                os.getenv("NEO4J_PASSWORD", "novelaction"),
-            ),
-        )
+        _driver = GraphDatabase.driver(uri, auth=_neo4j_auth())
         return _driver
     except Exception as exc:
         logger.warning("Neo4j driver 初始化失败: %s", exc)

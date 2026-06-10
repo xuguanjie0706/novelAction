@@ -95,6 +95,20 @@ TASK_PROFILES: dict[str, dict] = {
         "frequency_penalty": 0.15,
         "presence_penalty": 0.0,
     },
+    "dabai.quality": {
+        # dabai 质检 v2（衔接/五拍/钩子）：要稳定 JSON 与可比较打分
+        "temperature": 0.2,
+        "top_p": 0.8,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+    },
+    "dabai.debrief": {
+        # dabai 章末复盘提取（图事实 + 向量记忆）：稳定 JSON
+        "temperature": 0.25,
+        "top_p": 0.85,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+    },
     "suggest.stream": {
         # 写作建议：偏自由，但不要走偏
         "temperature": 0.8,

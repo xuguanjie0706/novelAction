@@ -9,9 +9,9 @@ from sqlalchemy.orm import Session
 from app.models import Chapter, Project
 from app.routers.ai.gated_draft_helpers import _count_words_plain, _save_chapter_content
 from app.services.ai.service import AIService
-from app.services.dabai.consistency_check import check_dabai_consistency
 from app.services.dabai.draft_stream import stream_dabai_chapter_draft
 from app.services.dabai.outline_plan import resolve_chapter_plan
+from app.services.dabai.quality_check import run_dabai_quality
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 from app.utils.dabai_mode import is_dabai_project
 
@@ -114,14 +114,18 @@ async def dabai_gated_draft_event_stream(
         yield _sse({"error": f"保存失败：{e}"})
         return
 
-    yield _sse({"event": "qc_running", "attempt": 1, "dabai_consistency": True, "label": "dabai 设定一致性校验…"})
+    yield _sse({
+        "event": "qc_running", "attempt": 1, "dabai_consistency": True,
+        "label": "dabai 质检 v2：设定一致性 + 衔接/五拍/钩子…",
+    })
     plan = resolve_chapter_plan(db, project_id, chapter)
-    report = check_dabai_consistency(db, project, chapter, plan_node=plan)
+    report = await run_dabai_quality(svc, db, project, chapter, plan_node=plan)
     chapter.last_quality_report = report
     chapter.last_quality_score = report.get("overall_score")
     passed = bool(report.get("consistency_pass", True))
     blockers = report.get("blockers") or []
     warnings = report.get("warnings") or []
+    llm_part = report.get("llm") or {}
 
     score = float(report.get("overall_score") or (100 if passed else 40))
 
@@ -133,8 +137,16 @@ async def dabai_gated_draft_event_stream(
         "overall_score": score,
         "subscribe_intent": score,
         "blockers": blockers[:5],
-        "warnings": warnings[:5],
-        "summary": "设定一致性通过" if passed else f"存在 {len(blockers)} 条阻断项",
+        "warnings": warnings[:8],
+        "continuity_score": llm_part.get("continuity_score"),
+        "beat_score": llm_part.get("beat_score"),
+        "hook_score": llm_part.get("hook_score"),
+        "suggestions": llm_part.get("suggestions") or [],
+        "summary": (
+            "质检通过" if passed and not warnings
+            else f"{len(warnings)} 条提醒" if passed
+            else f"存在 {len(blockers)} 条阻断项"
+        ),
     })
 
     if passed:

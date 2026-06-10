@@ -1,7 +1,7 @@
 /**
  * @file 卷级导演单展示（燃点 / 卷末高潮 / 节奏骨架 / 下卷悬念）
  */
-import { Flame, Target, Sparkles, GitBranch, Clock, AlertCircle } from 'lucide-react'
+import { Flame, Target, Sparkles, GitBranch, Clock, AlertCircle, Globe, MapPin } from 'lucide-react'
 import clsx from 'clsx'
 import type { OutlineNode } from '../../types'
 import {
@@ -215,6 +215,54 @@ function ReadBlock({ label, sublabel, children, accent }: {
   )
 }
 
+// ── 世界地图块（dabai 专属）────────────────────────────────────────────────────
+
+/**
+ * 展示大白文卷级世界地图数据（来自 OutlineNode.extra.world_map）。
+ * Bootstrap gen_volumes_map_dabai 写入；只读，不可在此编辑。
+ */
+function WorldMapBlock({ extra }: { extra: Record<string, unknown> }) {
+  const wm = (extra.world_map ?? {}) as Record<string, unknown>
+  const regionName = typeof wm.region_name === 'string' ? wm.region_name : null
+  const mapNote = typeof wm.map_note === 'string' ? wm.map_note : null
+  const travelSpine = Array.isArray(wm.travel_spine) ? (wm.travel_spine as string[]) : []
+  const locs = Array.isArray(wm.locations)
+    ? (wm.locations as Array<Record<string, string>>)
+    : []
+  if (!regionName && locs.length === 0 && !mapNote) return null
+
+  return (
+    <section>
+      <SectionLabel
+        icon={<Globe size={12} className="text-teal-600" />}
+        title={regionName ? `地图：${regionName}` : '本卷地图区域'}
+        hint="Bootstrap 生成 · 写章自动注入"
+      />
+      <div className="rounded-lg border border-teal-200 bg-teal-50/40 px-3 py-2 space-y-1.5">
+        {mapNote && (
+          <p className="text-xs text-teal-800 leading-relaxed italic">{mapNote}</p>
+        )}
+        {travelSpine.length > 0 && (
+          <p className="text-[11px] text-gray-500 flex items-center gap-1">
+            <MapPin size={10} className="shrink-0" />
+            {travelSpine.join(' → ')}
+          </p>
+        )}
+        {locs.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 pt-0.5">
+            {locs.map((l, i) => (
+              <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-teal-100 text-teal-700">
+                {l.name ?? '?'}
+                {l.danger === 'dangerous' ? ' ⚠' : l.danger === 'forbidden' ? ' 🔒' : ''}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
 /** 大纲页「基础」Tab：卷级完整导演单（可编辑） */
 export function VolumeDirectorPanel({
   node,
@@ -272,6 +320,7 @@ export function VolumeDirectorPanel({
   return (
     <div className="space-y-4">
       <MetaBadges d={d} />
+      <WorldMapBlock extra={node.extra ?? {}} />
       {d.protagonistRealmRange && (
         <ReadBlock label="主角境界" sublabel="本卷初 → 卷末（Step 9 战力曲线）" accent="gray">
           {d.protagonistRealmRange}

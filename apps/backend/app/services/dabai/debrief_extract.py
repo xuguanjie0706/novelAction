@@ -15,10 +15,19 @@ def build_debrief_prompt(
     chapter_number: int,
     content: str,
     plan_summary: str,
+    known_characters: list[str] | None = None,
 ) -> tuple[str, str]:
+    names_line = ""
+    if known_characters:
+        names_line = (
+            "人名规范：graph_facts 中的 character/a/b 必须使用以下标准名"
+            "（首位是主角），禁止用「主角」「少年」等代称：\n"
+            f"{('、'.join(known_characters))}\n\n"
+        )
     user = (
         f"第{chapter_number}章 {chapter_title}\n"
         f"章纲摘要：{plan_summary[:400]}\n\n"
+        f"{names_line}"
         f"正文（节选）：{(content or '')[:6000]}\n\n"
         "返回 JSON：\n"
         "{\n"
@@ -38,7 +47,8 @@ def build_debrief_prompt(
 
 
 async def extract_dabai_debrief(svc: Any, *, chapter_number: int, title: str,
-                              content: str, plan_summary: str) -> dict:
+                              content: str, plan_summary: str,
+                              known_characters: list[str] | None = None) -> dict:
     from app.services.bootstrap.parse import parse_json
 
     system, user = build_debrief_prompt(
@@ -46,6 +56,7 @@ async def extract_dabai_debrief(svc: Any, *, chapter_number: int, title: str,
         chapter_number=chapter_number,
         content=content,
         plan_summary=plan_summary,
+        known_characters=known_characters,
     )
     raw = await svc._call_with_retry(
         system, user, task="dabai.debrief", max_tokens=2048,

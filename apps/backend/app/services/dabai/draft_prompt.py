@@ -1,9 +1,17 @@
-"""dabai 写作 prompt（主链路 Project/Chapter + OutlineNode.extra.dabai）。"""
+"""dabai 写作 prompt（主链路 Project/Chapter + OutlineNode.extra.dabai）。
+
+上下文注入块（图谱/前情/记忆/人物状态）由 ``draft_context.build_dabai_draft_context``
+统一组装后传入，本模块只负责拼装顺序与措辞，不直连任何数据源。
+"""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from app.models import Chapter, OutlineNode, Project
-from app.services.dabai.neo4j_sync import build_graph_context_block
 from app.services.dabai.outline_plan import chapter_display_number
+
+if TYPE_CHECKING:
+    from app.services.dabai.draft_context import DabaiDraftContext
 
 
 def _dabai_elements(plan: OutlineNode | None) -> dict:
@@ -54,8 +62,13 @@ def build_dabai_draft_prompt(
     prev_chapter_tail: str = "",
     user_prompt: str = "",
     replace_existing: bool = False,
+    context: "DabaiDraftContext | None" = None,
 ) -> tuple[str, str]:
-    """构造 dabai 正文 (system, user) prompt；必须逐项落实章节要素五拍。"""
+    """构造 dabai 正文 (system, user) prompt；必须逐项落实章节要素五拍。
+
+    Args:
+        context: 上下文注入块（图谱/前情/记忆/人物状态）；None 时各块跳过（降级兼容）。
+    """
     extra = (plan.extra if plan else {}) or {}
     gf = (project.extra or {}).get("golden_finger") or {}
     pos = (project.extra or {}).get("positioning") or {}
@@ -70,27 +83,36 @@ def build_dabai_draft_prompt(
         "2. 必须按【本章爽点节拍（章节要素）】五拍顺序写，不得跳过或合并成一段糊过去；\n"
         "3. 情绪反转须有转折拍铺垫；见证者反应分级递进（愣→疑→惊→服）；\n"
         f"4. 篇幅：正文 {lo}～{hi} 字，严禁超过 {hi} 字；五拍各用紧凑篇幅，禁止重复铺陈；\n"
-        "5. 只输出正文，不要标题、不要小标题、不要旁白说明。"
+        "5. 衔接硬约束：开头必须正面承接【上章结尾】与上章末钩子；人物境界/位置/敌对关系"
+        "以【当前状态】块为准；位置变化必须在正文交代移动过程，禁止无交代瞬移；"
+        "禁止与【前情提要】【相关记忆】矛盾；\n"
+        "6. 只输出正文，不要标题、不要小标题、不要旁白说明。"
     )
 
-    graph_block = build_graph_context_block(str(project.id))
     beat_block = build_dabai_chapter_elements_block(plan)
 
     user_parts = [
         f"《{project.title}》第{ch_no}章",
         f"金手指：{gf.get('name', '')}（{gf.get('core_ability', '')}）",
     ]
-    if graph_block.strip():
-        user_parts.append(graph_block.strip())
-
-    user_parts.append("【本章爽点节拍（章节要素，必须逐项落实）】")
-    user_parts.append(beat_block)
+    # 注入顺序：全局状态 → 前情 → 记忆 → 出场人物 → 上章结尾 → 五拍（任务紧随其后）
+    for block in (
+        (context.graph_block if context else ""),
+        (context.recent_plot_block if context else ""),
+        (context.memory_block if context else ""),
+        (context.char_state_block if context else ""),
+    ):
+        if block and block.strip():
+            user_parts.append(block.strip())
 
     if prev_chapter_tail.strip():
-        tail = prev_chapter_tail.strip()[-400:]
+        tail = prev_chapter_tail.strip()[-600:]
         user_parts.append(
             f"【上章结尾（须紧接下一瞬间续写）】\n{tail}"
         )
+
+    user_parts.append("【本章爽点节拍（章节要素，必须逐项落实）】")
+    user_parts.append(beat_block)
 
     task = (
         f"按上面五拍写出第{ch_no}章正文。"

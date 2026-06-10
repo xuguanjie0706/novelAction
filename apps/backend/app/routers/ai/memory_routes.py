@@ -222,6 +222,7 @@ async def reembed_memory(
 def list_memory(
     project_id: str,
     memory_type: Optional[str] = None,
+    chapter_id: Optional[str] = Query(None, description="只看某章提取的记忆（dabai 复盘面板用）"),
     sort_by: Optional[str] = Query(
         None,
         description="排序字段：chapter（默认）/ importance / access_count / recent_access",
@@ -245,6 +246,8 @@ def list_memory(
     )
     if memory_type:
         q = q.filter(MemoryChunk.memory_type == memory_type)
+    if chapter_id:
+        q = q.filter(MemoryChunk.chapter_id == chapter_id)
 
     if sort_by == "importance":
         q = q.order_by(MemoryChunk.importance_score.desc().nullslast())

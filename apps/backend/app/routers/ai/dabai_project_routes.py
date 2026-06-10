@@ -16,41 +16,86 @@ from app.models import Chapter, Project
 from app.models.user import User
 from app.routers.ai.dabai_draft_handlers import dabai_draft_assist_event_stream
 from app.services.ai_service import AIService
-from app.services.dabai.consistency_check import check_dabai_consistency
-from app.services.dabai.outline_plan import resolve_chapter_plan
+from app.services.dabai.debrief_apply import apply_dabai_debrief
+from app.services.dabai.quality_check import run_dabai_quality
 from app.utils.dabai_mode import is_dabai_project
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-class DabaiConsistencyRequest(BaseModel):
-    chapter_id: UUID
-
-
-@router.post("/dabai-consistency-check")
-def dabai_consistency_check(
-    project_id: str,
-    req: DabaiConsistencyRequest,
-    db: Session = Depends(get_db),
-):
-    """dabai 正文设定一致性校验（规则引擎，非文采质检）。"""
+def _get_dabai_chapter(db: Session, project_id: str, chapter_id: UUID) -> tuple[Project, Chapter]:
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project or not is_dabai_project(project):
         raise HTTPException(404, "非 dabai 项目")
     chapter = (
         db.query(Chapter)
-        .filter(Chapter.id == req.chapter_id, Chapter.project_id == project_id)
+        .filter(Chapter.id == chapter_id, Chapter.project_id == project_id)
         .first()
     )
     if not chapter:
         raise HTTPException(404, "章节不存在")
-    plan = resolve_chapter_plan(db, project_id, chapter)
-    report = check_dabai_consistency(db, project, chapter, plan_node=plan)
+    return project, chapter
+
+
+class DabaiConsistencyRequest(BaseModel):
+    chapter_id: UUID
+    mode: Literal["rules", "full"] = "full"   # rules=纯规则秒回；full=规则+LLM 衔接/五拍/钩子
+    model_profile: Literal["local", "gemini"] = "gemini"
+    llm_provider_id: Optional[UUID] = None
+
+
+@router.post("/dabai-consistency-check")
+async def dabai_consistency_check(
+    project_id: str,
+    req: DabaiConsistencyRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """dabai 质检 v2：规则一致性（阻断）+ LLM 衔接/五拍/钩子（提醒，可降级）。"""
+    project, chapter = _get_dabai_chapter(db, project_id, req.chapter_id)
+    svc = AIService(
+        profile=req.model_profile, db=db,
+        llm_provider_id=req.llm_provider_id, user_id=user.id,
+    )
+    report = await run_dabai_quality(
+        svc, db, project, chapter, with_llm=(req.mode == "full"),
+    )
     chapter.last_quality_report = report
     chapter.last_quality_score = report.get("overall_score")
     db.commit()
     return report
+
+
+class DabaiDebriefRequest(BaseModel):
+    chapter_id: UUID
+    model_profile: Literal["local", "gemini"] = "gemini"
+    llm_provider_id: Optional[UUID] = None
+
+
+@router.post("/dabai-debrief")
+async def dabai_debrief(
+    project_id: str,
+    req: DabaiDebriefRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """dabai 章末复盘：提取图事实/向量记忆 → Neo4j + MemoryChunk（幂等，可重跑）。"""
+    project, chapter = _get_dabai_chapter(db, project_id, req.chapter_id)
+    if not (chapter.content or "").strip():
+        raise HTTPException(400, "本章还没有正文，无法复盘")
+    svc = AIService(
+        profile=req.model_profile, db=db,
+        llm_provider_id=req.llm_provider_id, user_id=user.id,
+    )
+    try:
+        result = await apply_dabai_debrief(db, project, chapter, svc)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("dabai 复盘失败 chapter=%s", req.chapter_id)
+        raise HTTPException(500, f"复盘失败：{exc}") from exc
+    return {"chapter_id": str(req.chapter_id), **result}
 
 
 class DabaiDraftRequest(BaseModel):

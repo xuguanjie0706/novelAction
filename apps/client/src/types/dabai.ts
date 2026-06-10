@@ -136,6 +136,7 @@ export const DABAI_STEP_LABELS: Record<string, string> = {
   factions: '势力',
   characters: '人物',
   storylines: '故事线',
+  story_assets: '剧情资产·关系',
   volumes: '卷骨架',
   chapter_outlines: '章纲·爽点节拍',
 }

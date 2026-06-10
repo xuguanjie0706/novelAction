@@ -63,11 +63,14 @@ def build_dabai_draft_prompt(
     user_prompt: str = "",
     replace_existing: bool = False,
     context: "DabaiDraftContext | None" = None,
+    pre_warn_block: str = "",
 ) -> tuple[str, str]:
     """构造 dabai 正文 (system, user) prompt；必须逐项落实章节要素五拍。
 
     Args:
         context: 上下文注入块（图谱/前情/记忆/人物状态）；None 时各块跳过（降级兼容）。
+        pre_warn_block: 写前导演单（pre_warn.format_prewarn_block 产出）；
+            注入在五拍块之前，块内指令优先级高于章纲字面；空串 = 无简报降级路径。
     """
     extra = (plan.extra if plan else {}) or {}
     gf = (project.extra or {}).get("golden_finger") or {}
@@ -95,7 +98,7 @@ def build_dabai_draft_prompt(
         f"《{project.title}》第{ch_no}章",
         f"金手指：{gf.get('name', '')}（{gf.get('core_ability', '')}）",
     ]
-    # 注入顺序：全局状态 → 前情 → 记忆 → 出场人物 → 上章结尾 → 五拍（任务紧随其后）
+    # 注入顺序：全局状态 → 前情 → 记忆 → 出场人物 → 上章结尾 → 导演单 → 五拍（任务紧随其后）
     for block in (
         (context.graph_block if context else ""),
         (context.recent_plot_block if context else ""),
@@ -110,6 +113,9 @@ def build_dabai_draft_prompt(
         user_parts.append(
             f"【上章结尾（须紧接下一瞬间续写）】\n{tail}"
         )
+
+    if pre_warn_block.strip():
+        user_parts.append(pre_warn_block.strip())
 
     user_parts.append("【本章爽点节拍（章节要素，必须逐项落实）】")
     user_parts.append(beat_block)

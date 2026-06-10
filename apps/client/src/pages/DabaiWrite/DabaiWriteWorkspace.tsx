@@ -6,7 +6,7 @@ import { EditorContent } from '@tiptap/react'
 import clsx from 'clsx'
 import { Brain, Loader2, PenLine, ShieldCheck, Sparkles } from 'lucide-react'
 import DabaiChapterBeatCard from '../../components/Dabai/DabaiChapterBeatCard'
-import DabaiConsistencyBanner from '../../components/Writing/ChapterEditor/DabaiConsistencyBanner'
+import DabaiWriteQualityBanner, { isGenericQualityReport } from './DabaiWriteQualityBanner'
 import type { Chapter, OutlineNode } from '../../types'
 import type { DabaiBeatDisplay } from '../../utils/dabaiOutlineDisplay'
 import DabaiDebriefPanel from './DabaiDebriefPanel'
@@ -34,9 +34,9 @@ export default function DabaiWriteWorkspace({ projectId, chapter, plan, beat }: 
   )
   const [debriefOpen, setDebriefOpen] = useState(false)
 
-  const consistencyReport = chapter.last_quality_report as Parameters<
-    typeof DabaiConsistencyBanner
-  >[0]['report']
+  const qualityReport = isGenericQualityReport(chapter.last_quality_report)
+    ? chapter.last_quality_report
+    : null
 
   return (
     <div className="flex h-full min-w-0">
@@ -97,7 +97,7 @@ export default function DabaiWriteWorkspace({ projectId, chapter, plan, beat }: 
                 本章未关联章纲节点，AI 将无法读取章节要素。
               </p>
             )}
-            <DabaiConsistencyBanner report={consistencyReport} />
+            <DabaiWriteQualityBanner report={qualityReport} />
             {editor && <EditorContent editor={editor} />}
           </div>
         </div>

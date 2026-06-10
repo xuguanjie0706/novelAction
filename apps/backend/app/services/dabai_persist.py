@@ -18,8 +18,38 @@ from app.models.dabai import (
     DabaiCharacter, DabaiChapterOutline, DabaiFaction,
     DabaiProject, DabaiStoryline, DabaiVolume,
 )
+from app.models.dabai_lab import DabaiAsset, DabaiClue, DabaiRelation
 
 logger = logging.getLogger("dabai.persist")
+
+
+def make_chapter_outline_row(
+    project_id: UUID,
+    volume_id: UUID | None,
+    ch: dict,
+    fallback_number: int = 0,
+) -> DabaiChapterOutline:
+    """章纲 dict → DabaiChapterOutline 行（bootstrap 与写作期卷展开共用同一字段映射）。
+
+    Args:
+        project_id: 所属项目 id。
+        volume_id: 目标卷 id（bootstrap=第1卷；卷展开=被展开卷）。
+        ch: pipeline 归一化后的章纲 dict（normalize_chapter 产物）。
+        fallback_number: ch 缺 chapter_number 时的兜底全局章号。
+    """
+    return DabaiChapterOutline(
+        project_id=project_id, volume_id=volume_id,
+        chapter_number=int(ch.get("chapter_number", fallback_number)),
+        title=ch.get("title"), shuang_type=ch.get("shuang_type"),
+        yaqu_setup=ch.get("yaqu_setup"), emotion_turn=ch.get("emotion_turn"),
+        yinbao=ch.get("yinbao"),
+        shuang_payoff=ch.get("shuang_payoff"), witnesses=ch.get("witnesses") or [],
+        end_hook=ch.get("end_hook"), new_info_count=int(ch.get("new_info_count", 1)),
+        involved_characters=ch.get("involved_characters") or [],
+        is_big_beat=bool(ch.get("is_big_beat", False)),
+        expected_words=int(ch.get("expected_words", 2000)),
+        realm_rank=ch.get("realm_rank"),
+    )
 
 
 class DabaiPersister:
@@ -79,9 +109,68 @@ class DabaiPersister:
                     project_id=p.id, name=s.get("name", ""), type=s.get("type"),
                     summary=s.get("summary"), sort_order=i,
                 ))
+        elif step == "story_assets":
+            self._save_story_assets(data or {})
         elif step == "volumes":
             self._save_volumes(data or [])
         self.db.commit()
+
+    def _protagonist_name(self) -> str:
+        """主角名（characters 步已落库后调用）。"""
+        rows = (
+            self.db.query(DabaiCharacter)
+            .filter(DabaiCharacter.project_id == self.project.id)
+            .order_by(DabaiCharacter.sort_order)
+            .all()
+        )
+        for c in rows:
+            if "主角" in (c.role or ""):
+                return c.name
+        return rows[0].name if rows else "主角"
+
+    def _save_story_assets(self, data: dict) -> None:
+        """剧情资产+初始关系分流落库（台账种子）。
+
+        - debut=start（开局既有）→ DabaiAsset(source=seed, active)
+        - debut=later（剧情规划）→ DabaiClue(foreshadow, chapter_planted=0)
+          ——未获得的东西不得进「当前台账」注入，否则模型会提前用（能力漂移）
+        - initial_relations → DabaiRelation(source=seed, history 锚定第0章)
+        """
+        p = self.project
+        protag = self._protagonist_name()
+        for a in (data.get("plot_assets") or [])[:8]:
+            if not isinstance(a, dict) or not str(a.get("name") or "").strip():
+                continue
+            kind = str(a.get("kind") or "item").lower()
+            kind = kind if kind in ("skill", "item") else "item"
+            name = str(a["name"]).strip()[:120]
+            desc = f"[{a.get('plot_role', '')}] {str(a.get('description') or '')[:200]}"
+            if str(a.get("debut") or "start").lower() == "later":
+                self.db.add(DabaiClue(
+                    project_id=p.id, title=name, clue_type="foreshadow",
+                    description=f"{desc}（规划第{a.get('planned_volume', '?')}卷登场）",
+                    chapter_planted=0, status="open", source="bootstrap",
+                ))
+            else:
+                self.db.add(DabaiAsset(
+                    project_id=p.id, kind=kind, name=name,
+                    owner=str(a.get("owner") or protag).strip()[:100] or protag,
+                    description=desc, status="active", source="seed",
+                ))
+        for r in (data.get("initial_relations") or [])[:10]:
+            if not isinstance(r, dict) or not str(r.get("to") or "").strip():
+                continue
+            attitude = str(r.get("attitude") or "中立").strip()[:40]
+            tension = str(r.get("tension") or "")[:200]
+            self.db.add(DabaiRelation(
+                project_id=p.id,
+                from_name=str(r.get("from") or protag).strip()[:100] or protag,
+                to_name=str(r["to"]).strip()[:100],
+                attitude=attitude, note=tension, last_change_chapter=0,
+                history=[{"chapter": 0, "attitude": attitude,
+                          "reason": tension or "开局设定"}],
+                source="seed",
+            ))
 
     def _save_volumes(self, vols: list[dict]) -> None:
         p = self.project
@@ -104,22 +193,16 @@ class DabaiPersister:
             self.first_volume_id = rows[0].id  # 章纲默认归第 1 卷
 
     def save_chapter_batch(self, batch: list[dict]) -> int:
-        """落一批章纲（章号沿用全卷连续序），返回累计章数。"""
+        """落一批章纲（章号沿用全卷连续序），返回累计章数。
+
+        bootstrap 路径只展开第 1 卷，volume_id 归第 1 卷；写作期按卷展开
+        走 make_chapter_outline_row（带目标卷 id），不经过本方法。
+        """
         p = self.project
         for ch in batch:
             self._chapter_seq += 1
-            self.db.add(DabaiChapterOutline(
-                project_id=p.id, volume_id=self.first_volume_id,
-                chapter_number=int(ch.get("chapter_number", self._chapter_seq)),
-                title=ch.get("title"), shuang_type=ch.get("shuang_type"),
-                yaqu_setup=ch.get("yaqu_setup"), emotion_turn=ch.get("emotion_turn"),
-                yinbao=ch.get("yinbao"),
-                shuang_payoff=ch.get("shuang_payoff"), witnesses=ch.get("witnesses") or [],
-                end_hook=ch.get("end_hook"), new_info_count=int(ch.get("new_info_count", 1)),
-                involved_characters=ch.get("involved_characters") or [],
-                is_big_beat=bool(ch.get("is_big_beat", False)),
-                expected_words=int(ch.get("expected_words", 2000)),
-                realm_rank=ch.get("realm_rank"),
+            self.db.add(make_chapter_outline_row(
+                p.id, self.first_volume_id, ch, fallback_number=self._chapter_seq,
             ))
         self.db.commit()
         return self._chapter_seq

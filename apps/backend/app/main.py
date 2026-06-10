@@ -70,6 +70,8 @@ from app.routers import consistency_fix as consistency_fix_router
 from app.routers import jobs as jobs_router
 from app.routers import fanqie_proxy as fanqie_proxy_router
 from app.routers import dabai as dabai_router  # 大白文独立分支（爽点节拍器）
+from app.routers import dabai_lab_ai as dabai_lab_ai_router  # dabai 实验书架写作期 AI（质检/复盘/记忆/线索/预警）
+from app.routers import dabai_expand as dabai_expand_router  # dabai 按卷展开章纲（写作期懒展开）
 from app.services.llm_config import seed_llm_from_env_if_empty
 from app.services.cover_storage import ensure_cover_storage_dir, resolved_cover_storage_dir
 from app.services.character_portrait_storage import (
@@ -263,6 +265,8 @@ app.include_router(fanqie_proxy_router.router, prefix="/api/v1")
 
 # 大白文独立分支：自带 pipeline + dabai_* 表，路由内部按 Bearer user 隔离。
 app.include_router(dabai_router.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+app.include_router(dabai_lab_ai_router.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
+app.include_router(dabai_expand_router.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])
 
 # 全局只读 / 管理（需登录，不绑项目）。
 app.include_router(admin_llm.router, prefix="/api/v1", dependencies=[Depends(get_current_user)])

@@ -17,8 +17,16 @@ _PROOF_MARKERS = ("证", "验证", "烫", "松", "止血", "倒计时", "止疼"
 _CHOICE_MARKERS = ("择", "赌", "挤", "被迫", "强绑", "否决", "提取", "绑定", "接受")
 _META_MARKERS = ("穿越", "熟读", "网文", "套路", "等的就是")
 
-_AWAKENING_KEYWORDS = (
-    "系统", "觉醒", "金手指", "吞噬", "提取", "绑定", "激活", "传承", "外挂",
+# 首次绑定/觉醒信号（章纲字段须出现，不能仅靠全书金手指名）
+_FIRST_AWAKENING_MARKERS = (
+    "觉醒", "绑定", "锁定", "首次", "激活", "倒计时", "机械音", "传承", "外挂",
+    "金手指", "叮", "接入", "载入", "启动",
+)
+# 首次实战使用（黄金前段仍须疑→证→择，但非「再觉醒」）
+_FIRST_USE_MARKERS = ("发动", "首用", "首战", "第一次")
+# 熟练使用期：打脸/升级戏，不应再套 DB-10
+_MATURE_USE_MARKERS = (
+    "吸干", "转化", "再跳", "修为点", "闻丹", "捏碎", "撒碎", "休了你", "当面休",
 )
 
 
@@ -28,19 +36,31 @@ def is_awakening_chapter(
     golden_finger_name: str = "",
     golden_chapters: int = 3,
 ) -> bool:
-    """章纲是否属金手指首次登场/绑定章（启发式，覆盖黄金前三章）。"""
+    """章纲是否属金手指首次登场/绑定/首战章（仅黄金前段 + 本章字段启发式）。"""
     num = int(ch.get("chapter_number") or 0)
     if num < 1 or num > golden_chapters:
         return False
-    parts = [
+    ch_blob = " ".join([
         ch.get("title") or "",
         ch.get("yinbao") or "",
         ch.get("end_hook") or "",
-        ch.get("shuang_type") or "",
-        golden_finger_name,
-    ]
-    blob = " ".join(parts)
-    return any(k in blob for k in _AWAKENING_KEYWORDS)
+        ch.get("emotion_turn") or "",
+        ch.get("yaqu_setup") or "",
+    ])
+    if any(m in ch_blob for m in _MATURE_USE_MARKERS):
+        return False
+    if any(m in ch_blob for m in _FIRST_AWAKENING_MARKERS):
+        return True
+    if any(m in ch_blob for m in _FIRST_USE_MARKERS):
+        return True
+    # 金手指名仅作弱信号：须本章同时出现「系统」+ 脑中提示类场景
+    gf = (golden_finger_name or "").strip()
+    if gf and any(k in gf for k in ("系统", "传承", "外挂")):
+        if "系统" in ch_blob and any(
+            u in ch_blob for u in ("脑中", "脑海", "响起", "提示", "濒死", "锁定")
+        ):
+            return True
+    return False
 
 
 def bind_ladder_emotion_turn_hint(gf_name: str = "金手指") -> str:
@@ -56,7 +76,7 @@ def chapter_outline_bind_block(gf_name: str = "") -> str:
     hint = bind_ladder_emotion_turn_hint(gf_name or "金手指")
     return (
         "\n【金手指绑定节拍 · 黄金章专用】\n"
-        "若本章含系统/传承/天赋首次觉醒或首次使用，emotion_turn 必须写清「疑→证→择」：\n"
+        "若本章为金手指首次觉醒/绑定或首战使用（非熟练打脸章），emotion_turn 必须写清「疑→证→择」：\n"
         "  疑：濒死/屈辱下先怀疑（幻觉、心魔、鬼叫、诈骗），禁止一句「活下去的希望」就全信；\n"
         "  证：给一个即时可验证的身体反馈（倒计时压迫、止痛、锁链松一分、意识被拽回）；\n"
         "  择：主角主动但克制地选择（挤出两个字/赌命），或系统濒死强绑（无否决权）。\n"

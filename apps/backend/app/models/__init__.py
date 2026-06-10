@@ -43,6 +43,10 @@ from app.models.dabai import (
     DabaiProject, DabaiVolume, DabaiChapterOutline,
     DabaiFaction, DabaiCharacter, DabaiStoryline,
 )
+from app.models.dabai_lab import (
+    DabaiPreWarnRecord, DabaiQualityReport, DabaiMemory, DabaiClue,
+    DabaiAsset, DabaiRelation,
+)
 
 __all__ = [
     "Project",
@@ -91,4 +95,10 @@ __all__ = [
     "DabaiFaction",
     "DabaiCharacter",
     "DabaiStoryline",
+    "DabaiPreWarnRecord",
+    "DabaiQualityReport",
+    "DabaiMemory",
+    "DabaiClue",
+    "DabaiAsset",
+    "DabaiRelation",
 ]

@@ -376,7 +376,89 @@ logline
 - [x] 卷级结构化战力时间轴（`/outline/power-timeline` + 创作端「战力轴」页）
 - [x] **地点逐章台账 + 空间防漂移**（2026-06）：`Character.extra.location_milestones` 逐章记录位置变化与移动原因（`location_change_reason`）；复盘双路径透传 + 可编辑「移动原因」框；写章注入「近期行踪」与空间连续性硬约束。地点入库仍走复盘期 `location_debrief.enrich_new_locations`（queue_auto 经 `chapter-debrief` 已触发，非 Bootstrap/势力生成期）
 
-### 大白文（dabai）写章上下文链路（2026-06-10 重修）
+### 大白文实验前端（dabai API，2026-06-10）
+
+- **书架**：`/dabai` → `pages/Dabai/`（网格同「我的书架」，数据走 `/api/v1/dabai`）
+- **写作**：`/dabai/:id/write-dabailab` → `pages/Dabai/write-dabailab/`（章纲侧栏 + 五拍要素 + 流式正文；无 DabaiResult / TipTap）
+- Bootstrap **dabaiwen** 仍走 `/project/:id/dabai-write`，与实验书架分离
+
+### 实验书架写作期产物链路（预警/质检/记忆/线索，2026-06-10 二批）
+
+lab 侧（dabai_* 表）补齐写作期四件套，与精品文链路隔离、全部落库（持久化优先）：
+
+- **新表**（`models/dabai_lab.py` + migration `f3a4b5c6d7e9`，FK 均 ondelete=CASCADE）：
+  `dabai_pre_warn_records`（导演单，每章最新一条）/ `dabai_quality_reports`（质检报告，每章最新一条）/
+  `dabai_memories`（复盘记忆，章级幂等）/ `dabai_clues`（线索台账 open/resolved/dropped）。
+- **预警**：`lab_pre_warn.resolve_lab_pre_warn` 增 `db` 参数落库（`persist_lab_pre_warn`）；
+  前端 `DabaiDraftEvent` 增 `pre_warn_running/done`，写作区右侧栏「预警」面板实时 + 落库回看。
+- **质检**：`services/dabai/lab_quality.py`（规则层 DLB-01 字数偏离 / DLB-02 见证者缺席 + LLM 层复用
+  `quality_check._merge_report`，DBQ-* 口径一致；task=`dabai.quality`）。⚠️ `quality_check` 必须函数内
+  延迟导入（经 draft_stream→AIService→routers.ai 有循环 import 链）。
+- **复盘**：`services/dabai/lab_debrief.py`（task=`dabai.debrief`，提取记忆 3-8 条 + 线索埋设/回收；
+  同章重跑先删旧记忆；新线索按标题去重、回收按 id 精确匹配；mock 项目走章纲启发式降级）。
+- **端点**：`routers/dabai_lab_ai.py`（prefix `/dabai`）：POST `chapters/{cid}/quality-check`（mode=rules|full）、
+  POST `chapters/{cid}/debrief`、GET `quality-report` / `pre-warn` / `memory?chapter_id=` / `clues?status=`、
+  PATCH `clues/{id}`（手动纠偏）。
+- **前端**：`api/dabaiLab.ts` + `types/dabaiLab.ts`；写作区右侧折叠栏 `write-dabailab/side/`
+  （WorkspaceSidePanel：预警/质检/记忆三 Tab，随章刷新）；顶层 tab 增 `memory`（记忆库，按章分组+类型筛选+搜索）
+  与 `clues`（线索台账，状态筛选+手动回收/弃用），`workspaceTab.ts` 为唯一 tab 定义源。
+- **写章流自动闭环**：写前预警（mock 跳过）→ 正文 → 正文落库后同流自动质检+复盘
+  （`routers/dabai.py:_auto_qc_debrief`，SSE `quality_running/done`、`debrief_running/done`；
+  单步失败 yield 带 error 的 done 事件不中断流；mock 项目质检只跑规则层、复盘走启发式）。
+  侧栏「质检/记忆」面板经 refreshKey 自动重拉；手动按钮保留（可重跑）。
+
+### 实验书架双台账：资产 + 人物关系（2026-06-11 三批）
+
+> 设计决策：**不照搬**主链路 Skill/Item/CharacterRelationship 三表（避免平行栈），
+> 用两张轻量台账表治三类漂移：能力漂移、资产漂移、关系漂移（敌对→臣服→效忠即爽点曲线）。
+
+- **新表**（migration `a4b5c6d7e8f1`）：`dabai_assets`（kind=skill/item/golden_finger，owner 人名字符串，
+  status=active/consumed/lost + status_chapter）/ `dabai_relations`（from/to 人名、attitude 最新态度、
+  `history` JSON 保留完整轨迹 `{chapter, attitude, reason}`，chapter=null 表示手动改）。
+- **服务**：`services/dabai/lab_ledger.py` 三职责——
+  ① `seed_ledgers`：开局派生（金手指→资产；人物 role→初始态度：打脸对象=敌对/女主=暧昧/导师=扶持），
+  幂等（有 seed 行即跳过），写章流/复盘/GET 端点均惰性触发；
+  ② `build_ledger_block`：注入块（主角 active 资产 + 在场人物关系 + 硬约束「禁用台账外能力/已消耗不得再用/态度变化须交代」），
+  注入正文 prompt（`dabai_write.build_prose_prompt` 增 `ledger_block` 参数）+ 导演单 prompt + 复盘 prompt；
+  ③ `apply_ledger_changes`：复盘新增 `asset_changes`（gain/consume/lose/upgrade，gain 按 name+owner 去重、
+  失而复得自动复活）与 `relation_changes`（同章重跑替换该章轨迹，幂等）。
+- **端点**：`dabai_lab_ai.py` 增 GET/PATCH `assets`、GET/PATCH `relations`（手动纠偏）。
+- **前端**：顶层 tab `ledger`（台账，`LedgerPanel` 资产/关系双子页：状态标记、态度下拉改、轨迹展开）；
+  复盘结果卡片显示资产/关系变更摘要。
+
+### 实验书架 P0 优化：记忆/线索回灌 + 写后抗断流（2026-06-11 四批）
+
+- **回灌（修「只写不读」缺口）**：`lab_draft_context.py` 增 `memory_block`
+  （重要度 desc + 时效 Top-8，跨越近3章窗口之前的事实对模型可见）与 `clue_block`
+  （open 线索按埋设章号升序——埋越久越优先提醒回收）；注入正文 prompt
+  （`build_prose_prompt` 增 `memory_block`/`clue_block` 参数）+ 导演单 prompt（经 ctx 透传）。
+- **写后抗断流**：质检+复盘从 SSE 生成器内移至 `services/dabai/lab_post_write.py`
+  `spawn_post_write_pipeline`——独立 SessionLocal 的 asyncio task，经 Queue 向 SSE 转发进度；
+  客户端关页只丢展示，落库照常完成。`_POST_WRITE_TASKS` 强引用集合防 GC。
+  `debrief_done` 事件增 `asset_changes`/`relation_changes`。
+- **已识别未做**（P1/P2 备忘）：境界 realm_rank 规则化注入导演单 + 倒退阻断规则；
+  质检 suggestions 回灌重写 prompt；质检+复盘合并单次调用省成本；DLB-02 见证者
+  全名匹配误报软化；同章重跑复盘清理本章旧 debrief 线索；重写复用本章最新导演单。
+
+### 实验书架 Bootstrap 新步骤：剧情资产+初始关系（story_assets，2026-06-11 五批）
+
+> 设计决策：台账种子从「规则启发式」升级为「建书期 LLM 生成」，且**开局既有 vs 剧情规划必须分流**——
+> 未获得的东西进「当前台账」注入会让模型提前用（能力漂移），故规划类落线索台账，获得后复盘自然转资产。
+
+- **链路位置**：`storylines → story_assets → volumes`（`dabai/config.py` PIPELINE_STEPS，温度 0.65）。
+- **产出契约**（`dabai/schemas.py`）：`{plot_assets: [{kind, name, plot_role(争夺点/底牌/成长线/身世信物),
+  owner, debut: start|later, planned_volume, description}], initial_relations: [{from, to, attitude, tension}]}`；
+  金手指不重复列入（已单独建账）。
+- **落库分流**（`dabai_persist._save_story_assets`）：debut=start → `dabai_assets`(source=seed, active)；
+  debut=later → `dabai_clues`(foreshadow, chapter_planted=0, source=bootstrap)；
+  initial_relations → `dabai_relations`(source=seed, history 锚定第0章, note=张力)。
+  bootstrap 已写 seed 行 → `lab_ledger.seed_ledgers` 启发式自动跳过（幂等兼容存量书）。
+- **下游一致性**：`prompts._ctx_brief` 注入「剧情资产（卷/章纲须围绕这批东西做文章，禁止另造同位宝物）」，
+  volumes 与 chapter_outlines prompt 自动携带。
+- **mock**：`mock_responses._STORY_ASSETS`（林凡宇宙样本）；前端 `DABAI_STEP_LABELS` 增「剧情资产·关系」。
+- 注意：本仓 pytest 强制 3.12 venv；沙箱验证走 mock pipeline 冒烟（collect_bootstrap 全步通过）。
+
+### 大白文（dabaiwen）写章上下文链路（2026-06-10 重修）
 
 > 背景：dabai 正文衔接差的三个根因均为**静默失效 bug**，已修复：
 > ① `debrief_apply.py` 调用不存在的 `chapter.chapter_number` → 复盘一直 AttributeError 被路由层吞掉，图谱/向量记忆从未写入；
@@ -388,6 +470,7 @@ logline
 - **prompt 顺序**：全局状态→前情→记忆→人物→上章结尾(600字)→五拍→任务；system 增加衔接硬约束（承接末钩子、位置变化须交代移动、以「当前状态」块为准）。
 - **质检 v2**（`services/dabai/quality_check.py`）：规则层（DBC-01 境界倒退仍是唯一阻断）+ LLM 层（task=`dabai.quality` 低温 JSON：衔接 continuity / 五拍逐项 pass·partial·miss / 钩子强度，只出 DBQ-01~04 warning 与 ≤3 条可执行建议，禁文采类）；综合分=衔接40%+五拍40%+钩子20%；LLM 失败降级规则报告（`llm_status`）。gated 写章流与 `/ai/dabai-consistency-check`（升级支持 mode=rules|full + 模型线路）均走此入口。
 - **复盘端点**：`POST /ai/dabai-debrief`（独立于主链路 chapter-debrief 两步流，单步提取+落库，幂等可重跑）；`GET /ai/memory` 支持 `chapter_id` 过滤。采样档：`dabai.quality` 0.2 / `dabai.debrief` 0.25。
+- **写前导演单**（2026-06-10 三批，`services/dabai/pre_warn.py`）：写前一次低温 LLM 调用（task=`dabai.prewarn` 0.25）做「事实裁决 + 写法指导」，解决章纲五拍与实际剧情漂移时写章模型自行裁决出错的问题。输出 `fact_lock`（开笔境界/位置/在场/禁止出现）/ `conflict_notes`（章纲 vs 事实冲突弥合）/ `opening_directive` / `beat_execution`（五拍逐拍落法）/ `bridge_directives`（仅确实需要时给位置/境界交代写法，LLM 确认规避规则误报——**显式决策：不做纯规则预警**，DBC-02 误报停用是前车之鉴）。注入位置：上章结尾之后、五拍块之前，块内指令优先级高于章纲字面。复用 `prepare_dabai_draft_inputs`（draft_stream 新增）与正文共享同一份上下文，不重复查库。落 `PreWriteWarningRecord`（`result.version=dabai-prewarn-v1`）；重写/门控重跑复用本章最新记录；LLM 失败静默降级回无简报路径。SSE：两入口均发 `pre_warn_running` / `pre_warn_done`（`dabai_mode: true`）。写后 DBC-01 阻断保留兜底。
 - **DabaiWrite UI**（2026-06-10 二批）：侧栏分卷折叠（卷头已写/总数、待写/已写筛选、自动展开+滚动定位当前章）；`DabaiInlineProgress` 编辑器内联生成进度（读全局 genQueue 当前章任务 progress，不另起 SSE）；`DabaiDebriefPanel` 复盘/记忆侧栏（一键复盘、图谱同步状态徽章、本章记忆列表）；`DabaiConsistencyBanner` v2 渲染衔接/五拍/钩子分数与修改建议（兼容旧报告）。
 
 ## 待完成功能

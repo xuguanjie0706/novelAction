@@ -33,7 +33,12 @@ function errMessage(err: unknown, fallback: string): string {
   return fallback
 }
 
-export function useDabaiGenerate(): UseDabaiGenerateResult {
+interface UseDabaiGenerateOptions {
+  /** 生成完成后回调；提供时不再打开内联详情 */
+  onDone?: (projectId: string) => void
+}
+
+export function useDabaiGenerate(options?: UseDabaiGenerateOptions): UseDabaiGenerateResult {
   const [list, setList] = useState<DabaiProjectSummary[]>([])
   const [detail, setDetail] = useState<DabaiProjectDetail | null>(null)
   const [generating, setGenerating] = useState(false)
@@ -87,8 +92,9 @@ export function useDabaiGenerate(): UseDabaiGenerateResult {
             toast.error(`${ev.step} 失败：${ev.message}`)
             break
           case 'done':
-            openDetail(ev.project_id)
-            refreshList()
+            if (options?.onDone) options.onDone(ev.project_id)
+            else void openDetail(ev.project_id)
+            void refreshList()
             break
           case 'error':
             toast.error(ev.message)
@@ -101,7 +107,7 @@ export function useDabaiGenerate(): UseDabaiGenerateResult {
     } finally {
       setGenerating(false)
     }
-  }, [openDetail, refreshList])
+  }, [openDetail, options?.onDone, refreshList])
 
   const remove = useCallback(async (id: string) => {
     try {

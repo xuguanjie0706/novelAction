@@ -47,10 +47,10 @@ async def run_step(
     raise DabaiStepError(f"{step} 连续 2 次失败：{last_err}")
 
 
-def _batch_ranges(planned: int, size: int) -> list[tuple[int, int]]:
-    """切分章节区间，如 (60,30) → [(1,30),(31,60)]。"""
+def _batch_ranges(planned: int, size: int, start: int = 1) -> list[tuple[int, int]]:
+    """切分章节区间，如 (60,30) → [(1,30),(31,60)]；start 支持增量补全从中途起批。"""
     size = max(5, size)
-    return [(s, min(s + size - 1, planned)) for s in range(1, planned + 1, size)]
+    return [(s, min(s + size - 1, planned)) for s in range(max(1, start), planned + 1, size)]
 
 
 def _tail_of(batch: list[dict]) -> str:
@@ -83,22 +83,34 @@ def _enforce_realm(batch: list[dict], running: int, vr_hi: int | None, rmax: int
 
 async def aiter_chapter_batches(
     ctx: dict, call: CallFn, cfg: DabaiConfig, target_volume: dict,
+    *,
+    start_chapter: int = 1,
+    chapter_offset: int = 0,
+    prev_tail: str = "",
+    realm_floor: int | None = None,
 ) -> AsyncIterator[tuple[list[dict], int, int]]:
-    """逐批生成目标卷章纲，yield (batch_chapters, batch_start, batch_end)。
+    """逐批生成目标卷章纲，yield (batch_chapters, global_start, global_end)。
 
     批间承接两条线：① 爽点钩子(prev_tail)；② 境界脊柱(realm_floor，单调不减、写库强保证)。
+
+    卷展开（写作期，卷2+ / 增量补全）专用参数：
+      start_chapter: 卷内起始章（1-based）。未满卷增量补全时从已有章数+1 起批。
+      chapter_offset: 全局章号偏移（= 之前各卷 planned_chapters 之和）。落库与 prompt
+        展示均用全局章号（offset + 卷内章号），黄金前3章约束也按全局章号判定。
+      prev_tail: 起步承接钩子。增量补全=本卷末章 end_hook；新展开卷=上一卷末章钩子。
+      realm_floor: 起步境界档（增量补全取本卷已有末章 realm_rank），不低于卷区间下限。
     """
     planned = int(target_volume.get("planned_chapters", cfg.volume_chapters))
     ctx["_target_volume"] = target_volume
     rmax = _realm_max(ctx)
     vr_lo = target_volume.get("realm_start_rank") or 1
     vr_hi = target_volume.get("realm_end_rank") or rmax
-    accumulated: list[dict] = []
-    prev_tail = ""
-    running = int(vr_lo)  # 主角当前境界档，跨批延续
-    for bs, be in _batch_ranges(planned, cfg.chapter_batch_size):
+    prev_tail = (prev_tail or "").strip()
+    running = max(int(realm_floor or 0), int(vr_lo))  # 主角当前境界档，跨批延续
+    for bs, be in _batch_ranges(planned, cfg.chapter_batch_size, start=start_chapter):
         ctx["_batch"] = {
             "batch_start": bs, "batch_end": be,
+            "global_start": chapter_offset + bs, "global_end": chapter_offset + be,
             "prev_tail": prev_tail, "realm_floor": running,
         }
         batch = await run_step(
@@ -108,10 +120,9 @@ async def aiter_chapter_batches(
         if not isinstance(batch, list):
             batch = []
         for i, ch in enumerate(batch):
-            ch["chapter_number"] = len(accumulated) + i + 1
+            ch["chapter_number"] = chapter_offset + bs + i
         running = _enforce_realm(batch, running, vr_hi, rmax)  # 写库前强制单调
-        accumulated.extend(batch)
         prev_tail = _tail_of(batch)
-        yield batch, bs, be
+        yield batch, chapter_offset + bs, chapter_offset + be
     ctx.pop("_batch", None)
     ctx.pop("_target_volume", None)

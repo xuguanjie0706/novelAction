@@ -50,6 +50,7 @@ async def extract_dabai_debrief(svc: Any, *, chapter_number: int, title: str,
                               content: str, plan_summary: str,
                               known_characters: list[str] | None = None) -> dict:
     from app.services.bootstrap.parse import parse_json
+    from app.services.bootstrap.retry import call_with_retry
 
     system, user = build_debrief_prompt(
         chapter_title=title,
@@ -58,8 +59,8 @@ async def extract_dabai_debrief(svc: Any, *, chapter_number: int, title: str,
         plan_summary=plan_summary,
         known_characters=known_characters,
     )
-    raw = await svc._call_with_retry(
-        system, user, task="dabai.debrief", max_tokens=2048,
+    raw = await call_with_retry(
+        svc, system, user, max_tokens=2048, task="dabai.debrief",
     )
     data = parse_json(raw)
     if not isinstance(data, dict):

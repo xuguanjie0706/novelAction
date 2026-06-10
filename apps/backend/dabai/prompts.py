@@ -41,6 +41,13 @@ def _ctx_brief(ctx: dict) -> str:
     if "storylines" in ctx:
         sl = "、".join(s.get("name", "") for s in ctx["storylines"])
         parts.append(f"故事线：{sl}")
+    if "story_assets" in ctx and isinstance(ctx["story_assets"], dict):
+        assets = ctx["story_assets"].get("plot_assets") or []
+        if assets:
+            aa = "、".join(
+                f"{a.get('name', '')}({a.get('plot_role', '')})" for a in assets[:6]
+            )
+            parts.append(f"剧情资产（卷/章纲须围绕这批东西做文章，禁止另造同位宝物）：{aa}")
     return "\n".join(parts)
 
 
@@ -200,6 +207,37 @@ def storylines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
     return _SYS_BASE, user
 
 
+def story_assets(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
+    """剧情资产 + 初始关系：台账种子，章纲与写章全程引用同一批设定。"""
+    chars = ctx.get("characters") or []
+    char_lines = "\n".join(
+        f"  - {c.get('name', '')}（{c.get('role', '')}）：{(c.get('persona') or '')[:30]}"
+        for c in chars[:8]
+    )
+    user = (
+        f"{_ctx_brief(ctx)}\n\n"
+        f"【人物清单】\n{char_lines}\n\n"
+        "设计两块台账种子，只返回 JSON：\n"
+        "1. plot_assets：3-6 件有剧情功能的功法/道具（不是装备列表——每件必须绑定剧情作用：\n"
+        "   被各方觊觎的争夺点 / 反派底牌 / 主角功法升级路线 / 身世信物谜题）。\n"
+        "2. initial_relations：主角与每个核心人物的开局关系（要有张力，是前期打脸剧情的燃料）。\n"
+        "{\n"
+        '  "plot_assets": [\n'
+        '    {"kind": "skill|item", "name": "≤10字", "plot_role": "争夺点|底牌|成长线|身世信物",\n'
+        '     "owner": "开局持有者人名（未登场则留空）", "debut": "start|later", "planned_volume": 1,\n'
+        '     "description": "≤40字：谁觊觎/怎么升级/何时引爆"}\n'
+        "  ],\n"
+        '  "initial_relations": [\n'
+        '    {"from": "主角人名", "to": "对方人名",\n'
+        '     "attitude": "敌对|轻视|忌惮|臣服|效忠|盟友|暧昧|中立",\n'
+        '     "tension": "≤30字初始张力（嫉妒/退婚之恨/暗中觊觎金手指）"}\n'
+        "  ]\n"
+        "}\n"
+        "注意：金手指本身不要重复列入 plot_assets（已单独建账）。"
+    )
+    return _SYS_BASE, user
+
+
 def _ladder_block(ctx: dict) -> str:
     """境界体系档位清单（供卷/章对齐 realm rank）。"""
     levels = (ctx.get("power_ladder") or {}).get("levels") or []
@@ -247,13 +285,16 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
     batch = ctx.get("_batch", {})
     bs = int(batch.get("batch_start", 1))
     be = int(batch.get("batch_end", n))
+    # 全局章号（卷展开时 = 前卷偏移 + 卷内章号；bootstrap 第1卷两者相同）
+    gbs = int(batch.get("global_start", bs))
+    gbe = int(batch.get("global_end", be))
     prev_tail = (batch.get("prev_tail") or "").strip()
     batch_count = be - bs + 1
     carry = ""
     if prev_tail:
         carry = (
-            f"\n【上一批结尾（硬性承接）】上一批最后一章的爽点收尾/钩子是："
-            f"「{prev_tail[:120]}」。本批第{bs}章 yaqu_setup 必须顺着它起，"
+            f"\n【上文结尾（硬性承接）】前一章（可能是上一卷末章）的爽点收尾/钩子是："
+            f"「{prev_tail[:120]}」。本批第{gbs}章 yaqu_setup 必须顺着它起，"
             "不得另起炉灶、不得回到已解决的旧危机。\n"
         )
     # 境界脊柱：本卷区间 + 本批起步 floor（禁止回退）
@@ -279,30 +320,51 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         "★转折拍是关键★：从憋屈到引爆之间必须有一个『扳机』——主角情绪从隐忍/被动 靠一个具体触发点"
         "（一句羞辱、一个细节、一段闪念、一声金手指提示）转到出手/反击，"
         "这样正文才不会情绪硬跳。金手指首次觉醒章还须写清『疑→证→择』绑定节拍（见下方硬约束）。"
-        "先排好整卷爽点序列，再逐章展开。"
+        "先排好整卷爽点序列，再逐章展开。\n"
+        "【功力要求】你是写了三十年白话网文的老作者，章纲每个字段都按可拍画面写：\n"
+        "  - 标题自带钩子（冲突/反差/悬念入题），禁止『修炼』『突破』这类白开水标题；\n"
+        "  - yaqu_setup 写到具体的人+具体的不公（谁、当着谁、用什么方式压主角），不写抽象处境；\n"
+        "  - yinbao 写清招式/手段/场面调度，反转要有“先抑两拍再爆”的节奏感；\n"
+        "  - shuang_payoff 写打脸对象的具体反应（脸色/下跪/改口/围观惊呼），爽感可量化；\n"
+        "  - 全卷爽点强度要走阶梯：小爽铺垫→中爽推进→大爆点炸场，禁止平铺直叙一个调门到底；\n"
+        "  - 所有人物/势力/功法/道具只能用上文给定的既有设定，禁止凭空新造核心设定。"
     )
     gf_name = (ctx.get("golden_finger") or {}).get("name", "")
-    bind_block = chapter_outline_bind_block(gf_name) if bs <= cfg.golden_chapters else ""
+    # 黄金前 N 章按★全局章号★判定：仅全书开局批注入金手指绑定节拍，卷2+不再触发
+    bind_block = chapter_outline_bind_block(gf_name) if gbs <= cfg.golden_chapters else ""
+    golden_rule = (
+        f"1. 黄金前 {cfg.golden_chapters} 章（仅当本批含全书第1章时）："
+        "第1章蓄憋屈+留金手指钩子，第2章金手指见效，第3章第一次当众大打脸。\n"
+        if gbs <= cfg.golden_chapters else
+        "1. 本批非全书开局：开篇承接上文钩子直接进入本卷冲突，禁止重新介绍金手指/世界观。\n"
+    )
+    # 前情回灌（卷展开期由 volume_expand.build_story_so_far 注入；bootstrap 期为空）
+    story = (ctx.get("story_so_far") or "").strip()
+    story_block = (
+        "\n【前情与既定事实（全部已发生，章纲必须与之自洽；禁止矛盾、禁止重置、"
+        "禁止让已死/已臣服人物无故复活/翻脸）】\n" + story + "\n"
+    ) if story else ""
     user = (
         f"{_ctx_brief(ctx)}\n"
-        + _benchmark_block(ctx) + "\n"
+        + _benchmark_block(ctx)
+        + story_block + "\n"
         f"为《{vol.get('title', '第1卷')}》（phase={vol.get('phase')}，全卷共 {n} 章）"
-        f"生成第 {bs}～{be} 章章纲（本批 {batch_count} 章）。\n"
+        f"生成全书第 {gbs}～{gbe} 章章纲（本卷第 {bs}～{be} 章，本批 {batch_count} 章）。\n"
         f"本卷大爆点：{vol.get('big_beats')}\n本卷卷末高潮：{vol.get('volume_climax')}\n"
         f"可用人物：{chars}\n可用爽点类型：{pool}\n"
         + _ladder_block(ctx)
         + carry + realm_block + bind_block +
         "硬约束：\n"
-        f"1. 黄金前 {cfg.golden_chapters} 章（仅当本批含第1章时）：第1章蓄憋屈+留金手指钩子，第2章金手指见效，第3章第一次当众大打脸。\n"
+        + golden_rule +
         "2. 相邻两章 shuang_type 不得相同；每 "
         f"{cfg.big_beat_every} 章至少一个 is_big_beat=true 的大爆点。\n"
         "3. shuang_payoff 必须写明『当着谁的面、爽在哪』，witnesses 至少 1 人（爽点必须有观众）。\n"
         f"4. 每章 new_info_count ≤ {cfg.max_new_info_per_chapter}（一次只引入一个新设定/新人物/新名词）。\n"
         "5. end_hook 必须具体（更强敌人登场/更大机缘/打脸预告），禁用『悬念丛生』『让人期待』套话。\n"
         "6. 禁止给主角爽点强加 choice_cost / 后遗症 / 道德负担。\n\n"
-        f"返回 JSON 数组，{batch_count} 个元素（第{bs}～{be}章），每个：\n"
+        f"返回 JSON 数组，{batch_count} 个元素（全书第{gbs}～{gbe}章），每个：\n"
         "{\n"
-        f'  "chapter_number": {bs}, "title": "第X章 标题(≤10字)",\n'
+        f'  "chapter_number": {gbs}, "title": "第X章 标题(≤10字)",\n'
         '  "shuang_type": "本章爽点类型(从可用类型选)",\n'
         '  "yaqu_setup": "憋屈势能：谁在压主角/什么不公",\n'
         '  "emotion_turn": "转折拍：从【情绪】→【触发】→【情绪】；金手指觉醒章须含疑→证→择（如 从恍惚→疑为鬼叫→倒计时/锁链松→赌命提取）",\n'
@@ -331,6 +393,7 @@ _BUILDERS = {
     "golden_finger": golden_finger,
     "factions": factions,
     "storylines": storylines,
+    "story_assets": story_assets,
     "volumes": volumes,
     "chapter_outlines": chapter_outlines,
 }

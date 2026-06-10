@@ -246,6 +246,34 @@ def _hook_for(ch: int, n: int) -> str:
     return f"刚平一事，更强的敌人已盯上林凡——第{ch + 1}章危机扑面而来"
 
 
+_STORY_ASSETS = {
+    "plot_assets": [
+        {"kind": "skill", "name": "噬灵诀", "plot_role": "成长线",
+         "owner": PROTAGONIST, "debut": "start", "planned_volume": 1,
+         "description": "随吞噬次数进化的功法，每卷解锁新形态，宗门长老暗中觊觎"},
+        {"kind": "item", "name": "母亲的玉佩", "plot_role": "身世信物",
+         "owner": PROTAGONIST, "debut": "start", "planned_volume": 1,
+         "description": "被李家夺走一半，藏着主角身世与上界坐标"},
+        {"kind": "item", "name": "玄阴火种", "plot_role": "争夺点",
+         "owner": "", "debut": "later", "planned_volume": 2,
+         "description": "秘境至宝，各宗争夺，主角吞噬后境界跃迁的关键"},
+        {"kind": "skill", "name": "灭魂印", "plot_role": "底牌",
+         "owner": "噬魂老人", "debut": "later", "planned_volume": 3,
+         "description": "幕后反派杀器，与主角系统同源，揭示金手指来历"},
+    ],
+    "initial_relations": [
+        {"from": PROTAGONIST, "to": "李天骄", "attitude": "敌对",
+         "tension": "悔婚当众羞辱，且其家族夺走玉佩另一半"},
+        {"from": PROTAGONIST, "to": "苏挽柔", "attitude": "暧昧",
+         "tension": "唯一未落井下石之人，暗中递过疗伤药"},
+        {"from": PROTAGONIST, "to": "周扒皮", "attitude": "轻视",
+         "tension": "克扣主角杂役月例，狗眼看人低"},
+        {"from": PROTAGONIST, "to": "玄阳真人", "attitude": "中立",
+         "tension": "掌门看似公允，实则注意到主角功法异常"},
+    ],
+}
+
+
 # ── 分发表 ──────────────────────────────────────────────────────────────────
 def get(step: str, cfg: DabaiConfig, meta: dict | None = None) -> Any:
     meta = meta or {}
@@ -261,6 +289,7 @@ def get(step: str, cfg: DabaiConfig, meta: dict | None = None) -> Any:
         "golden_finger": lambda: {"golden_finger": _GOLDEN_FINGER, "power_ladder": _POWER_LADDER},
         "factions": lambda: {"factions": _FACTIONS, "characters": _CHARACTERS},
         "storylines": lambda: _STORYLINES,
+        "story_assets": lambda: _STORY_ASSETS,
         "volumes": lambda: _volumes(cfg),
     }
     if step not in table:

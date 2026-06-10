@@ -26,7 +26,7 @@ OUTPUT_DIR = Path(__file__).parent / "outputs"
 
 _SETTING_STEPS = {
     "benchmark", "positioning", "golden_finger", "power_ladder",
-    "factions", "characters", "storylines", "volumes",
+    "factions", "characters", "storylines", "story_assets", "volumes",
 }
 
 # 合并步：carrier 一次 LLM 调用同时产出多个 ctx 键；derived 复用同次结果，不再调 LLM。
@@ -153,6 +153,7 @@ class BootstrapResult:
             "factions": self.ctx.get("factions"),
             "characters": self.ctx.get("characters"),
             "storylines": self.ctx.get("storylines"),
+            "story_assets": self.ctx.get("story_assets"),
             "volumes": self.ctx.get("volumes"),
             "chapter_outlines": self.ctx.get("chapter_outlines"),
             "linter_report": self.linter_report,

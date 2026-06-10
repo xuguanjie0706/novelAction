@@ -106,4 +106,5 @@ def check_dabai_consistency(
         "blockers": blockers,
         "status": "blocked" if blockers else ("warning" if warnings else "ok"),
         "overall_score": score,
+        "version": "dabai-qc-v2",
     }

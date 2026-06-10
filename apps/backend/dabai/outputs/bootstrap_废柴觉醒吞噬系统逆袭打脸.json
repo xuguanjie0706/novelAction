@@ -1,0 +1,906 @@
+{
+  "logline": "废柴觉醒吞噬系统逆袭打脸",
+  "meta": {
+    "volume_count": 6,
+    "volume_chapters": 30,
+    "chapter_batch_size": 30,
+    "mock": true,
+    "model": "gpt-4o-mini",
+    "failed_steps": []
+  },
+  "benchmark": {
+    "topic": "系统流 / 吞噬流升级打脸",
+    "reference_books": [
+      {
+        "title": "（对标·系统升级流代表作）",
+        "why_comparable": "同为系统外挂+越级打脸",
+        "core_appeal": "数值化升级、当众打脸、扮猪吃虎",
+        "setting_motif": "签到/吞噬式金手指 + 清晰境界阶梯",
+        "style_note": "短句多、对话密、节奏极快、解释直给"
+      },
+      {
+        "title": "（对标·吞噬流代表作）",
+        "why_comparable": "吞噬万物获得力量的爽感引擎相同",
+        "core_appeal": "越强越稀有越爽、当众吞掉对手依仗",
+        "setting_motif": "吞噬转化 + 反噬限制",
+        "style_note": "爽点前置、章末强钩子、口语化"
+      },
+      {
+        "title": "（对标·废柴逆袭流代表作）",
+        "why_comparable": "开局退婚/被辱蓄憋屈再逆袭",
+        "core_appeal": "黄金三章打脸、扬名立威",
+        "setting_motif": "宗门外门白眼 + 天才反派土壤",
+        "style_note": "憋屈—反击—扬名的三章情绪闭环"
+      }
+    ],
+    "style_profile": {
+      "sentence_style": "短句为主、口语化、少环境描写",
+      "pacing": "极快，憋屈不拖、爽点前置",
+      "dialogue_density": "高，靠对话推进冲突",
+      "shuang_cadence": "每章一小爽点，每5章一大爆点",
+      "narration_voice": "贴主角的爽感视角，解释直给、不留白"
+    },
+    "setting_conventions": [
+      "金手指当章见效、可量化升级",
+      "境界阶梯清晰可数(炼气→…)",
+      "开局退婚/被逐/被夺资源蓄憋屈",
+      "天才反派当打脸靶子"
+    ],
+    "tropes_to_use": [
+      "当众打脸",
+      "扮猪吃虎",
+      "越级吞噬碾压",
+      "夺回遗物立威",
+      "黄金三章定调"
+    ],
+    "pitfalls_to_avoid": [
+      "主角窝囊超过一章",
+      "金手指迟迟不见效",
+      "一章塞太多新设定",
+      "情绪硬跳无铺垫"
+    ]
+  },
+  "positioning": {
+    "target_audience": "16-28 岁男性，番茄/七猫移动端碎片化读者，偏好升级打脸爽文",
+    "shuang_pool": [
+      "打脸",
+      "升级",
+      "获宝",
+      "扮猪吃虎",
+      "装逼",
+      "群嘲反转",
+      "收小弟"
+    ],
+    "face_slap_frequency": "每章至少一次小爽点，每 5 章一个大爆点",
+    "golden_three_strategy": "第1章被退婚+当众羞辱蓄憋屈，第2章觉醒吞噬系统，第3章当众打脸退婚者",
+    "pace_type": "fast",
+    "emotional_arc": "憋屈→反击→扬名，三章一个完整爽感闭环",
+    "taboo_lines": [
+      "主角不许窝囊超过一章",
+      "不许长篇世界观说明",
+      "金手指当章见效"
+    ],
+    "writing_style": "plain"
+  },
+  "golden_finger": {
+    "name": "万物吞噬系统",
+    "type": "系统流 + 吞噬流",
+    "core_ability": "吞噬任意天材地宝、功法、妖兽甚至敌人修为，转化为自身力量与属性",
+    "upgrade_mechanism": "吞噬量化为「噬力值」，攒满即可突破境界，越级吞噬有额外暴击",
+    "shuang_engine": "敌人越强、宝物越稀有，吞噬反馈越爽；打脸时可当众吞掉对方依仗",
+    "restriction": "吞噬有冷却且初期会反噬，强行越级吞噬需承受灼烧之痛（防无敌没张力，但不构成长期代价）",
+    "signature_lines": [
+      "叮——吞噬成功",
+      "你以为的杀招，是我的口粮"
+    ]
+  },
+  "power_ladder": {
+    "name": "噬道修行体系",
+    "levels": [
+      {
+        "rank": 1,
+        "name": "炼气境",
+        "desc": "感应灵气，九层圆满可筑基"
+      },
+      {
+        "rank": 2,
+        "name": "筑基境",
+        "desc": "灵气化液，寿元二百载"
+      },
+      {
+        "rank": 3,
+        "name": "金丹境",
+        "desc": "结丹成婴之基，一方豪强"
+      },
+      {
+        "rank": 4,
+        "name": "元婴境",
+        "desc": "元婴出窍，宗门长老级"
+      },
+      {
+        "rank": 5,
+        "name": "化神境",
+        "desc": "神识通天，一州霸主"
+      },
+      {
+        "rank": 6,
+        "name": "炼虚境",
+        "desc": "虚空显化，传说级强者"
+      },
+      {
+        "rank": 7,
+        "name": "合体境",
+        "desc": "法则加身，大陆巅峰"
+      }
+    ]
+  },
+  "factions": [
+    {
+      "name": "玄阳宗",
+      "stance": "主角方",
+      "role": "主角所在宗门，外门弟子受尽白眼",
+      "power_tier": "金丹境掌门",
+      "note": "前期看不起主角，后期被主角扬名带飞"
+    },
+    {
+      "name": "李家",
+      "stance": "压迫方",
+      "role": "天才李天骄家族，悔婚羞辱主角",
+      "power_tier": "元婴境家主",
+      "note": "贯穿前三卷的打脸对象土壤"
+    },
+    {
+      "name": "万妖谷",
+      "stance": "中立/资源",
+      "role": "妖兽与天材地宝的来源地",
+      "power_tier": "化神境妖王",
+      "note": "主角吞噬升级的猎场"
+    },
+    {
+      "name": "噬天教",
+      "stance": "神秘势力",
+      "role": "上古吞噬一脉残党，与系统同源",
+      "power_tier": "未知",
+      "note": "中后期身世线，先埋钩子"
+    }
+  ],
+  "characters": [
+    {
+      "name": "林凡",
+      "role": "主角",
+      "tier": "核心",
+      "start_realm": "炼气一层",
+      "vol1_target_realm": "筑基初期",
+      "persona": "重生废柴，扮猪吃虎，腹黑隐忍但该装逼时绝不手软",
+      "desire": "变强、打脸所有看不起他的人、查明系统来历",
+      "wound": "被退婚当众羞辱、母亲遗物被夺",
+      "golden_finger": "万物吞噬系统"
+    },
+    {
+      "name": "李天骄",
+      "role": "打脸对象/前期反派",
+      "tier": "核心",
+      "start_realm": "炼气九层",
+      "persona": "天之骄子，傲慢，悔婚主角",
+      "function": "前期主要打脸靶子，每次找茬都被反杀"
+    },
+    {
+      "name": "苏挽柔",
+      "role": "女主/师妹",
+      "tier": "核心",
+      "start_realm": "炼气七层",
+      "persona": "唯一没看不起主角的人，外冷内热",
+      "function": "感情线锚点 + 关键时刻救场"
+    },
+    {
+      "name": "周扒皮",
+      "role": "工具人配角",
+      "tier": "配角",
+      "persona": "外门管事，势利眼，前期刁难主角后被打脸"
+    },
+    {
+      "name": "玄阳真人",
+      "role": "宗门掌门",
+      "tier": "配角",
+      "persona": "慧眼识珠，后期力排众议提拔主角"
+    },
+    {
+      "name": "噬魂老人",
+      "role": "神秘导师",
+      "tier": "配角",
+      "persona": "系统残魂化身，半遮半掩透露身世，先埋钩子"
+    }
+  ],
+  "storylines": [
+    {
+      "name": "升级打脸主线",
+      "type": "main",
+      "summary": "林凡靠吞噬系统从炼气废柴一路逆袭，逐个打脸看不起他的人并扬名"
+    },
+    {
+      "name": "退婚复仇线",
+      "type": "revenge",
+      "summary": "向李家与李天骄讨回当众羞辱之仇，夺回母亲遗物"
+    },
+    {
+      "name": "挽柔感情线",
+      "type": "romance",
+      "summary": "与苏挽柔在患难中互相扶持，慢热升温"
+    },
+    {
+      "name": "系统身世线",
+      "type": "mystery",
+      "summary": "吞噬系统的来历、噬天教残党、上古吞噬一脉的秘密，长线慢埋"
+    }
+  ],
+  "volumes": [
+    {
+      "volume_number": 1,
+      "title": "第1卷 新手村·退婚打脸",
+      "phase": "opening",
+      "planned_chapters": 30,
+      "big_beats": [
+        "当众打脸悔婚的李天骄，一战扬名",
+        "吞噬稀有妖丹越级突破，震惊外门",
+        "夺回母亲遗物，立威外门"
+      ],
+      "volume_climax": "外门大比夺魁，当众吞掉李天骄的本命法宝，李家颜面扫地",
+      "end_hook": "噬魂老人现身，留下一句『你的系统，来历不简单』便消失"
+    },
+    {
+      "volume_number": 2,
+      "title": "第2卷 外门崛起·吞噬扬名",
+      "phase": "rising",
+      "planned_chapters": 30,
+      "big_beats": [
+        "第2卷大爆点A：越级吞噬碾压强敌",
+        "第2卷大爆点B：当众揭穿并打脸高位者"
+      ],
+      "volume_climax": "第2卷卷末高潮：更强敌人登场，主角越级翻盘",
+      "end_hook": "更大的势力注意到主角，下一卷危机降临"
+    },
+    {
+      "volume_number": 3,
+      "title": "第3卷 宗门大比·一鸣惊人",
+      "phase": "rising",
+      "planned_chapters": 30,
+      "big_beats": [
+        "第3卷大爆点A：越级吞噬碾压强敌",
+        "第3卷大爆点B：当众揭穿并打脸高位者"
+      ],
+      "volume_climax": "第3卷卷末高潮：更强敌人登场，主角越级翻盘",
+      "end_hook": "更大的势力注意到主角，下一卷危机降临"
+    },
+    {
+      "volume_number": 4,
+      "title": "第4卷 万妖谷·猎宝结仇",
+      "phase": "turning",
+      "planned_chapters": 30,
+      "big_beats": [
+        "第4卷大爆点A：越级吞噬碾压强敌",
+        "第4卷大爆点B：当众揭穿并打脸高位者"
+      ],
+      "volume_climax": "第4卷卷末高潮：更强敌人登场，主角越级翻盘",
+      "end_hook": "更大的势力注意到主角，下一卷危机降临"
+    },
+    {
+      "volume_number": 5,
+      "title": "第5卷 李家清算·至暗反击",
+      "phase": "dark_hour",
+      "planned_chapters": 30,
+      "big_beats": [
+        "第5卷大爆点A：越级吞噬碾压强敌",
+        "第5卷大爆点B：当众揭穿并打脸高位者"
+      ],
+      "volume_climax": "第5卷卷末高潮：更强敌人登场，主角越级翻盘",
+      "end_hook": "更大的势力注意到主角，下一卷危机降临"
+    },
+    {
+      "volume_number": 6,
+      "title": "第6卷 噬天惊变·身世揭晓",
+      "phase": "climax",
+      "planned_chapters": 30,
+      "big_beats": [
+        "第6卷大爆点A：越级吞噬碾压强敌",
+        "第6卷大爆点B：当众揭穿并打脸高位者"
+      ],
+      "volume_climax": "第6卷卷末高潮：更强敌人登场，主角越级翻盘",
+      "end_hook": "更大的势力注意到主角，下一卷危机降临"
+    }
+  ],
+  "chapter_outlines": [
+    {
+      "chapter_number": 1,
+      "title": "第1章 笑到最后",
+      "shuang_type": "群嘲反转",
+      "yaqu_setup": "被周扒皮克扣月例、当众讥讽是废物",
+      "yinbao": "林凡借吞噬系统把嘲讽原样奉还，瞬间扭转局面",
+      "shuang_payoff": "林凡当着李天骄、周扒皮的面把嘲讽原样奉还，李天骄、周扒皮从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "李天骄",
+        "周扒皮"
+      ],
+      "end_hook": "退婚书还在桌上，林凡脑海里却响起一声『叮——吞噬系统觉醒』",
+      "new_info_count": 2,
+      "involved_characters": [
+        "林凡",
+        "李天骄",
+        "周扒皮"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 2,
+      "title": "第2章 吞宝得机缘",
+      "shuang_type": "获宝",
+      "yaqu_setup": "李天骄带人堵门挑衅，扬言要废了主角",
+      "yinbao": "林凡借吞噬系统一口吞下旁人抢不到的天材地宝，瞬间扭转局面",
+      "shuang_payoff": "林凡当着外门弟子众的面一口吞下旁人抢不到的天材地宝，外门弟子众从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "外门弟子众"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第3章危机扑面而来",
+      "new_info_count": 2,
+      "involved_characters": [
+        "林凡",
+        "外门弟子众"
+      ],
+      "is_big_beat": true,
+      "expected_words": 2300
+    },
+    {
+      "chapter_number": 3,
+      "title": "第3章 当众打脸",
+      "shuang_type": "打脸",
+      "yaqu_setup": "外门弟子起哄看主角笑话，赌他过不了试炼",
+      "yinbao": "林凡借吞噬系统当众吞掉对方的杀招与依仗，瞬间扭转局面",
+      "shuang_payoff": "林凡当着李家管事的面当众吞掉对方的杀招与依仗，李家管事从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "李家管事"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第4章危机扑面而来",
+      "new_info_count": 2,
+      "involved_characters": [
+        "林凡",
+        "李家管事"
+      ],
+      "is_big_beat": true,
+      "expected_words": 2300
+    },
+    {
+      "chapter_number": 4,
+      "title": "第4章 锋芒乍现",
+      "shuang_type": "装逼",
+      "yaqu_setup": "管事故意分配最差洞府与灵田，断主角资源",
+      "yinbao": "林凡借吞噬系统随手露出碾压级手段，瞬间扭转局面",
+      "shuang_payoff": "林凡当着苏挽柔的面随手露出碾压级手段，苏挽柔从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "苏挽柔"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第5章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "苏挽柔"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 5,
+      "title": "第5章 笑到最后",
+      "shuang_type": "群嘲反转",
+      "yaqu_setup": "对手亮出稀有法宝当众炫耀，碾压式羞辱",
+      "yinbao": "林凡借吞噬系统把嘲讽原样奉还，瞬间扭转局面",
+      "shuang_payoff": "林凡当着玄阳真人、众长老的面把嘲讽原样奉还，玄阳真人、众长老从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "玄阳真人",
+        "众长老"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第6章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "玄阳真人",
+        "众长老"
+      ],
+      "is_big_beat": true,
+      "expected_words": 2300
+    },
+    {
+      "chapter_number": 6,
+      "title": "第6章 强者归心",
+      "shuang_type": "收小弟",
+      "yaqu_setup": "李家放话三日内让主角滚出玄阳宗",
+      "yinbao": "林凡借吞噬系统实力震慑令对手俯首，瞬间扭转局面",
+      "shuang_payoff": "林凡当着万妖谷散修的面实力震慑令对手俯首，万妖谷散修从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "万妖谷散修"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第7章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "万妖谷散修"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 7,
+      "title": "第7章 力挽狂澜",
+      "shuang_type": "救场",
+      "yaqu_setup": "被周扒皮克扣月例、当众讥讽是废物",
+      "yinbao": "林凡借吞噬系统危急关头吞噬强援之力，瞬间扭转局面",
+      "shuang_payoff": "林凡当着李天骄的面危急关头吞噬强援之力，李天骄从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "李天骄"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第8章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "李天骄"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 8,
+      "title": "第8章 名动外门",
+      "shuang_type": "扬名",
+      "yaqu_setup": "李天骄带人堵门挑衅，扬言要废了主角",
+      "yinbao": "林凡借吞噬系统一战打出名号，瞬间扭转局面",
+      "shuang_payoff": "林凡当着内门弟子众的面一战打出名号，内门弟子众从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "内门弟子众"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第9章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "内门弟子众"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 9,
+      "title": "第9章 当众打脸",
+      "shuang_type": "打脸",
+      "yaqu_setup": "外门弟子起哄看主角笑话，赌他过不了试炼",
+      "yinbao": "林凡借吞噬系统当众吞掉对方的杀招与依仗，瞬间扭转局面",
+      "shuang_payoff": "林凡当着李天骄、周扒皮的面当众吞掉对方的杀招与依仗，李天骄、周扒皮从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "李天骄",
+        "周扒皮"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第10章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "李天骄",
+        "周扒皮"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 10,
+      "title": "第10章 一夜越境",
+      "shuang_type": "升级",
+      "yaqu_setup": "管事故意分配最差洞府与灵田，断主角资源",
+      "yinbao": "林凡借吞噬系统吞噬妖丹噬力暴涨、当场破境，瞬间扭转局面",
+      "shuang_payoff": "林凡当着外门弟子众的面吞噬妖丹噬力暴涨、当场破境，外门弟子众从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "外门弟子众"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第11章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "外门弟子众"
+      ],
+      "is_big_beat": true,
+      "expected_words": 2300
+    },
+    {
+      "chapter_number": 11,
+      "title": "第11章 吞宝得机缘",
+      "shuang_type": "获宝",
+      "yaqu_setup": "对手亮出稀有法宝当众炫耀，碾压式羞辱",
+      "yinbao": "林凡借吞噬系统一口吞下旁人抢不到的天材地宝，瞬间扭转局面",
+      "shuang_payoff": "林凡当着李家管事的面一口吞下旁人抢不到的天材地宝，李家管事从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "李家管事"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第12章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "李家管事"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 12,
+      "title": "第12章 深藏不露",
+      "shuang_type": "扮猪吃虎",
+      "yaqu_setup": "李家放话三日内让主角滚出玄阳宗",
+      "yinbao": "林凡借吞噬系统故意示弱诱敌再一击反杀，瞬间扭转局面",
+      "shuang_payoff": "林凡当着苏挽柔的面故意示弱诱敌再一击反杀，苏挽柔从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "苏挽柔"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第13章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "苏挽柔"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 13,
+      "title": "第13章 锋芒乍现",
+      "shuang_type": "装逼",
+      "yaqu_setup": "被周扒皮克扣月例、当众讥讽是废物",
+      "yinbao": "林凡借吞噬系统随手露出碾压级手段，瞬间扭转局面",
+      "shuang_payoff": "林凡当着玄阳真人、众长老的面随手露出碾压级手段，玄阳真人、众长老从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "玄阳真人",
+        "众长老"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第14章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "玄阳真人",
+        "众长老"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 14,
+      "title": "第14章 笑到最后",
+      "shuang_type": "群嘲反转",
+      "yaqu_setup": "李天骄带人堵门挑衅，扬言要废了主角",
+      "yinbao": "林凡借吞噬系统把嘲讽原样奉还，瞬间扭转局面",
+      "shuang_payoff": "林凡当着万妖谷散修的面把嘲讽原样奉还，万妖谷散修从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "万妖谷散修"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第15章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "万妖谷散修"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 15,
+      "title": "第15章 强者归心",
+      "shuang_type": "收小弟",
+      "yaqu_setup": "外门弟子起哄看主角笑话，赌他过不了试炼",
+      "yinbao": "林凡借吞噬系统实力震慑令对手俯首，瞬间扭转局面",
+      "shuang_payoff": "林凡当着李天骄的面实力震慑令对手俯首，李天骄从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "李天骄"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第16章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "李天骄"
+      ],
+      "is_big_beat": true,
+      "expected_words": 2300
+    },
+    {
+      "chapter_number": 16,
+      "title": "第16章 力挽狂澜",
+      "shuang_type": "救场",
+      "yaqu_setup": "管事故意分配最差洞府与灵田，断主角资源",
+      "yinbao": "林凡借吞噬系统危急关头吞噬强援之力，瞬间扭转局面",
+      "shuang_payoff": "林凡当着内门弟子众的面危急关头吞噬强援之力，内门弟子众从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "内门弟子众"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第17章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "内门弟子众"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 17,
+      "title": "第17章 名动外门",
+      "shuang_type": "扬名",
+      "yaqu_setup": "对手亮出稀有法宝当众炫耀，碾压式羞辱",
+      "yinbao": "林凡借吞噬系统一战打出名号，瞬间扭转局面",
+      "shuang_payoff": "林凡当着李天骄、周扒皮的面一战打出名号，李天骄、周扒皮从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "李天骄",
+        "周扒皮"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第18章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "李天骄",
+        "周扒皮"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 18,
+      "title": "第18章 当众打脸",
+      "shuang_type": "打脸",
+      "yaqu_setup": "李家放话三日内让主角滚出玄阳宗",
+      "yinbao": "林凡借吞噬系统当众吞掉对方的杀招与依仗，瞬间扭转局面",
+      "shuang_payoff": "林凡当着外门弟子众的面当众吞掉对方的杀招与依仗，外门弟子众从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "外门弟子众"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第19章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "外门弟子众"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 19,
+      "title": "第19章 一夜越境",
+      "shuang_type": "升级",
+      "yaqu_setup": "被周扒皮克扣月例、当众讥讽是废物",
+      "yinbao": "林凡借吞噬系统吞噬妖丹噬力暴涨、当场破境，瞬间扭转局面",
+      "shuang_payoff": "林凡当着李家管事的面吞噬妖丹噬力暴涨、当场破境，李家管事从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "李家管事"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第20章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "李家管事"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 20,
+      "title": "第20章 吞宝得机缘",
+      "shuang_type": "获宝",
+      "yaqu_setup": "李天骄带人堵门挑衅，扬言要废了主角",
+      "yinbao": "林凡借吞噬系统一口吞下旁人抢不到的天材地宝，瞬间扭转局面",
+      "shuang_payoff": "林凡当着苏挽柔的面一口吞下旁人抢不到的天材地宝，苏挽柔从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "苏挽柔"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第21章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "苏挽柔"
+      ],
+      "is_big_beat": true,
+      "expected_words": 2300
+    },
+    {
+      "chapter_number": 21,
+      "title": "第21章 深藏不露",
+      "shuang_type": "扮猪吃虎",
+      "yaqu_setup": "外门弟子起哄看主角笑话，赌他过不了试炼",
+      "yinbao": "林凡借吞噬系统故意示弱诱敌再一击反杀，瞬间扭转局面",
+      "shuang_payoff": "林凡当着玄阳真人、众长老的面故意示弱诱敌再一击反杀，玄阳真人、众长老从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "玄阳真人",
+        "众长老"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第22章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "玄阳真人",
+        "众长老"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 22,
+      "title": "第22章 锋芒乍现",
+      "shuang_type": "装逼",
+      "yaqu_setup": "管事故意分配最差洞府与灵田，断主角资源",
+      "yinbao": "林凡借吞噬系统随手露出碾压级手段，瞬间扭转局面",
+      "shuang_payoff": "林凡当着万妖谷散修的面随手露出碾压级手段，万妖谷散修从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "万妖谷散修"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第23章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "万妖谷散修"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 23,
+      "title": "第23章 笑到最后",
+      "shuang_type": "群嘲反转",
+      "yaqu_setup": "对手亮出稀有法宝当众炫耀，碾压式羞辱",
+      "yinbao": "林凡借吞噬系统把嘲讽原样奉还，瞬间扭转局面",
+      "shuang_payoff": "林凡当着李天骄的面把嘲讽原样奉还，李天骄从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "李天骄"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第24章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "李天骄"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 24,
+      "title": "第24章 强者归心",
+      "shuang_type": "收小弟",
+      "yaqu_setup": "李家放话三日内让主角滚出玄阳宗",
+      "yinbao": "林凡借吞噬系统实力震慑令对手俯首，瞬间扭转局面",
+      "shuang_payoff": "林凡当着内门弟子众的面实力震慑令对手俯首，内门弟子众从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "内门弟子众"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第25章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "内门弟子众"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 25,
+      "title": "第25章 力挽狂澜",
+      "shuang_type": "救场",
+      "yaqu_setup": "被周扒皮克扣月例、当众讥讽是废物",
+      "yinbao": "林凡借吞噬系统危急关头吞噬强援之力，瞬间扭转局面",
+      "shuang_payoff": "林凡当着李天骄、周扒皮的面危急关头吞噬强援之力，李天骄、周扒皮从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "李天骄",
+        "周扒皮"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第26章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "李天骄",
+        "周扒皮"
+      ],
+      "is_big_beat": true,
+      "expected_words": 2300
+    },
+    {
+      "chapter_number": 26,
+      "title": "第26章 名动外门",
+      "shuang_type": "扬名",
+      "yaqu_setup": "李天骄带人堵门挑衅，扬言要废了主角",
+      "yinbao": "林凡借吞噬系统一战打出名号，瞬间扭转局面",
+      "shuang_payoff": "林凡当着外门弟子众的面一战打出名号，外门弟子众从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "外门弟子众"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第27章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "外门弟子众"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 27,
+      "title": "第27章 当众打脸",
+      "shuang_type": "打脸",
+      "yaqu_setup": "外门弟子起哄看主角笑话，赌他过不了试炼",
+      "yinbao": "林凡借吞噬系统当众吞掉对方的杀招与依仗，瞬间扭转局面",
+      "shuang_payoff": "林凡当着李家管事的面当众吞掉对方的杀招与依仗，李家管事从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "李家管事"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第28章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "李家管事"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 28,
+      "title": "第28章 一夜越境",
+      "shuang_type": "升级",
+      "yaqu_setup": "管事故意分配最差洞府与灵田，断主角资源",
+      "yinbao": "林凡借吞噬系统吞噬妖丹噬力暴涨、当场破境，瞬间扭转局面",
+      "shuang_payoff": "林凡当着苏挽柔的面吞噬妖丹噬力暴涨、当场破境，苏挽柔从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "苏挽柔"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第29章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "苏挽柔"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 29,
+      "title": "第29章 吞宝得机缘",
+      "shuang_type": "获宝",
+      "yaqu_setup": "对手亮出稀有法宝当众炫耀，碾压式羞辱",
+      "yinbao": "林凡借吞噬系统一口吞下旁人抢不到的天材地宝，瞬间扭转局面",
+      "shuang_payoff": "林凡当着玄阳真人、众长老的面一口吞下旁人抢不到的天材地宝，玄阳真人、众长老从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "玄阳真人",
+        "众长老"
+      ],
+      "end_hook": "刚平一事，更强的敌人已盯上林凡——第30章危机扑面而来",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "玄阳真人",
+        "众长老"
+      ],
+      "is_big_beat": false,
+      "expected_words": 2000
+    },
+    {
+      "chapter_number": 30,
+      "title": "第30章 深藏不露",
+      "shuang_type": "扮猪吃虎",
+      "yaqu_setup": "李家放话三日内让主角滚出玄阳宗",
+      "yinbao": "林凡借吞噬系统故意示弱诱敌再一击反杀，瞬间扭转局面",
+      "shuang_payoff": "林凡当着万妖谷散修的面故意示弱诱敌再一击反杀，万妖谷散修从讥讽到惊骇失语，外门哗然",
+      "witnesses": [
+        "万妖谷散修"
+      ],
+      "end_hook": "外门大比落幕，噬魂老人现身丢下一句『你的系统来历不简单』便消失",
+      "new_info_count": 1,
+      "involved_characters": [
+        "林凡",
+        "万妖谷散修"
+      ],
+      "is_big_beat": true,
+      "expected_words": 2300
+    }
+  ],
+  "linter_report": {
+    "status": "ok",
+    "score": 100,
+    "issue_count": 0,
+    "critical_count": 0,
+    "issues": []
+  }
+}

@@ -9,8 +9,13 @@ from sqlalchemy.orm import Session
 from app.models import Chapter, Project
 from app.routers.ai.gated_draft_helpers import _count_words_plain, _save_chapter_content
 from app.services.ai.service import AIService
-from app.services.dabai.draft_stream import stream_dabai_chapter_draft
+from app.services.dabai.draft_stream import (
+    DabaiDraftInputs,
+    prepare_dabai_draft_inputs,
+    stream_dabai_chapter_draft,
+)
 from app.services.dabai.outline_plan import resolve_chapter_plan
+from app.services.dabai.pre_warn import resolve_dabai_pre_warn
 from app.services.dabai.quality_check import run_dabai_quality
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 from app.utils.dabai_mode import is_dabai_project
@@ -18,6 +23,34 @@ from app.utils.dabai_mode import is_dabai_project
 
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _run_pre_warn_stage(
+    db: Session,
+    svc: AIService,
+    project: Project,
+    chapter: Chapter,
+    project_id: str,
+    *,
+    reuse_if_exists: bool,
+) -> tuple[DabaiDraftInputs, str, dict]:
+    """写前阶段：组装前置数据 + 生成/复用导演单（两入口共用）。
+
+    Returns:
+        (inputs, brief_block, pre_warn_done SSE 载荷)；导演单失败时 brief 为空串（降级）。
+    """
+    inputs = await prepare_dabai_draft_inputs(db, project, chapter, project_id)
+    brief, done_evt = await resolve_dabai_pre_warn(
+        svc,
+        db,
+        project,
+        chapter,
+        inputs.plan,
+        inputs.context,
+        inputs.prev_tail,
+        reuse_if_exists=reuse_if_exists,
+    )
+    return inputs, brief, done_evt
 
 
 async def dabai_draft_assist_event_stream(
@@ -34,8 +67,14 @@ async def dabai_draft_assist_event_stream(
     """普通起笔/重写 SSE（与 draft-assist 格式兼容：``{text}`` chunk）。"""
     yield _sse({
         "event": "dabai_draft_mode",
-        "message": "大白文专线：按章节要素五拍写正文",
+        "message": "大白文专线：写前导演单 + 按章节要素五拍写正文",
     })
+    yield _sse({"event": "pre_warn_running", "dabai_mode": True})
+    inputs, brief, pre_warn_evt = await _run_pre_warn_stage(
+        db, svc, project, chapter, project_id,
+        reuse_if_exists=replace_existing,
+    )
+    yield _sse(pre_warn_evt)
     try:
         async for chunk in stream_dabai_chapter_draft(
             svc,
@@ -46,6 +85,8 @@ async def dabai_draft_assist_event_stream(
             user_prompt=user_prompt,
             replace_existing=replace_existing,
             stream_log_context=stream_log_ctx,
+            inputs=inputs,
+            pre_warn_block=brief,
         ):
             yield _sse({"text": chunk})
     except Exception as e:
@@ -67,7 +108,7 @@ async def dabai_gated_draft_event_stream(
     user_prompt: str,
     stream_log_ctx: dict,
 ) -> AsyncGenerator[str, None]:
-    """dabai 门控写章：单次按章节要素起笔 + 设定一致性校验（不做文采质检循环）。"""
+    """dabai 门控写章：写前导演单 + 单次按章节要素起笔 + 设定一致性校验（不做文采质检循环）。"""
     yield _sse({
         "event": "gate_config",
         "dabai_mode": True,
@@ -75,9 +116,15 @@ async def dabai_gated_draft_event_stream(
         "min_subscribe_intent": 0,
         "max_rewrite_attempts": 1,
         "auto_quality_gate": False,
-        "pre_write_warning_enabled": False,
-        "message": "大白文专线：跳过通用质检循环，写后做设定一致性校验",
+        "pre_write_warning_enabled": True,
+        "message": "大白文专线：写前导演单 + 跳过通用质检循环，写后做设定一致性校验",
     })
+    yield _sse({"event": "pre_warn_running", "dabai_mode": True})
+    inputs, brief, pre_warn_evt = await _run_pre_warn_stage(
+        db, svc, project, chapter, project_id,
+        reuse_if_exists=True,
+    )
+    yield _sse(pre_warn_evt)
     yield _sse({"event": "attempt_start", "attempt": 1, "max_attempts": 1, "strategy": "initial"})
 
     accumulated = ""
@@ -91,6 +138,8 @@ async def dabai_gated_draft_event_stream(
             user_prompt=user_prompt,
             replace_existing=True,
             stream_log_context={**stream_log_ctx, "gated_attempt": 1},
+            inputs=inputs,
+            pre_warn_block=brief,
         ):
             accumulated += chunk
             yield _sse({"text": chunk})

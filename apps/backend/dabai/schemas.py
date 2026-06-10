@@ -55,6 +55,11 @@ STEP_CONTRACT: dict[str, dict[str, Any]] = {
         "shape": "list",
         "item_required": ["name", "type", "summary"],
     },
+    "story_assets": {
+        # 剧情资产 + 初始关系（一次调用两块；落 dabai_assets/dabai_clues/dabai_relations）
+        "shape": "object",
+        "required": ["plot_assets", "initial_relations"],
+    },
     "volumes": {
         "shape": "list",
         "item_required": ["volume_number", "title", "phase", "big_beats", "volume_climax"],

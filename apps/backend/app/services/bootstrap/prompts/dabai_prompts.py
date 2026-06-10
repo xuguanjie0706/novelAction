@@ -4,6 +4,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.services.bootstrap.prompts.character_naming import (
+    character_naming_constraints_for_prompt,
+)
+
 _SYS_DABAI = (
     "你是有15年经验的番茄/七猫玄幻修仙大白文主编。"
     "读者要的是：情绪势能→爽点引爆→即时反馈→更强钩子；境界阶梯清晰可数；"
@@ -109,17 +113,25 @@ def build_cast_world_dabai_prompt(ctx: dict, n_volumes: int) -> tuple[str, str]:
     pos = ctx.get("positioning") or {}
     pool = "、".join(pos.get("shuang_pool") or [])
     levels = "、".join(ctx.get("power_level_names") or [])
+    naming_block = character_naming_constraints_for_prompt(
+        ctx.get("genre") or pos.get("subgenre") or "玄幻修仙",
+        project_title=ctx.get("project_title"),
+        logline=ctx.get("logline"),
+        require_name_meaning=True,
+    )
     user = (
         f"小说：《{ctx.get('project_title', '')}》\n创意：{ctx.get('logline', '')}\n"
         f"爽点池：{pool}\n全书 {n_volumes} 卷\n"
         f"境界体系（人物 start_realm / Boss boss_realm 必须从此列表精确选名）：{levels or '（待生成）'}\n\n"
+        f"{naming_block}\n"
+        "⚠️ 大白文「文风直白」只约束正文叙述，**不**豁免命名规范：人名仍须有寓意、可回读，禁止模板名。\n\n"
         "一次返回 JSON（四块）：\n"
         "{\n"
         '  "factions": [{"name": "势力名", "stance": "压迫方/主角方/中立", '
         '"role": "在爽点循环中的作用", "power_tier": "最高战力档", "note": "前期/后期作用"}],\n'
         '  "characters": [{"name": "姓名（具体人名，禁止卷NBoss）", "role": "主角/打脸对象/女主/导师", '
         '"tier": "核心/arc", "start_realm": "起始境界（从境界体系列表选）", "persona": "性格", '
-        '"function": "爽点功能"}],\n'
+        '"function": "爽点功能", "name_meaning": "15~40字：姓/名各字意象+与命运或书名主题的暗线"}],\n'
         '  "storylines": [{"name": "线名", "type": "main/revenge/romance/mystery", "summary": "一句话"}],\n'
         '  "antagonist_ladder": [{"volume_number": 1, "boss_name": "必须与 characters 中某反派姓名完全一致", '
         '"boss_realm": "对决境界（从境界体系列表选）", "faction": "所属势力", '
@@ -182,7 +194,9 @@ def build_chapter_plans_dabai_prompt(
         x.get("name", "") for x in (wm.get("locations") or []) if isinstance(x, dict)
     )
     pool = "、".join((ctx.get("positioning") or {}).get("shuang_pool") or [])
-    chars = "、".join(c.get("name", "") for c in (ctx.get("characters") or [])[:8])
+    all_names = [c.get("name", "") for c in (ctx.get("characters") or []) if c.get("name")]
+    chars = "、".join(all_names[:8])
+    existing = "、".join(all_names[:30])
     levels = " ".join(
         f"{l.get('rank')}={l.get('name')}"
         for l in (ctx.get("power_systems_full") or [{}])[0].get("levels", [])
@@ -203,7 +217,10 @@ def build_chapter_plans_dabai_prompt(
         "每章：title（6～14字章名，概括本章爽点，禁止「未命名」）, shuang_type, yaqu_setup, "
         "emotion_turn, yinbao, shuang_payoff, witnesses, "
         "end_hook, new_info_count, involved_characters, is_big_beat, expected_words, "
-        "realm_rank, location_name（须在本卷地图内）。禁止 choice_cost。"
+        "realm_rank, location_name（须在本卷地图内）。禁止 choice_cost。\n"
+        f"【人名约束】已有人物：{existing or '（无）'}。witnesses / involved_characters 优先复用已有人名；"
+        "确需新配角时须用完整正名（姓+名 2~4 字、有寓意），禁止「灵儿/婉儿」类儿化乳名、"
+        "「路人甲/某长老」类占位名，且不得与已有名仅一字之差。"
     )
     system = _SYS_DABAI + (
         "\n章纲专项：憋屈→转折拍→引爆→爽感（有观众）→钩子；相邻章 shuang_type 不得相同。"

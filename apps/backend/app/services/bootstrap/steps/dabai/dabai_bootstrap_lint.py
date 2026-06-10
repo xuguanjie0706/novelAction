@@ -8,6 +8,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import Character, OutlineNode, Project
 from app.services.bootstrap.antagonist_roster import ensure_ladder_characters
+from app.services.bootstrap.prompts.character_naming import is_weak_character_name
 from app.services.bootstrap.steps.dabai.dabai_converge import (
     repair_dabai_volume_boss_binding,
     sync_ctx_char_maps,
@@ -25,6 +26,25 @@ def run_dabai_bootstrap_lint(svc: Any, project: Project, ctx: dict) -> dict:
     if repaired:
         logger.info("dabai.converge 回填 volume_boss project=%s 卷数=%d", project.id, repaired)
     issues: list[dict] = []
+    seen_given: dict[str, str] = {}
+    for ch in chars:
+        name = (ch.name or "").strip()
+        reason = is_weak_character_name(name)
+        if reason:
+            issues.append({
+                "rule_id": "DBL-06", "severity": "high", "character": name,
+                "message": f"人物「{name}」命名随意：{reason}；须结合书名/主题意象重命名",
+            })
+            continue
+        # 同批「名」重复或仅一字之差的近义堆砌（取姓后部分粗判）
+        given = name[1:] if len(name) <= 3 else name[2:]
+        if given and given in seen_given:
+            issues.append({
+                "rule_id": "DBL-07", "severity": "medium", "character": name,
+                "message": f"「{name}」与「{seen_given[given]}」名部重复，辨识度不足",
+            })
+        elif given:
+            seen_given[given] = name
     volumes = (
         svc.db.query(OutlineNode)
         .filter(

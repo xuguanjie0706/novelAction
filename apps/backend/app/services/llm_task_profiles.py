@@ -95,6 +95,13 @@ TASK_PROFILES: dict[str, dict] = {
         "frequency_penalty": 0.15,
         "presence_penalty": 0.0,
     },
+    "dabai.prewarn": {
+        # dabai 写前导演单：事实裁决 + 写法指令，要稳定 JSON、不许发挥
+        "temperature": 0.25,
+        "top_p": 0.85,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+    },
     "dabai.quality": {
         # dabai 质检 v2（衔接/五拍/钩子）：要稳定 JSON 与可比较打分
         "temperature": 0.2,
@@ -148,6 +155,9 @@ TASK_PROFILES: dict[str, dict] = {
     "bootstrap.storylines": {"temperature": 0.7, "top_p": 0.9},
     "bootstrap.storyline_weave": {"temperature": 0.3, "top_p": 0.85},
     "bootstrap.characters": {"temperature": 0.75, "top_p": 0.9},
+    # dabai 合并步：人物命名需要足够发散避免模板名坍缩，对齐 bootstrap.characters
+    "bootstrap.dabai_cast_world": {"temperature": 0.75, "top_p": 0.9, "presence_penalty": 0.2},
+    "bootstrap.dabai_vol_chapters": {"temperature": 0.6, "top_p": 0.9},
     "bootstrap.skills": {"temperature": 0.65, "top_p": 0.9},
     "bootstrap.items": {"temperature": 0.65, "top_p": 0.9},
     "bootstrap.volumes": {"temperature": 0.6, "top_p": 0.9},

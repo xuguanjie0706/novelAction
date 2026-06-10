@@ -28,6 +28,11 @@ from app.dependencies import get_current_user
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 from app.models.user import User
 from app.services.dabai_persist import DabaiPersister, persist_bootstrap_result
+from app.services.dabai.draft_stream import dabai_draft_max_tokens
+from app.services.dabai.lab_draft_context import build_lab_draft_context
+from app.services.dabai.lab_ledger import build_ledger_block, seed_ledgers
+from app.services.dabai.lab_post_write import spawn_post_write_pipeline
+from app.services.dabai.lab_pre_warn import resolve_lab_pre_warn
 from app.services.dabai_write import build_prose_prompt, mock_prose
 
 logger = logging.getLogger("dabai.api")
@@ -259,6 +264,8 @@ async def _handle_event(persister: DabaiPersister, cfg, ev: dict, kind: str):
 
 
 # ── 章节正文写作（流式）──────────────────────────────────────────────────────
+
+
 class WriteRequest(BaseModel):
     mock: bool = Field(default=False, description="离线 mock 正文（不调真实 LLM）")
     model_profile: Literal["local", "gemini"] = "gemini"
@@ -273,7 +280,7 @@ async def draft_chapter_stream(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> StreamingResponse:
-    """流式写一章正文（简化大白文链路），完成后落库 content + status=written。"""
+    """流式写一章正文（前情 + 写前导演单 + 五拍正文），完成后落库。"""
     project = _owned_or_404(db, project_id, user)
     ch = (
         db.query(DabaiChapterOutline)
@@ -283,10 +290,16 @@ async def draft_chapter_stream(
     )
     if not ch:
         raise HTTPException(status_code=404, detail="章节不存在")
-    system, user_prompt = build_prose_prompt(project, ch)
+
+    draft_ctx = build_lab_draft_context(db, project, ch)
+    seed_ledgers(db, project)
+    ledger_block = build_ledger_block(db, project, ch)
+    replace_existing = bool((ch.content or "").strip())
 
     async def gen():
         chunks: list[str] = []
+        pre_warn_block = ""
+        ai = None
         try:
             if req.mock:
                 for seg in mock_prose(project, ch):
@@ -296,9 +309,24 @@ async def draft_chapter_stream(
                 from app.services.ai.service import AIService
                 ai = AIService(profile=req.model_profile, db=db,
                                llm_provider_id=req.llm_provider_id, user_id=user.id)
+                yield _sse({"event": "pre_warn_running", "dabai_mode": True})
+                pre_warn_block, pre_warn_evt = await resolve_lab_pre_warn(
+                    ai, project, ch, draft_ctx, db=db, ledger_block=ledger_block,
+                )
+                yield _sse(pre_warn_evt)
+                system, user_prompt = build_prose_prompt(
+                    project, ch,
+                    prev_tail=draft_ctx.prev_tail,
+                    recent_plot_block=draft_ctx.recent_plot_block,
+                    pre_warn_block=pre_warn_block,
+                    ledger_block=ledger_block,
+                    memory_block=draft_ctx.memory_block,
+                    clue_block=draft_ctx.clue_block,
+                    replace_existing=replace_existing,
+                )
                 async for delta in ai._stream_ai(
                     system, user_prompt, task="dabai.write",
-                    max_tokens=max(1200, (ch.expected_words or 2000) * 2),
+                    max_tokens=dabai_draft_max_tokens(ch.expected_words or 2000),
                 ):
                     if not delta:
                         continue
@@ -313,6 +341,17 @@ async def draft_chapter_stream(
         db.commit()
         yield _sse({"event": "done", "chapter_id": str(chapter_id),
                     "word_count": len(ch.content)})
+        # 写后自动质检 + 复盘：独立 session 后台任务（关页不丢落库），同流转发进度
+        events = spawn_post_write_pipeline(
+            project.id, ch.id,
+            mock=req.mock, model_profile=req.model_profile,
+            llm_provider_id=req.llm_provider_id, user_id=user.id,
+        )
+        while True:
+            evt = await events.get()
+            if evt is None:
+                break
+            yield _sse(evt)
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

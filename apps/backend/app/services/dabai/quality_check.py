@@ -180,13 +180,16 @@ async def run_dabai_quality(
     llm_status = "ok"
     try:
         from app.services.bootstrap.parse import parse_json
+        from app.services.bootstrap.retry import call_with_retry
 
         prev_tail = (
             _prev_chapter_tail(db, str(project.id), chapter)
             if (chapter.sort_order or 0) > 0 else ""
         )
         system, user = build_qc_prompt(chapter, plan_node, prev_tail=prev_tail)
-        raw = await svc._call_with_retry(system, user, task="dabai.quality", max_tokens=1400)
+        raw = await call_with_retry(
+            svc, system, user, max_tokens=1400, task="dabai.quality",
+        )
         llm_data = parse_json(raw)
         if not isinstance(llm_data, dict):
             llm_status = "parse_error"

@@ -18,6 +18,7 @@ PIPELINE_STEPS: list[str] = [
     "factions",          # 势力阵营
     "characters",        # 人物档案
     "storylines",        # 故事线
+    "story_assets",      # 剧情资产+初始关系（台账种子：争夺点/底牌/成长线 + 关系张力）
     "volumes",           # 卷骨架
     "chapter_outlines",  # 章纲（爽点节拍器）
 ]
@@ -31,6 +32,7 @@ STEP_TEMPERATURE: dict[str, float] = {
     "factions": 0.6,
     "characters": 0.7,
     "storylines": 0.6,
+    "story_assets": 0.65,
     "volumes": 0.6,
     "chapter_outlines": 0.75,  # 爽点要变化，但骨架仍需稳定 JSON
 }

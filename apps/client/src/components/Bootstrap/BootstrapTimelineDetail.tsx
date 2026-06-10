@@ -484,6 +484,23 @@ export default function BootstrapTimelineDetail({
           </div>
         )}
 
+        {step.status === 'done' && haltedStep && onRegen && step.key !== haltedStep && (
+          <div className="mb-4 rounded-xl border border-amber-100 bg-amber-50/80 px-4 py-3 text-sm text-amber-900">
+            <p className="leading-relaxed">
+              当前阻塞在「{haltedStep}」。若需修正本步产出（例如卷级 BOSS 境界曲线），可重新生成本步后再重试失败步骤。
+            </p>
+            <button
+              type="button"
+              disabled={!!regenStep}
+              onClick={() => onRegen(step.key)}
+              className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-800 shadow-sm transition-colors hover:bg-amber-50 disabled:opacity-50"
+            >
+              {regenStep === step.key ? <Loader2 size={14} className="animate-spin" /> : null}
+              {regenStep === step.key ? '重新生成中…' : '重新生成本步'}
+            </button>
+          </div>
+        )}
+
         {/* 步骤完成且已拉取到真实数据时展示富内容；否则降级为 count/preview 摘要 */}
         {step.status === 'done' && stepData?.[step.key] != null
           ? <StepDataContent stepKey={step.key} data={stepData[step.key]} />
@@ -614,7 +631,7 @@ export default function BootstrapTimelineDetail({
         <div className="flex shrink-0 flex-col gap-3 border-t border-gray-200 bg-white/95 px-5 py-4 backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:px-8">
           <p className="text-xs leading-relaxed text-gray-500 sm:max-w-xl">
             {haltedStep
-              ? '生成已暂停：请先重试失败步骤，后续步骤不会继续，直到本步成功。'
+              ? '生成已暂停：先「重试失败步骤」；若问题在前序步骤（如卷骨架 BOSS 曲线），选中该步后点「重新生成本步」。'
               : '关闭将中断当前连接；未结束的生成可在书架顶部「继续」恢复。'}
           </p>
           <div className="flex flex-wrap justify-end gap-2 sm:shrink-0">

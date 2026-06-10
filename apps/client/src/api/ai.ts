@@ -20,6 +20,14 @@ export const llmApi = {
 // ── AI ────────────────────────────────────────────────
 export const aiApi = {
   qualityCheck: (pid: string, data: any) => api.post(`/projects/${pid}/ai/quality-check`, data),
+  dabaiConsistencyCheck: (pid: string, chapterId: string) =>
+    api.post<{
+      consistency_pass?: boolean
+      overall_score?: number
+      blockers?: { rule_id: string; message: string }[]
+      warnings?: { rule_id: string; message: string }[]
+      status?: string
+    }>(`/projects/${pid}/ai/dabai-consistency-check`, { chapter_id: chapterId }),
   generateWorldSettings: (
     pid: string,
     data: {

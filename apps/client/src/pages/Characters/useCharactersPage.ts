@@ -15,6 +15,7 @@ import {
   type GroupBy,
 } from './shared/constants'
 import type { CharacterGroup } from './CharacterList'
+import { canonicalCharacterRole } from '../../utils/characterRoleDisplay'
 
 export function useCharactersPage() {
   const { projectId, tab } = useParams<{ projectId: string; tab: string }>()
@@ -57,7 +58,7 @@ export function useCharactersPage() {
     const q = searchQ.trim().toLowerCase()
     return characters.filter(c => {
       if (q && !c.name.toLowerCase().includes(q) && !(c.faction ?? '').toLowerCase().includes(q)) return false
-      if (roleFilter !== 'all' && c.role !== roleFilter) return false
+      if (roleFilter !== 'all' && canonicalCharacterRole(c.role) !== roleFilter) return false
       if (statusFilter !== 'all' && (c.current_status ?? 'alive') !== statusFilter) return false
       if (tierFilter !== 'all' && (c.character_tier ?? 'core') !== tierFilter) return false
       return true
@@ -72,7 +73,7 @@ export function useCharactersPage() {
           key: role,
           label: ROLE_META[role as keyof typeof ROLE_META]?.label ?? role,
           color: ROLE_META[role as keyof typeof ROLE_META]?.color ?? '',
-          chars: filteredChars.filter(c => c.role === role),
+          chars: filteredChars.filter(c => canonicalCharacterRole(c.role) === role),
         }))
         .filter(g => g.chars.length > 0)
     }

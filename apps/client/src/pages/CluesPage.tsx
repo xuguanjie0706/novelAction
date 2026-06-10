@@ -13,6 +13,7 @@ import { foreshadowsApi, chapterIndexesApi, qualityDebtsApi, chaptersApi, aiApi 
 import { authFetch } from '../api/authFetch'
 import type { Foreshadow, ChapterIndex, QualityDebt } from '../types'
 import { useAppStore, modelProfileFromRoute, llmProviderIdFromRoute } from '../store'
+import { isDabaiProject } from '../utils/dabaiOutlineDisplay'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 import {
@@ -161,7 +162,8 @@ export default function CluesPage() {
         toast.error('找不到对应章节（可能已删章），请从目录进入写作页')
         return
       }
-      navigate(`/project/${projectId}/write?chapter=${cid}`)
+      const isDabai = isDabaiProject(useAppStore.getState().currentProject?.extra as Record<string, unknown>)
+      navigate(`/project/${projectId}/${isDabai ? 'dabai-write' : 'write'}?chapter=${cid}`)
     },
     [projectId, chapters, navigate],
   )

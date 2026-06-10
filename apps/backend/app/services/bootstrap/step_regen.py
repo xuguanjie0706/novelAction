@@ -118,6 +118,7 @@ def build_full_ctx(db: Session, project: Any) -> dict:
     )
     if chars:
         ctx["char_names"] = [c.name for c in chars]
+        ctx["char_id_list"] = [{"id": str(c.id), "name": c.name} for c in chars]
         ctx["protagonist"] = next(
             (c.name for c in chars if c.role == "protagonist"), chars[0].name
         )
@@ -179,6 +180,16 @@ def build_full_ctx(db: Session, project: Any) -> dict:
             .count()
         )
         ctx["chapter_quota_used"] = used
+
+    from app.utils.dabai_mode import is_dabai_project
+    if is_dabai_project(project):
+        ctx["bootstrap_mode"] = "dabai"
+        for key in ("cultivation_contract", "golden_finger", "dabai_golden_finger", "benchmark"):
+            if project_extra.get(key) is not None:
+                ctx[key] = project_extra[key]
+        pos = project_extra.get("positioning")
+        if isinstance(pos, dict):
+            ctx["dabai_positioning"] = pos
 
     return ctx
 
@@ -342,6 +353,7 @@ def wipe_step(db: Session, project_id: str | UUID, step: str) -> None:
     ):
         # 这些步骤只写 project.extra，不删表行；由 dispatch_regen 覆盖写入即可
         _extra_keys = {
+            "consistency": ("consistency_issues", "dabai_lint"),
             "rhythm_map": ("rhythm_map",),
             "signal_audit": ("signal_audit",),
             "promise_seeds": ("core_mysteries", "opening_contract"),
@@ -387,6 +399,12 @@ async def dispatch_regen(svc: Any, project: Any, step: str, ctx: dict) -> Any:
         ValueError: 不支持的步骤名。
     """
     from app.models import OutlineNode, Character
+    from app.utils.dabai_mode import is_dabai_project
+
+    if step == "consistency" and is_dabai_project(project):
+        from app.services.bootstrap.steps.dabai.dabai_bootstrap_lint import run_dabai_bootstrap_lint
+        report = run_dabai_bootstrap_lint(svc, project, ctx)
+        return [report] if report else []
 
     _SIMPLE_MAP: dict[str, str] = {
         "power_systems":    "_gen_power_systems",
@@ -425,6 +443,15 @@ async def dispatch_regen(svc: Any, project: Any, step: str, ctx: dict) -> Any:
 
     if step == "volumes":
         extra = project.extra if isinstance(getattr(project, "extra", None), dict) else {}
+        if is_dabai_project(project):
+            from app.services.bootstrap.steps.dabai.volumes_map_dabai import gen_volumes_map_dabai
+            nodes = await gen_volumes_map_dabai(svc, project, ctx)
+            if isinstance(nodes, list):
+                ctx["_volume_ids"] = [str(n.id) for n in nodes]
+                ctx["volumes_summary"] = " | ".join(
+                    f"{n.title}：{(n.summary or '')[:40]}" for n in nodes
+                )
+            return nodes or []
         if extra.get("fanfic_positioning"):
             from app.services.bootstrap.fanfic_ctx import merge_fanfic_extra_into_ctx
 

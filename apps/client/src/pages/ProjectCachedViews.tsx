@@ -5,6 +5,7 @@ import PageSpinner from '../components/common/PageSpinner'
 
 const OutlinePage = lazy(() => import('./OutlinePage'))
 const WritePage = lazy(() => import('./WritePage'))
+const DabaiWritePage = lazy(() => import('./DabaiWritePage'))
 const CharactersPage = lazy(() => import('./CharactersPage'))
 const SettingsPage = lazy(() => import('./SettingsPage'))
 const MemoryPage = lazy(() => import('./MemoryPage'))
@@ -17,12 +18,13 @@ const PowerTimelinePage = lazy(() => import('./PowerTimelinePage'))
 const StorylineWeavePage = lazy(() => import('./StorylineWeavePage'))
 const RelationsGraphPage = lazy(() => import('./RelationsGraphPage'))
 
-const TABS = ['outline', 'write', 'characters', 'relations', 'worldbuilding', 'settings', 'timeline', 'powercurve', 'storyweave', 'memory', 'clues', 'rhythmmap', 'promises'] as const
+const TABS = ['outline', 'write', 'dabai-write', 'characters', 'relations', 'worldbuilding', 'settings', 'timeline', 'powercurve', 'storyweave', 'memory', 'clues', 'rhythmmap', 'promises'] as const
 type Tab = (typeof TABS)[number]
 
 const TAB_PAGES: Record<Tab, React.LazyExoticComponent<() => JSX.Element>> = {
   outline: OutlinePage,
   write: WritePage,
+  'dabai-write': DabaiWritePage,
   characters: CharactersPage,
   relations: RelationsGraphPage,
   worldbuilding: WorldBuildingPage,

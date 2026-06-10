@@ -87,7 +87,7 @@ export interface FanficStartMeta {
 
 export interface StartParams {
   logline: string
-  mode: 'sequential' | 'doupo' | 'fanfic' | 'xianxia'
+  mode: 'sequential' | 'doupo' | 'fanfic' | 'xianxia' | 'dabai'
   targetWords: number
   modelProfile: string
   llmProviderId?: string | null
@@ -175,7 +175,17 @@ const XIANXIA_STEP_KEYS: StepKey[] = [
   'opening_contract', 'consistency',
 ]
 
+const DABAI_STEP_KEYS: StepKey[] = [
+  'positioning', 'project',
+  'power_ladder',
+  'factions',
+  'skills', 'items',
+  'volumes',
+  'consistency',
+]
+
 function getStepKeys(mode: StartParams['mode']): StepKey[] {
+  if (mode === 'dabai') return DABAI_STEP_KEYS
   if (mode === 'xianxia') return XIANXIA_STEP_KEYS
   if (mode === 'doupo') return DOUPO_STEP_KEYS
   if (mode === 'fanfic') return FANFIC_STEP_KEYS
@@ -432,6 +442,9 @@ export function useBootstrapStream() {
       if (key) {
         setPhase('generating')
         syncHaltedStep(key)
+        setGateStep(null)
+        setGateMessage('')
+        setGatePreview(null)
         setSteps(prev => blockStepsAfter(
           prev.map(s =>
             s.key === key
@@ -477,6 +490,9 @@ export function useBootstrapStream() {
       }
       setPhase('gate')
     } else if (event === 'gate_passed') {
+      setGateStep(null)
+      setGateMessage('')
+      setGatePreview(null)
       setPhase('generating')
     } else if (event === 'cancelled') {
       streamCompleteRef.current = true
@@ -633,7 +649,8 @@ export function useBootstrapStream() {
 
       // 根据快照中的 mode 还原步骤列表与 ref
       const runMode: StartParams['mode'] =
-        (run.mode === 'doupo' || run.mode === 'fanfic' || run.mode === 'xianxia') ? run.mode : 'sequential'
+        (run.mode === 'doupo' || run.mode === 'fanfic' || run.mode === 'xianxia' || run.mode === 'dabai')
+          ? run.mode : 'sequential'
       currentModeRef.current = runMode
       setSteps(getStepKeys(runMode).map(k => makeStep(k)))
       setActiveLogline((run.logline || opts?.loglineHint || '').trim())
@@ -705,12 +722,14 @@ export function useBootstrapStream() {
         const failed = toKey(gd?.step)
         const haltMsg = typeof gd?.message === 'string' ? gd.message : '步骤失败，请手动重试此步骤'
         if (run.project_id) setProjectId(run.project_id)
+        setGateStep(null)
+        setGateMessage('')
+        setGatePreview(null)
         if (failed) {
           syncHaltedStep(failed)
           setErrorMsg(haltMsg)
           setSteps(prev => blockStepsAfter(prev, failed))
           setPhase('generating')
-          await retryFailedStep(failed, params)
         }
         return
       }
@@ -892,17 +911,6 @@ export function useBootstrapStream() {
         body: JSON.stringify(body),
       })
       if (!res.ok) {
-        if (res.status === 409) {
-          const snapRes = await authFetch(`/api/v1/bootstrap/runs/${rid}`, { method: 'GET' })
-          if (snapRes.ok) {
-            const snap = await snapRes.json() as { status?: string }
-            if (snap.status === 'running') {
-              setErrorMsg('')
-              setPhase('generating')
-              return
-            }
-          }
-        }
         const text = await res.text().catch(() => '')
         let detail = text || `resume 失败 (${res.status})`
         try {
@@ -910,6 +918,35 @@ export function useBootstrapStream() {
           if (typeof parsed.detail === 'string') detail = parsed.detail
           else if (parsed.detail != null) detail = JSON.stringify(parsed.detail)
         } catch { /* 非 JSON 则沿用原文 */ }
+        if (res.status === 409) {
+          const snapRes = await authFetch(`/api/v1/bootstrap/runs/${rid}`, { method: 'GET' })
+          if (snapRes.ok) {
+            const snap = await snapRes.json() as {
+              status?: string
+              gate_data?: { step?: string; message?: string; kind?: string }
+            }
+            if (snap.status === 'running') {
+              setErrorMsg('')
+              setPhase('generating')
+              return
+            }
+            if (snap.status === 'awaiting_retry') {
+              const gd = snap.gate_data
+              const failed = toKey(gd?.step)
+              const haltMsg = typeof gd?.message === 'string' ? gd.message : detail
+              setGateStep(null)
+              setGateMessage('')
+              setGatePreview(null)
+              if (failed) {
+                syncHaltedStep(failed)
+                setSteps(prev => blockStepsAfter(prev, failed))
+              }
+              setErrorMsg(haltMsg)
+              setPhase('generating')
+              return
+            }
+          }
+        }
         throw new Error(detail)
       }
       setErrorMsg('')

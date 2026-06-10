@@ -5,9 +5,9 @@ import { Plus, Crown, Users, Search, Sparkles } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import clsx from 'clsx'
 import type { Character } from '../../types'
+import { roleMetaForCharacter } from '../../utils/characterRoleDisplay'
 import {
-  ROLE_META, STATUS_META, TIER_META,
-  ROLE_CHIPS, STATUS_CHIPS, TIER_CHIPS,
+  ROLE_META, ROLE_CHIPS, STATUS_META, STATUS_CHIPS, TIER_META, TIER_CHIPS,
   type RoleFilter, type StatusFilter, type TierFilter, type GroupBy,
 } from './shared/constants'
 import { CharacterAvatar } from './shared/components'
@@ -190,7 +190,7 @@ export function CharacterList(props: CharacterListProps) {
               </div>
               {group.chars.map(c => {
                 const sm = STATUS_META[c.current_status ?? 'alive'] ?? STATUS_META.alive
-                const rm = ROLE_META[c.role as keyof typeof ROLE_META] ?? ROLE_META.supporting
+                const rm = roleMetaForCharacter(c.role, c.extra as Record<string, unknown> | undefined)
                 return (
                   <button key={c.id} onClick={() => onSelect(c)}
                     className={clsx('w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors border-l-2',

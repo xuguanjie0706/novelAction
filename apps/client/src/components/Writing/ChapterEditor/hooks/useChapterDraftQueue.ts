@@ -9,6 +9,7 @@ import { useAppStore, modelProfileFromRoute, routeLlmProviderPayload } from '../
 import type { Chapter, OutlineNode } from '../../../../types'
 import type { WritingConfig } from '../../../../api/client'
 import { chapterHasNarrativeBody, shouldUseGatedDraft } from '../../../../utils/writingConfigGate'
+import { isDabaiProject } from '../../../../utils/dabaiOutlineDisplay'
 import { INLINE_ACTIONS } from '../constants'
 import { hasHtmlTextContent, isBookFirstChapterTitle } from '../utils'
 
@@ -111,6 +112,7 @@ export function useChapterDraftQueue({
         min_subscribe_intent?: number
       } | null
       const useGated = shouldUseGatedDraft(writingConfig)
+      const dabaiMode = isDabaiProject(useAppStore.getState().currentProject?.extra as Record<string, unknown> | undefined)
       const hasGate = wc?.auto_quality_gate === true
         && ((wc?.min_overall_score ?? 0) > 0 || (wc?.min_subscribe_intent ?? 0) > 0)
       const gatedLabel = hasGate
@@ -128,7 +130,9 @@ export function useChapterDraftQueue({
         },
       })
       const warnReuseHint = '（本章若已有预警记录将自动复用，跳过重复审稿）'
-      const toastMsg = useGated
+      const toastMsg = dabaiMode
+        ? `已加入 AI 队列：大白文专线（按章节要素五拍写正文${useGated ? ' + 设定一致性校验' : ''}）`
+        : useGated
         ? `已加入 AI 队列：写前预警 + 质量门控写作${warnReuseHint}`
         : `已加入 AI 队列：写前预警 + 重写本章${warnReuseHint}`
       toast.success(toastMsg)

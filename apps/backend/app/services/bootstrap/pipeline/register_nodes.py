@@ -159,6 +159,45 @@ def _register_all() -> None:
         label="规划卷骨架（境界预算契约硬执行）...",
     ))
 
+    # ── 大白文·修仙线（mode=dabai）────────────────────────────
+    from app.services.bootstrap.graph_dabai import (
+        node_cast_world_dabai,
+        node_dabai_bootstrap_lint,
+        node_dabai_gate,
+        node_dabai_positioning,
+        node_golden_power_dabai,
+        node_volumes_map_dabai,
+    )
+
+    register_node(NodeSpec(
+        key="positioning_dabai", fn=node_dabai_positioning, seq=100,
+        graph_id="positioning", is_positioning=True,
+    ))
+    register_node(NodeSpec(
+        key="gate_positioning_dabai", fn=node_dabai_gate, seq=150,
+        graph_id="gate", interrupt_before=True,
+    ))
+    register_node(NodeSpec(
+        key="golden_power_dabai", fn=node_golden_power_dabai, seq=304,
+        graph_id="power_ladder", replaces="power_systems",
+        label="金手指 + 境界主轴 + 境界预算契约（合并）...",
+    ))
+    register_node(NodeSpec(
+        key="cast_world_dabai", fn=node_cast_world_dabai, seq=500,
+        graph_id="factions", replaces="factions",
+        label="势力 + 人物 + 故事线 + 卷级对立面（合并）...",
+    ))
+    register_node(NodeSpec(
+        key="volumes_map_dabai", fn=node_volumes_map_dabai, seq=800,
+        graph_id="volumes", replaces="volumes",
+        label="卷骨架 + 卷级地图 + 境界区间...",
+    ))
+    register_node(NodeSpec(
+        key="dabai_bootstrap_lint", fn=node_dabai_bootstrap_lint, seq=940,
+        graph_id="consistency", replaces="consistency",
+        label="大白文 Bootstrap 规则质检...",
+    ))
+
     # ── 同人线 ───────────────────────────────────────────────
     from app.services.bootstrap.graph_fanfic import (
         node_audit as fanfic_audit,

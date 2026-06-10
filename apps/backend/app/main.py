@@ -192,6 +192,9 @@ async def _on_startup() -> None:
     from app.config import settings as _settings
     await init_bootstrap_graph(_settings.DATABASE_URL)
 
+    from app.services.graph_store.neo4j_client import ensure_schema
+    ensure_schema()
+
     from app.startup.logging_config import ensure_app_logging
 
     ensure_app_logging()
@@ -215,7 +218,9 @@ async def _on_startup() -> None:
 async def _on_shutdown() -> None:
     """关闭 Bootstrap AsyncPostgresSaver 连接池。"""
     from app.services.bootstrap.graph import close_bootstrap_graph
+    from app.services.graph_store.neo4j_client import close_driver
     await close_bootstrap_graph()
+    close_driver()
 
 
 # ── 中间件注册 ────────────────────────────────────────────────────────────

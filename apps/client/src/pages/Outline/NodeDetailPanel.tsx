@@ -26,6 +26,13 @@ import {
   buildVolumeDirectorSavePayload,
   type VolumeDirectorForm,
 } from '../../components/Outline/VolumeDirectorView'
+import DabaiVolumeChapterList from './DabaiVolumeChapterList'
+import DabaiChapterBeatCard from '../../components/Dabai/DabaiChapterBeatCard'
+import {
+  dabaiBeatFromOutlineNode,
+  isDabaiOutlineNode,
+  isDabaiProject,
+} from '../../utils/dabaiOutlineDisplay'
 
 export default function NodeDetailPanel({
   node, projectId, onOpenChapter, onSaved, onAICommitDone, onJumpToChapterPlan, onQualityCheck,
@@ -51,7 +58,7 @@ export default function NodeDetailPanel({
    */
   initialTab?: 'overview' | 'quality' | 'chapters' | 'chapter' | 'scene' | 'ai'
 }) {
-  const { characters, storyLines, outlineTree } = useAppStore()
+  const { characters, storyLines, outlineTree, currentProject, powerSystems } = useAppStore()
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [activeTab, setActiveTab] = useState<'overview' | 'quality' | 'chapters' | 'chapter' | 'scene' | 'ai'>('overview')
@@ -147,6 +154,9 @@ export default function NodeDetailPanel({
     [node.id, node.children, isExpandable],
   )
 
+  const isDabaiVolume = isExpandable && isDabaiProject(currentProject?.extra as Record<string, unknown> | undefined)
+  const realmLevels = powerSystems[0]?.levels as Array<{ rank?: number; name?: string }> | undefined
+
   // 按章节编号索引 linter issues（章节清单徽章悬停/展开）
   const linterIssuesByChapter = useMemo(() => {
     const issues = (node.extra?.linter_issues as LinterIssueRow[] | undefined) ?? []
@@ -171,7 +181,7 @@ export default function NodeDetailPanel({
     ...(node.node_type === 'chapter_plan' ? [{ key: 'scene' as const, label: '分场蓝图' }] : []),
     // 卷节点：章节清单 + 合并质检
     ...(isExpandable && chapterChildren.length > 0
-      ? [{ key: 'chapters' as const, label: `章节（${chapterChildren.length}）` }]
+      ? [{ key: 'chapters' as const, label: isDabaiVolume ? `爽点章纲（${chapterChildren.length}）` : `章节（${chapterChildren.length}）` }]
       : []),
     ...(isExpandable ? [{ key: 'quality' as const, label: '质检' }] : []),
     ...(isExpandable ? [{ key: 'ai' as const, label: 'AI 展开' }] : []),
@@ -259,6 +269,13 @@ export default function NodeDetailPanel({
             <div className="border border-dashed border-gray-200 rounded-lg px-4 py-8 text-sm text-gray-400 text-center">
               该卷还没有章节计划。点击「AI 展开」生成章节大纲。
             </div>
+          ) : isDabaiVolume ? (
+            <DabaiVolumeChapterList
+              chapters={chapterChildren}
+              linterIssuesByChapter={linterIssuesByChapter}
+              realmLevels={realmLevels}
+              onJumpToChapterPlan={onJumpToChapterPlan}
+            />
           ) : (
             <div className="space-y-1 max-h-[calc(100vh-280px)] overflow-y-auto pr-0.5">
               {chapterChildren.map((ch, idx) => {
@@ -368,6 +385,10 @@ export default function NodeDetailPanel({
 
       {activeTab === 'chapter' && node.node_type === 'chapter_plan' && (
         <div className="space-y-4">
+          {isDabaiOutlineNode(node) && (() => {
+            const beat = dabaiBeatFromOutlineNode(node, (node.sort_order ?? 0) + 1, { realmLevels })
+            return beat ? <DabaiChapterBeatCard beat={beat} /> : null
+          })()}
           {/* 实力里程碑 */}
             <div>
               <div className="flex items-baseline gap-2 mb-1">

@@ -50,6 +50,7 @@ from app.services.bootstrap.graph import (
 )
 from app.services.bootstrap.pipeline.runner import resume_pipeline, run_pipeline
 from app.services.bootstrap.pipeline.styles import get_style
+from app.schemas.bootstrap_dabai_positioning import try_validate_dabai_positioning
 from app.schemas.bootstrap_fanfic_positioning import try_validate_fanfic_positioning
 from app.schemas.bootstrap_positioning import try_validate_positioning
 
@@ -94,6 +95,7 @@ class StartRequest(BaseModel):
     - ``doupo``：斗破·大白文玄幻，基于通用线，单斗气主轴 + 势力/功法/法宝三合一 + 精简设定，禁修仙/禁上帝视角
     - ``fanfic``：同人·番茄，必填原著名与梗概，支持穿书/重生/AU
     - ``xianxia``：番茄·玄幻修仙直白，境界进度由「境界预算契约」硬执行（杜绝第一卷修满）
+    - ``dabai``：大白文·修仙，约4次LLM Bootstrap；卷纲定地图+境界区间，章纲懒展开定具体境界
 
     注：番茄（fanqie）分支已下线，由 doupo 取代。
     """
@@ -102,7 +104,7 @@ class StartRequest(BaseModel):
     target_words: int = 1_200_000
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
-    mode: Literal["sequential", "doupo", "fanfic", "xianxia"] = "sequential"
+    mode: Literal["sequential", "doupo", "fanfic", "xianxia", "dabai"] = "sequential"
     fanfic_meta: Optional[FanficStartMeta] = None
     auto_mode: bool = False
     # 写作风格档位（作者建书时一次性选择，全书贯彻）：
@@ -203,7 +205,7 @@ async def create_run(
 
     style = get_style(req.mode)
     _effective_ws = req.writing_style
-    if req.mode in ("doupo", "fanfic", "xianxia") and _effective_ws == "standard":
+    if req.mode in ("doupo", "fanfic", "xianxia", "dabai") and _effective_ws == "standard":
         _effective_ws = "plain"
     extra_ctx = None
     if req.mode == "fanfic" and req.fanfic_meta:
@@ -508,6 +510,9 @@ def _build_resume_payload(run: BootstrapRun, req: ResumeRequest) -> dict:
             raise HTTPException(status_code=422, detail="缺少有效的 positioning，无法通过立项闸门")
         if run.mode == "fanfic":
             normalized, err = try_validate_fanfic_positioning(raw)
+        elif run.mode == "dabai":
+            benchmark = gd.get("benchmark") if isinstance(gd.get("benchmark"), dict) else None
+            normalized, err = try_validate_dabai_positioning(raw, benchmark=benchmark)
         elif run.mode in ("xianxia", "doupo"):
             # 斗破立项产物字段集与修仙线一致，复用同一校验，无需新增 schema
             from app.schemas.bootstrap_xianxia_positioning import (

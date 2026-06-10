@@ -88,6 +88,13 @@ TASK_PROFILES: dict[str, dict] = {
         "frequency_penalty": 0.1,
         "presence_penalty": 0.0,
     },
+    "dabai.write": {
+        # 大白文专线：低温 + 低 penalty，按章节要素五拍稳定输出
+        "temperature": 0.72,
+        "top_p": 0.9,
+        "frequency_penalty": 0.15,
+        "presence_penalty": 0.0,
+    },
     "suggest.stream": {
         # 写作建议：偏自由，但不要走偏
         "temperature": 0.8,

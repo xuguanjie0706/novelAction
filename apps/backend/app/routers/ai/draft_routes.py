@@ -64,6 +64,10 @@ from app.routers.ai.draft_context import (
 )
 from app.routers.ai.pre_write_for_draft import resolve_pre_write_brief_for_draft
 from app.services.ai.context_assembler import assemble_full
+from app.routers.ai.dabai_draft_handlers import (
+    dabai_draft_assist_event_stream,
+    should_route_dabai_draft,
+)
 
 router = APIRouter()
 
@@ -123,6 +127,38 @@ async def draft_assist_stream(
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(404, "Project not found")
+
+    svc = AIService(
+        "gemini" if req.model_profile == "gemini" else "default",
+        db=db,
+        llm_provider_id=req.llm_provider_id,
+    )
+    stream_log_ctx = {
+        "project_id": str(project_id),
+        "chapter_id": str(req.chapter_id),
+    }
+    user_prompt_str = (req.user_prompt or "").strip()
+
+    if should_route_dabai_draft(project):
+        async def dabai_stream():
+            async for line in dabai_draft_assist_event_stream(
+                db,
+                svc,
+                project,
+                chapter,
+                str(project_id),
+                user_prompt=user_prompt_str,
+                replace_existing=bool(req.replace_existing),
+                stream_log_ctx=stream_log_ctx,
+            ):
+                yield line
+
+        return StreamingResponse(
+            dabai_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     ctx = await _build_draft_context(db, project_id, chapter, project)
     rag_snapshot = ctx.pop("rag_retrieval_snapshot", None)
     rag_log_id = ctx.pop("rag_retrieval_log_id", None)
@@ -134,8 +170,6 @@ async def draft_assist_stream(
     )
     if viol:
         raise HTTPException(status_code=409, detail=viol)
-
-    user_prompt_str = (req.user_prompt or "").strip()
 
     if req.focus_quality_debt_id:
         debt = (
@@ -171,17 +205,7 @@ async def draft_assist_stream(
         )
         user_prompt_str = (user_prompt_str + focus_block).strip()
 
-    stream_log_ctx = {
-        "project_id": str(project_id),
-        "chapter_id": str(req.chapter_id),
-        "rag_retrieval_log_id": rag_log_id,
-    }
-
-    svc = AIService(
-        "gemini" if req.model_profile == "gemini" else "default",
-        db=db,
-        llm_provider_id=req.llm_provider_id,
-    )
+    stream_log_ctx["rag_retrieval_log_id"] = rag_log_id
 
     async def event_stream():
         if rag_snapshot:

@@ -1,13 +1,16 @@
 import React from 'react'
 import { NavLink } from 'react-router-dom'
-import { BarChart2, BookOpen, Users, Map, FileText, Brain, Globe, Bookmark, BookMarked, GanttChart, Sparkles, Sword, GitBranch } from 'lucide-react'
+import { BarChart2, BookOpen, Users, Map, FileText, Brain, Globe, Bookmark, BookMarked, GanttChart, Sparkles, Sword, GitBranch, Zap } from 'lucide-react'
 import clsx from 'clsx'
+import { useAppStore } from '../../store'
+import { isDabaiProject } from '../../utils/dabaiOutlineDisplay'
 
 interface Props { projectId: string }
 
 const NAV = [
   { to: 'outline',       icon: BookOpen, label: '大纲' },
-  { to: 'write',         icon: FileText, label: '写作' },
+  { to: 'write',         icon: FileText, label: '写作', hideWhenDabai: true },
+  { to: 'dabai-write',   icon: Zap,      label: '爽文', dabaiOnly: true },
   { to: 'characters',    icon: Users,    label: '人物' },
   { to: 'relations',     icon: Sparkles, label: '关系图' },
   { to: 'worldbuilding', icon: Globe,    label: '世界' },
@@ -22,9 +25,18 @@ const NAV = [
 ]
 
 export default function Sidebar({ projectId }: Props) {
+  const isDabai = isDabaiProject(
+    useAppStore(s => s.currentProject?.extra) as Record<string, unknown> | undefined,
+  )
+  const items = NAV.filter(item => {
+    if (item.dabaiOnly && !isDabai) return false
+    if (item.hideWhenDabai && isDabai) return false
+    return true
+  })
+
   return (
     <aside className="w-14 flex flex-col items-center py-4 bg-[#2C2520] gap-1">
-      {NAV.map(({ to, icon: Icon, label }) => (
+      {items.map(({ to, icon: Icon, label }) => (
         <NavLink
           key={to}
           to={`/project/${projectId}/${to}`}

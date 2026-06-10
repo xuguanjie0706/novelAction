@@ -130,6 +130,22 @@ async def gen_vol_chapter_plans(
             f"volume_node.node_type 必须为 'volume'，实际为 '{volume_node.node_type}'"
         )
 
+    from app.utils.dabai_mode import is_dabai_project
+    if is_dabai_project(project):
+        from app.services.bootstrap.steps.dabai.vol_chapter_plans_dabai import (
+            gen_vol_chapter_plans_dabai,
+        )
+        return await gen_vol_chapter_plans_dabai(
+            svc, project, volume_node, ctx,
+            written_summaries=written_summaries,
+            open_promises=open_promises,
+            memory_chunks=memory_chunks,
+            editorial_prompt_block=editorial_prompt_block,
+            chapter_from=chapter_from,
+            chapter_to=chapter_to,
+            seed_nodes=seed_nodes,
+        )
+
     # ── 卷间衔接：强制读取上一卷末悬念钩子 ─────────────────────────────────
     # 上一卷的 hook 是编辑层对读者的承诺；第1章前500字必须让读者感受到它仍在发酵。
     prev_vol_hook_block = ""

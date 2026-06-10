@@ -14,6 +14,7 @@ from uuid import UUID
 
 from app.database import SessionLocal
 from app.models.bootstrap_run import BootstrapRun
+from app.schemas.bootstrap_dabai_positioning import try_validate_dabai_positioning
 from app.schemas.bootstrap_fanfic_positioning import try_validate_fanfic_positioning
 from app.schemas.bootstrap_fanqie_positioning import try_validate_fanqie_positioning
 from app.schemas.bootstrap_positioning import try_validate_positioning
@@ -93,6 +94,9 @@ def build_auto_resume_payload(run: BootstrapRun) -> dict | None:
             normalized, err = try_validate_fanfic_positioning(raw)
         elif run.mode == "fanqie":
             normalized, err = try_validate_fanqie_positioning(raw)
+        elif run.mode == "dabai":
+            benchmark = gd.get("benchmark") if isinstance(gd.get("benchmark"), dict) else None
+            normalized, err = try_validate_dabai_positioning(raw, benchmark=benchmark)
         else:
             normalized, err = try_validate_positioning(raw)
         if err or normalized is None:
@@ -208,6 +212,21 @@ async def _auto_resume_chain(
             payload = build_auto_resume_payload(run)
             if not payload:
                 if run.status == "running":
+                    events = run.events if isinstance(run.events, list) else []
+                    if events and events[-1].get("event") == "step_done":
+                        last_step = str(events[-1].get("step") or "")
+                        if last_step in ("consistency", "canon_audit"):
+                            logger.info(
+                                "auto_mode: run %s 图已跑完但未落 done，停止空转（step=%s）",
+                                run_id, last_step,
+                            )
+                            return
+                    if round_i >= 3:
+                        logger.info(
+                            "auto_mode: run %s status=running 无闸门可 resume，停止空转 round=%s",
+                            run_id, round_i,
+                        )
+                        return
                     await asyncio.sleep(0.35)
                     continue
                 logger.info(

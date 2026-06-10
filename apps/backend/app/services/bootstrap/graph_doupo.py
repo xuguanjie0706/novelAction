@@ -18,7 +18,9 @@ doupo **完全基于通用（sequential）线**，不复制、不依赖番茄（
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+from typing import Any
 
 from langgraph.types import interrupt
 
@@ -73,13 +75,19 @@ async def _doupo_step(
     if needs_project:
         project = db.query(Project).filter(Project.id == state.get("project_id")).first()
 
+    async def _invoke_step() -> Any:
+        if inspect.iscoroutinefunction(fn):
+            if needs_project:
+                return await fn(svc, project, ctx)
+            return await fn(svc, ctx)
+        if needs_project:
+            return await asyncio.to_thread(fn, svc, project, ctx)
+        return await asyncio.to_thread(fn, svc, ctx)
+
     while True:
         emit(run_id, "step_start", db, step=step, label=label)
         try:
-            if needs_project:
-                result = await asyncio.wait_for(fn(svc, project, ctx), timeout=300.0)
-            else:
-                result = await asyncio.wait_for(fn(svc, ctx), timeout=300.0)
+            result = await asyncio.wait_for(_invoke_step(), timeout=300.0)
         except BootstrapStepError as exc:
             msg = str(exc)
         except asyncio.TimeoutError:

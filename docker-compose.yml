@@ -25,6 +25,16 @@ services:
     ports:
       - "${NOVEL_DOCKER_REDIS_HOST_PORT:-6379}:6379"
 
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/novelaction
+    ports:
+      - "${NOVEL_DOCKER_NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NOVEL_DOCKER_NEO4J_BOLT_PORT:-7687}:7687"
+    volumes:
+      - neo4j_data:/data
+
   backend:
     build:
       context: ./apps/backend
@@ -35,12 +45,16 @@ services:
     environment:
       DATABASE_URL: postgresql://novel:novel@postgres:5432/novel_db
       REDIS_URL: redis://redis:6379/0
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: novelaction
       PYTHONPATH: /app
     env_file:
       - ./apps/backend/.env
     depends_on:
       - postgres
       - redis
+      - neo4j
     volumes:
       - ./apps/backend:/app
     entrypoint: ["scripts/docker-entrypoint.sh"]
@@ -74,3 +88,4 @@ services:
 
 volumes:
   postgres_data:
+  neo4j_data:

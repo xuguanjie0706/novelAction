@@ -92,6 +92,15 @@ export async function runGatedRewriteChapter(
 
       // 结构化事件处理
       if (ev === 'gate_config') {
+        if (obj.dabai_mode === true) {
+          pushProgress({
+            step: 'gate_config',
+            label: String(obj.message || '大白文专线：按章节要素写正文 + 设定一致性校验'),
+            done: true,
+            error: false,
+          })
+          return
+        }
         const hookOn = obj.hook_mandate_active === true
         const fsEn = obj.enforce_face_slap_payoff_when_hook_required === true
         const blk = obj.block_on_consistency_issues === true || obj.block_on_realm_mismatch === true
@@ -174,9 +183,12 @@ export async function runGatedRewriteChapter(
       }
 
       if (ev === 'qc_running') {
+        const qcLabel = obj.dabai_consistency === true || typeof obj.label === 'string'
+          ? String(obj.label || 'dabai 设定一致性校验')
+          : `第 ${currentAttempt} 轮质检中…`
         pushProgress({
           step: `attempt_${currentAttempt}_qc`,
-          label: `第 ${currentAttempt} 轮质检中…`,
+          label: qcLabel,
           done: false,
           error: false,
         })
@@ -184,9 +196,21 @@ export async function runGatedRewriteChapter(
       }
 
       if (ev === 'qc_result') {
-        lastOverall = obj.overall_score as number
-        lastSubscribe = obj.subscribe_intent as number
-        const scoreLabel = `综合 ${(lastOverall).toFixed(1)} / 订阅 ${(lastSubscribe).toFixed(1)}`
+        lastOverall = Number(obj.overall_score) || 0
+        lastSubscribe = Number(obj.subscribe_intent ?? obj.overall_score) || 0
+        if (obj.dabai_consistency === true) {
+          const blockerCount = Array.isArray(obj.blockers) ? obj.blockers.length : 0
+          pushProgress({
+            step: `attempt_${currentAttempt}_qc`,
+            label: obj.passed
+              ? `✓ 设定一致性通过（${lastOverall.toFixed(0)} 分）`
+              : `△ 设定一致性未通过（${blockerCount} 条阻断）`,
+            done: true,
+            error: !obj.passed,
+          })
+          return
+        }
+        const scoreLabel = `综合 ${lastOverall.toFixed(1)} / 订阅 ${lastSubscribe.toFixed(1)}`
         pushProgress({
           step: `attempt_${currentAttempt}_qc`,
           label: `✓ 质检完成：${scoreLabel}`,
@@ -198,9 +222,21 @@ export async function runGatedRewriteChapter(
 
       if (ev === 'gate_passed') {
         gateOutcome = 'passed'
+        if (obj.dabai_consistency === true) {
+          const wc = typeof obj.word_count === 'number' ? obj.word_count : null
+          pushProgress({
+            step: 'gate_result',
+            label: wc != null
+              ? `✅ 大白文写作完成（${wc} 字，设定一致性通过）`
+              : '✅ 大白文写作完成（设定一致性通过）',
+            done: true,
+            error: false,
+          })
+          return
+        }
         pushProgress({
           step: 'gate_result',
-          label: `✅ 质量达标（第 ${obj.attempt} 轮）— 综合 ${(obj.overall_score as number).toFixed(1)} / 订阅 ${(obj.subscribe_intent as number).toFixed(1)}`,
+          label: `✅ 质量达标（第 ${obj.attempt} 轮）— 综合 ${lastOverall.toFixed(1)} / 订阅 ${lastSubscribe.toFixed(1)}`,
           done: true,
           error: false,
         })
@@ -220,9 +256,19 @@ export async function runGatedRewriteChapter(
 
       if (ev === 'gate_failed') {
         gateOutcome = 'failed'
+        if (obj.reason === 'dabai_consistency') {
+          const blockerCount = Array.isArray(obj.blockers) ? obj.blockers.length : 0
+          pushProgress({
+            step: 'gate_result',
+            label: `⏸ 设定一致性未通过（${blockerCount} 条阻断），章节已标记「待审阅」`,
+            done: true,
+            error: false,
+          })
+          return
+        }
         pushProgress({
           step: 'gate_result',
-          label: `⏸ 达到最大次数仍未达标 — 综合 ${(obj.final_score as number).toFixed(1)} / 订阅 ${(obj.final_subscribe_intent as number).toFixed(1)}，章节已标记「待审阅」`,
+          label: `⏸ 达到最大次数仍未达标 — 综合 ${Number(obj.final_score ?? 0).toFixed(1)} / 订阅 ${Number(obj.final_subscribe_intent ?? 0).toFixed(1)}，章节已标记「待审阅」`,
           done: true,
           error: false,
         })

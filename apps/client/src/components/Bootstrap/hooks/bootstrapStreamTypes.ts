@@ -79,7 +79,7 @@ export interface FanficStartMeta {
 
 export interface StartParams {
   logline: string
-  mode: 'sequential' | 'doupo' | 'fanfic' | 'xianxia'
+  mode: 'sequential' | 'doupo' | 'fanfic' | 'xianxia' | 'dabai'
   targetWords: number
   modelProfile: string
   llmProviderId?: string | null
@@ -168,7 +168,18 @@ export const XIANXIA_STEP_KEYS: StepKey[] = [
   'opening_contract', 'consistency',
 ]
 
+/** 大白文·修仙：约5次LLM，止于卷骨架+地图+境界区间；功法/法宝在人物后单独生成 */
+export const DABAI_STEP_KEYS: StepKey[] = [
+  'positioning', 'project',
+  'power_ladder',
+  'factions',
+  'skills', 'items',
+  'volumes',
+  'consistency',
+]
+
 export function getStepKeys(mode: StartParams['mode']): StepKey[] {
+  if (mode === 'dabai') return DABAI_STEP_KEYS
   if (mode === 'xianxia') return XIANXIA_STEP_KEYS
   if (mode === 'doupo') return DOUPO_STEP_KEYS
   if (mode === 'fanfic') return FANFIC_STEP_KEYS

@@ -4,17 +4,11 @@
  * 数据来源：props.detail（由 useDabaiGenerate 提供）。无编辑能力（生成+展示+质检）。
  */
 import type { ReactNode } from 'react'
-import { Flame, Star, Sparkles, ShieldAlert, Users, GitBranch, Layers, Zap, PenLine, BookMarked } from 'lucide-react'
+import { Flame, Sparkles, ShieldAlert, Users, GitBranch, Layers, Zap, BookMarked } from 'lucide-react'
 import type { DabaiProjectDetail, DabaiChapter, DabaiLinterReport, DabaiBenchmark } from '../../types/dabai'
 import DabaiBeatMap from './DabaiBeatMap'
-
-const SHUANG_COLOR: Record<string, string> = {
-  打脸: 'bg-rose-100 text-rose-700', 升级: 'bg-amber-100 text-amber-700',
-  获宝: 'bg-emerald-100 text-emerald-700', 扮猪吃虎: 'bg-violet-100 text-violet-700',
-  装逼: 'bg-sky-100 text-sky-700', 群嘲反转: 'bg-pink-100 text-pink-700',
-  收小弟: 'bg-teal-100 text-teal-700', 救场: 'bg-orange-100 text-orange-700',
-  扬名: 'bg-indigo-100 text-indigo-700',
-}
+import DabaiChapterBeatCard from './DabaiChapterBeatCard'
+import { dabaiBeatFromChapter } from '../../utils/dabaiOutlineDisplay'
 
 function Card({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
@@ -65,44 +59,13 @@ function ChapterRow(
   { ch, onWrite, realmName }:
   { ch: DabaiChapter; onWrite?: (ch: DabaiChapter) => void; realmName?: (r?: number | null) => string },
 ) {
-  const color = SHUANG_COLOR[ch.shuang_type] ?? 'bg-gray-100 text-gray-600'
   const written = ch.status === 'written'
   return (
-    <div className="rounded-xl border border-gray-100 p-3 hover:border-amber-200">
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-semibold text-gray-900">第{ch.chapter_number}章</span>
-        <span className="text-sm text-gray-600">{ch.title}</span>
-        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${color}`}>{ch.shuang_type}</span>
-        {ch.is_big_beat && (
-          <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600">
-            <Star size={11} fill="currentColor" />大爆点
-          </span>
-        )}
-        {ch.realm_rank ? (
-          <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600">
-            {realmName?.(ch.realm_rank) || `境界${ch.realm_rank}档`}
-          </span>
-        ) : null}
-        {onWrite && (
-          <button
-            type="button"
-            onClick={() => onWrite(ch)}
-            className={`ml-auto inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium ${
-              written ? 'text-emerald-600 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50'
-            }`}
-          >
-            <PenLine size={12} />{written ? '看/改正文' : '写正文'}
-          </button>
-        )}
-        <span className={`text-xs text-gray-300 ${onWrite ? '' : 'ml-auto'}`}>{ch.expected_words}字 · 新信息{ch.new_info_count}</span>
-      </div>
-      <div className="mt-2 grid gap-1 text-xs text-gray-500 sm:grid-cols-[auto_1fr]">
-        <span className="text-gray-400">憋屈</span><span>{ch.yaqu_setup}</span>
-        {ch.emotion_turn ? (<><span className="text-violet-400">转折</span><span>{ch.emotion_turn}</span></>) : null}
-        <span className="text-rose-400">爽点</span><span className="text-gray-700">{ch.shuang_payoff}</span>
-        <span className="text-gray-400">钩子</span><span>{ch.end_hook}</span>
-      </div>
-    </div>
+    <DabaiChapterBeatCard
+      beat={dabaiBeatFromChapter(ch, realmName)}
+      onWrite={onWrite ? () => onWrite(ch) : undefined}
+      writeLabel={written ? '看/改正文' : '写正文'}
+    />
   )
 }
 

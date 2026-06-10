@@ -51,7 +51,7 @@ interface Props {
   onRecoverConsumed?: () => void
 }
 
-type Mode = 'sequential' | 'doupo' | 'fanfic' | 'xianxia'
+type Mode = 'sequential' | 'doupo' | 'fanfic' | 'xianxia' | 'dabai'
 
 /** 弹层（默认正常提交） vs 全屏工作台（默认恢复 run） */
 type BootstrapShell = 'modal' | 'workspace'
@@ -227,7 +227,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
   /** 切换生成方案；斗破/同人/修仙线默认白话直白，与后端 plain 兜底一致。 */
   function selectMode(next: Mode) {
     setMode(next)
-    if (next === 'doupo' || next === 'fanfic' || next === 'xianxia') setWritingStyle('plain')
+    if (next === 'doupo' || next === 'fanfic' || next === 'xianxia' || next === 'dabai') setWritingStyle('plain')
   }
 
   // ── 开始生成 ─────────────────────────────────────────────────
@@ -364,7 +364,15 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
   const selectedStep = steps.find(s => s.key === selectedStepKey) ?? null
   const isGatePhase = phase === 'gate'
   /** 时间轴 + 右栏：生成中 / 完成 / 根闸门（不再单独全屏审阅页） */
-  const showWorkbenchSplit = isTimelinePhase || (isGatePhase && !!gateStep)
+  const canRegenStep = Boolean(
+    projectId && (
+      phase === 'done'
+      || haltedStep
+      || steps.some(s => s.status === 'error')
+    ),
+  )
+
+  const showWorkbenchSplit = isTimelinePhase || (isGatePhase && !!gateStep && !haltedStep)
 
   const useWorkspaceChrome =
     shell === 'workspace' && phase !== 'input' && showWorkbenchSplit
@@ -582,6 +590,25 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                     修仙原生管线：升级流立项 + 金手指咬合境界轴 + 境界预算契约硬执行（逐卷锁窗口，杜绝「第一卷修满」），白话直给。
                   </div>
                 </button>
+                <button
+                  onClick={() => selectMode('dabai')}
+                  className={clsx(
+                    'p-3 rounded-xl border-2 text-left transition-all',
+                    mode === 'dabai'
+                      ? 'border-rose-400 bg-rose-50'
+                      : 'border-gray-100 hover:border-rose-200'
+                  )}
+                >
+                  <div className="text-sm font-semibold text-gray-800 mb-1">
+                    ⚡ 大白文·修仙
+                    {mode === 'dabai' && (
+                      <span className="ml-2 text-xs bg-rose-500 text-white px-1.5 py-0.5 rounded-full">已选</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500 leading-relaxed">
+                    约5次LLM建书：势力/人物后生成功法法宝，卷纲定地图+境界区间，章纲懒展开；正文只做设定一致性校验。
+                  </div>
+                </button>
               </div>
             </div>
 
@@ -699,12 +726,12 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
               logline={logline}
               elapsedSec={waitSec}
               generationStartMs={generationStartMs}
-              onRegen={phase === 'done' && projectId
+              onRegen={canRegenStep && projectId
                 ? (step) => void triggerRegen(step, projectId, resumeParams)
                 : undefined}
               regenStep={regenStep}
             />
-            {isGatePhase && gateStep ? (
+            {isGatePhase && gateStep && !haltedStep ? (
               gateStep === 'positioning' && !positioningData ? (
                 <div className="flex min-h-0 flex-1 flex-col items-center justify-center bg-[#f8fafc] px-6">
                   <Loader2 size={28} className="animate-spin text-amber-500" />
@@ -771,7 +798,7 @@ export default function GenerateWizard({ onClose, recoverRunId, onRecoverConsume
                     ...updated,
                   }))
                 }
-                onRegen={projectId
+                onRegen={canRegenStep && projectId
                   ? (step) => void triggerRegen(step, projectId, resumeParams)
                   : undefined}
                 regenStep={regenStep}

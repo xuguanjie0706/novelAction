@@ -72,6 +72,28 @@ STYLE_REGISTRY: dict[str, StyleConfig] = {
         skip_core=frozenset({"antagonist_ladder", "opening_contract"}),
     ),
 
+    "dabai": StyleConfig(
+        style_id="dabai",
+        display_name="大白文·修仙",
+        # 约 5 次 LLM：立项 / 金手指+境界 / 势力+人物+故事线 / 功法+道具 / 卷+地图；章纲写作期懒展开。
+        nodes=[
+            "positioning_dabai",
+            "gate_positioning_dabai",
+            "golden_power_dabai",
+            "cast_world_dabai",
+            "volumes_map_dabai",
+            "gate_volumes",
+            "dabai_bootstrap_lint",
+        ],
+        default_writing_style="plain",
+        skip_core=frozenset({
+            "power_systems", "gate_power_systems",
+            "factions", "storylines", "antagonist_ladder", "characters", "gate_characters",
+            "settings", "volumes", "emotion_villain", "memory_relations",
+            "core_mysteries", "opening_contract", "consistency",
+        }),
+    ),
+
     "fanfic": StyleConfig(
         style_id="fanfic",
         display_name="同人",

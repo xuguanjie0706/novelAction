@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 from app.models.dabai_lab import DabaiClue, DabaiMemory
 from app.services.dabai.lab_ledger import (
-    apply_ledger_changes, build_ledger_block, seed_ledgers,
+    apply_ledger_changes, build_ledger_block, build_panel_snapshot,
+    prune_noise_assets, seed_ledgers, sync_protagonist_realm,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,10 @@ def _build_debrief_prompt(
     if tail:
         parts.append(f"【本章正文（结尾部分）】\n{tail}")
     parts.append(
+        "【资产变更约束】asset_changes 禁止写入修为点/修为/经验点等系统内部计数；"
+        "golden_finger 仅限全书金手指本名（非系统面板词）。"
+    )
+    parts.append(
         "提取后只返回 JSON：\n"
         "{\n"
         '  "summary": "本章一句话事实摘要（谁在哪做了什么、结果如何），≤60字",\n'
@@ -71,38 +76,25 @@ def _build_debrief_prompt(
         "  ],\n"
         '  "resolved_clue_ids": ["上方未回收线索中，本章已明确回收的 id；无则[]"],\n'
         '  "asset_changes": [  // 本章功法/道具/金手指的实际变化；无则[]\n'
-        '    {"action": "gain|consume|lose|upgrade", "kind": "skill|item|golden_finger",\n'
-        '     "name": "≤20字", "owner": "持有者人名", "note": "≤40字"}\n'
+        '    {"action": "gain|use|consume|lose|upgrade", "kind": "skill|item|golden_finger",\n'
+        '     "name": "≤20字", "owner": "持有者人名", "note": "≤40字",\n'
+        '     "grade": 0-4或null, "base_stat": {"atk":数值,...}或null,\n'
+        '     "cooldown_chapters": 技能冷却章数或null}\n'
+        '  // action=use：本章主动施展了某技能（更新冷却计时，技能仍active）\n'
         "  ],\n"
         '  "relation_changes": [  // 人物对主角态度的实际变化（如打脸后跪服）；无则[]\n'
         '    {"from": "主角人名", "to": "对方人名", "attitude": "敌对|轻视|忌惮|臣服|效忠|盟友|暧昧|中立",\n'
         '     "reason": "≤30字变化原因"}\n'
-        "  ]\n"
+        "  ],\n"
+        '  "realm_snapshot": {   // 章末主角境界精确快照（系统文核心；必填）\n'
+        '    "realm": "大境界名称，如筑基期",\n'
+        '    "sub_level": 当前小境界层数（整数，如3），无则null,\n'
+        '    "max_sub": 该大境界最大层数（整数，如9），无则null,\n'
+        '    "combat_power": 战力估算数值（整数，参考境界档位合理估算），无则null\n'
+        "  }\n"
         "}"
     )
     return _DEBRIEF_SYSTEM, "\n\n".join(parts)
-
-
-def _mock_result(ch: DabaiChapterOutline) -> dict:
-    """离线 mock：从章纲五拍派生最小复盘结果（不调 LLM）。"""
-    memories = []
-    if (ch.shuang_payoff or "").strip():
-        memories.append({
-            "type": "event", "content": str(ch.shuang_payoff)[:60],
-            "importance": 4, "tags": list(ch.witnesses or [])[:3],
-        })
-    return {
-        "summary": f"第{ch.chapter_number}章：{(ch.yinbao or ch.title or '')[:50]}",
-        "memories": memories,
-        "new_clues": (
-            [{"title": str(ch.end_hook)[:20], "type": "hook",
-              "description": str(ch.end_hook)[:60]}]
-            if (ch.end_hook or "").strip() else []
-        ),
-        "resolved_clue_ids": [],
-        "asset_changes": [],
-        "relation_changes": [],
-    }
 
 
 def _persist_memories(
@@ -180,18 +172,8 @@ async def run_lab_debrief(
     db: Session,
     project: DabaiProject,
     ch: DabaiChapterOutline,
-    *,
-    mock: bool = False,
 ) -> dict:
-    """lab 复盘入口：提取 + 落库，幂等可重跑。
-
-    Args:
-        svc: AIService（mock=True 时可传 None）。
-    Returns:
-        {"version", "summary", "memory_count", "new_clues", "resolved_clues"}
-    Raises:
-        ValueError: 正文为空或 LLM JSON 解析失败。
-    """
+    """lab 复盘入口：提取 + 落库，幂等可重跑。"""
     if not (ch.content or "").strip():
         raise ValueError("本章尚无正文，无法复盘")
 
@@ -203,26 +185,33 @@ async def run_lab_debrief(
         .all()
     )
 
-    if mock:
-        result = _mock_result(ch)
-    else:
-        from app.services.bootstrap.parse import parse_json
-        from app.services.bootstrap.retry import call_with_retry
+    from app.services.bootstrap.parse import parse_json
+    from app.services.bootstrap.retry import call_with_retry
 
-        ledger_block = build_ledger_block(db, project, ch)
-        system, user = _build_debrief_prompt(project, ch, open_clues, ledger_block)
-        raw = await call_with_retry(
-            svc, system, user, max_tokens=2200, task="dabai.debrief",
-        )
-        result = parse_json(raw)
-        if not isinstance(result, dict):
-            raise ValueError("复盘 JSON 解析失败")
+    ledger_block = build_ledger_block(db, project, ch)
+    system, user = _build_debrief_prompt(project, ch, open_clues, ledger_block)
+    raw = await call_with_retry(
+        svc, system, user, max_tokens=2200, task="dabai.debrief",
+    )
+    result = parse_json(raw)
+    if not isinstance(result, dict):
+        raise ValueError("复盘 JSON 解析失败")
 
     memories = _persist_memories(db, project, ch, result)
     created, resolved = _persist_clues(db, project, ch, result, open_clues)
     asset_logs, relation_logs = apply_ledger_changes(db, project, ch, result)
+    prune_noise_assets(db, project)
+    realm_label = sync_protagonist_realm(db, project, ch, memories=memories)
+
+    # 系统面板快照：复盘结束后立即存档，作为下章写作的数值绝对基准
+    realm_info = result.get("realm_snapshot") if isinstance(result.get("realm_snapshot"), dict) else None
+    try:
+        build_panel_snapshot(db, project, ch, realm_info=realm_info)
+    except Exception as _snap_err:  # noqa: BLE001
+        logger.warning("面板快照写入失败 ch=%s: %s", ch.id, _snap_err)
+
     db.commit()
-    return {
+    payload = {
         "version": DEBRIEF_VERSION,
         "summary": str(result.get("summary") or "")[:200],
         "memory_count": len(memories),
@@ -231,3 +220,12 @@ async def run_lab_debrief(
         "asset_changes": asset_logs,
         "relation_changes": relation_logs,
     }
+    if realm_label:
+        payload["protagonist_realm"] = realm_label
+    if realm_info:
+        payload["realm_snapshot"] = {
+            "sub_level": realm_info.get("sub_level"),
+            "max_sub": realm_info.get("max_sub"),
+            "combat_power": realm_info.get("combat_power"),
+        }
+    return payload

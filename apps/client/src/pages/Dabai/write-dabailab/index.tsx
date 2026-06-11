@@ -70,7 +70,6 @@ export default function WriteDabailabPage() {
               {activeChapter ? (
                 <WriteDabailabWorkspace
                   projectId={projectId!}
-                  mock={detail.mock}
                   chapter={activeChapter}
                   beat={dabaiBeatFromChapter(activeChapter, realmName)}
                   onSaved={() => void afterSave(activeChapter.id!)}
@@ -92,9 +91,15 @@ export default function WriteDabailabPage() {
                   onSelectChapter={jumpToChapter}
                 />
               )}
-              {tab === 'characters' && <CharactersPanel detail={detail} />}
+              {tab === 'characters' && <CharactersPanel detail={detail} projectId={projectId!} />}
               {tab === 'world' && <WorldPanel detail={detail} />}
-              {tab === 'quality' && <LinterPanel report={detail.linter_report} />}
+              {tab === 'quality' && (
+                <LinterPanel
+                  report={detail.linter_report}
+                  projectId={projectId!}
+                  onRelinted={reload}
+                />
+              )}
               {tab === 'memory' && <MemoryLibraryPanel projectId={projectId!} />}
               {tab === 'clues' && <CluesPanel projectId={projectId!} />}
               {tab === 'ledger' && <LedgerPanel projectId={projectId!} />}

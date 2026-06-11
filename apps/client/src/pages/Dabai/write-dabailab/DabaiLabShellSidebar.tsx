@@ -10,7 +10,7 @@ const NAV: { tab: WorkspaceTab; icon: typeof FileText; label: string }[] = [
   { tab: 'volumes', icon: Layers, label: '卷纲' },
   { tab: 'characters', icon: Users, label: '人物' },
   { tab: 'world', icon: Globe, label: '设定' },
-  { tab: 'quality', icon: ShieldCheck, label: '质检' },
+  { tab: 'quality', icon: ShieldCheck, label: '卷纲质检' },
   { tab: 'memory', icon: Brain, label: '记忆' },
   { tab: 'clues', icon: Milestone, label: '线索' },
   { tab: 'ledger', icon: Package, label: '台账' },

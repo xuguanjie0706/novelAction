@@ -39,6 +39,8 @@ def build_lab_prewarn_prompt(
     ch: DabaiChapterOutline,
     ctx: LabDraftContext,
     ledger_block: str = "",
+    *,
+    replace_existing: bool = False,
 ) -> tuple[str, str]:
     """构造实验书架导演单 (system, user)。ledger_block 为资产/关系台账（可空）。"""
     gf = project.golden_finger or {}
@@ -48,6 +50,9 @@ def build_lab_prewarn_prompt(
     ]
     if ctx.recent_plot_block.strip():
         parts.append(ctx.recent_plot_block.strip())
+    if ctx.panel_block.strip():
+        # 系统面板快照：导演单裁决冲突时需要知道精确的境界/技能冷却基准
+        parts.append(ctx.panel_block.strip())
     if ctx.memory_block.strip():
         parts.append(ctx.memory_block.strip())
     if ctx.clue_block.strip():
@@ -58,6 +63,11 @@ def build_lab_prewarn_prompt(
         parts.append(f"【上章结尾（正文开头须紧接续写）】\n{ctx.prev_tail.strip()[-600:]}")
     parts.append("【本章章纲五拍（卷展开期生成，可能与上述事实漂移）】")
     parts.append(_build_lab_beat_block(ch))
+    if replace_existing:
+        parts.append(
+            "【重写要求】本章已有正文，beat_execution 须给出与常见模板不同的落法"
+            "（换开笔切入/换扳机细节/换对话顺序），情节结果不变但写法须可区分。"
+        )
     parts.append(
         "对照以上资料完成裁决与指导，只返回 JSON：\n"
         "{\n"
@@ -119,15 +129,24 @@ async def resolve_lab_pre_warn(
     ctx: LabDraftContext,
     db: Session | None = None,
     ledger_block: str = "",
+    *,
+    replace_existing: bool = False,
 ) -> tuple[str, dict]:
     """生成导演单；传 db 时结果落库（持久化优先）；失败降级为空简报，不阻塞写章。"""
     try:
         from app.services.bootstrap.parse import parse_json
         from app.services.bootstrap.retry import call_with_retry
 
-        system, user = build_lab_prewarn_prompt(project, ch, ctx, ledger_block)
+        system, user = build_lab_prewarn_prompt(
+            project, ch, ctx, ledger_block, replace_existing=replace_existing,
+        )
+        prewarn_sampling = (
+            {"temperature": 0.45, "presence_penalty": 0.15}
+            if replace_existing else None
+        )
         raw = await call_with_retry(
             svc, system, user, max_tokens=1400, task="dabai.prewarn",
+            sampling=prewarn_sampling,
         )
         result = parse_json(raw)
         if not isinstance(result, dict):

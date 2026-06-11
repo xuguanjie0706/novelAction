@@ -32,39 +32,34 @@ router = APIRouter(prefix="/dabai", tags=["dabai"])
 
 
 class ExpandRequest(BaseModel):
-    """卷展开请求。mock 缺省跟随项目（mock 项目走离线样本）。"""
+    """卷展开请求。"""
 
-    mock: Optional[bool] = Field(default=None, description="离线 mock；缺省跟随项目")
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
     force: bool = Field(default=False, description="满卷时删旧重做")
     chapter_batch_size: Optional[int] = Field(default=None, ge=5, le=60)
 
 
-def _expand_cfg(project, req: ExpandRequest, db: Session, mock: bool):
+def _expand_cfg(project, req: ExpandRequest, db: Session):
     """从项目 meta 重建 DabaiConfig（批大小可被请求覆写）。"""
     from dabai.config import DabaiConfig
 
     meta = project.meta or {}
     cfg = DabaiConfig(
-        logline=project.logline, mock=mock,
+        logline=project.logline,
         volume_count=int(meta.get("volume_count", 6)),
         volume_chapters=int(meta.get("volume_chapters", 30)),
         chapter_batch_size=int(req.chapter_batch_size
                                or meta.get("chapter_batch_size", 30)),
     )
-    if not mock:
-        cfg.base_url, cfg.api_key, cfg.model = _resolve_connection(
-            db, req.model_profile, req.llm_provider_id,
-        )
+    cfg.base_url, cfg.api_key, cfg.model = _resolve_connection(
+        db, req.model_profile, req.llm_provider_id,
+    )
     return cfg
 
 
-def _expand_call(cfg, req: ExpandRequest, db: Session, user: User, mock: bool):
-    """构造注入式调用器：mock=DabaiLLM 离线样本；真实=AIService._call_ai。"""
-    if mock:
-        from dabai.pipeline import dabai_llm_call
-        return dabai_llm_call(cfg)
+def _expand_call(cfg, req: ExpandRequest, db: Session, user: User):
+    """构造注入式调用器（AIService._call_ai）。"""
     from dabai.llm_client import parse_json
     from app.services.ai.service import AIService
     ai = AIService(profile=req.model_profile, db=db,
@@ -95,9 +90,8 @@ async def expand_volume_chapters(
     if not volume:
         raise HTTPException(status_code=404, detail="目标卷不存在")
 
-    mock = req.mock if req.mock is not None else bool(project.mock)
-    cfg = _expand_cfg(project, req, db, mock)
-    call = _expand_call(cfg, req, db, user, mock)
+    cfg = _expand_cfg(project, req, db)
+    call = _expand_call(cfg, req, db, user)
 
     async def event_gen():
         try:

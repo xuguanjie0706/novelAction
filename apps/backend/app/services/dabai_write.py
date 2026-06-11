@@ -1,4 +1,4 @@
-"""大白文章节正文写作：prompt + 离线 mock 正文。
+"""大白文章节正文写作：prompt 组装。
 
 实验书架写章经 ``dabai.py`` 注入上章结尾 / 前情 / 写前导演单，避免章间剧情重置。
 """
@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dabai.golden_finger_bind import is_awakening_chapter, prose_bind_instructions
 from app.models.dabai import DabaiChapterOutline, DabaiProject
+from app.services.dabai.lab_ledger import protagonist_name
 
 _SYSTEM_BASE = (
     "你是番茄/七猫大白文写手，专写移动端爽文正文。硬要求：\n"
@@ -52,14 +53,21 @@ def build_prose_prompt(
     ledger_block: str = "",
     memory_block: str = "",
     clue_block: str = "",
+    panel_block: str = "",
     replace_existing: bool = False,
+    prior_content: str = "",
 ) -> tuple[str, str]:
-    """据项目设定 + 本章五拍 + 衔接上下文，构造正文写作 (system, user)。"""
+    """据项目设定 + 本章五拍 + 衔接上下文，构造正文写作 (system, user)。
+
+    panel_block: 系统面板快照块（上章末存档的数值绝对基准），注入在 ledger 之前，
+                 让模型在写任何战斗/修炼场景前先知道精确的境界/技能/冷却状态。
+    """
     gf = project.golden_finger or {}
     ladder = project.power_ladder or {}
     level_list = ladder.get("levels") or []
     levels = "、".join(x.get("name", "") for x in level_list[:7])
     chars = "、".join(c.name for c in project.characters[:8])
+    protag = protagonist_name(project)
     target = ch.expected_words or 2000
     hi = target + 200
     lo = max(1600, target - 200)
@@ -103,6 +111,7 @@ def build_prose_prompt(
 
     user_parts = [
         f"《{project.title or project.logline}》第{ch.chapter_number}章",
+        f"POV 主角：{protag}（全文须用此名，禁止改名或用「少年/他」代称开章）",
         f"金手指：{gf.get('name', '')}（{gf.get('core_ability', '')}）",
         f"境界阶梯：{levels}",
         f"可用人物：{chars}",
@@ -112,6 +121,9 @@ def build_prose_prompt(
 
     if recent_plot_block.strip():
         user_parts.append(recent_plot_block.strip())
+    if panel_block.strip():
+        # 系统面板快照放在记忆回灌之前：它是精确数值基准，优先级高于文本记忆
+        user_parts.append(panel_block.strip())
     if memory_block.strip():
         user_parts.append(memory_block.strip())
     if clue_block.strip():
@@ -122,6 +134,11 @@ def build_prose_prompt(
         user_parts.append(f"【上章结尾（须紧接下一瞬间续写）】\n{prev_tail.strip()[-600:]}")
     if pre_warn_block.strip():
         user_parts.append(pre_warn_block.strip())
+    if replace_existing and prior_content.strip():
+        user_parts.append(
+            "【上一版正文节选（须换写法：禁止复用相同开头句、相同段落顺序与相同对话原句）】\n"
+            + prior_content.strip()[:450]
+        )
 
     user_parts.append("【本章爽点节拍（章节要素，必须逐项落实）】")
     user_parts.append(_build_lab_beat_block(ch))
@@ -130,10 +147,16 @@ def build_prose_prompt(
         f"按上面五拍写出第{ch.chapter_number}章正文。"
         f"目标 {target} 字（允许 {lo}～{hi}），严禁超过 {hi} 字。"
         "推进：①憋屈（别拖）→ ②转折扳机 → ③引爆 → ④爽点+见证者分级反应 → ⑤章末钩子。"
+        "同一章纲允许多种写法：开笔切入点、对话顺序、扳机细节须有变化，"
+        "禁止套用「疼！钻心的疼！」等烂大街起手式。"
         "直接开写正文。"
     )
     if replace_existing:
-        task = "【整章重写】" + task + "不要复述旧稿；以导演单与前情事实为准 reinterpret 章纲。"
+        task = (
+            "【整章重写】" + task
+            + "必须 reinterpret 章纲五拍（换场景切入/换对话/换引爆细节），"
+            "以导演单与前情事实为准，情节结果不变但表述须与上一版明显不同。"
+        )
     user_parts.append(task)
 
     pos = project.positioning or {}
@@ -142,34 +165,3 @@ def build_prose_prompt(
         user_parts.append(f"禁忌：{'；'.join(str(t) for t in tabs[:3])}")
 
     return system, "\n\n".join(user_parts)
-
-
-def mock_prose(project: DabaiProject, ch: DabaiChapterOutline) -> list[str]:
-    """离线 mock 正文（分段流式）；仅第1章演示金手指绑定流程。"""
-    who = "、".join(ch.witnesses or []) or "众人"
-    gf = (project.golden_finger or {}).get("name", "金手指")
-    segments: list[str] = [
-        f"　　{ch.yaqu_setup or '又一次被人当众奚落'}。林凡攥紧了拳头，喉咙发紧，却还是把那口气咽了下去。\n\n",
-        f"　　“就你也配？”{who}的讥讽像针一样扎过来。\n\n",
-    ]
-    if (ch.chapter_number or 1) <= 1:
-        segments.extend([
-            "　　他本想再忍。可耳边那句“也配”，忽然和母亲临终前那个不甘的眼神重叠在了一起。\n\n"
-            f"　　识海里忽然一响，像有人在他脑子里敲了一下。林凡第一反应不是狂喜——是诈尸了吗？\n\n"
-            f"　　锁链跟着轻轻一颤，竟松了半分。林凡喉头发紧，哑着嗓子在心里挤出两个字：「……绑定。」\n\n"
-            f"　　下一瞬，{gf}的提示音彻底亮起。他缓缓抬起头，眼神里的隐忍，一点点变成了冷。\n\n",
-        ])
-    else:
-        segments.append(
-            "　　他本不想惹事，可对方步步紧逼，退无可退。\n\n"
-            f"　　{gf}在识海里轻轻一震，力量如潮水涌来。\n\n",
-        )
-    segments.extend([
-        f"　　{ch.yinbao or '一道力量自丹田奔涌而出'}——下一瞬，{ch.shuang_payoff or '全场寂静'}。\n\n",
-        f"　　{who}先是一愣，只当自己看错了；再定睛细看，脸上的轻蔑慢慢挂不住了；"
-        "直到那股气势实实在在压下来，才终于变成了不可置信的惊骇。\n\n",
-        "　　“这……这怎么可能！”\n\n",
-        "　　林凡拍了拍手，淡淡道：“就这？”\n\n",
-        f"　　{ch.end_hook or '而更大的风暴，正在远处悄然逼近。'}\n",
-    ])
-    return segments

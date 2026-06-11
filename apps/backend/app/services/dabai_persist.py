@@ -226,11 +226,15 @@ def persist_bootstrap_result(db: Session, result: Any, user_id: UUID | None) -> 
     persister = DabaiPersister(db, result.cfg, user_id)
     persister.create()
     for step in ("benchmark", "positioning", "golden_finger", "power_ladder",
-                 "factions", "characters", "storylines", "volumes"):
+                 "factions", "characters", "storylines", "story_assets", "volumes"):
         if ctx.get(step) is not None:
             persister.save_step(step, ctx[step])
     if ctx.get("chapter_outlines"):
         persister.save_chapter_batch(ctx["chapter_outlines"])
-    return persister.finalize(
+    project = persister.finalize(
         result.linter_report, result.failed_steps, result.to_json().get("meta", {}),
     )
+    if persister._chapter_seq > 0 and not result.failed_steps:
+        from app.services.dabai.lab_outline_lint import run_dabai_project_linter
+        run_dabai_project_linter(db, project)
+    return project

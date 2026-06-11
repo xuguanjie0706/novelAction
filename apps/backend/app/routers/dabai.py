@@ -33,7 +33,7 @@ from app.services.dabai.lab_draft_context import build_lab_draft_context
 from app.services.dabai.lab_ledger import build_ledger_block, seed_ledgers
 from app.services.dabai.lab_post_write import spawn_post_write_pipeline
 from app.services.dabai.lab_pre_warn import resolve_lab_pre_warn
-from app.services.dabai_write import build_prose_prompt, mock_prose
+from app.services.dabai_write import build_prose_prompt
 
 logger = logging.getLogger("dabai.api")
 
@@ -42,7 +42,6 @@ router = APIRouter(prefix="/dabai", tags=["dabai"])
 
 class GenerateRequest(BaseModel):
     logline: str = Field(..., min_length=2, max_length=200, description="一句话创意")
-    mock: bool = Field(default=False, description="离线 mock（不调真实 LLM）")
     # 模型/线路选择：沿用通用分支约定（local 走 .env，gemini 走 llm_providers/env）
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
@@ -60,7 +59,7 @@ def _resolve_connection(
     与 AIService.__init__ 同源：
       - gemini：resolve_gemini_connection(db, llm_provider_id)（DB 默认/指定线路 > 环境 GEMINI_*）
       - local ：.env 的 LLM_BASE_URL / LLM_API_KEY / AI_MODEL
-    解析失败抛 400（提示去管理后台配线路或勾选 mock）。
+    解析失败抛 400（提示去管理后台配线路或 .env 本地模型）。
     """
     from app.config import settings
     if model_profile == "gemini":
@@ -71,14 +70,14 @@ def _resolve_connection(
         if not conn:
             raise HTTPException(
                 status_code=400,
-                detail="未配置远程大模型：请在管理后台「大模型」新增并启用，或勾选离线 mock。",
+                detail="未配置远程大模型：请在管理后台「大模型」新增并启用。",
             )
         return normalize_openai_base_url(conn[0]), (conn[2] or "").strip() or "not-required", conn[1]
     model = (settings.AI_MODEL or "").strip()
     if not model:
         raise HTTPException(
             status_code=400,
-            detail="未配置本地模型：请在 .env 设置 AI_MODEL，或选远程线路 / 勾选 mock。",
+            detail="未配置本地模型：请在 .env 设置 AI_MODEL，或选择远程线路。",
         )
     return settings.LLM_BASE_URL, (settings.LLM_API_KEY or "").strip() or "not-required", model
 
@@ -86,26 +85,18 @@ def _resolve_connection(
 def _cfg_from_req(req: GenerateRequest, db: Session):
     from dabai.config import DabaiConfig
     cfg = DabaiConfig(
-        logline=req.logline.strip(), mock=req.mock,
+        logline=req.logline.strip(),
         volume_count=req.volume_count, volume_chapters=req.volume_chapters,
         big_beat_every=req.big_beat_every, chapter_batch_size=req.chapter_batch_size,
     )
-    if not req.mock:
-        cfg.base_url, cfg.api_key, cfg.model = _resolve_connection(
-            db, req.model_profile, req.llm_provider_id,
-        )
+    cfg.base_url, cfg.api_key, cfg.model = _resolve_connection(
+        db, req.model_profile, req.llm_provider_id,
+    )
     return cfg
 
 
 def _build_call(cfg, req: GenerateRequest, db: Session, user: User):
-    """构造注入式异步调用器。
-
-    - mock：DabaiLLM（离线样本）。
-    - 真实：复用通用分支 AIService._call_ai（继承计费 / 调用日志 / 任务级采样）。
-    """
-    if req.mock:
-        from dabai.pipeline import dabai_llm_call
-        return dabai_llm_call(cfg)
+    """构造注入式异步调用器（复用 AIService._call_ai：计费 / 调用日志 / 任务级采样）。"""
     from dabai.llm_client import parse_json
     from app.services.ai.service import AIService
     ai = AIService(profile=req.model_profile, db=db,
@@ -258,8 +249,17 @@ async def _handle_event(persister: DabaiPersister, cfg, ev: dict, kind: str):
         yield _sse({"event": "linter_done", "status": d.get("status"),
                     "score": d.get("score"), "issue_count": d.get("issue_count")})
     elif kind == "bootstrap_end":
-        persister.finalize(ev.get("linter_report"), ev.get("failed_steps", []),
-                           _meta_from_cfg(cfg, ev.get("failed_steps", [])))
+        failed = ev.get("failed_steps", [])
+        persister.finalize(ev.get("linter_report"), failed,
+                           _meta_from_cfg(cfg, failed))
+        report = persister.project.linter_report or {}
+        if persister._chapter_seq > 0 and not failed:
+            from app.services.dabai.lab_outline_lint import run_dabai_project_linter
+            report = run_dabai_project_linter(persister.db, persister.project)
+        if report.get("status") and report.get("status") != "pending":
+            yield _sse({"event": "linter_done", "status": report.get("status"),
+                        "score": report.get("score"),
+                        "issue_count": report.get("issue_count")})
         yield _sse({"event": "done", "project_id": str(persister.project.id)})
 
 
@@ -267,7 +267,6 @@ async def _handle_event(persister: DabaiPersister, cfg, ev: dict, kind: str):
 
 
 class WriteRequest(BaseModel):
-    mock: bool = Field(default=False, description="离线 mock 正文（不调真实 LLM）")
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
 
@@ -295,43 +294,47 @@ async def draft_chapter_stream(
     seed_ledgers(db, project)
     ledger_block = build_ledger_block(db, project, ch)
     replace_existing = bool((ch.content or "").strip())
+    prior_content = (ch.content or "").strip() if replace_existing else ""
 
     async def gen():
         chunks: list[str] = []
         pre_warn_block = ""
         ai = None
         try:
-            if req.mock:
-                for seg in mock_prose(project, ch):
-                    chunks.append(seg)
-                    yield _sse({"event": "chunk", "delta": seg})
-            else:
-                from app.services.ai.service import AIService
-                ai = AIService(profile=req.model_profile, db=db,
-                               llm_provider_id=req.llm_provider_id, user_id=user.id)
-                yield _sse({"event": "pre_warn_running", "dabai_mode": True})
-                pre_warn_block, pre_warn_evt = await resolve_lab_pre_warn(
-                    ai, project, ch, draft_ctx, db=db, ledger_block=ledger_block,
-                )
-                yield _sse(pre_warn_evt)
-                system, user_prompt = build_prose_prompt(
-                    project, ch,
-                    prev_tail=draft_ctx.prev_tail,
-                    recent_plot_block=draft_ctx.recent_plot_block,
-                    pre_warn_block=pre_warn_block,
-                    ledger_block=ledger_block,
-                    memory_block=draft_ctx.memory_block,
-                    clue_block=draft_ctx.clue_block,
-                    replace_existing=replace_existing,
-                )
-                async for delta in ai._stream_ai(
-                    system, user_prompt, task="dabai.write",
-                    max_tokens=dabai_draft_max_tokens(ch.expected_words or 2000),
-                ):
-                    if not delta:
-                        continue
-                    chunks.append(delta)
-                    yield _sse({"event": "chunk", "delta": delta})
+            from app.services.ai.service import AIService
+            ai = AIService(profile=req.model_profile, db=db,
+                           llm_provider_id=req.llm_provider_id, user_id=user.id)
+            yield _sse({"event": "pre_warn_running", "dabai_mode": True})
+            pre_warn_block, pre_warn_evt = await resolve_lab_pre_warn(
+                ai, project, ch, draft_ctx, db=db, ledger_block=ledger_block,
+                replace_existing=replace_existing,
+            )
+            yield _sse(pre_warn_evt)
+            system, user_prompt = build_prose_prompt(
+                project, ch,
+                prev_tail=draft_ctx.prev_tail,
+                recent_plot_block=draft_ctx.recent_plot_block,
+                pre_warn_block=pre_warn_block,
+                ledger_block=ledger_block,
+                memory_block=draft_ctx.memory_block,
+                clue_block=draft_ctx.clue_block,
+                panel_block=draft_ctx.panel_block,
+                replace_existing=replace_existing,
+                prior_content=prior_content,
+            )
+            write_sampling = (
+                {"temperature": 0.92, "presence_penalty": 0.35, "frequency_penalty": 0.35}
+                if replace_existing else None
+            )
+            async for delta in ai._stream_ai(
+                system, user_prompt, task="dabai.write",
+                max_tokens=dabai_draft_max_tokens(ch.expected_words or 2000),
+                sampling=write_sampling,
+            ):
+                if not delta:
+                    continue
+                chunks.append(delta)
+                yield _sse({"event": "chunk", "delta": delta})
         except Exception as exc:  # noqa: BLE001
             logger.error("dabai 正文流式异常 chapter=%s：%s", chapter_id, exc)
             yield _sse({"event": "error", "message": str(exc)})
@@ -344,7 +347,7 @@ async def draft_chapter_stream(
         # 写后自动质检 + 复盘：独立 session 后台任务（关页不丢落库），同流转发进度
         events = spawn_post_write_pipeline(
             project.id, ch.id,
-            mock=req.mock, model_profile=req.model_profile,
+            model_profile=req.model_profile,
             llm_provider_id=req.llm_provider_id, user_id=user.id,
         )
         while True:
@@ -377,6 +380,20 @@ def get_project(
     user: User = Depends(get_current_user),
 ) -> dict:
     return _detail(_owned_or_404(db, project_id, user))
+
+
+@router.post("/projects/{project_id}/relint-outline")
+def relint_outline(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """全书章纲 linter 重跑（读库最新章纲，写回 linter_report）。"""
+    from app.services.dabai.lab_outline_lint import run_dabai_project_linter
+
+    project = _owned_or_404(db, project_id, user)
+    report = run_dabai_project_linter(db, project)
+    return {"linter_report": report}
 
 
 @router.delete("/projects/{project_id}")

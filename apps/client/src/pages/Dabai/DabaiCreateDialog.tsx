@@ -14,7 +14,6 @@ interface Props {
   onClose: () => void
   onGenerate: (payload: {
     logline: string
-    mock: boolean
     model_profile: 'local' | 'gemini'
     llm_provider_id?: string
     volume_count: number
@@ -35,8 +34,9 @@ export default function DabaiCreateDialog({
   open, generating, steps, stepStatus, chapterTotal, onClose, onGenerate,
 }: Props) {
   const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
-  const [logline, setLogline] = useState('废柴少年觉醒吞噬系统，一路逆袭打脸天才')
-  const [mock, setMock] = useState(false)
+  const [logline, setLogline] = useState(
+    '被挖灵根逐出宗门的弃子，绑定「词条掠夺」——谁当众踩他，谁身上就掉一条神级词条归他',
+  )
   const [volumeChapters, setVolumeChapters] = useState(30)
 
   if (!open) return null
@@ -45,7 +45,6 @@ export default function DabaiCreateDialog({
     if (!logline.trim() || generating) return
     void onGenerate({
       logline: logline.trim(),
-      mock,
       model_profile: modelProfileFromRoute(aiBackendRoute),
       ...routeLlmProviderPayload(aiBackendRoute),
       volume_count: 6,
@@ -69,19 +68,13 @@ export default function DabaiCreateDialog({
           onChange={e => setLogline(e.target.value)}
           rows={3}
           className="mt-4 w-full resize-none rounded-xl border border-gray-200 px-3 py-2 text-sm"
-          placeholder="一句话创意"
+          placeholder="一句话创意：憋屈起点 + 独特金手指 + 打脸爽点（避免「废柴+吞噬+天才」老三板斧）"
         />
         <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-gray-600">
-          {!mock && (
-            <div className="flex items-center gap-2">
-              <span className="text-gray-400">模型</span>
-              <LlmAgentMenu />
-            </div>
-          )}
-          <label className="flex items-center gap-1.5">
-            <input type="checkbox" checked={mock} onChange={e => setMock(e.target.checked)} />
-            mock
-          </label>
+          <div className="flex items-center gap-2">
+            <span className="text-gray-400">模型</span>
+            <LlmAgentMenu />
+          </div>
           <label className="flex items-center gap-1.5">
             每卷
             <input

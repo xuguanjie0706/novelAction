@@ -30,6 +30,16 @@ export function useVolumeExpand(projectId: string, onDone: () => void): VolumeEx
     dabaiExpandVolumeStream(projectId, volume.id, {}, ev => {
       if (ev.event === 'chapter_batch') {
         setProgress(`${ev.total} 章`)
+      } else if (ev.event === 'linter_done') {
+        const score = ev.score ?? '—'
+        const issues = ev.issue_count ?? 0
+        if (ev.status === 'blocked') {
+          toast.error(`卷纲质检阻断：${score} 分，${issues} 项问题（含 critical）`)
+        } else if (ev.status === 'warning') {
+          toast(`卷纲质检：${score} 分，${issues} 项警告`, { icon: '⚠️' })
+        } else {
+          toast.success(`卷纲质检：${score} 分通过`)
+        }
       } else if (ev.event === 'done') {
         toast.success(`第 ${ev.volume_number} 卷章纲已展开（${ev.created} 章）`)
       } else if (ev.event === 'error') {

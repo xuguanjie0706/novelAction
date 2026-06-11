@@ -14,7 +14,6 @@ import { BEAT_KEYS, BEAT_LABELS } from './labels'
 interface Props {
   projectId: string
   chapterId: string
-  mock: boolean
   hasContent: boolean
   /** 自增信号：写后自动质检完成后 +1，触发重拉落库报告。 */
   refreshKey: number
@@ -41,7 +40,7 @@ function ScoreRow({ label, value }: { label: string; value: number }) {
   )
 }
 
-export default function QualityCard({ projectId, chapterId, mock, hasContent, refreshKey }: Props) {
+export default function QualityCard({ projectId, chapterId, hasContent, refreshKey }: Props) {
   const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
   const [report, setReport] = useState<DabaiLabQualityReport | null>(null)
   const [running, setRunning] = useState(false)
@@ -58,8 +57,7 @@ export default function QualityCard({ projectId, chapterId, mock, hasContent, re
     setRunning(true)
     try {
       const res = await dabaiLabApi.qualityCheck(projectId, chapterId, {
-        mock,
-        mode: mock ? 'rules' : 'full',
+        mode: 'full',
         model_profile: modelProfileFromRoute(aiBackendRoute),
         ...(llmProviderIdFromRoute(aiBackendRoute)
           ? { llm_provider_id: llmProviderIdFromRoute(aiBackendRoute) }

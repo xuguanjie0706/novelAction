@@ -14,13 +14,12 @@ type SideTab = 'prewarn' | 'quality' | 'memory'
 
 const TABS: { id: SideTab; icon: typeof Brain; label: string }[] = [
   { id: 'prewarn', icon: AlertTriangle, label: '预警' },
-  { id: 'quality', icon: ShieldCheck, label: '质检' },
+  { id: 'quality', icon: ShieldCheck, label: '正文质检' },
   { id: 'memory', icon: Brain, label: '记忆' },
 ]
 
 interface Props {
   projectId: string
-  mock: boolean
   chapter: DabaiChapter
   preWarnLive: PreWarnLive | null
   preWarnRefreshKey: number
@@ -31,7 +30,7 @@ interface Props {
 }
 
 export default function WorkspaceSidePanel({
-  projectId, mock, chapter, preWarnLive, preWarnRefreshKey,
+  projectId, chapter, preWarnLive, preWarnRefreshKey,
   qualityRefreshKey, memoryRefreshKey,
 }: Props) {
   const [open, setOpen] = useState(true)
@@ -103,7 +102,6 @@ export default function WorkspaceSidePanel({
           <QualityCard
             projectId={projectId}
             chapterId={chapter.id}
-            mock={mock}
             hasContent={hasContent}
             refreshKey={qualityRefreshKey}
           />
@@ -112,7 +110,6 @@ export default function WorkspaceSidePanel({
           <MemoryCard
             projectId={projectId}
             chapterId={chapter.id}
-            mock={mock}
             hasContent={hasContent}
             refreshKey={memoryRefreshKey}
           />

@@ -1,7 +1,7 @@
 /**
  * @file components/Dabai/DabaiWritePanel.tsx — 大白文单章写作面板（模态）。
  * 左侧展示该章爽点节拍章纲，右侧流式生成 / 展示正文。简化写作链路，无质检闭环。
- * 模型/线路与 mock 由 props 透传（沿用通用分支选择）。
+ * 模型/线路由 props 透传（沿用通用分支选择）。
  */
 import { useState } from 'react'
 import toast from 'react-hot-toast'
@@ -12,7 +12,6 @@ import type { DabaiChapter } from '../../types/dabai'
 interface Props {
   projectId: string
   chapter: DabaiChapter
-  mock: boolean
   modelProfile: 'local' | 'gemini'
   llmProviderId?: string
   onClose: () => void
@@ -20,7 +19,7 @@ interface Props {
 }
 
 export default function DabaiWritePanel({
-  projectId, chapter, mock, modelProfile, llmProviderId, onClose, onSaved,
+  projectId, chapter, modelProfile, llmProviderId, onClose, onSaved,
 }: Props) {
   const [content, setContent] = useState(chapter.content ?? '')
   const [writing, setWriting] = useState(false)
@@ -32,7 +31,7 @@ export default function DabaiWritePanel({
     try {
       await dabaiDraftStream(
         projectId, chapter.id ?? '',
-        { mock, model_profile: modelProfile, ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}) },
+        { model_profile: modelProfile, ...(llmProviderId ? { llm_provider_id: llmProviderId } : {}) },
         (ev) => {
           if (ev.event === 'chunk') { acc += ev.delta; setContent(acc) }
           else if (ev.event === 'done') { toast.success(`已生成 ${ev.word_count} 字`); onSaved() }
@@ -79,7 +78,7 @@ export default function DabaiWritePanel({
               {writing ? '生成中…' : content ? '重新生成' : '生成正文'}
             </button>
             <p className="mt-2 text-xs text-gray-400">
-              {mock ? '离线 mock 正文' : `走所选线路（${modelProfile === 'local' ? '本地' : '远程'}）`}
+              走所选线路（{modelProfile === 'local' ? '本地' : '远程'}）
             </p>
           </div>
 

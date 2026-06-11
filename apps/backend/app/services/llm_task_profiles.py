@@ -89,11 +89,11 @@ TASK_PROFILES: dict[str, dict] = {
         "presence_penalty": 0.0,
     },
     "dabai.write": {
-        # 大白文专线：低温 + 低 penalty，按章节要素五拍稳定输出
-        "temperature": 0.72,
-        "top_p": 0.9,
-        "frequency_penalty": 0.15,
-        "presence_penalty": 0.0,
+        # 大白文专线：五拍结构要稳，但正文需留文采变化（过低易逐字复刻章纲）
+        "temperature": 0.84,
+        "top_p": 0.92,
+        "frequency_penalty": 0.2,
+        "presence_penalty": 0.12,
     },
     "dabai.prewarn": {
         # dabai 写前导演单：事实裁决 + 写法指令，要稳定 JSON、不许发挥

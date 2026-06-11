@@ -13,13 +13,12 @@ import { MEM_TYPE_LABELS } from './labels'
 interface Props {
   projectId: string
   chapterId: string
-  mock: boolean
   hasContent: boolean
   /** 自增信号：写后自动复盘完成后 +1，触发重拉本章记忆。 */
   refreshKey: number
 }
 
-export default function MemoryCard({ projectId, chapterId, mock, hasContent, refreshKey }: Props) {
+export default function MemoryCard({ projectId, chapterId, hasContent, refreshKey }: Props) {
   const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
   const [items, setItems] = useState<DabaiLabMemory[]>([])
   const [running, setRunning] = useState(false)
@@ -40,7 +39,6 @@ export default function MemoryCard({ projectId, chapterId, mock, hasContent, ref
     setRunning(true)
     try {
       const res = await dabaiLabApi.debrief(projectId, chapterId, {
-        mock,
         model_profile: modelProfileFromRoute(aiBackendRoute),
         ...(llmProviderIdFromRoute(aiBackendRoute)
           ? { llm_provider_id: llmProviderIdFromRoute(aiBackendRoute) }

@@ -25,13 +25,12 @@ async def _run_post_write_pipeline(
     project_id: UUID,
     chapter_id: UUID,
     *,
-    mock: bool,
     model_profile: str,
     llm_provider_id: Optional[UUID],
     user_id,
     events: asyncio.Queue,
 ) -> None:
-    """写后自动质检 + 复盘；mock 项目质检只跑规则层、复盘走启发式。"""
+    """写后自动质检 + 复盘。"""
     from app.database import SessionLocal
     db = SessionLocal()
     try:
@@ -43,17 +42,13 @@ async def _run_post_write_pipeline(
         )
         if not project or not ch:
             return
-        ai = None
-        if not mock:
-            from app.services.ai.service import AIService
-            ai = AIService(profile=model_profile, db=db,
-                           llm_provider_id=llm_provider_id, user_id=user_id)
+        from app.services.ai.service import AIService
+        ai = AIService(profile=model_profile, db=db,
+                       llm_provider_id=llm_provider_id, user_id=user_id)
 
         events.put_nowait({"event": "quality_running", "dabai_mode": True})
         try:
-            report = await run_lab_quality(
-                ai, db, project, ch, with_llm=not mock and ai is not None,
-            )
+            report = await run_lab_quality(ai, db, project, ch, with_llm=True)
             events.put_nowait({"event": "quality_done", "ok": True,
                                "status": report.get("status"),
                                "overall_score": report.get("overall_score"),
@@ -65,7 +60,7 @@ async def _run_post_write_pipeline(
 
         events.put_nowait({"event": "debrief_running", "dabai_mode": True})
         try:
-            result = await run_lab_debrief(ai, db, project, ch, mock=mock)
+            result = await run_lab_debrief(ai, db, project, ch)
             events.put_nowait({"event": "debrief_done", "ok": True,
                                "summary": result.get("summary"),
                                "memory_count": result.get("memory_count"),
@@ -86,7 +81,6 @@ def spawn_post_write_pipeline(
     project_id: UUID,
     chapter_id: UUID,
     *,
-    mock: bool,
     model_profile: str,
     llm_provider_id: Optional[UUID],
     user_id,
@@ -98,7 +92,7 @@ def spawn_post_write_pipeline(
     events: asyncio.Queue = asyncio.Queue()
     task = asyncio.create_task(_run_post_write_pipeline(
         project_id, chapter_id,
-        mock=mock, model_profile=model_profile,
+        model_profile=model_profile,
         llm_provider_id=llm_provider_id, user_id=user_id,
         events=events,
     ))

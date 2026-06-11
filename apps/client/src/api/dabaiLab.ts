@@ -19,7 +19,6 @@ const LAB_AI_TIMEOUT_MS = 180_000
 
 /** 质检/复盘通用请求体（模型线路沿用写章约定）。 */
 export interface DabaiLabAiRequest {
-  mock?: boolean
   model_profile?: 'local' | 'gemini'
   llm_provider_id?: string
   /** 仅质检用：rules=只跑规则层（快速、零 LLM 成本）。 */

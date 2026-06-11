@@ -260,5 +260,16 @@ async def aiter_volume_expand(
         yield {"event": "chapter_batch", "batch_start": gbs, "batch_end": gbe,
                "total": created}
 
+    from app.services.dabai.lab_outline_lint import run_dabai_project_linter
+
+    db.refresh(p)
+    linter_report = run_dabai_project_linter(db, p, cfg)
+    yield {
+        "event": "linter_done",
+        "status": linter_report.get("status"),
+        "score": linter_report.get("score"),
+        "issue_count": linter_report.get("issue_count"),
+        "critical_count": linter_report.get("critical_count"),
+    }
     yield {"event": "done", "volume_number": volume.volume_number,
            "created": created}

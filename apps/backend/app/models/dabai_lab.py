@@ -1,10 +1,13 @@
-"""dabai 实验书架写作期产物表（预警 / 质检 / 记忆 / 线索）。
+"""dabai 实验书架写作期产物表（预警 / 质检 / 记忆 / 线索 / 台账 / 面板快照）。
 
 与精品文主链路完全隔离（PreWriteWarningRecord / MemoryChunk / Foreshadow
 均绑定 Project，不可复用）。遵循「持久化优先」硬规则：写前导演单、质检
-报告、复盘记忆、线索台账全部落库，刷新后可回看。
+报告、复盘记忆、线索台账、系统面板快照全部落库，刷新后可回看。
 
 所有 FK 带 ondelete=CASCADE + passive_deletes，删项目时由 DB 级联清理。
+
+资产品阶枚举（grade 字段）：
+  0 = 凡品  1 = 灵品  2 = 仙品  3 = 神品  4 = 传说/天外
 """
 from __future__ import annotations
 
@@ -113,6 +116,19 @@ class DabaiAsset(Base):
     status = Column(String(20), default="active")     # active / consumed / lost
     status_chapter = Column(Integer)                  # 最近状态变化章号
     source = Column(String(20), default="debrief")    # seed / debrief / manual
+
+    # ── 系统文数值字段（v2，2026-06）──────────────────────────────────────────
+    # grade: 品阶数值 0=凡品 1=灵品 2=仙品 3=神品 4=传说；None=未定级
+    grade = Column(Integer, nullable=True)
+    # base_stat: 基础属性加成，如 {"atk": 200, "def": 50, "desc": "攻击+200"}
+    base_stat = Column(JSON, nullable=True)
+    # cooldown_chapters: 技能冷却章数（0=无冷却；None=被动技能不适用）
+    cooldown_chapters = Column(Integer, nullable=True)
+    # last_used_chapter: 最近一次使用章号（用于判断冷却是否结束）
+    last_used_chapter = Column(Integer, nullable=True)
+    # enhancement_level: 强化/升阶层数（0=未强化）
+    enhancement_level = Column(Integer, default=0)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
 
@@ -163,3 +179,43 @@ class DabaiClue(Base):
     source = Column(String(20), default="debrief")   # debrief / manual
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+
+
+class DabaiPanelSnapshot(Base):
+    """系统面板快照：每章复盘完成后存一条，作为下章写作的绝对基准。
+
+    snapshot JSON 结构（v1）：
+    {
+      "realm": "筑基期",
+      "sub_level": 3,           # 小境界层数
+      "max_sub": 9,             # 该大境界最大层数
+      "combat_power": 5800,     # 战力估算
+      "skills": [               # 主角 active 技能列表（含冷却状态）
+        {"name": "...", "grade": 1, "cooldown_chapters": 2,
+         "last_used_chapter": 47, "on_cooldown": true}
+      ],
+      "items": [                # 主角 active 道具/法宝列表
+        {"name": "...", "grade": 2, "base_stat": {...}}
+      ],
+      "golden_fingers": [       # 金手指
+        {"name": "...", "description": "..."}
+      ]
+    }
+    """
+
+    __tablename__ = "dabai_panel_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("dabai_projects.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    chapter_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("dabai_chapter_outlines.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    chapter_number = Column(Integer, index=True)
+    snapshot = Column(JSON, default=dict)       # 结构化系统面板数据（见类 docstring）
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

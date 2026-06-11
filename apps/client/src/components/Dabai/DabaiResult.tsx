@@ -124,7 +124,6 @@ export default function DabaiResult(
         <div className="flex flex-wrap items-center gap-2">
           <Flame size={18} className="text-amber-500" />
           <h2 className="text-lg font-bold text-gray-900">{detail.title || detail.logline}</h2>
-          {detail.mock && <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">离线 mock</span>}
           <span className="ml-auto"><LinterBadge report={report} /></span>
         </div>
         <p className="mt-2 text-sm text-gray-500">一句话创意：{detail.logline}</p>

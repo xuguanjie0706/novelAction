@@ -24,6 +24,7 @@ async def call_with_retry(
     *,
     max_tokens: int | None = None,
     task: Optional[str] = None,
+    sampling: Optional[dict] = None,
 ) -> str:
     """调用 AI，单次执行；失败立即抛错（不再做外层退避重试）。
 
@@ -34,4 +35,5 @@ async def call_with_retry(
         prompt,
         max_tokens=max_tokens if max_tokens is not None else min_completion_tokens(),
         task=task,
+        sampling=sampling,
     )

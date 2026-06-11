@@ -1,8 +1,7 @@
 """dabai 实验书架写作期 AI 端点（质检 / 复盘 / 记忆 / 线索 / 预警查询）。
 
 资源边界：仅操作 dabai_* 表，与精品文主链路隔离。路由前缀 /dabai，
-挂在 /api/v1 下（main.py 统一鉴权）。CRUD 之外的生成端点均按
-mock 项目支持离线降级（质检只跑规则、复盘走启发式）。
+挂在 /api/v1 下（main.py 统一鉴权）。
 """
 from __future__ import annotations
 
@@ -18,8 +17,8 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 from app.models.dabai_lab import (
-    DabaiAsset, DabaiClue, DabaiMemory, DabaiPreWarnRecord,
-    DabaiQualityReport, DabaiRelation,
+    DabaiAsset, DabaiClue, DabaiMemory, DabaiPanelSnapshot,
+    DabaiPreWarnRecord, DabaiQualityReport, DabaiRelation,
 )
 from app.models.user import User
 from app.routers.dabai import _owned_or_404
@@ -33,9 +32,8 @@ router = APIRouter(prefix="/dabai", tags=["dabai-lab-ai"])
 
 
 class LabAiRequest(BaseModel):
-    """质检/复盘通用请求体：模型线路与 mock 开关，沿用写章约定。"""
+    """质检/复盘通用请求体：模型线路，沿用写章约定。"""
 
-    mock: bool = Field(default=False, description="离线 mock（不调真实 LLM）")
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
     mode: Literal["rules", "full"] = "full"  # 仅质检用：rules=只跑规则层
@@ -75,7 +73,7 @@ async def lab_quality_check(
     ch = _chapter_or_404(db, project, chapter_id)
     if not (ch.content or "").strip():
         raise HTTPException(status_code=400, detail="本章尚无正文，无法质检")
-    with_llm = req.mode == "full" and not req.mock
+    with_llm = req.mode == "full"
     svc = _build_ai(req, db, user) if with_llm else None
     return await run_lab_quality(svc, db, project, ch, with_llm=with_llm)
 
@@ -112,9 +110,9 @@ async def lab_debrief(
     """章末复盘：提取记忆与线索并落库（幂等可重跑）。"""
     project = _owned_or_404(db, project_id, user)
     ch = _chapter_or_404(db, project, chapter_id)
-    svc = None if req.mock else _build_ai(req, db, user)
+    svc = _build_ai(req, db, user)
     try:
-        return await run_lab_debrief(svc, db, project, ch, mock=req.mock)
+        return await run_lab_debrief(svc, db, project, ch)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -214,11 +212,24 @@ def lab_asset_list(
         "id": str(a.id), "kind": a.kind, "name": a.name, "owner": a.owner,
         "description": a.description, "acquired_chapter": a.acquired_chapter,
         "status": a.status, "status_chapter": a.status_chapter, "source": a.source,
+        # v2 数值字段
+        "grade": a.grade,
+        "base_stat": a.base_stat,
+        "cooldown_chapters": a.cooldown_chapters,
+        "last_used_chapter": a.last_used_chapter,
+        "enhancement_level": a.enhancement_level or 0,
     } for a in rows], "total": len(rows)}
 
 
 class AssetPatch(BaseModel):
-    status: Literal["active", "consumed", "lost"]
+    """手动纠偏资产：状态变更 + 可选的数值字段修正。"""
+
+    status: Optional[Literal["active", "consumed", "lost"]] = None
+    grade: Optional[int] = Field(default=None, ge=0, le=4)
+    cooldown_chapters: Optional[int] = Field(default=None, ge=0)
+    last_used_chapter: Optional[int] = Field(default=None, ge=0)
+    base_stat: Optional[dict] = None
+    enhancement_level: Optional[int] = Field(default=None, ge=0)
 
 
 @router.patch("/projects/{project_id}/assets/{asset_id}")
@@ -229,15 +240,26 @@ def lab_asset_patch(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    """手动改资产状态（复盘误判时纠偏）。"""
+    """手动改资产状态或数值字段（复盘误判时纠偏）。"""
     project = _owned_or_404(db, project_id, user)
     row = db.query(DabaiAsset).filter(DabaiAsset.id == asset_id,
                                       DabaiAsset.project_id == project.id).first()
     if not row:
         raise HTTPException(status_code=404, detail="资产不存在")
-    row.status = req.status
+    if req.status is not None:
+        row.status = req.status
+    if req.grade is not None:
+        row.grade = req.grade
+    if req.cooldown_chapters is not None:
+        row.cooldown_chapters = req.cooldown_chapters
+    if req.last_used_chapter is not None:
+        row.last_used_chapter = req.last_used_chapter
+    if req.base_stat is not None:
+        row.base_stat = req.base_stat
+    if req.enhancement_level is not None:
+        row.enhancement_level = req.enhancement_level
     db.commit()
-    return {"ok": True, "id": str(row.id), "status": row.status}
+    return {"ok": True, "id": str(row.id), "status": row.status, "grade": row.grade}
 
 
 # ── 关系台账 ─────────────────────────────────────────────────────────────────
@@ -317,3 +339,62 @@ def lab_pre_warn_latest(
         "brief": row.brief or "",
         "created_at": row.created_at.isoformat() if row.created_at else None,
     } if row else None)}
+
+
+# ── 系统面板快照 ─────────────────────────────────────────────────────────────
+@router.get("/projects/{project_id}/panel-snapshot")
+def lab_panel_snapshot_latest(
+    project_id: UUID,
+    chapter_id: Optional[UUID] = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """最新一条系统面板快照（或指定章节的快照）。
+
+    查询参数：
+      chapter_id: 若传入则取该章快照；否则取全书最新（章号最大）的快照。
+
+    返回：{"snapshot": {...} | null, "chapter_number": int | null}
+    """
+    project = _owned_or_404(db, project_id, user)
+    q = db.query(DabaiPanelSnapshot).filter(
+        DabaiPanelSnapshot.project_id == project.id,
+    )
+    if chapter_id:
+        q = q.filter(DabaiPanelSnapshot.chapter_id == chapter_id)
+    row = q.order_by(DabaiPanelSnapshot.chapter_number.desc()).first()
+    if not row:
+        return {"snapshot": None, "chapter_number": None}
+    return {
+        "snapshot": row.snapshot or {},
+        "chapter_number": row.chapter_number,
+        "chapter_id": str(row.chapter_id),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+@router.get("/projects/{project_id}/panel-snapshots")
+def lab_panel_snapshot_list(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """全书面板快照列表（按章号倒序）；用于前端「系统面板时间线」。"""
+    project = _owned_or_404(db, project_id, user)
+    rows = (
+        db.query(DabaiPanelSnapshot)
+        .filter(DabaiPanelSnapshot.project_id == project.id)
+        .order_by(DabaiPanelSnapshot.chapter_number.desc())
+        .limit(200)
+        .all()
+    )
+    return {"items": [{
+        "id": str(r.id),
+        "chapter_id": str(r.chapter_id),
+        "chapter_number": r.chapter_number,
+        "realm": (r.snapshot or {}).get("realm"),
+        "sub_level": (r.snapshot or {}).get("sub_level"),
+        "combat_power": (r.snapshot or {}).get("combat_power"),
+        "snapshot": r.snapshot or {},
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    } for r in rows], "total": len(rows)}

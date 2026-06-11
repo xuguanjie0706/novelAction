@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.models.dabai import DabaiChapterOutline, DabaiProject
-from app.models.dabai_lab import DabaiClue, DabaiMemory
+from app.models.dabai_lab import DabaiClue, DabaiMemory, DabaiPanelSnapshot
 
 _MEM_LABELS = {
     "summary": "摘要", "fact": "事实", "event": "事件",
@@ -24,8 +24,9 @@ class LabDraftContext:
 
     prev_tail: str
     recent_plot_block: str
-    memory_block: str = ""   # 复盘记忆回灌（重要度+时效 Top-K）
-    clue_block: str = ""     # 未回收线索回灌（埋设越久越优先）
+    memory_block: str = ""    # 复盘记忆回灌（重要度+时效 Top-K）
+    clue_block: str = ""      # 未回收线索回灌（埋设越久越优先）
+    panel_block: str = ""     # 系统面板快照块（上章末精确数值基准）
 
 
 def _tail_of_content(content: str, max_len: int = 800) -> str:
@@ -85,6 +86,78 @@ def _build_clue_block(
     )
 
 
+def _build_panel_block(
+    db: Session, project: DabaiProject, ch: DabaiChapterOutline,
+) -> str:
+    """从最新一条面板快照生成「系统面板」注入块。
+
+    找不到快照时返回空串（降级到旧台账块），不阻塞写章。
+    """
+    snap = (
+        db.query(DabaiPanelSnapshot)
+        .filter(
+            DabaiPanelSnapshot.project_id == project.id,
+            DabaiPanelSnapshot.chapter_number < ch.chapter_number,
+        )
+        .order_by(DabaiPanelSnapshot.chapter_number.desc())
+        .first()
+    )
+    if not snap or not snap.snapshot:
+        return ""
+
+    s = snap.snapshot
+    lines: list[str] = [f"【系统面板（第{snap.chapter_number}章末存档，数值不可自相矛盾）】"]
+
+    realm = str(s.get("realm") or "")
+    sub = s.get("sub_level")
+    max_s = s.get("max_sub")
+    cp = s.get("combat_power")
+    realm_str = realm
+    if sub is not None and max_s:
+        realm_str += f"·第{sub}/{max_s}层"
+    elif sub is not None:
+        realm_str += f"·第{sub}层"
+    if cp:
+        realm_str += f"（战力约{cp}）"
+    if realm_str.strip():
+        lines.append(f"- 境界：{realm_str}")
+
+    # 品阶数字 → 汉字标签（与 lab_ledger._GRADE_LABELS 保持一致）
+    _PANEL_GRADE = {0: "凡品", 1: "灵品", 2: "仙品", 3: "神品", 4: "传说"}
+
+    def _grade_tag(grade) -> str:
+        """grade int → '[灵品]' 格式标签，None 返回空串。"""
+        if grade is None:
+            return ""
+        return f"[{_PANEL_GRADE.get(int(grade), f'{grade}品')}]"
+
+    skills_avail, skills_cd = [], []
+    for sk in (s.get("skills") or []):
+        tag = _grade_tag(sk.get("grade"))
+        if sk.get("on_cooldown"):
+            skills_cd.append(f"{sk['name']}{tag}（冷却{sk.get('cooldown_remaining', '?')}章）")
+        else:
+            skills_avail.append(f"{sk['name']}{tag}")
+    if skills_avail:
+        lines.append(f"- 可用技能：{'、'.join(skills_avail[:8])}")
+    if skills_cd:
+        lines.append(f"- ⛔冷却中（不可使用）：{'、'.join(skills_cd[:6])}")
+
+    items = [
+        f"{it['name']}{_grade_tag(it.get('grade'))}"
+        for it in (s.get("items") or [])
+    ]
+    if items:
+        lines.append(f"- 持有法宝：{'、'.join(items[:8])}")
+
+    gfs = [gf["name"] for gf in (s.get("golden_fingers") or []) if gf.get("name")]
+    if gfs:
+        lines.append(f"- 金手指：{'、'.join(gfs)}")
+
+    lines.append("- ★以上数据为硬性基准，本章境界/技能/法宝状态必须与之衔接，不可凭空突破或使用冷却中技能。")
+    return "\n".join(lines)
+
+
 def build_lab_draft_context(
     db: Session,
     project: DabaiProject,
@@ -135,4 +208,5 @@ def build_lab_draft_context(
         recent_plot_block=recent_plot_block,
         memory_block=_build_memory_block(db, project, ch),
         clue_block=_build_clue_block(db, project, ch),
+        panel_block=_build_panel_block(db, project, ch),
     )

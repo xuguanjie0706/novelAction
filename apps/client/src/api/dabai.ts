@@ -60,9 +60,8 @@ export function dabaiGenerateStream(
   return streamSse('/api/v1/dabai/projects/stream', payload, onEvent, signal)
 }
 
-/** 按卷展开章纲请求体（全部可省：mock 跟随项目、线路默认 gemini）。 */
+/** 按卷展开章纲请求体（线路默认 gemini）。 */
 export interface DabaiExpandRequest {
-  mock?: boolean
   model_profile?: 'local' | 'gemini'
   llm_provider_id?: string
   /** 满卷删旧重做（未满卷为增量补全，无需此参数）。 */
@@ -73,6 +72,7 @@ export interface DabaiExpandRequest {
 export type DabaiExpandEvent =
   | { event: 'expand_start'; volume_number: number; chapter_from: number; chapter_to: number; mode: 'full' | 'incremental' | 'force' }
   | { event: 'chapter_batch'; batch_start: number; batch_end: number; total: number }
+  | { event: 'linter_done'; status?: string; score?: number | null; issue_count?: number; critical_count?: number }
   | { event: 'done'; volume_number: number; created: number }
   | { event: 'error'; message: string; code?: string }
 
@@ -95,7 +95,6 @@ export function dabaiExpandVolumeStream(
 
 /** 章节正文写作请求体。 */
 export interface DabaiDraftRequest {
-  mock: boolean
   model_profile?: 'local' | 'gemini'
   llm_provider_id?: string
 }
@@ -154,5 +153,12 @@ export const dabaiApi = {
   /** 删除项目。 */
   remove(id: string) {
     return api.delete<{ ok: boolean; deleted: string }>(`/dabai/projects/${id}`)
+  },
+
+  /** 全书章纲 linter 重跑（读库最新章纲，写回 linter_report）。 */
+  relintOutline(id: string) {
+    return api.post<{ linter_report: DabaiProjectDetail['linter_report'] }>(
+      `/dabai/projects/${id}/relint-outline`,
+    )
   },
 }

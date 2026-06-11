@@ -46,11 +46,15 @@ export interface DabaiLinterIssue {
 }
 
 export interface DabaiLinterReport {
-  status?: 'ok' | 'warning' | 'blocked'
-  score?: number
+  status?: 'ok' | 'warning' | 'blocked' | 'pending'
+  score?: number | null
   issue_count?: number
   critical_count?: number
   issues?: DabaiLinterIssue[]
+  /** 全书章纲数（lab_outline_lint 写入）。 */
+  chapter_count?: number
+  /** ISO 时间戳（lab_outline_lint 写入）。 */
+  linted_at?: string | null
 }
 
 export interface DabaiBenchmarkBook {
@@ -106,7 +110,6 @@ export interface DabaiProjectSummary {
 
 export interface DabaiGenerateRequest {
   logline: string
-  mock: boolean
   /** 模型/线路：沿用通用分支选择（local 走 .env，gemini 走 llm_providers/env）。 */
   model_profile?: 'local' | 'gemini'
   llm_provider_id?: string

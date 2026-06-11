@@ -23,6 +23,27 @@ logger = logging.getLogger(__name__)
 
 LAB_QC_VERSION = "dabai-lab-qc-v1"
 
+# 章纲见证者常用统称 ↔ 正文口语别名（DLB-02 语义匹配，避免字面误报）
+_WITNESS_ALIASES: dict[str, tuple[str, ...]] = {
+    "围观家奴": ("家奴", "家仆", "杂役", "仆人", "阿大", "阿二", "阿三", "阿四"),
+    "叶家弟子": ("族人", "子弟", "弟子", "叶家", "家族"),
+    "围观众人": ("众人", "围观", "家仆", "族人", "惊呼"),
+}
+
+
+def _witness_in_content(witness: str, content: str) -> bool:
+    """见证者是否在正文中出现（含别名/子串）。"""
+    w = witness.strip()
+    if not w or w in content:
+        return bool(w and w in content)
+    for alias in _WITNESS_ALIASES.get(w, ()):
+        if alias in content:
+            return True
+    for stem in ("家奴", "家仆", "弟子", "族人", "杂役", "围观"):
+        if stem in w and stem in content:
+            return True
+    return False
+
 
 def _plain_content(ch: DabaiChapterOutline) -> str:
     return re.sub(r"<[^>]+>", "", ch.content or "").strip()
@@ -43,7 +64,7 @@ def _rule_report(ch: DabaiChapterOutline) -> dict:
             })
 
     witnesses = [str(w) for w in (ch.witnesses or []) if str(w).strip()]
-    missing = [w for w in witnesses if w not in content]
+    missing = [w for w in witnesses if not _witness_in_content(w, content)]
     if witnesses and missing:
         warnings.append({
             "rule_id": "DLB-02",
@@ -104,7 +125,7 @@ async def run_lab_quality(
 
     Args:
         svc: AIService（with_llm=False 时可传 None）。
-        with_llm: False 时只跑规则（快速校验 / mock 项目用）。
+        with_llm: False 时只跑规则（快速校验）。
     Returns:
         合并后的报告 dict（已落库）。
     """

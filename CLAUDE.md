@@ -457,6 +457,19 @@ lab 侧（dabai_* 表）补齐写作期四件套，与精品文链路隔离、�
   volumes 与 chapter_outlines prompt 自动携带。
 - **mock**：`mock_responses._STORY_ASSETS`（林凡宇宙样本）；前端 `DABAI_STEP_LABELS` 增「剧情资产·关系」。
 - 注意：本仓 pytest 强制 3.12 venv；沙箱验证走 mock pipeline 冒烟（collect_bootstrap 全步通过）。
+- **修复（同批）**：① `persist_bootstrap_result`（非流式口）步骤清单漏 `story_assets` 已补；
+  ② `build_ledger_block` 资产按持有者归属（此前全标成主角的；他人资产现单列「其他人物持有（不归主角使用）」）；
+  ③ 人物面板伴随台账：`CharactersPanel` 拉 assets/relations，按人名匹配显示每人持有功法/道具
+  + 对主角态度徽章 + 张力。存量书（建于该步骤之前）只有惰性种子，需重新生成才有完整剧情资产；
+  台账表未 migrate 时接口 500、前端静默为空——先 `alembic upgrade`。
+
+### 实验书架卷纲质检闭环（2026-06-12）
+
+> 修复「质检 Tab 只读 bootstrap 快照、卷展开不更新」的架构断层。
+
+- **单一 linter 服务**：`services/dabai/lab_outline_lint.py`（`run_dabai_project_linter`）从 `dabai_volumes` + `dabai_chapter_outlines` 读库全书章纲，跑 `dabai/linter.py`，补检按卷 `REALM-03`，写回 `DabaiProject.linter_report`（含 `linted_at` / `chapter_count`）。
+- **触发点**：bootstrap 收尾（流式/非流式）、`volume_expand` 展开完成（SSE `linter_done`）、手动 `POST /dabai/projects/{id}/relint-outline`。
+- **前端**：顶栏 Tab 改名「卷纲质检」；写作侧栏「正文质检」消歧；`LinterPanel` 空报告显示「尚未检测」+ 重新检测按钮（不再伪装 100 分通过）；卷展开 done 后 toast 带分数。
 
 ### 大白文（dabaiwen）写章上下文链路（2026-06-10 重修）
 
@@ -535,6 +548,7 @@ lab 侧（dabai_* 表）补齐写作期四件套，与精品文链路隔离、�
 | ~~`apps/client/src/pages/CluesPage.tsx`~~ | ~~1007~~ | ✅ 已拆至 `pages/Clues/`（壳 443 行；最大 QualityDebtCard 173 行） |
 | ~~`apps/backend/app/routers/cover.py`~~ | ~~908~~ | ✅ 已拆为 cover_b64_decode.py（367）+ cover_gateway.py（289）+ 薄壳（284） |
 | `apps/backend/app/services/ai/chapter_ingredients.py` | 552 | ⚠️ 软警戒线上方；已拆出 ingredient_types.py（104）+ ingredient_prompt.py（108） |
+| `apps/backend/app/services/dabai/lab_ledger.py` | 579 | ⚠️ 软警戒线上方（v2 加入品阶/面板快照逻辑）；禁止继续内联新能力；待拆 panel_snapshot_service.py |
 | `apps/backend/app/routers/outline/qa_internal.py` | 878 | 🚫 超硬上限（600）；新逻辑放 `routers/outline/routes_*.py`，禁止在此文件新增 |
 | ~~`apps/backend/app/routers/outline/helpers/realm_timeline.py`~~ | ~~728~~ | ✅ 已拆为 realm_whitelist.py（204）+ realm_attribution.py（115）+ 薄壳（369） |
 | ~~`apps/backend/app/routers/ai/draft_context.py`~~ | ~~678~~ | ✅ 已拆为 draft_ctx_reader.py（116）+ draft_ctx_promise.py（139）+ 薄壳（363） |

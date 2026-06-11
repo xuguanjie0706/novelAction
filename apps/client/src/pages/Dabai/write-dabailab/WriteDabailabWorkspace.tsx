@@ -16,13 +16,12 @@ import { llmProviderIdFromRoute, modelProfileFromRoute, useAppStore } from '../.
 
 interface Props {
   projectId: string
-  mock: boolean
   chapter: DabaiChapter
   beat: DabaiBeatDisplay
   onSaved: () => void
 }
 
-export default function WriteDabailabWorkspace({ projectId, mock, chapter, beat, onSaved }: Props) {
+export default function WriteDabailabWorkspace({ projectId, chapter, beat, onSaved }: Props) {
   const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
   const [text, setText] = useState(chapter.content ?? '')
   const [busy, setBusy] = useState(false)
@@ -46,7 +45,6 @@ export default function WriteDabailabWorkspace({ projectId, mock, chapter, beat,
         projectId,
         chapter.id,
         {
-          mock,
           model_profile: modelProfileFromRoute(aiBackendRoute),
           ...(llmProviderIdFromRoute(aiBackendRoute)
             ? { llm_provider_id: llmProviderIdFromRoute(aiBackendRoute) }
@@ -132,7 +130,6 @@ export default function WriteDabailabWorkspace({ projectId, mock, chapter, beat,
 
       <WorkspaceSidePanel
         projectId={projectId}
-        mock={mock}
         chapter={chapter}
         preWarnLive={preWarnLive}
         preWarnRefreshKey={preWarnRefreshKey}

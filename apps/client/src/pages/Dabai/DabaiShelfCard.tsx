@@ -63,7 +63,7 @@ export default function DabaiShelfCard({ item, onOpen, onDelete, deleting }: Pro
       <div className="flex flex-col gap-1 px-4 py-3">
         <p className="line-clamp-2 text-[12px] text-gray-500">{item.logline}</p>
         <div className="mt-auto flex items-center justify-between pt-2">
-          <span className="text-[11px] text-gray-400">{timeAgo(item.created_at)}{item.mock ? ' · mock' : ''}</span>
+          <span className="text-[11px] text-gray-400">{timeAgo(item.created_at)}</span>
           <button
             type="button"
             title="删除"

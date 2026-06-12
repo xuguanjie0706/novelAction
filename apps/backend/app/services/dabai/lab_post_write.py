@@ -29,8 +29,10 @@ async def _run_post_write_pipeline(
     llm_provider_id: Optional[UUID],
     user_id,
     events: asyncio.Queue,
+    run_quality: bool = True,
+    run_debrief: bool = True,
 ) -> None:
-    """写后自动质检 + 复盘。"""
+    """写后自动质检 + 复盘（可按请求跳过）。"""
     from app.database import SessionLocal
     db = SessionLocal()
     try:
@@ -46,32 +48,34 @@ async def _run_post_write_pipeline(
         ai = AIService(profile=model_profile, db=db,
                        llm_provider_id=llm_provider_id, user_id=user_id)
 
-        events.put_nowait({"event": "quality_running", "dabai_mode": True})
-        try:
-            report = await run_lab_quality(ai, db, project, ch, with_llm=True)
-            events.put_nowait({"event": "quality_done", "ok": True,
-                               "status": report.get("status"),
-                               "overall_score": report.get("overall_score"),
-                               "llm_status": report.get("llm_status")})
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("dabai-lab 写后质检失败 chapter=%s：%s", chapter_id, exc)
-            db.rollback()
-            events.put_nowait({"event": "quality_done", "ok": False, "error": str(exc)})
+        if run_quality:
+            events.put_nowait({"event": "quality_running", "dabai_mode": True})
+            try:
+                report = await run_lab_quality(ai, db, project, ch, with_llm=True, source="post_write")
+                events.put_nowait({"event": "quality_done", "ok": True,
+                                   "status": report.get("status"),
+                                   "overall_score": report.get("overall_score"),
+                                   "llm_status": report.get("llm_status")})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("dabai-lab 写后质检失败 chapter=%s：%s", chapter_id, exc)
+                db.rollback()
+                events.put_nowait({"event": "quality_done", "ok": False, "error": str(exc)})
 
-        events.put_nowait({"event": "debrief_running", "dabai_mode": True})
-        try:
-            result = await run_lab_debrief(ai, db, project, ch)
-            events.put_nowait({"event": "debrief_done", "ok": True,
-                               "summary": result.get("summary"),
-                               "memory_count": result.get("memory_count"),
-                               "new_clues": result.get("new_clues"),
-                               "resolved_clues": result.get("resolved_clues"),
-                               "asset_changes": result.get("asset_changes"),
-                               "relation_changes": result.get("relation_changes")})
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("dabai-lab 写后复盘失败 chapter=%s：%s", chapter_id, exc)
-            db.rollback()
-            events.put_nowait({"event": "debrief_done", "ok": False, "error": str(exc)})
+        if run_debrief:
+            events.put_nowait({"event": "debrief_running", "dabai_mode": True})
+            try:
+                result = await run_lab_debrief(ai, db, project, ch)
+                events.put_nowait({"event": "debrief_done", "ok": True,
+                                   "summary": result.get("summary"),
+                                   "memory_count": result.get("memory_count"),
+                                   "new_clues": result.get("new_clues"),
+                                   "resolved_clues": result.get("resolved_clues"),
+                                   "asset_changes": result.get("asset_changes"),
+                                   "relation_changes": result.get("relation_changes")})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("dabai-lab 写后复盘失败 chapter=%s：%s", chapter_id, exc)
+                db.rollback()
+                events.put_nowait({"event": "debrief_done", "ok": False, "error": str(exc)})
     finally:
         db.close()
         events.put_nowait(None)
@@ -84,6 +88,8 @@ def spawn_post_write_pipeline(
     model_profile: str,
     llm_provider_id: Optional[UUID],
     user_id,
+    run_quality: bool = True,
+    run_debrief: bool = True,
 ) -> asyncio.Queue:
     """启动写后流水线后台任务，返回事件队列（None 哨兵收尾）。
 
@@ -95,6 +101,8 @@ def spawn_post_write_pipeline(
         model_profile=model_profile,
         llm_provider_id=llm_provider_id, user_id=user_id,
         events=events,
+        run_quality=run_quality,
+        run_debrief=run_debrief,
     ))
     _POST_WRITE_TASKS.add(task)
     task.add_done_callback(_POST_WRITE_TASKS.discard)

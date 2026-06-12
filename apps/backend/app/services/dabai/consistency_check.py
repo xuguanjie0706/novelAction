@@ -26,6 +26,40 @@ def _plain_content(chapter: Chapter) -> str:
     return re.sub(r"<[^>]+>", "", chapter.content or "").strip().lower()
 
 
+# 回忆/对比/突破自述语境标记：低境界词出现在这些语境中不算倒退
+_RETRO_BEFORE = (
+    "当年", "曾经", "昔日", "回忆", "回想", "那时", "当初", "彼时",
+    "还是", "不过是", "区区", "突破", "晋升", "踏入", "迈入", "升入",
+)
+_RETRO_AFTER = ("突破", "晋升", "之后", "之时", "时期", "时候", "巅峰")
+
+
+def realm_regression_hit(plain: str, term: str) -> bool:
+    """低境界词是否以「现在时」出现（回忆/对比/突破自述语境豁免）。
+
+    DBC-02 因正则误报停用是前车之鉴：阻断规则误报代价最高，
+    故对「当年还是炼气期」「从炼气期突破」类提及做语境豁免，
+    所有出现位置均为回忆语境时不判倒退。
+    """
+    if not term:
+        return False
+    start = 0
+    while True:
+        idx = plain.find(term, start)
+        if idx < 0:
+            return False
+        before = plain[max(0, idx - 12):idx]
+        after = plain[idx + len(term): idx + len(term) + 8]
+        retro = (
+            any(m in before for m in _RETRO_BEFORE)
+            or before[-1:] in ("从", "自")
+            or any(m in after for m in _RETRO_AFTER)
+        )
+        if not retro:
+            return True
+        start = idx + len(term)
+
+
 def _payoff_keywords(payoff: str, yaqu: str) -> list[str]:
     """从 payoff/yaqu 抽 3~8 字检索锚点，不用 shuang_type 标签字面量。"""
     raw = re.sub(r"[^\u4e00-\u9fff]", "", f"{payoff} {yaqu}")
@@ -68,14 +102,14 @@ def check_dabai_consistency(
 
     realm_map = _realm_names(db, project)
 
-    # DBC-01 境界词（阻断）
+    # DBC-01 境界词（阻断；回忆/对比/突破自述语境豁免，防误阻断）
     if realm_rank and realm_rank in realm_map:
         lower_levels = [n.lower() for r, n in realm_map.items() if r < int(realm_rank) and n]
         for low in lower_levels:
-            if low in plain:
+            if low in plain and realm_regression_hit(plain, low):
                 blockers.append({
                     "rule_id": "DBC-01",
-                    "message": f"正文出现低于本章档位的境界「{low}」",
+                    "message": f"正文以现在时出现低于本章档位的境界「{low}」",
                 })
                 break
 
@@ -91,6 +125,8 @@ def check_dabai_consistency(
             warnings.append({
                 "rule_id": "DBC-03",
                 "message": "正文与章纲爽点/憋屈描述关联较弱（可忽略，以人工审阅为准）",
+                # 自述「可忽略」的低置信度提示不计入综合分扣减
+                "score_exempt": True,
             })
 
     passed = not blockers

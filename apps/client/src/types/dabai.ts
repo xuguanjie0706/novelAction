@@ -9,6 +9,7 @@ export interface DabaiChapter {
   chapter_number: number
   title: string
   shuang_type: string          // 一等公民：本章爽点类型
+  location?: string | null     // 场景载体（地点+事件，相邻章轮换防同质化）
   yaqu_setup: string           // 憋屈势能
   emotion_turn?: string        // 转折拍：情绪扳机
   yinbao: string               // 引爆
@@ -142,5 +143,25 @@ export const DABAI_STEP_LABELS: Record<string, string> = {
   story_assets: '剧情资产·关系',
   volumes: '卷骨架',
   chapter_outlines: '章纲·爽点节拍',
+}
+
+/** 导出预检（对齐精品文 ExportPreview）。 */
+export interface DabaiExportChapterIssue {
+  chapter_id: string
+  title: string
+  sort_order: number
+  word_count: number
+  status: 'ok' | 'too_short' | 'too_long' | 'empty'
+  message: string
+}
+
+export interface DabaiExportPreview {
+  total_chapters: number
+  total_words: number
+  platform: string
+  platform_name: string
+  compliant_chapters: number
+  issues: DabaiExportChapterIssue[]
+  platforms: Record<string, { name: string; min_words: number; max_words: number }>
 }
 

@@ -13,7 +13,15 @@ import json
 from typing import Any
 
 from dabai.config import DabaiConfig
+from dabai.first_chapter_opening import first_chapter_opening_block
 from dabai.golden_finger_bind import chapter_outline_bind_block
+from dabai.non_system import (
+    benchmark_non_system_note,
+    chapter_outline_non_system_note,
+    golden_finger_extra_block,
+    golden_finger_json_fields,
+    prefers_non_system,
+)
 
 _SYS_BASE = (
     "你是有15年经验的番茄/七猫大白文主编，专精移动端碎片化爽文。\n"
@@ -89,8 +97,10 @@ def benchmark(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         "严禁抄录任何作品的原文段落、具体情节或人物原名作为输出内容。\n"
         "只返回 JSON。"
     )
+    logline = ctx.get("logline") or ""
     user = (
-        f"题材 / 一句话创意：{ctx['logline']}\n\n"
+        f"题材 / 一句话创意：{logline}\n"
+        + benchmark_non_system_note(logline) + "\n"
         "返回 JSON（顶层两块：benchmark 对标分析、positioning 立项定位，"
         "positioning 要从 benchmark 推导而来）：\n"
         "{\n"
@@ -143,21 +153,24 @@ def positioning(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
 
 def golden_finger(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
     """合并步：一次产出 金手指 + 境界阶梯（两者同属力量体系，须自洽）。"""
+    artifact = prefers_non_system(ctx)
+    type_hint, gf_extra_fields = golden_finger_json_fields(artifact=artifact)
     user = (
         f"{_ctx_brief(ctx)}\n"
         + _benchmark_block(ctx) + "\n"
-        "一次设计好本书的【力量体系】——金手指 + 与之匹配的境界阶梯。"
+        + (golden_finger_extra_block() if artifact else "")
+        + "一次设计好本书的【力量体系】——金手指 + 与之匹配的境界阶梯。"
         "金手指要当章见效、能持续产出爽点；境界要清晰可数、和金手指的升级机制自洽。"
         "可借鉴对标设定母题，但要差异化。返回 JSON（两块）：\n"
         "{\n"
         '  "golden_finger": {\n'
         '    "name": "金手指名称",\n'
-        '    "type": "类型（系统/吞噬/重生/天赋/老爷爷/签到…可组合）",\n'
+        f'    "type": "{type_hint}",\n'
         '    "core_ability": "核心能力（一句话）",\n'
         '    "upgrade_mechanism": "怎么靠它变强（量化升级路径，且要呼应下面的境界阶梯）",\n'
         '    "shuang_engine": "怎么持续产生爽点（越强越稀有越爽 在哪体现）",\n'
         '    "restriction": "限制（防无敌没张力，但不能是劝退读者的长期代价）",\n'
-        '    "signature_lines": ["1-2句标志性提示音/口头禅"]\n'
+        + gf_extra_fields +
         "  },\n"
         '  "power_ladder": {\n'
         '    "name": "体系名称",\n'
@@ -221,6 +234,11 @@ def story_assets(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         "1. plot_assets：3-6 件有剧情功能的功法/道具（不是装备列表——每件必须绑定剧情作用：\n"
         "   被各方觊觎的争夺点 / 反派底牌 / 主角功法升级路线 / 身世信物谜题）。\n"
         "2. initial_relations：主角与每个核心人物的开局关系（要有张力，是前期打脸剧情的燃料）。\n"
+        "★debut 分流（硬约束）★：\n"
+        "  - debut=start：仅「开局已持有」——他人持有的争夺点/底牌、主角随身身世信物等；\n"
+        "  - debut=later：第1章及之后才获得的功法/宝物（含成长线主功法、金手指配套魔经/诀）；\n"
+        "  - plot_role=成长线 的功法 ★必须★ debut=later（第1章认主后才得，禁止标 start）；\n"
+        "  - 主角持有的 skill 默认 debut=later，除非明确是开局就练的残缺入门诀且第1章不获得。\n"
         "{\n"
         '  "plot_assets": [\n'
         '    {"kind": "skill|item", "name": "≤10字", "plot_role": "争夺点|底牌|成长线|身世信物",\n'
@@ -270,7 +288,10 @@ def volumes(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         f"全书从第1卷起单调上升，最高不超过 {max_rank}；"
         "每卷 realm_end_rank ≥ realm_start_rank；下一卷 realm_start_rank = 上一卷 realm_end_rank（首尾相接，禁止回退）；"
         "开局卷升幅要小（1-2 档），别一卷暴涨。\n"
-        "第1卷必须是新手村开局：退婚/被辱→觉醒金手指→当众打脸扬名。"
+        "第1卷开局须贴合本书主题定制（见下方第1章开局块），"
+        "禁止默认套用退婚+踹 cliff/演武场羞辱等烂模板；"
+        "结构仍是：蓄憋屈→金手指露头→留当众打脸钩子。"
+        + first_chapter_opening_block(ctx)
     )
     return _SYS_BASE, user
 
@@ -327,14 +348,29 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         "  - yinbao 写清招式/手段/场面调度，反转要有“先抑两拍再爆”的节奏感；\n"
         "  - shuang_payoff 写打脸对象的具体反应（脸色/下跪/改口/围观惊呼），爽感可量化；\n"
         "  - 全卷爽点强度要走阶梯：小爽铺垫→中爽推进→大爆点炸场，禁止平铺直叙一个调门到底；\n"
-        "  - 所有人物/势力/功法/道具只能用上文给定的既有设定，禁止凭空新造核心设定。"
+        "  - 所有人物/势力/功法/道具只能用上文给定的既有设定，禁止凭空新造核心设定。\n"
+        "【反同质化（硬约束，违反即废稿）】每章是一集不同的戏，不是同一集换个对手：\n"
+        "  - location 场景载体轮换：相邻 3 章 location 不得同类。可轮换的载体示例："
+        "比试擂台/退婚宴席/拍卖行/坊市集市/藏经阁/丹房药园/刑堂审讯/任务历练/秘境探险/"
+        "客栈酒楼/夜袭追杀/拜师考核/灵田矿脉/边境哨所——按本书世界观取具体名字；\n"
+        "  - 标题句式轮换：从 悬念式(他敢动手?)/台词式(就凭你也配)/反差式(废物拍出天价)/"
+        "动作式(一掌碎碑)/数字式(三息之内) 等策略轮换，"
+        "★禁止全批标题同一句式、禁止相邻标题以相同字词开头★；\n"
+        "  - 打脸对象与见证者轮换：禁止同一人连续 3 章当靶子，witnesses 阵容逐章有变化；\n"
+        "  - 憋屈手法轮换：言语羞辱/资源克扣/规则刁难/当众污蔑/抢功嫁祸/退婚悔约 轮着来，"
+        "禁止每章都是『嘲讽主角是废物』一招。"
     )
     gf_name = (ctx.get("golden_finger") or {}).get("name", "")
     # 黄金前 N 章按★全局章号★判定：仅全书开局批注入金手指绑定节拍，卷2+不再触发
-    bind_block = chapter_outline_bind_block(gf_name) if gbs <= cfg.golden_chapters else ""
+    bind_block = chapter_outline_bind_block(
+        gf_name, artifact=prefers_non_system(ctx),
+    ) if gbs <= cfg.golden_chapters else ""
+    non_sys_block = chapter_outline_non_system_note() if prefers_non_system(ctx) else ""
+    ch1_block = first_chapter_opening_block(ctx) if gbs <= 1 <= gbe else ""
     golden_rule = (
-        f"1. 黄金前 {cfg.golden_chapters} 章（仅当本批含全书第1章时）："
-        "第1章蓄憋屈+留金手指钩子，第2章金手指见效，第3章第一次当众大打脸。\n"
+        f"1. 黄金前 {cfg.golden_chapters} 章（本批含全书第1章）："
+        "第1章按【第1章开局定制】从本书主题写具体憋屈+留金手指钩子（禁止退婚踹 cliff）；"
+        "第2章金手指见效，第3章第一次当众大打脸。\n"
         if gbs <= cfg.golden_chapters else
         "1. 本批非全书开局：开篇承接上文钩子直接进入本卷冲突，禁止重新介绍金手指/世界观。\n"
     )
@@ -344,16 +380,19 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         "\n【前情与既定事实（全部已发生，章纲必须与之自洽；禁止矛盾、禁止重置、"
         "禁止让已死/已臣服人物无故复活/翻脸）】\n" + story + "\n"
     ) if story else ""
+    # 质检高频问题回灌（卷展开期由 lab_qc_feedback 聚合注入；bootstrap 期为空）
+    qc_block = (ctx.get("qc_feedback") or "").strip()
+    qc_block = ("\n" + qc_block + "\n") if qc_block else ""
     user = (
         f"{_ctx_brief(ctx)}\n"
         + _benchmark_block(ctx)
-        + story_block + "\n"
+        + story_block + qc_block + "\n"
         f"为《{vol.get('title', '第1卷')}》（phase={vol.get('phase')}，全卷共 {n} 章）"
         f"生成全书第 {gbs}～{gbe} 章章纲（本卷第 {bs}～{be} 章，本批 {batch_count} 章）。\n"
         f"本卷大爆点：{vol.get('big_beats')}\n本卷卷末高潮：{vol.get('volume_climax')}\n"
         f"可用人物：{chars}\n可用爽点类型：{pool}\n"
         + _ladder_block(ctx)
-        + carry + realm_block + bind_block +
+        + carry + realm_block + bind_block + non_sys_block + ch1_block +
         "硬约束：\n"
         + golden_rule +
         "2. 相邻两章 shuang_type 不得相同；每 "
@@ -366,6 +405,7 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         "{\n"
         f'  "chapter_number": {gbs}, "title": "第X章 标题(≤10字)",\n'
         '  "shuang_type": "本章爽点类型(从可用类型选)",\n'
+        '  "location": "本章主场景载体(具体地点+事件，如 万宝拍卖行·斗宝；相邻3章不得同类)",\n'
         '  "yaqu_setup": "憋屈势能：谁在压主角/什么不公",\n'
         '  "emotion_turn": "转折拍：从【情绪】→【触发】→【情绪】；金手指觉醒章须含疑→证→择（如 从恍惚→疑为鬼叫→倒计时/锁链松→赌命提取）",\n'
         '  "yinbao": "引爆：主角怎么靠金手指反转",\n'

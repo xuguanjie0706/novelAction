@@ -247,6 +247,12 @@ async def aiter_volume_expand(
     story = build_story_so_far(db, p, volume, offset)
     if story:
         ctx["story_so_far"] = story
+    # 质检高频问题回灌：已写章节反复踩坑的 rule_id → 本卷章纲从源头规避
+    from app.services.dabai.lab_qc_feedback import build_project_qc_issue_block
+
+    qc_issues = build_project_qc_issue_block(db, p.id)
+    if qc_issues:
+        ctx["qc_feedback"] = qc_issues
     created = 0
     async for batch, gbs, gbe in aiter_chapter_batches(
         ctx, call, cfg, _volume_dict(volume),

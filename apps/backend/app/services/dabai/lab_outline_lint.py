@@ -57,6 +57,7 @@ def _chapter_dict(ch: DabaiChapterOutline) -> dict:
         "chapter_number": ch.chapter_number,
         "title": ch.title,
         "shuang_type": ch.shuang_type or "",
+        "location": ch.location or "",
         "yaqu_setup": ch.yaqu_setup or "",
         "emotion_turn": ch.emotion_turn or "",
         "yinbao": ch.yinbao or "",

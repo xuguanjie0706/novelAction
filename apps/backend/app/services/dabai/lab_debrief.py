@@ -90,7 +90,8 @@ def _build_debrief_prompt(
         '    "realm": "大境界名称，如筑基期",\n'
         '    "sub_level": 当前小境界层数（整数，如3），无则null,\n'
         '    "max_sub": 该大境界最大层数（整数，如9），无则null,\n'
-        '    "combat_power": 战力估算数值（整数，参考境界档位合理估算），无则null\n'
+        '    "combat_power": 战力估算数值（整数，参考境界档位合理估算），无则null,\n'
+        '    "location": "章末主角所在的具体地点，≤15字（下一章开笔位置基准）"，无法判断则null\n'
         "  }\n"
         "}"
     )

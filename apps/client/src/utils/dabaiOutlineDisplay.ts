@@ -107,7 +107,7 @@ export function dabaiBeatFromChapter(ch: DabaiChapter, realmName?: (r?: number |
     endHook: ch.end_hook,
     realmRank: ch.realm_rank ?? null,
     realmLabel: realmName?.(ch.realm_rank) ?? (ch.realm_rank ? `第${ch.realm_rank}档` : ''),
-    locationName: '',
+    locationName: ch.location ?? '',
     isBigBeat: ch.is_big_beat,
     expectedWords: ch.expected_words ?? null,
   }

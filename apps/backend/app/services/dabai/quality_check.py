@@ -58,6 +58,11 @@ def build_qc_prompt(
     content = re.sub(r"<[^>]+>", "", chapter.content or "").strip()
     head = content[:4500]
     tail = content[-1200:] if len(content) > 5700 else ""
+    # 中段抽样：head+tail 之外仍有正文时补 800 字，重复铺陈多发于中段
+    mid = ""
+    if len(content) > 6500:
+        c = len(content) // 2
+        mid = content[c - 400: c + 400]
     beat_block = build_dabai_chapter_elements_block(plan)
 
     parts = [f"《{chapter.title}》质检。"]
@@ -65,6 +70,8 @@ def build_qc_prompt(
         parts.append(f"【上章结尾（本章开头应承接）】\n{prev_tail.strip()[-600:]}")
     parts.append(f"【章纲五拍要素】\n{beat_block}")
     parts.append(f"【本章正文（开头部分）】\n{head}")
+    if mid:
+        parts.append(f"【本章正文（中段抽样，重点查重复铺陈/口水循环）】\n{mid}")
     if tail:
         parts.append(f"【本章正文（结尾部分）】\n{tail}")
     parts.append(
@@ -92,26 +99,44 @@ def _coerce_score(v: Any, default: int = 80) -> int:
 
 
 def _beat_summary(beats: dict) -> tuple[int, list[str]]:
-    """五拍状态 → (均分, 未落实拍的标签列表)。"""
+    """五拍状态 → (均分, 未落实拍的标签列表)。
+
+    LLM 漏返回/返回非法值的拍按 partial(60) 计——禁止缺字段默认满分，
+    否则 JSON 越残缺综合分越高。
+    """
     scores: list[int] = []
     missing: list[str] = []
     for key in _BEAT_KEYS:
-        status = str(beats.get(key) or "pass").lower()
-        scores.append(_BEAT_SCORE.get(status, 60))
+        status = str(beats.get(key) or "").lower()
+        if status not in _BEAT_SCORE:
+            scores.append(_BEAT_SCORE["partial"])
+            missing.append(f"{_BEAT_LABELS[key]}（未返回，按 partial 计）")
+            continue
+        scores.append(_BEAT_SCORE[status])
         if status in ("partial", "miss"):
             missing.append(f"{_BEAT_LABELS[key]}（{status}）")
     return (round(sum(scores) / len(scores)) if scores else 100), missing
 
 
 def _merge_report(rule: dict, llm: dict | None, llm_status: str) -> dict:
-    """规则 + LLM 合并：规则 blockers 仍是唯一阻断；LLM 只追加 warning 与建议。"""
+    """规则 + LLM 合并：规则 blockers 仍是唯一阻断；LLM 只追加 warning 与建议。
+
+    裁决权单轨：标记 ``llm_overridable`` 的规则 warning（如 DLB-03 位移证据）
+    已注入 LLM prompt 由其裁决，LLM 正常返回时丢弃，避免规则误报否决 LLM 结论；
+    LLM 降级时保留作兜底。其余规则 warning 计入综合分（每条 -5，封顶 -15，
+    ``score_exempt`` 标记除外）。
+    """
     report = dict(rule)
     report["version"] = QC_VERSION
     report["llm_status"] = llm_status
+    rule_warnings = list(rule.get("warnings") or [])
+    if llm_status == "ok":
+        rule_warnings = [w for w in rule_warnings if not w.get("llm_overridable")]
+    report["warnings"] = rule_warnings
     if not isinstance(llm, dict) or llm_status != "ok":
         return report
 
-    warnings = list(report.get("warnings") or [])
+    warnings = list(rule_warnings)
     continuity = _coerce_score(llm.get("continuity_score"))
     hook = _coerce_score(llm.get("hook_score"))
     beat_score, missing_beats = _beat_summary(llm.get("beats") or {})
@@ -144,11 +169,13 @@ def _merge_report(rule: dict, llm: dict | None, llm_status: str) -> dict:
         "suggestions": [str(s)[:120] for s in (llm.get("suggestions") or [])][:3],
     }
 
-    # 综合分：规则阻断 → 保持规则给的 40；否则 衔接40% + 五拍40% + 钩子20%
+    # 综合分：规则阻断 → 保持规则给的 40；
+    # 否则 衔接40% + 五拍40% + 钩子20%，再扣规则层 warning 计权（每条 -5 封顶 -15）
     if report.get("blockers"):
         return report
     overall = round(continuity * 0.4 + beat_score * 0.4 + hook * 0.2)
-    report["overall_score"] = overall
+    penalty = 5 * len([w for w in rule_warnings if not w.get("score_exempt")])
+    report["overall_score"] = max(0, overall - min(penalty, 15))
     report["status"] = "ok" if not warnings else "warning"
     return report
 

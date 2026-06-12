@@ -45,7 +45,7 @@ from app.models.dabai import (
 )
 from app.models.dabai_lab import (
     DabaiPreWarnRecord, DabaiQualityReport, DabaiMemory, DabaiClue,
-    DabaiAsset, DabaiRelation, DabaiPanelSnapshot,
+    DabaiAsset, DabaiRelation, DabaiPanelSnapshot, DabaiScenePlan,
 )
 
 __all__ = [
@@ -102,4 +102,5 @@ __all__ = [
     "DabaiAsset",
     "DabaiRelation",
     "DabaiPanelSnapshot",
+    "DabaiScenePlan",
 ]

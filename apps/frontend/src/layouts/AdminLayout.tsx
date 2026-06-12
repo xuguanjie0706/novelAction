@@ -15,6 +15,7 @@ import {
   SafetyCertificateOutlined,
   UserOutlined,
   WalletOutlined,
+  AuditOutlined,
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useMemo } from 'react'
@@ -47,6 +48,7 @@ export default function AdminLayout() {
     if (loc.pathname.startsWith('/rag-metrics')) return ['/rag-metrics']
     if (loc.pathname.startsWith('/rag-logs')) return ['/rag-logs']
     if (loc.pathname.startsWith('/memory-conflict-logs')) return ['/memory-conflict-logs']
+    if (loc.pathname.startsWith('/dabai-quality-logs')) return ['/dabai-quality-logs']
     if (loc.pathname.startsWith('/cover-image-calls')) return ['/cover-image-calls']
     if (loc.pathname.startsWith('/image-providers')) return ['/image-providers']
     if (loc.pathname.startsWith('/llm')) return ['/llm']
@@ -134,6 +136,12 @@ export default function AdminLayout() {
               icon: <SafetyCertificateOutlined />,
               label: '记忆冲突检测',
               onClick: () => navigate('/memory-conflict-logs'),
+            },
+            {
+              key: '/dabai-quality-logs',
+              icon: <AuditOutlined />,
+              label: '大白文质检历史',
+              onClick: () => navigate('/dabai-quality-logs'),
             },
             {
               key: '/reading-review',

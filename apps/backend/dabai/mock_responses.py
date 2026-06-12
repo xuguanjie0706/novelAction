@@ -249,7 +249,7 @@ def _hook_for(ch: int, n: int) -> str:
 _STORY_ASSETS = {
     "plot_assets": [
         {"kind": "skill", "name": "噬灵诀", "plot_role": "成长线",
-         "owner": PROTAGONIST, "debut": "start", "planned_volume": 1,
+         "owner": PROTAGONIST, "debut": "later", "planned_volume": 1,
          "description": "随吞噬次数进化的功法，每卷解锁新形态，宗门长老暗中觊觎"},
         {"kind": "item", "name": "母亲的玉佩", "plot_role": "身世信物",
          "owner": PROTAGONIST, "debut": "start", "planned_volume": 1,

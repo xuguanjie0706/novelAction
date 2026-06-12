@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 from app.models.dabai_lab import DabaiAsset, DabaiMemory, DabaiPanelSnapshot, DabaiRelation
+from app.services.dabai.lab_ledger_seed import seed_ledgers
 
 logger = logging.getLogger(__name__)
 
@@ -148,54 +149,6 @@ def protagonist_name(project: DabaiProject) -> str:
         if "主角" in (c.role or ""):
             return c.name
     return project.characters[0].name if project.characters else "主角"
-
-
-# ── 种子 ─────────────────────────────────────────────────────────────────────
-def seed_ledgers(db: Session, project: DabaiProject) -> None:
-    """开局台账派生（幂等：已有 seed 行则跳过）。失败静默，不阻塞调用方。"""
-    try:
-        has_seed = (
-            db.query(DabaiAsset.id)
-            .filter(DabaiAsset.project_id == project.id, DabaiAsset.source == "seed")
-            .first()
-            or db.query(DabaiRelation.id)
-            .filter(DabaiRelation.project_id == project.id, DabaiRelation.source == "seed")
-            .first()
-        )
-        if has_seed:
-            return
-        protag = protagonist_name(project)
-
-        gf = project.golden_finger or {}
-        if gf.get("name"):
-            gf_name = str(gf["name"])[:120]
-            gf_desc = str(gf.get("core_ability") or "")[:300]
-            db.add(DabaiAsset(
-                project_id=project.id, kind="golden_finger",
-                name=gf_name, owner=protag,
-                description=gf_desc,
-                grade=_guess_grade(gf_name, gf_desc),
-                cooldown_chapters=0,   # 金手指默认无冷却
-                status="active", source="seed",
-            ))
-
-        for c in project.characters:
-            if c.name == protag:
-                continue
-            attitude = next(
-                (v for k, v in _ROLE_ATTITUDE.items() if k in (c.role or "")), "中立",
-            )
-            db.add(DabaiRelation(
-                project_id=project.id, from_name=protag, to_name=c.name,
-                attitude=attitude, note=(c.function or "")[:200],
-                last_change_chapter=0,
-                history=[{"chapter": 0, "attitude": attitude, "reason": "开局设定"}],
-                source="seed",
-            ))
-        db.commit()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("dabai-lab 台账种子失败 project=%s: %s", project.id, exc)
-        db.rollback()
 
 
 # ── 注入块 ───────────────────────────────────────────────────────────────────
@@ -518,6 +471,9 @@ def build_panel_snapshot(
         else:  # golden_finger
             golden_fingers.append(entry)
 
+    # 章末位置：复盘提取的下一章开笔位置基准（空间防漂移；可为空）
+    location = str((realm_info or {}).get("location") or "").strip()[:50]
+
     snap = DabaiPanelSnapshot(
         project_id=project.id,
         chapter_id=ch.id,
@@ -527,6 +483,7 @@ def build_panel_snapshot(
             "sub_level": sub_level,
             "max_sub": max_sub,
             "combat_power": combat_power,
+            "location": location,
             "skills": skills,
             "items": items,
             "golden_fingers": golden_fingers,

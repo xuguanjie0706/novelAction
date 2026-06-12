@@ -35,7 +35,7 @@ export default function DabaiCreateDialog({
 }: Props) {
   const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
   const [logline, setLogline] = useState(
-    '被挖灵根逐出宗门的弃子，绑定「词条掠夺」——谁当众踩他，谁身上就掉一条神级词条归他',
+    '阴尸宗收尸弟子李夜，乱葬岗得残破万魂幡，血祭认主后幡内亡魂代修反哺——魔门弱肉强食，不要系统面板无叮提示',
   )
   const [volumeChapters, setVolumeChapters] = useState(30)
 
@@ -68,7 +68,7 @@ export default function DabaiCreateDialog({
           onChange={e => setLogline(e.target.value)}
           rows={3}
           className="mt-4 w-full resize-none rounded-xl border border-gray-200 px-3 py-2 text-sm"
-          placeholder="一句话创意：憋屈起点 + 独特金手指 + 打脸爽点（避免「废柴+吞噬+天才」老三板斧）"
+          placeholder="一句话创意：憋屈起点 + 金手指载体 + 爽点方向（法器流请加「不要系统/无叮」；系统流可写「觉醒XX系统」）"
         />
         <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-gray-600">
           <div className="flex items-center gap-2">

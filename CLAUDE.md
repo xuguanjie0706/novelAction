@@ -436,9 +436,41 @@ lab 侧（dabai_* 表）补齐写作期四件套，与精品文链路隔离、�
   `spawn_post_write_pipeline`——独立 SessionLocal 的 asyncio task，经 Queue 向 SSE 转发进度；
   客户端关页只丢展示，落库照常完成。`_POST_WRITE_TASKS` 强引用集合防 GC。
   `debrief_done` 事件增 `asset_changes`/`relation_changes`。
-- **已识别未做**（P1/P2 备忘）：境界 realm_rank 规则化注入导演单 + 倒退阻断规则；
-  质检 suggestions 回灌重写 prompt；质检+复盘合并单次调用省成本；DLB-02 见证者
-  全名匹配误报软化；同章重跑复盘清理本章旧 debrief 线索；重写复用本章最新导演单。
+- **已识别未做**（P1/P2 备忘）：质检+复盘合并单次调用省成本；同章重跑复盘清理本章旧
+  debrief 线索；重写复用本章最新导演单。（境界倒退阻断 / suggestions 回灌 /
+  DLB-02 误报软化已于「正文质检闭环批」完成，见下节 2026-06-12 三批）
+
+### 实验书架正文质检闭环 + 误报治理（2026-06-12 三批）
+
+> 修两类结构性问题：①质检报告「只写不读」（suggestions 无消费方、无书级聚合）；
+> ②规则层与 LLM 层裁决双轨打架（DLB-03 事后压分 vs prompt 教 LLM 别扣分）。
+
+- **裁决权单轨**：DLB-03 规则降级为「证据收集」——证据注入 LLM 质检 prompt
+  （`_build_lab_qc_prompt` 增 `bridge_evidence`），LLM 按正文裁决；规则 warning 标
+  `llm_overridable`，LLM 正常返回时在 `_merge_report` 丢弃（降级时保留兜底）；
+  `_cap_continuity_for_location_gap` 事后压分已删除。
+- **规则分计权**：`_merge_report` 综合分在 40/40/20 加权后扣规则层 warning（每条 -5
+  封顶 -15；`score_exempt` 标记除外，DBC-03 自述可忽略不扣）。此前规则 warning 对
+  综合分零影响。
+- **五拍缺字段不再默认满分**：`_beat_summary` LLM 漏返回的拍按 partial(60) 计并标注。
+- **DLB-02 去硬编码**：`lab_quality._WITNESS_ALIASES`（含样书专名）删除，改为规则派生
+  （全称/去括号/「的」分段/前缀 + `_WITNESS_GROUP_SETS` 同义词组）；
+  `first_chapter_opening.witness_stems` 同步清除人名 dict。
+- **境界倒退**：主线 DBC-01 与新增 lab **DLB-04（阻断）** 共用
+  `consistency_check.realm_regression_hit`——回忆/对比/突破自述语境豁免
+  （`_RETRO_BEFORE/_RETRO_AFTER` 窗口）；DLB-04 双重收窄：仅查主角名 ±24 字窗口
+  （他人低境界是正常剧情），DBC-02 误报前车之鉴。
+- **质检读端**（新 `services/dabai/lab_qc_feedback.py`）：
+  ① 章级 `build_chapter_qc_feedback_block`——重写时注入上一版报告 blockers/suggestions/
+  未落实拍（`build_prose_prompt` 增 `qc_feedback_block`，仅 replace_existing 注入）；
+  ② 书级 `build_project_qc_issue_block`——各章**最新**报告聚合高频 rule_id（≥2 次才注入），
+  经 `volume_expand` ctx[`qc_feedback`] 回灌章纲展开 prompt（对齐精品线支柱一）。
+- **质量欠债（派生视图，无新表）**：`lab_quality_query.list_dabai_quality_debts`
+  （各章最新报告 <70 分或 blocked）+ GET `/dabai/projects/{id}/quality-debts?threshold=`。
+- **其他**：QC prompt 长章（>6500 字）补中段 800 字抽样（重复铺陈多发于中段，主线/lab 同步）；
+  `_build_continuity_snapshot` 增 `ctx` 参数复用调用方 LabDraftContext 不重复查库。
+- 注意：沙箱无 3.12 venv，仅过纯函数冒烟；合入前跑
+  `pytest tests/test_dabai_lab_continuity.py tests/test_lab_ledger_p0.py tests/test_dabai_first_chapter_opening.py`。
 
 ### 实验书架 Bootstrap 新步骤：剧情资产+初始关系（story_assets，2026-06-11 五批）
 
@@ -470,6 +502,33 @@ lab 侧（dabai_* 表）补齐写作期四件套，与精品文链路隔离、�
 - **单一 linter 服务**：`services/dabai/lab_outline_lint.py`（`run_dabai_project_linter`）从 `dabai_volumes` + `dabai_chapter_outlines` 读库全书章纲，跑 `dabai/linter.py`，补检按卷 `REALM-03`，写回 `DabaiProject.linter_report`（含 `linted_at` / `chapter_count`）。
 - **触发点**：bootstrap 收尾（流式/非流式）、`volume_expand` 展开完成（SSE `linter_done`）、手动 `POST /dabai/projects/{id}/relint-outline`。
 - **前端**：顶栏 Tab 改名「卷纲质检」；写作侧栏「正文质检」消歧；`LinterPanel` 空报告显示「尚未检测」+ 重新检测按钮（不再伪装 100 分通过）；卷展开 done 后 toast 带分数。
+
+### 实验书架非系统文（法器流 / 魔道，2026-06-12）
+
+> logline 含「不要系统」「魔门」「魂幡」等时，Bootstrap 自动走法器金手指口径。
+
+- **检测**：`dabai/non_system.py`（`prefers_non_system`）读 logline + positioning.taboo_lines。
+- **prompt 分支**：`golden_finger` 步输出 `manifestation_style`/`blood_price` 替代 `signature_lines`；章纲/正文禁止叮、面板、任务栏。
+- **样章章纲**：`dabai/examples/ch01_momen_wan_hun_fan.json`（《魔门无情》第1章五拍，可对照写作页字段）。
+
+### 实验书架分场层 + 章纲反同质化（2026-06-12 二批）
+
+> 修「第一章质量差」的两个结构性根因：①章纲五拍一句话直接糊 2000 字正文（缺场面调度层）；
+> ②30 章一批生成无场景/标题轮换约束 → 全书「演武场被辱→觉醒→打脸」一个模子。
+
+- **分场层**（章纲→分场→正文，对齐精品文 Scene 三层调度但轻量化）：
+  新表 `dabai_scene_plans`（migration `c6d7e8f9a0b3`，每章最新一条，先删后插幂等）；
+  `services/dabai/lab_scene_plan.py`：写前导演单之后、正文之前一次 LLM 调用（task=`dabai.sceneplan` 0.55），
+  五拍拆 2-4 场，每场锁定 地点/在场/动作链/**台词弹药 2-3 句原话**/感官锚点/场末转折/word_budget，
+  另出 `opening_line`（黄金第一章前 3 行进冲突，禁环境/回忆开篇）。复用写章同一份 LabDraftContext 不重复查库；
+  失败降级为五拍直写不阻塞。`build_prose_prompt` 增 `scene_block` 参数，有分场时 task 切「按场施工」模式
+  （台词弹药须用上、感官锚点落正文、场间用场末转折过渡）。SSE 增 `scene_plan_running/done`；
+  GET `chapters/{cid}/scene-plan` 可回看。重写时分场升温 0.7 换戏。
+- **章纲反同质化**：`dabai_chapter_outlines` 新增 `location` 列（场景载体，同 migration）；
+  `dabai/prompts.chapter_outlines` 加【反同质化】硬约束（场景载体轮换池/标题 5 策略轮换禁相邻同开头/
+  打脸对象与憋屈手法轮换）；`dabai/linter.py` 增 `_lint_sameness`：DB-11（location 缺失/相邻雷同，
+  存量书全空时跳过防误报）+ DB-12（相邻标题前 2 字相同=句式坍缩）。location 贯穿
+  schemas→persist→`_detail`→前端 `DabaiBeatDisplay.locationName`（节拍卡已有槽位，直接接上）。
 
 ### 大白文（dabaiwen）写章上下文链路（2026-06-10 重修）
 

@@ -75,7 +75,10 @@ async def lab_quality_check(
         raise HTTPException(status_code=400, detail="本章尚无正文，无法质检")
     with_llm = req.mode == "full"
     svc = _build_ai(req, db, user) if with_llm else None
-    return await run_lab_quality(svc, db, project, ch, with_llm=with_llm)
+    source = "manual" if req.mode == "full" else "rules"
+    return await run_lab_quality(
+        svc, db, project, ch, with_llm=with_llm, source=source,
+    )
 
 
 @router.get("/projects/{project_id}/chapters/{chapter_id}/quality-report")
@@ -94,8 +97,51 @@ def lab_quality_report(
         .order_by(DabaiQualityReport.created_at.desc())
         .first()
     )
-    return {"report": row.report if row else None,
-            "created_at": row.created_at.isoformat() if row and row.created_at else None}
+    return {
+        "report": row.report if row else None,
+        "report_id": str(row.id) if row else None,
+        "created_at": row.created_at.isoformat() if row and row.created_at else None,
+    }
+
+
+@router.get("/projects/{project_id}/chapters/{chapter_id}/quality-reports")
+def lab_quality_report_history(
+    project_id: UUID,
+    chapter_id: UUID,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """本章质检历史（最新在前，含快照字段）。"""
+    from app.services.dabai.lab_quality_query import list_dabai_quality_reports
+
+    project = _owned_or_404(db, project_id, user)
+    _chapter_or_404(db, project, chapter_id)
+    items = list_dabai_quality_reports(
+        db,
+        project_id=project.id,
+        chapter_id=chapter_id,
+        limit=min(max(limit, 1), 100),
+        include_report=False,
+    )
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/projects/{project_id}/quality-debts")
+def lab_quality_debts(
+    project_id: UUID,
+    threshold: int = 70,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """质量欠债清单：各章最新报告低于阈值或被阻断的章节（派生视图，无新表）。"""
+    from app.services.dabai.lab_quality_query import list_dabai_quality_debts
+
+    project = _owned_or_404(db, project_id, user)
+    items = list_dabai_quality_debts(
+        db, project.id, threshold=min(max(threshold, 0), 100),
+    )
+    return {"items": items, "total": len(items), "threshold": threshold}
 
 
 # ── 复盘（记忆 + 线索）──────────────────────────────────────────────────────
@@ -317,7 +363,43 @@ def lab_relation_patch(
     return {"ok": True, "id": str(row.id), "attitude": row.attitude}
 
 
-# ── 预警（写前导演单）查询 ───────────────────────────────────────────────────
+# ── 预警（写前导演单）────────────────────────────────────────────────────────
+@router.post("/projects/{project_id}/chapters/{chapter_id}/pre-warn")
+async def lab_pre_warn_run(
+    project_id: UUID,
+    chapter_id: UUID,
+    req: LabAiRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """手动生成/重跑写前导演单（落库并返回）。"""
+    from app.services.dabai.lab_draft_context import build_lab_draft_context
+    from app.services.dabai.lab_ledger import build_ledger_block
+    from app.services.dabai.lab_pre_warn import PREWARN_VERSION, resolve_lab_pre_warn
+
+    project = _owned_or_404(db, project_id, user)
+    ch = _chapter_or_404(db, project, chapter_id)
+    draft_ctx = build_lab_draft_context(db, project, ch)
+    seed_ledgers(db, project)
+    ledger_block = build_ledger_block(db, project, ch)
+    replace_existing = bool((ch.content or "").strip())
+    svc = _build_ai(req, db, user)
+    brief, evt, result = await resolve_lab_pre_warn(
+        svc, project, ch, draft_ctx, db=db, ledger_block=ledger_block,
+        replace_existing=replace_existing,
+    )
+    return {
+        "record": ({
+            "version": PREWARN_VERSION,
+            "result": result or {},
+            "brief": brief,
+        } if result else None),
+        "ok": evt.get("ok", False),
+        "brief_injected": evt.get("brief_injected", False),
+        "error": evt.get("error"),
+    }
+
+
 @router.get("/projects/{project_id}/chapters/{chapter_id}/pre-warn")
 def lab_pre_warn_latest(
     project_id: UUID,
@@ -337,6 +419,87 @@ def lab_pre_warn_latest(
     return {"record": ({
         "version": row.version, "result": row.result or {},
         "brief": row.brief or "",
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    } if row else None)}
+
+
+# ── 分场调度单 ───────────────────────────────────────────────────────────────
+@router.post("/projects/{project_id}/chapters/{chapter_id}/scene-plan")
+async def lab_scene_plan_run(
+    project_id: UUID,
+    chapter_id: UUID,
+    req: LabAiRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """手动生成/重跑分场调度单（落库并返回；依赖本章已有导演单）。"""
+    from app.services.dabai.lab_draft_context import build_lab_draft_context
+    from app.services.dabai.lab_ledger import build_ledger_block
+    from app.services.dabai.lab_pre_warn import load_lab_pre_warn
+    from app.services.dabai.lab_scene_plan import resolve_lab_scene_plan
+
+    project = _owned_or_404(db, project_id, user)
+    ch = _chapter_or_404(db, project, chapter_id)
+    pre_warn_block, pre_warn_result = load_lab_pre_warn(db, ch.id)
+    if not pre_warn_result:
+        raise HTTPException(status_code=400, detail="请先在「预警」Tab 生成导演单")
+    draft_ctx = build_lab_draft_context(db, project, ch)
+    seed_ledgers(db, project)
+    ledger_block = build_ledger_block(db, project, ch)
+    replace_existing = bool((ch.content or "").strip())
+    svc = _build_ai(req, db, user)
+    brief, evt = await resolve_lab_scene_plan(
+        svc, project, ch, draft_ctx, db=db,
+        pre_warn_block=pre_warn_block, ledger_block=ledger_block,
+        pre_warn_result=pre_warn_result,
+        replace_existing=replace_existing,
+    )
+    record = None
+    if evt.get("scene_count", 0) > 0:
+        from app.models.dabai_lab import DabaiScenePlan
+        row = (
+            db.query(DabaiScenePlan)
+            .filter(DabaiScenePlan.chapter_id == ch.id)
+            .order_by(DabaiScenePlan.created_at.desc())
+            .first()
+        )
+        if row:
+            record = {
+                "version": row.version,
+                "scenes": row.scenes or [],
+                "opening_line": row.opening_line or "",
+                "brief": row.brief or brief,
+            }
+    return {
+        "record": record,
+        "ok": evt.get("ok", False),
+        "scene_count": evt.get("scene_count", 0),
+        "scene_names": evt.get("scene_names") or [],
+        "error": evt.get("error"),
+    }
+
+
+@router.get("/projects/{project_id}/chapters/{chapter_id}/scene-plan")
+def lab_scene_plan_latest(
+    project_id: UUID,
+    chapter_id: UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """本章最新一条落库分场调度单；无则 {"record": null}。"""
+    from app.models.dabai_lab import DabaiScenePlan
+
+    project = _owned_or_404(db, project_id, user)
+    row = (
+        db.query(DabaiScenePlan)
+        .filter(DabaiScenePlan.project_id == project.id,
+                DabaiScenePlan.chapter_id == chapter_id)
+        .order_by(DabaiScenePlan.created_at.desc())
+        .first()
+    )
+    return {"record": ({
+        "version": row.version, "scenes": row.scenes or [],
+        "opening_line": row.opening_line or "", "brief": row.brief or "",
         "created_at": row.created_at.isoformat() if row.created_at else None,
     } if row else None)}
 

@@ -1,11 +1,14 @@
 /**
  * 预警卡片 — 写前导演单展示。
- * 数据来源：写章 SSE 实时事件（live）+ 落库记录（GET pre-warn，切章/生成完成后拉取）。
+ * 数据来源：侧栏手动生成/重跑 + 写章 SSE（首次生成）+ 落库记录 GET。
  */
 import { useEffect, useState } from 'react'
+import clsx from 'clsx'
+import toast from 'react-hot-toast'
 import { AlertTriangle, Loader2, ShieldAlert } from 'lucide-react'
 import { dabaiLabApi } from '../../../../api/dabaiLab'
 import type { DabaiPreWarnRecord } from '../../../../types/dabaiLab'
+import { llmProviderIdFromRoute, modelProfileFromRoute, useAppStore } from '../../../../store'
 import { BEAT_KEYS, BEAT_LABELS } from './labels'
 
 export interface PreWarnLive {
@@ -31,8 +34,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 export default function PreWarnCard({ projectId, chapterId, live, refreshKey }: Props) {
+  const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
   const [record, setRecord] = useState<DabaiPreWarnRecord | null>(null)
   const [loading, setLoading] = useState(false)
+  const [running, setRunning] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -44,24 +49,60 @@ export default function PreWarnCard({ projectId, chapterId, live, refreshKey }: 
     return () => { cancelled = true }
   }, [projectId, chapterId, refreshKey])
 
-  if (live?.running) {
+  const run = async () => {
+    const hadRecord = !!record
+    setRunning(true)
+    try {
+      const res = await dabaiLabApi.runPreWarn(projectId, chapterId, {
+        model_profile: modelProfileFromRoute(aiBackendRoute),
+        ...(llmProviderIdFromRoute(aiBackendRoute)
+          ? { llm_provider_id: llmProviderIdFromRoute(aiBackendRoute) }
+          : {}),
+      })
+      setRecord(res.data.record)
+      if (res.data.error) toast(res.data.error, { icon: '⚠️' })
+      else toast.success(hadRecord ? '导演单已重新生成' : '导演单已生成')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '导演单生成失败')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const showRunning = live?.running || running
+
+  if (showRunning) {
     return (
-      <p className="flex items-center gap-2 text-xs text-amber-600">
-        <Loader2 size={14} className="animate-spin" /> 写前导演单生成中…
-      </p>
+      <button
+        type="button"
+        disabled
+        className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-amber-300 px-3 py-1.5 text-xs font-semibold text-white"
+      >
+        <Loader2 size={13} className="animate-spin" /> 导演单生成中…
+      </button>
     )
   }
 
   const r = record?.result
   if (!r) {
     return (
-      <div className="space-y-2 text-xs text-gray-400">
+      <div className="space-y-2 text-xs">
+        <button
+          type="button"
+          onClick={() => void run()}
+          className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 font-semibold text-white hover:bg-amber-600"
+        >
+          <AlertTriangle size={13} />
+          生成导演单
+        </button>
         {live?.error ? (
           <p className="flex items-start gap-1.5 text-amber-600">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" /> {live.error}
           </p>
         ) : null}
-        <p>{loading ? '加载中…' : '暂无导演单——生成正文时自动产出（裁决章纲 vs 已写事实冲突）'}</p>
+        <p className="text-gray-400">
+          {loading ? '加载中…' : '裁决章纲 vs 已写事实；首次写章会自动生成，也可在此手动生成'}
+        </p>
       </div>
     )
   }
@@ -72,6 +113,18 @@ export default function PreWarnCard({ projectId, chapterId, live, refreshKey }: 
 
   return (
     <div className="space-y-3 text-xs">
+      <button
+        type="button"
+        onClick={() => void run()}
+        className={clsx(
+          'inline-flex w-full items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 font-semibold text-white',
+          'bg-amber-500 hover:bg-amber-600',
+        )}
+      >
+        <AlertTriangle size={13} />
+        重新生成导演单
+      </button>
+
       <Section title="开笔事实锁定">
         <div className="flex flex-wrap gap-1">
           {fact.realm ? <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">境界·{fact.realm}</span> : null}

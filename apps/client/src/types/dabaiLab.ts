@@ -31,6 +31,29 @@ export interface DabaiPreWarnRecord {
   created_at: string | null
 }
 
+/** 分场调度单场结构（落库 scenes[] 元素）。 */
+export interface DabaiScenePlanItem {
+  order?: number
+  name?: string
+  location?: string
+  characters_on_stage?: string[]
+  goal?: string
+  event?: string
+  dialogue_ammo?: string[]
+  sensory_anchor?: string
+  end_turn?: string
+  word_budget?: number
+}
+
+/** 落库的分场调度记录（GET scene-plan）。 */
+export interface DabaiScenePlanRecord {
+  version: string
+  scenes: DabaiScenePlanItem[]
+  opening_line: string
+  brief: string
+  created_at: string | null
+}
+
 /** SSE pre_warn_done 事件载荷（写章流内实时推送）。 */
 export interface DabaiPreWarnDoneEvent {
   event: 'pre_warn_done'

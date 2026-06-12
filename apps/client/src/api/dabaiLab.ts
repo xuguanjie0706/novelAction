@@ -12,6 +12,7 @@ import type {
   DabaiLabQualityReport,
   DabaiLabRelation,
   DabaiPreWarnRecord,
+  DabaiScenePlanRecord,
 } from '../types/dabaiLab'
 
 /** LLM 端点最长 3 分钟。 */
@@ -75,10 +76,44 @@ export const dabaiLabApi = {
     )
   },
 
+  /** 手动生成/重跑写前导演单（落库并返回）。 */
+  runPreWarn(projectId: string, chapterId: string, payload: DabaiLabAiRequest) {
+    return api.post<{
+      record: DabaiPreWarnRecord | null
+      ok: boolean
+      brief_injected?: boolean
+      error?: string
+    }>(
+      `/dabai/projects/${projectId}/chapters/${chapterId}/pre-warn`,
+      payload, { timeout: LAB_AI_TIMEOUT_MS },
+    )
+  },
+
   /** 本章最新落库导演单。 */
   getPreWarn(projectId: string, chapterId: string) {
     return api.get<{ record: DabaiPreWarnRecord | null }>(
       `/dabai/projects/${projectId}/chapters/${chapterId}/pre-warn`,
+    )
+  },
+
+  /** 手动生成/重跑分场调度单（落库并返回；须先有导演单）。 */
+  runScenePlan(projectId: string, chapterId: string, payload: DabaiLabAiRequest) {
+    return api.post<{
+      record: DabaiScenePlanRecord | null
+      ok: boolean
+      scene_count?: number
+      scene_names?: string[]
+      error?: string
+    }>(
+      `/dabai/projects/${projectId}/chapters/${chapterId}/scene-plan`,
+      payload, { timeout: LAB_AI_TIMEOUT_MS },
+    )
+  },
+
+  /** 本章最新落库分场调度单。 */
+  getScenePlan(projectId: string, chapterId: string) {
+    return api.get<{ record: DabaiScenePlanRecord | null }>(
+      `/dabai/projects/${projectId}/chapters/${chapterId}/scene-plan`,
     )
   },
 

@@ -95,6 +95,13 @@ TASK_PROFILES: dict[str, dict] = {
         "frequency_penalty": 0.2,
         "presence_penalty": 0.12,
     },
+    "dabai.sceneplan": {
+        # dabai 分场调度：结构要稳（JSON 五字段齐），台词弹药需要一点锋芒
+        "temperature": 0.55,
+        "top_p": 0.9,
+        "frequency_penalty": 0.1,
+        "presence_penalty": 0.1,
+    },
     "dabai.prewarn": {
         # dabai 写前导演单：事实裁决 + 写法指令，要稳定 JSON、不许发挥
         "temperature": 0.25,

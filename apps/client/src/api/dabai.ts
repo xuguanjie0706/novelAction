@@ -5,6 +5,7 @@
  */
 import { api } from './base'
 import type {
+  DabaiExportPreview,
   DabaiGenerateRequest,
   DabaiProjectDetail,
   DabaiProjectSummary,
@@ -97,6 +98,12 @@ export function dabaiExpandVolumeStream(
 export interface DabaiDraftRequest {
   model_profile?: 'local' | 'gemini'
   llm_provider_id?: string
+  /** 作者写作指令，可为空；注入正文 prompt 最高优先级块。 */
+  user_instruction?: string
+  rerun_pre_warn?: boolean
+  rerun_scene_plan?: boolean
+  rerun_quality?: boolean
+  rerun_debrief?: boolean
 }
 
 /** SSE 流式事件：写前导演单（预警）→ 正文逐段 → 写后自动质检/复盘。 */
@@ -106,6 +113,11 @@ export type DabaiDraftEvent =
   | { event: 'error'; message: string }
   | { event: 'pre_warn_running'; dabai_mode: boolean }
   | import('../types/dabaiLab').DabaiPreWarnDoneEvent
+  | { event: 'scene_plan_running'; dabai_mode: boolean }
+  | {
+      event: 'scene_plan_done'; ok: boolean; scene_count: number
+      scene_names?: string[]; error?: string
+    }
   | { event: 'quality_running'; dabai_mode: boolean }
   | {
       event: 'quality_done'; ok: boolean; status?: string
@@ -160,5 +172,43 @@ export const dabaiApi = {
     return api.post<{ linter_report: DabaiProjectDetail['linter_report'] }>(
       `/dabai/projects/${id}/relint-outline`,
     )
+  },
+
+  /** 手动保存章节正文（微调落库，不触发写后流水线）。 */
+  patchChapterContent(projectId: string, chapterId: string, content: string) {
+    return api.patch<{ id: string; word_count: number; status: string }>(
+      `/dabai/projects/${projectId}/chapters/${chapterId}`,
+      { content },
+    )
+  },
+
+  /** 导出合规预检。 */
+  exportPreview(projectId: string, platform = 'general') {
+    return api.get<DabaiExportPreview>(`/dabai/projects/${projectId}/export/preview`, {
+      params: { platform },
+    })
+  },
+
+  /** 下载导出文件（txt / outline / package）。 */
+  async downloadExport(projectId: string, type: 'txt' | 'outline' | 'package') {
+    const token = (() => { try { return localStorage.getItem(AUTH_TOKEN_KEY) } catch { return null } })()
+    const res = await fetch(`/api/v1/dabai/projects/${projectId}/export/${type}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error((err as { detail?: string }).detail || '下载失败')
+    }
+    const blob = await res.blob()
+    const disp = res.headers.get('Content-Disposition') || ''
+    let filename = type === 'txt' ? 'novel.txt' : type === 'outline' ? 'novel_章纲.txt' : 'novel_投稿包.zip'
+    const m = disp.match(/filename\*=UTF-8''([^;]+)/) ?? disp.match(/filename="([^"]+)"/)
+    if (m) filename = decodeURIComponent(m[1])
+    const objUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = objUrl
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(objUrl)
   },
 }

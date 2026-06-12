@@ -41,6 +41,7 @@ def make_chapter_outline_row(
         project_id=project_id, volume_id=volume_id,
         chapter_number=int(ch.get("chapter_number", fallback_number)),
         title=ch.get("title"), shuang_type=ch.get("shuang_type"),
+        location=ch.get("location"),
         yaqu_setup=ch.get("yaqu_setup"), emotion_turn=ch.get("emotion_turn"),
         yinbao=ch.get("yinbao"),
         shuang_payoff=ch.get("shuang_payoff"), witnesses=ch.get("witnesses") or [],
@@ -136,6 +137,8 @@ class DabaiPersister:
           ——未获得的东西不得进「当前台账」注入，否则模型会提前用（能力漂移）
         - initial_relations → DabaiRelation(source=seed, history 锚定第0章)
         """
+        from app.services.dabai.story_asset_debut import resolve_plot_asset_debut
+
         p = self.project
         protag = self._protagonist_name()
         for a in (data.get("plot_assets") or [])[:8]:
@@ -145,7 +148,7 @@ class DabaiPersister:
             kind = kind if kind in ("skill", "item") else "item"
             name = str(a["name"]).strip()[:120]
             desc = f"[{a.get('plot_role', '')}] {str(a.get('description') or '')[:200]}"
-            if str(a.get("debut") or "start").lower() == "later":
+            if resolve_plot_asset_debut(a, protag) == "later":
                 self.db.add(DabaiClue(
                     project_id=p.id, title=name, clue_type="foreshadow",
                     description=f"{desc}（规划第{a.get('planned_volume', '?')}卷登场）",

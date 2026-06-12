@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from dabai.config import DabaiConfig
+from dabai.first_chapter_opening import lint_banned_ch1_tropes
 from dabai.golden_finger_bind import is_awakening_chapter, lint_bind_ladder
 
 # 套话黑名单（end_hook 命中即判废话）
@@ -207,7 +208,55 @@ def lint_chapters(
                   "整卷没有任何大爆点（is_big_beat）——节奏平淡",
                   f"每 {cfg.big_beat_every} 章安排一个大爆点"))
 
+    _lint_sameness(chapters, add)
+    for ch in chapters:
+        if int(ch.get("chapter_number") or 0) != 1:
+            continue
+        banned = lint_banned_ch1_tropes(ch)
+        if banned:
+            msg, sug = banned
+            add(Issue("DB-13", "medium", 1, msg, sug))
     return report
+
+
+def _lint_sameness(chapters: list[dict], add) -> None:
+    """DB-11/12 反同质化：场景载体与标题句式坍缩检查（章纲一个模子是正文 AI 味根因）。
+
+    存量书章纲无 location 字段：全批皆空时跳过 DB-11，避免 relint 误报刷屏。
+    """
+    has_loc = any((ch.get("location") or "").strip() for ch in chapters)
+    for i, ch in enumerate(chapters):
+        num = ch.get("chapter_number")
+        loc = (ch.get("location") or "").strip()
+        # DB-11：场景载体缺失 / 相邻雷同
+        if not has_loc:
+            pass
+        elif not loc:
+            add(Issue("DB-11", "medium", num,
+                      "location 为空——本章没有场景载体，正文会默认写回演武场/大殿",
+                      "补具体场景载体（地点+事件，如 万宝拍卖行·斗宝）"))
+        elif i > 0:
+            prev_loc = (chapters[i - 1].get("location") or "").strip()
+            if prev_loc and (loc == prev_loc or loc[:4] == prev_loc[:4]):
+                add(Issue("DB-11", "medium", num,
+                          f"相邻两章场景载体雷同：『{prev_loc}』→『{loc}』",
+                          "换场景载体（宴席/拍卖/秘境/刑堂/夜袭…），一章一集戏"))
+        # DB-12：相邻标题以相同字词开头（句式坍缩信号）
+        if i > 0:
+            t_now = _title_body(ch.get("title") or "")
+            t_prev = _title_body(chapters[i - 1].get("title") or "")
+            if t_now and t_prev and t_now[:2] == t_prev[:2]:
+                add(Issue("DB-12", "medium", num,
+                          f"相邻章标题开头雷同：『{t_prev}』→『{t_now}』——标题句式坍缩",
+                          "轮换标题策略：悬念式/台词式/反差式/动作式/数字式"))
+
+
+def _title_body(title: str) -> str:
+    """剥掉『第X章』前缀，取标题正文用于句式比较。"""
+    t = title.strip()
+    if "章" in t[:6]:
+        t = t.split("章", 1)[1]
+    return t.strip(" ：:·-—")
 
 
 def format_report(report: LinterReport) -> str:

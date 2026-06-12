@@ -1,9 +1,11 @@
+import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { Loader2, PenLine } from 'lucide-react'
 import DabaiLabShellSidebar from './DabaiLabShellSidebar'
 import DabaiLabTopBar from './DabaiLabTopBar'
 import WriteDabailabSidebar from './WriteDabailabSidebar'
 import WriteDabailabWorkspace from './WriteDabailabWorkspace'
+import DabaiExportPanel from './DabaiExportPanel'
 import VolumesPanel from './panels/VolumesPanel'
 import CharactersPanel from './panels/CharactersPanel'
 import WorldPanel from './panels/WorldPanel'
@@ -15,11 +17,13 @@ import { useWriteDabailab } from './useWriteDabailab'
 import { makeRealmLabel } from './realmLabel'
 import { parseWorkspaceTab } from './workspaceTab'
 import { dabaiBeatFromChapter } from '../../../utils/dabaiOutlineDisplay'
+import { dabaiChapterGenerateBlockReason } from './chapterGenerateGate'
 import type { DabaiChapter } from '../../../types/dabai'
 
 export default function WriteDabailabPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
+  const [exportOpen, setExportOpen] = useState(false)
   const tab = parseWorkspaceTab(searchParams.get('tab'))
   const { loadState, detail, groups, activeChapter, activeId, setActiveId, reload, afterSave } =
     useWriteDabailab(projectId)
@@ -50,8 +54,13 @@ export default function WriteDabailabPage() {
 
   const title = detail.title || detail.logline
   const realmName = makeRealmLabel(detail)
+  const chapterOutlines = detail.chapter_outlines ?? []
+  const generateBlockReason = activeChapter
+    ? dabaiChapterGenerateBlockReason(activeChapter, chapterOutlines)
+    : null
 
   return (
+    <>
     <div className="flex h-screen overflow-hidden bg-[#FAF8F4]">
       <DabaiLabShellSidebar />
       <div className="flex min-w-0 flex-1 flex-col">
@@ -66,12 +75,14 @@ export default function WriteDabailabPage() {
                 onSelect={ch => ch.id && setActiveId(ch.id)}
                 projectId={projectId!}
                 onExpanded={() => { activeId ? void afterSave(activeId) : reload() }}
+                onExport={() => setExportOpen(true)}
               />
               {activeChapter ? (
                 <WriteDabailabWorkspace
                   projectId={projectId!}
                   chapter={activeChapter}
                   beat={dabaiBeatFromChapter(activeChapter, realmName)}
+                  generateBlockReason={generateBlockReason}
                   onSaved={() => void afterSave(activeChapter.id!)}
                 />
               ) : (
@@ -108,5 +119,10 @@ export default function WriteDabailabPage() {
         </main>
       </div>
     </div>
+
+    {exportOpen && projectId ? (
+      <DabaiExportPanel projectId={projectId} onClose={() => setExportOpen(false)} />
+    ) : null}
+    </>
   )
 }

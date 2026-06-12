@@ -87,7 +87,7 @@ export default function QualityCard({ projectId, chapterId, hasContent, refreshK
         )}
       >
         {running ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />}
-        {hasContent ? (running ? '质检中…' : '跑质检（衔接/五拍/钩子）') : '本章尚无正文'}
+        {hasContent ? (running ? '质检中…' : '重新跑质检') : '本章尚无正文'}
       </button>
 
       {report ? (

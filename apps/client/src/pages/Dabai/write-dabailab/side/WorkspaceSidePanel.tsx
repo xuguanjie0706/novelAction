@@ -1,20 +1,22 @@
 /**
- * 写作工作区右侧栏 — 预警 / 质检 / 记忆 三个随章面板（可折叠）。
- * 数据均为章级：切章自动刷新；预警另接收写章 SSE 实时状态。
+ * 写作工作区右侧栏 — 预警 / 分场 / 质检 / 记忆 四个随章面板（可折叠）。
+ * 数据均为章级：切章自动刷新；预警与分场另接收写章 SSE 实时状态。
  */
 import { useState } from 'react'
 import clsx from 'clsx'
-import { AlertTriangle, Brain, ChevronsLeft, ChevronsRight, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, Brain, ChevronsLeft, ChevronsRight, Clapperboard, ShieldCheck } from 'lucide-react'
 import PreWarnCard, { type PreWarnLive } from './PreWarnCard'
+import ScenePlanCard, { type ScenePlanLive } from './ScenePlanCard'
 import QualityCard from './QualityCard'
 import MemoryCard from './MemoryCard'
 import type { DabaiChapter } from '../../../../types/dabai'
 
-type SideTab = 'prewarn' | 'quality' | 'memory'
+type SideTab = 'prewarn' | 'sceneplan' | 'quality' | 'memory'
 
 const TABS: { id: SideTab; icon: typeof Brain; label: string }[] = [
   { id: 'prewarn', icon: AlertTriangle, label: '预警' },
-  { id: 'quality', icon: ShieldCheck, label: '正文质检' },
+  { id: 'sceneplan', icon: Clapperboard, label: '分场' },
+  { id: 'quality', icon: ShieldCheck, label: '质检' },
   { id: 'memory', icon: Brain, label: '记忆' },
 ]
 
@@ -23,6 +25,9 @@ interface Props {
   chapter: DabaiChapter
   preWarnLive: PreWarnLive | null
   preWarnRefreshKey: number
+  scenePlanLive: ScenePlanLive | null
+  /** 分场完成后 +1，触发分场面板重拉。 */
+  scenePlanRefreshKey: number
   /** 写后自动质检完成后 +1，触发质检面板重拉。 */
   qualityRefreshKey: number
   /** 写后自动复盘完成后 +1，触发记忆面板重拉。 */
@@ -31,6 +36,7 @@ interface Props {
 
 export default function WorkspaceSidePanel({
   projectId, chapter, preWarnLive, preWarnRefreshKey,
+  scenePlanLive, scenePlanRefreshKey,
   qualityRefreshKey, memoryRefreshKey,
 }: Props) {
   const [open, setOpen] = useState(true)
@@ -96,6 +102,14 @@ export default function WorkspaceSidePanel({
             chapterId={chapter.id}
             live={preWarnLive}
             refreshKey={preWarnRefreshKey}
+          />
+        )}
+        {tab === 'sceneplan' && chapter.id && (
+          <ScenePlanCard
+            projectId={projectId}
+            chapterId={chapter.id}
+            live={scenePlanLive}
+            refreshKey={scenePlanRefreshKey}
           />
         )}
         {tab === 'quality' && chapter.id && (

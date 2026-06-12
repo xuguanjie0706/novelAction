@@ -45,8 +45,40 @@ class DabaiPreWarnRecord(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class DabaiScenePlan(Base):
+    """章节分场调度单：每章保留最新一条（重写时覆盖）。
+
+    五拍章纲 → 2-4 场分场 → 逐场正文，是「章纲一句话直接糊 2000 字」的解药。
+    scenes JSON 结构（v1）：
+    [{"order": 1, "name": "场名", "location": "地点", "characters_on_stage": [...],
+      "goal": "本场承担的节拍", "event": "发生什么（具体动作链）",
+      "dialogue_ammo": ["关键台词原话 2-3 句"], "sensory_anchor": "1个感官细节锚点",
+      "end_turn": "本场结尾的转折/递进", "word_budget": 600}]
+    """
+
+    __tablename__ = "dabai_scene_plans"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("dabai_projects.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    chapter_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("dabai_chapter_outlines.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    chapter_number = Column(Integer)
+    version = Column(String(40))          # dabai-lab-sceneplan-v1
+    scenes = Column(JSON, default=list)   # 分场列表（见类 docstring）
+    opening_line = Column(Text)           # 开篇第一句指令（前3行进冲突）
+    brief = Column(Text)                  # 注入正文 prompt 的分场块（空串=降级未注入）
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class DabaiQualityReport(Base):
-    """章节质检报告：每章保留最新一条（重跑时覆盖）。"""
+    """章节质检报告：每次质检追加一条（保留历史，供后台回归）。"""
 
     __tablename__ = "dabai_quality_reports"
 
@@ -61,12 +93,15 @@ class DabaiQualityReport(Base):
         ForeignKey("dabai_chapter_outlines.id", ondelete="CASCADE"),
         nullable=False, index=True,
     )
-    chapter_number = Column(Integer)
+    chapter_number = Column(Integer, index=True)
     version = Column(String(40))          # dabai-lab-qc-v1
     status = Column(String(20))           # ok / warning / blocked
     overall_score = Column(Integer)       # 衔接40% + 五拍40% + 钩子20%
-    report = Column(JSON, default=dict)   # 完整报告（blockers/warnings/llm/...）
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    source = Column(String(30), default="manual")  # manual / post_write / rules
+    content_word_count = Column(Integer)
+    content_head_preview = Column(Text)   # 质检时刻正文开头（便于后台 diff）
+    report = Column(JSON, default=dict)   # 完整报告（blockers/warnings/llm/continuity_snapshot/...）
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 class DabaiMemory(Base):

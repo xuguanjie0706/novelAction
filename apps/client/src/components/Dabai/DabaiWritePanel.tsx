@@ -8,10 +8,13 @@ import toast from 'react-hot-toast'
 import { Loader2, PenLine, X } from 'lucide-react'
 import { dabaiDraftStream } from '../../api/dabai'
 import type { DabaiChapter } from '../../types/dabai'
+import { dabaiChapterGenerateBlockReason } from '../../pages/Dabai/write-dabailab/chapterGenerateGate'
 
 interface Props {
   projectId: string
   chapter: DabaiChapter
+  /** 全书章纲，用于顺序生成门控。 */
+  chapters: DabaiChapter[]
   modelProfile: 'local' | 'gemini'
   llmProviderId?: string
   onClose: () => void
@@ -19,12 +22,18 @@ interface Props {
 }
 
 export default function DabaiWritePanel({
-  projectId, chapter, modelProfile, llmProviderId, onClose, onSaved,
+  projectId, chapter, chapters, modelProfile, llmProviderId, onClose, onSaved,
 }: Props) {
   const [content, setContent] = useState(chapter.content ?? '')
   const [writing, setWriting] = useState(false)
+  const generateBlockReason = dabaiChapterGenerateBlockReason(chapter, chapters)
+  const generateBlocked = Boolean(generateBlockReason) && !content.trim()
 
   const onWrite = async () => {
+    if (generateBlocked) {
+      toast.error(generateBlockReason!)
+      return
+    }
     setWriting(true)
     setContent('')
     let acc = ''
@@ -71,15 +80,20 @@ export default function DabaiWritePanel({
             </dl>
             <button
               onClick={onWrite}
-              disabled={writing}
+              disabled={writing || generateBlocked}
+              title={generateBlocked ? generateBlockReason ?? undefined : undefined}
               className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-60"
             >
               {writing ? <Loader2 size={15} className="animate-spin" /> : <PenLine size={15} />}
               {writing ? '生成中…' : content ? '重新生成' : '生成正文'}
             </button>
-            <p className="mt-2 text-xs text-gray-400">
-              走所选线路（{modelProfile === 'local' ? '本地' : '远程'}）
-            </p>
+            {generateBlocked ? (
+              <p className="mt-2 text-xs text-amber-600">{generateBlockReason}</p>
+            ) : (
+              <p className="mt-2 text-xs text-gray-400">
+                走所选线路（{modelProfile === 'local' ? '本地' : '远程'}）
+              </p>
+            )}
           </div>
 
           {/* 正文 */}

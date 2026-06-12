@@ -3,7 +3,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { LayoutGrid, ListTree } from 'lucide-react'
+import { LayoutGrid, ListTree, Package } from 'lucide-react'
 import type { DabaiChapter } from '../../../types/dabai'
 import type { VolumeGroup } from './groupByVolume'
 import { hasContent } from './useWriteDabailab'
@@ -31,10 +31,12 @@ interface Props {
   projectId: string
   /** 卷章纲展开完成后回调（重拉项目详情）。 */
   onExpanded: () => void
+  /** 打开导出面板。 */
+  onExport: () => void
 }
 
 export default function WriteDabailabSidebar({
-  groups, activeId, realmName, onSelect, projectId, onExpanded,
+  groups, activeId, realmName, onSelect, projectId, onExpanded, onExport,
 }: Props) {
   const expandState = useVolumeExpand(projectId, onExpanded)
   /** 仅未满卷（已有章数 < planned）渲染「展开/补全章纲」入口。 */
@@ -113,7 +115,16 @@ export default function WriteDabailabSidebar({
       <div className="space-y-2 border-b border-gray-100 px-3 py-2.5">
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">写作</span>
-          <div className="flex items-center gap-0.5 rounded-lg border border-gray-100 p-0.5">
+          <div className="flex items-center gap-0.5">
+            <button
+              type="button"
+              title="导出正文"
+              onClick={onExport}
+              className="rounded p-1.5 text-gray-400 transition-colors hover:bg-amber-50 hover:text-amber-600"
+            >
+              <Package size={14} />
+            </button>
+            <div className="flex items-center gap-0.5 rounded-lg border border-gray-100 p-0.5">
             <button
               type="button"
               title="章节树"
@@ -136,6 +147,7 @@ export default function WriteDabailabSidebar({
             >
               <LayoutGrid size={14} />
             </button>
+            </div>
           </div>
         </div>
         <div className="flex gap-1">

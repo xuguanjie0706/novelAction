@@ -30,7 +30,7 @@ from app.models.user import User
 from app.services.dabai_persist import DabaiPersister, persist_bootstrap_result
 from app.services.dabai.draft_stream import dabai_draft_max_tokens
 from app.services.dabai.lab_chapter_gate import dabai_chapter_generate_block_reason
-from app.services.dabai.lab_draft_context import build_lab_draft_context
+from app.services.dabai.lab_draft_context import build_lab_draft_context_async
 from app.services.dabai.lab_draft_trace import (
     build_lab_draft_trace,
     llm_call_context_from_trace,
@@ -66,8 +66,13 @@ class GenerateRequest(BaseModel):
     llm_provider_id: Optional[UUID] = None
     volume_count: int = Field(default=6, ge=1, le=20)
     volume_chapters: int = Field(default=30, ge=5, le=120)
+    outline_expand_size: int = Field(
+        default=15, ge=5, le=60,
+        description="单次章纲展开窗口（每卷规划章数/窗口=展开次数，如 30/15=2 次）",
+    )
     big_beat_every: int = Field(default=5, ge=2, le=15)
-    chapter_batch_size: int = Field(default=30, ge=5, le=60)
+    # 五拍展开批默认 5（小批防模板化；与 dabai.config.chapter_batch_size 对齐）
+    chapter_batch_size: int = Field(default=5, ge=5, le=60)
 
 
 def _resolve_connection(
@@ -106,6 +111,7 @@ def _cfg_from_req(req: GenerateRequest, db: Session):
     cfg = DabaiConfig(
         logline=req.logline.strip(),
         volume_count=req.volume_count, volume_chapters=req.volume_chapters,
+        outline_expand_size=req.outline_expand_size,
         big_beat_every=req.big_beat_every, chapter_batch_size=req.chapter_batch_size,
     )
     cfg.base_url, cfg.api_key, cfg.model = _resolve_connection(
@@ -120,9 +126,14 @@ def _build_call(cfg, req: GenerateRequest, db: Session, user: User):
     from app.services.ai.service import AIService
     ai = AIService(profile=req.model_profile, db=db,
                    llm_provider_id=req.llm_provider_id, user_id=user.id)
+    # 长输出步骤（单次整卷 beat+五拍 / 分批展开 / 修复）需要放开输出上限；
+    # 其余设定步走网关默认，避免对小上限模型传超额 max_tokens。
+    heavy_steps = {"volume_chapters", "chapter_outlines", "beat_sequence", "chapter_repair"}
 
     async def call(step: str, system: str, user_prompt: str, meta: dict | None):
-        text = await ai._call_ai(system, user_prompt, task=f"dabai.{step}")
+        max_tokens = cfg.max_tokens if step in heavy_steps else None
+        text = await ai._call_ai(system, user_prompt, max_tokens=max_tokens,
+                                 task=f"dabai.{step}")
         return parse_json(text)
 
     return call
@@ -131,6 +142,7 @@ def _build_call(cfg, req: GenerateRequest, db: Session, user: User):
 def _meta_from_cfg(cfg, failed_steps: list[str]) -> dict:
     return {
         "volume_count": cfg.volume_count, "volume_chapters": cfg.volume_chapters,
+        "outline_expand_size": cfg.outline_expand_size,
         "chapter_batch_size": cfg.chapter_batch_size, "mock": cfg.mock,
         "model": cfg.model, "failed_steps": failed_steps,
     }
@@ -145,12 +157,16 @@ def _detail(p: DabaiProject) -> dict:
         "positioning": p.positioning or {}, "golden_finger": p.golden_finger or {},
         "power_ladder": p.power_ladder or {},
         "factions": [{"name": f.name, "stance": f.stance, "role": f.role,
-                      "power_tier": f.power_tier, "note": f.note} for f in p.factions],
+                      "power_tier": f.power_tier, "note": f.note,
+                      "locations": f.locations or []} for f in p.factions],
         "characters": [{"name": c.name, "role": c.role, "tier": c.tier,
                         "start_realm": c.start_realm, "persona": c.persona,
                         "function": c.function, **(c.extra or {})} for c in p.characters],
-        "storylines": [{"name": s.name, "type": s.type, "summary": s.summary}
+        "storylines": [{"name": s.name, "type": s.type, "summary": s.summary,
+                        "nodes": s.nodes or [],
+                        "bound_characters": s.bound_characters or []}
                        for s in p.storylines],
+        "extra": p.extra or {},
         "linter_report": p.linter_report or {}, "meta": p.meta or {},
         "failed_steps": p.failed_steps or [],
         "created_at": p.created_at.isoformat() if p.created_at else None,
@@ -158,7 +174,8 @@ def _detail(p: DabaiProject) -> dict:
                      "phase": v.phase, "planned_chapters": v.planned_chapters,
                      "big_beats": v.big_beats or [], "volume_climax": v.volume_climax,
                      "end_hook": v.end_hook,
-                     "realm_start_rank": v.realm_start_rank, "realm_end_rank": v.realm_end_rank}
+                     "realm_start_rank": v.realm_start_rank, "realm_end_rank": v.realm_end_rank,
+                     "extra": v.extra or {}}
                     for v in p.volumes],
         "chapter_outlines": [{
             "id": str(c.id), "chapter_number": c.chapter_number, "title": c.title,
@@ -270,8 +287,10 @@ async def _handle_event(persister: DabaiPersister, cfg, ev: dict, kind: str):
                     "score": d.get("score"), "issue_count": d.get("issue_count")})
     elif kind == "bootstrap_end":
         failed = ev.get("failed_steps", [])
+        beats = (ev.get("ctx") or {}).get("beat_sequence") or None
         persister.finalize(ev.get("linter_report"), failed,
-                           _meta_from_cfg(cfg, failed))
+                           _meta_from_cfg(cfg, failed),
+                           extra_update={"beat_sequence_vol1": beats})
         report = persister.project.linter_report or {}
         if persister._chapter_seq > 0 and not failed:
             from app.services.dabai.lab_outline_lint import run_dabai_project_linter
@@ -348,7 +367,7 @@ async def draft_chapter_stream(
     if block_reason:
         raise HTTPException(status_code=400, detail=block_reason)
 
-    draft_ctx = build_lab_draft_context(db, project, ch)
+    draft_ctx = await build_lab_draft_context_async(db, project, ch)
     seed_ledgers(db, project)
     ledger_block = build_ledger_block(db, project, ch)
     replace_existing = bool((ch.content or "").strip())

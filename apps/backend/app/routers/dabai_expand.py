@@ -38,6 +38,7 @@ class ExpandRequest(BaseModel):
     llm_provider_id: Optional[UUID] = None
     force: bool = Field(default=False, description="满卷时删旧重做")
     chapter_batch_size: Optional[int] = Field(default=None, ge=5, le=60)
+    outline_expand_size: Optional[int] = Field(default=None, ge=5, le=60)
 
 
 def _expand_cfg(project, req: ExpandRequest, db: Session):
@@ -49,8 +50,10 @@ def _expand_cfg(project, req: ExpandRequest, db: Session):
         logline=project.logline,
         volume_count=int(meta.get("volume_count", 6)),
         volume_chapters=int(meta.get("volume_chapters", 30)),
+        outline_expand_size=int(req.outline_expand_size
+                                or meta.get("outline_expand_size", 15)),
         chapter_batch_size=int(req.chapter_batch_size
-                               or meta.get("chapter_batch_size", 30)),
+                               or meta.get("chapter_batch_size", 5)),
     )
     cfg.base_url, cfg.api_key, cfg.model = _resolve_connection(
         db, req.model_profile, req.llm_provider_id,
@@ -64,9 +67,13 @@ def _expand_call(cfg, req: ExpandRequest, db: Session, user: User):
     from app.services.ai.service import AIService
     ai = AIService(profile=req.model_profile, db=db,
                    llm_provider_id=req.llm_provider_id, user_id=user.id)
+    heavy_steps = {"volume_chapters", "chapter_outlines", "beat_sequence", "chapter_repair"}
 
     async def call(step: str, system: str, user_prompt: str, meta: dict | None):
-        text = await ai._call_ai(system, user_prompt, task=f"dabai.{step}")
+        max_tokens = cfg.max_tokens if step in heavy_steps else None
+        text = await ai._call_ai(
+            system, user_prompt, max_tokens=max_tokens, task=f"dabai.{step}",
+        )
         return parse_json(text)
 
     return call

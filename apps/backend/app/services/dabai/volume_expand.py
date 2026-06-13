@@ -29,20 +29,45 @@ class VolumeAlreadyFull(RuntimeError):
     """目标卷章纲已满且未指定 force，拒绝重复展开。"""
 
 
+def merge_beat_rows(existing: list, new: list) -> list:
+    """按 chapter_number 合并节拍行（增量展开时保留前窗口）。"""
+    by_num: dict[int, dict] = {}
+    for r in existing + new:
+        if isinstance(r, dict):
+            by_num[int(r.get("chapter_number") or 0)] = r
+    return [by_num[k] for k in sorted(by_num) if k > 0]
+
+
 def build_expand_ctx(p: DabaiProject) -> dict:
-    """从 dabai_* 表重建章纲 prompt 所需 ctx（与 bootstrap 期 ctx 键对齐）。"""
+    """从 dabai_* 表重建章纲 prompt 所需 ctx（与 bootstrap 期 ctx 键对齐）。
+
+    规划层产物（反派阶梯/谜题排程/书名）从 project.extra 回读，
+    使卷 2+ 章纲与 bootstrap 期拿到同一份富上下文（ctx_rich 注入块）。
+    """
+    extra = p.extra or {}
     return {
         "logline": p.logline,
         "benchmark": p.benchmark or {},
         "positioning": p.positioning or {},
         "golden_finger": p.golden_finger or {},
         "power_ladder": p.power_ladder or {},
+        "antagonist_ladder": extra.get("antagonist_ladder") or [],
+        "mystery_schedule": extra.get("mystery_schedule") or {},
+        "title_blurb": extra.get("title_blurb") or {},
+        # 规划快照（bootstrap storylines 步一次产出，不随写作期变化）。
+        # 用于 chapter_design_context 的 relations_block（开局关系张力）与
+        # assets_block（剧情资产台账，含★本卷必须兑现登场★标记）。
+        # 存量书（建于此修复之前）extra 无此键，降级为空 dict → 两块静默为空。
+        "story_assets": extra.get("story_assets") or {},
         "factions": [{"name": f.name, "stance": f.stance, "role": f.role,
-                      "power_tier": f.power_tier, "note": f.note} for f in p.factions],
+                      "power_tier": f.power_tier, "note": f.note,
+                      "locations": f.locations or []} for f in p.factions],
         "characters": [{"name": c.name, "role": c.role, "tier": c.tier,
                         "start_realm": c.start_realm, "persona": c.persona,
                         "function": c.function, **(c.extra or {})} for c in p.characters],
-        "storylines": [{"name": s.name, "type": s.type, "summary": s.summary}
+        "storylines": [{"name": s.name, "type": s.type, "summary": s.summary,
+                        "nodes": s.nodes or [],
+                        "bound_characters": s.bound_characters or []}
                        for s in p.storylines],
         "volumes": [_volume_dict(v) for v in p.volumes],
     }
@@ -55,6 +80,7 @@ def _volume_dict(v: DabaiVolume) -> dict:
         "big_beats": v.big_beats or [], "volume_climax": v.volume_climax,
         "end_hook": v.end_hook,
         "realm_start_rank": v.realm_start_rank, "realm_end_rank": v.realm_end_rank,
+        "extra": v.extra or {},
     }
 
 
@@ -265,6 +291,17 @@ async def aiter_volume_expand(
         created += len(batch)
         yield {"event": "chapter_batch", "batch_start": gbs, "batch_end": gbe,
                "total": created}
+
+    # 节拍序列快照落库（持久化优先；增量展开时与已有窗口合并）
+    beats = ctx.get("beat_sequence") or []
+    if beats:
+        key = f"beat_sequence_vol{volume.volume_number}"
+        prior = (p.extra or {}).get(key) or []
+        merged = merge_beat_rows(
+            prior if isinstance(prior, list) else [], beats,
+        )
+        p.extra = {**(p.extra or {}), key: merged}
+        db.commit()
 
     from app.services.dabai.lab_outline_lint import run_dabai_project_linter
 

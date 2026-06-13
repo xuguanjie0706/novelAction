@@ -373,13 +373,13 @@ async def lab_pre_warn_run(
     user: User = Depends(get_current_user),
 ) -> dict:
     """手动生成/重跑写前导演单（落库并返回）。"""
-    from app.services.dabai.lab_draft_context import build_lab_draft_context
+    from app.services.dabai.lab_draft_context import build_lab_draft_context_async
     from app.services.dabai.lab_ledger import build_ledger_block
     from app.services.dabai.lab_pre_warn import PREWARN_VERSION, resolve_lab_pre_warn
 
     project = _owned_or_404(db, project_id, user)
     ch = _chapter_or_404(db, project, chapter_id)
-    draft_ctx = build_lab_draft_context(db, project, ch)
+    draft_ctx = await build_lab_draft_context_async(db, project, ch)
     seed_ledgers(db, project)
     ledger_block = build_ledger_block(db, project, ch)
     replace_existing = bool((ch.content or "").strip())
@@ -433,7 +433,7 @@ async def lab_scene_plan_run(
     user: User = Depends(get_current_user),
 ) -> dict:
     """手动生成/重跑分场调度单（落库并返回；依赖本章已有导演单）。"""
-    from app.services.dabai.lab_draft_context import build_lab_draft_context
+    from app.services.dabai.lab_draft_context import build_lab_draft_context_async
     from app.services.dabai.lab_ledger import build_ledger_block
     from app.services.dabai.lab_pre_warn import load_lab_pre_warn
     from app.services.dabai.lab_scene_plan import resolve_lab_scene_plan
@@ -443,7 +443,7 @@ async def lab_scene_plan_run(
     pre_warn_block, pre_warn_result = load_lab_pre_warn(db, ch.id)
     if not pre_warn_result:
         raise HTTPException(status_code=400, detail="请先在「预警」Tab 生成导演单")
-    draft_ctx = build_lab_draft_context(db, project, ch)
+    draft_ctx = await build_lab_draft_context_async(db, project, ch)
     seed_ledgers(db, project)
     ledger_block = build_ledger_block(db, project, ch)
     replace_existing = bool((ch.content or "").strip())

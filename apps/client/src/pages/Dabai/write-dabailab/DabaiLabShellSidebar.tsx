@@ -1,7 +1,7 @@
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import clsx from 'clsx'
 import {
-  ArrowLeft, Brain, FileText, Globe, Layers, Milestone, Package, ShieldCheck, Users,
+  ArrowLeft, Brain, BookOpen, FileText, Globe, Layers, Milestone, Package, ShieldCheck, Users,
 } from 'lucide-react'
 import { parseWorkspaceTab, type WorkspaceTab } from './workspaceTab'
 
@@ -14,6 +14,7 @@ const NAV: { tab: WorkspaceTab; icon: typeof FileText; label: string }[] = [
   { tab: 'memory', icon: Brain, label: '记忆' },
   { tab: 'clues', icon: Milestone, label: '线索' },
   { tab: 'ledger', icon: Package, label: '台账' },
+  { tab: 'archive', icon: BookOpen, label: '档案' },
 ]
 
 export default function DabaiLabShellSidebar() {

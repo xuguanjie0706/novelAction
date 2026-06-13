@@ -130,9 +130,14 @@ def format_prewarn_block(result: dict | None) -> str:
         lines.append(f"- 禁止出现：{'；'.join(forbidden[:5])}")
     for note in [str(x) for x in (result.get("conflict_notes") or []) if x][:4]:
         lines.append(f"- 冲突裁决：{note}")
+    for note in [str(x) for x in (result.get("setup_alignment") or []) if x][:4]:
+        lines.append(f"- 开局写法对齐：{note}")
     opening = str(result.get("opening_directive") or "").strip()
     if opening:
         lines.append(f"- 开头写法：{opening}")
+    setup = str(result.get("setup_check") or "").strip()
+    if setup and setup not in ("无", "无关键反转", "none", "None", "N/A", "/"):
+        lines.append(f"- 铺垫依据（反转/获得须立得住）：{setup}")
     beat_parts = [
         f"{_BEAT_LABELS[k]}：{str(beats.get(k)).strip()}"
         for k in _BEAT_KEYS

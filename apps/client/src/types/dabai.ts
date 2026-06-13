@@ -36,6 +36,8 @@ export interface DabaiVolume {
   end_hook: string
   realm_start_rank?: number | null
   realm_end_rank?: number | null
+  /** 卷级规划：boss / storyline_moves / mystery_moves。 */
+  extra?: Record<string, unknown>
 }
 
 export interface DabaiLinterIssue {
@@ -88,6 +90,8 @@ export interface DabaiProjectDetail {
   factions: Array<Record<string, unknown>>
   characters: Array<Record<string, unknown>>
   storylines: Array<Record<string, unknown>>
+  /** 规划层产物：antagonist_ladder / mystery_schedule / title_blurb / beat_sequence_vol{N}。 */
+  extra?: Record<string, unknown>
   linter_report: DabaiLinterReport
   meta: Record<string, unknown>
   failed_steps: string[]
@@ -116,6 +120,8 @@ export interface DabaiGenerateRequest {
   llm_provider_id?: string
   volume_count: number
   volume_chapters: number
+  /** 单次章纲展开窗口（如 30 章卷、15 窗口 = 展开 2 次）。 */
+  outline_expand_size?: number
   big_beat_every: number
   chapter_batch_size?: number
 }
@@ -131,16 +137,19 @@ export type DabaiStreamEvent =
   | { event: 'done'; project_id: string }
   | { event: 'error'; message: string }
 
-/** 8 步中文标签（进度展示）。 */
+/** Bootstrap 步骤中文标签（进度展示，与后端 PIPELINE_STEPS 对齐）。 */
 export const DABAI_STEP_LABELS: Record<string, string> = {
   benchmark: '对标分析',
   positioning: '立项定位',
   golden_finger: '金手指',
   power_ladder: '境界阶梯',
+  antagonist_ladder: '反派阶梯',
   factions: '势力',
   characters: '人物',
   storylines: '故事线',
   story_assets: '剧情资产·关系',
+  mystery_schedule: '谜题排程',
+  title_blurb: '书名·简介',
   volumes: '卷骨架',
   chapter_outlines: '章纲·爽点节拍',
 }

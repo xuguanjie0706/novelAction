@@ -27,7 +27,7 @@ from app.services.dabai.lab_prompt_shared import (
 
 logger = logging.getLogger(__name__)
 
-LAB_QC_VERSION = "dabai-lab-qc-v1"
+LAB_QC_VERSION = "dabai-lab-qc-v2"
 
 # 见证者群体类同义词组（DLB-02 语义匹配；禁止在此硬编码具体书的人名/家族名）
 # 章纲词与正文词落在同一组即视为出现（如章纲「围观家奴」↔ 正文「家仆」）
@@ -217,12 +217,45 @@ def _rule_report(
     }
 
 
+def _next_chapters_block(
+    db: Session,
+    project: DabaiProject,
+    ch: DabaiChapterOutline,
+    *,
+    limit: int = 2,
+) -> str:
+    """后续章纲摘要，供质检给出 future_chapter_suggestions。"""
+    rows = (
+        db.query(DabaiChapterOutline)
+        .filter(
+            DabaiChapterOutline.project_id == project.id,
+            DabaiChapterOutline.chapter_number > (ch.chapter_number or 0),
+        )
+        .order_by(DabaiChapterOutline.chapter_number.asc())
+        .limit(limit)
+        .all()
+    )
+    if not rows:
+        return ""
+    parts: list[str] = []
+    for nx in rows:
+        witnesses = "、".join(str(w) for w in (nx.witnesses or []) if str(w).strip())
+        parts.append(
+            f"第{nx.chapter_number}章《{nx.title or ''}》"
+            f" 场景={nx.location or '—'} 爽点={nx.shuang_type or '—'}\n"
+            f"  钩子={str(nx.end_hook or '')[:60]}"
+            + (f" 见证者={witnesses}" if witnesses else "")
+        )
+    return "\n".join(parts)
+
+
 def _build_lab_qc_prompt(
     ch: DabaiChapterOutline,
     *,
     prev_tail: str,
     prev_ch: DabaiChapterOutline | None = None,
     bridge_evidence: str = "",
+    next_chapters_block: str = "",
 ) -> tuple[str, str]:
     """构造 LLM 质检 (system, user)。正文取头 4500 + 中段抽样 + 尾 1200。
 
@@ -265,6 +298,11 @@ def _build_lab_qc_prompt(
             "若确属无交代瞬移到新场景，continuity_score 应 ≤60 并写明 continuity_issue。"
         )
     parts.append(f"【章纲五拍要素】\n{_build_lab_beat_block(ch)}")
+    if next_chapters_block.strip():
+        parts.append(
+            "【后续章纲预览（供 future_chapter_suggestions 参考；勿剧透未写内容）】\n"
+            f"{next_chapters_block.strip()}"
+        )
     parts.append(f"【本章正文（开头部分）】\n{head}")
     if mid:
         parts.append(f"【本章正文（中段抽样，重点查重复铺陈/口水循环）】\n{mid}")
@@ -282,7 +320,13 @@ def _build_lab_qc_prompt(
         '  "hook_score": 0-100,  // 章末钩子强度：能否让读者点开下一章\n'
         '  "hook_issue": "一句话，无问题留空",\n'
         '  "repetition_issue": "明显的重复铺陈/口水循环，无则留空",\n'
-        '  "suggestions": ["≤3条可执行修改建议，禁止文采类"]\n'
+        '  "chapter_suggestions": ["≤3条针对【本章正文】的可执行修改建议，禁止文采类"],\n'
+        '  "future_chapter_suggestions": ["≤2条对后续章节写作/章纲执行的提醒'
+        '（基于本章遗留问题与【后续章纲预览】，勿编造未给出的章纲）"],\n'
+        '  "rewrite_prompt": "若本章综合质量不佳（衔接/五拍/钩子有明显短板），'
+        '写一段150字内可直接交给写手的重写指令（先写必须保留什么，再写必须改什么）；'
+        '质量尚可则留空",\n'
+        '  "suggestions": ["与 chapter_suggestions 相同，兼容旧字段"]\n'
         "}"
     )
     return _QC_SYSTEM, "\n\n".join(parts)
@@ -306,6 +350,7 @@ async def run_lab_quality(
         合并后的报告 dict（已落库）。
     """
     from app.services.dabai.quality_check import _merge_report
+    from app.services.dabai.lab_qc_feedback import attach_rewrite_prompt
 
     rule = _rule_report(ch, db=db, project=project)
     bridge_evidence = next(
@@ -337,9 +382,10 @@ async def run_lab_quality(
             system, user = _build_lab_qc_prompt(
                 ch, prev_tail=ctx.prev_tail, prev_ch=prev_ch,
                 bridge_evidence=bridge_evidence,
+                next_chapters_block=_next_chapters_block(db, project, ch),
             )
             raw = await call_with_retry(
-                svc, system, user, max_tokens=1400, task="dabai.quality",
+                svc, system, user, max_tokens=1800, task="dabai.quality",
             )
             llm_data = parse_json(raw)
             if not isinstance(llm_data, dict):
@@ -350,6 +396,7 @@ async def run_lab_quality(
             llm_status = "error"
 
     report = _merge_report(rule, llm_data, llm_status)
+    report = attach_rewrite_prompt(report)
     report["version"] = LAB_QC_VERSION
     report["continuity_snapshot"] = _build_continuity_snapshot(db, project, ch, ctx=ctx)
     row = persist_lab_quality(db, project, ch, report, source=source)

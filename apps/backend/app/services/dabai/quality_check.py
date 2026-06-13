@@ -166,8 +166,22 @@ def _merge_report(rule: dict, llm: dict | None, llm_status: str) -> dict:
         "beat_score": beat_score,
         "hook_score": hook,
         "hook_issue": str(llm.get("hook_issue") or "")[:200],
-        "suggestions": [str(s)[:120] for s in (llm.get("suggestions") or [])][:3],
+        "chapter_suggestions": [
+            str(s)[:120]
+            for s in (llm.get("chapter_suggestions") or llm.get("suggestions") or [])
+        ][:3],
+        "future_chapter_suggestions": [
+            str(s)[:120] for s in (llm.get("future_chapter_suggestions") or [])
+        ][:2],
+        # 向后兼容旧读端
+        "suggestions": [
+            str(s)[:120]
+            for s in (llm.get("chapter_suggestions") or llm.get("suggestions") or [])
+        ][:3],
     }
+    llm_rewrite = str(llm.get("rewrite_prompt") or "").strip()
+    if llm_rewrite:
+        report["llm"]["rewrite_prompt"] = llm_rewrite[:800]
 
     # 综合分：规则阻断 → 保持规则给的 40；
     # 否则 衔接40% + 五拍40% + 钩子20%，再扣规则层 warning 计权（每条 -5 封顶 -15）

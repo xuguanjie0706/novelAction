@@ -17,6 +17,8 @@ export interface DabaiPreWarnResult {
   version?: string
   fact_lock?: DabaiFactLock
   conflict_notes?: string[]
+  /** 开篇章：章纲按开局台账微调（非已写正文冲突）。 */
+  setup_alignment?: string[]
   opening_directive?: string
   beat_execution?: Record<string, string>
   bridge_directives?: string[]
@@ -72,7 +74,7 @@ export interface DabaiLabRuleIssue {
   message: string
 }
 
-/** LLM 质检层（衔接/五拍/钩子）。 */
+/** LLM 质检层（衔接/五拍/钩子 + 本章/后续建议）。 */
 export interface DabaiLabQualityLlm {
   continuity_score: number
   continuity_issue: string
@@ -81,7 +83,14 @@ export interface DabaiLabQualityLlm {
   beat_score: number
   hook_score: number
   hook_issue: string
+  /** 本章修改建议（v2 主字段）。 */
+  chapter_suggestions?: string[]
+  /** 对后续章节的写作提醒。 */
+  future_chapter_suggestions?: string[]
+  /** 兼容旧报告。 */
   suggestions: string[]
+  /** LLM 原始重写指令（score<80 时后端也会合成顶层 rewrite_prompt）。 */
+  rewrite_prompt?: string
 }
 
 /** 章节质检报告（落库 report 字段）。 */
@@ -89,6 +98,8 @@ export interface DabaiLabQualityReport {
   version?: string
   status?: 'ok' | 'warning' | 'blocked' | string
   overall_score?: number
+  /** 综合分 <80 时生成的重写提示词（可直接填入写作指令）。 */
+  rewrite_prompt?: string
   llm_status?: 'ok' | 'skipped' | 'error' | 'parse_error' | string
   blockers?: DabaiLabRuleIssue[]
   warnings?: DabaiLabRuleIssue[]
@@ -161,4 +172,81 @@ export interface DabaiLabRelation {
   last_change_chapter: number | null
   history: DabaiRelationHistoryEntry[]
   source: string
+}
+
+// ── 情节档案（按章聚合：计划五拍 + 复盘实际 + 线索/资产/关系变更）─────────────
+
+/** 本章五拍计划块（章纲值）。 */
+export interface DabaiArchivePlan {
+  shuang_type: string
+  yaqu_setup: string
+  emotion_turn: string
+  yinbao: string
+  shuang_payoff: string
+  end_hook: string
+  location: string
+  realm_rank: number | null
+  is_big_beat: boolean
+  expected_words: number | null
+  witnesses: string[]
+  involved_characters: string[]
+}
+
+/** 复盘提取的核心事件（实际发生，非摘要记忆）。 */
+export interface DabaiArchiveCoreEvent {
+  id: string
+  mem_type: string
+  content: string
+  importance: number
+  tags: string[]
+}
+
+/** 本章埋设的线索。 */
+export interface DabaiArchiveCluePlanted {
+  id: string
+  title: string
+  clue_type: string
+  description: string | null
+  status: string
+}
+
+/** 本章回收的线索。 */
+export interface DabaiArchiveClueResolved {
+  id: string
+  title: string
+  clue_type: string
+}
+
+/** 本章资产变更（获得/消耗/失去）。 */
+export interface DabaiArchiveAssetChange {
+  name: string
+  kind: string
+  change: string
+}
+
+/** 本章人物态度变更。 */
+export interface DabaiArchiveRelationChange {
+  from: string
+  to: string
+  attitude: string | null
+  reason: string | null
+}
+
+/** 单章情节档案（GET .../archive）。 */
+export interface DabaiChapterArchive {
+  chapter_id: string
+  chapter_number: number
+  title: string
+  status: string
+  word_count: number
+  /** 是否已复盘（无复盘时只有计划，无实际事实）。 */
+  debriefed: boolean
+  plan: DabaiArchivePlan
+  summary: string | null
+  core_events: DabaiArchiveCoreEvent[]
+  clues_planted: DabaiArchiveCluePlanted[]
+  clues_resolved: DabaiArchiveClueResolved[]
+  asset_changes: DabaiArchiveAssetChange[]
+  relation_changes: DabaiArchiveRelationChange[]
+  first_appearances: string[]
 }

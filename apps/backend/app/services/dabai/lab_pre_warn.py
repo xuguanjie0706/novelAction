@@ -25,6 +25,62 @@ logger = logging.getLogger(__name__)
 
 PREWARN_VERSION = "dabai-lab-prewarn-v2"
 
+_OPENING_CHAPTER_RULE = (
+    "【开篇章规则（尚无已写正文）】事实基准=【开局剧情资产】+【当前台账】+金手指设定，"
+    "不是「已写正文」。章纲五拍若与开局资产/台账表述不一致："
+    "直接在 opening_directive 与 beat_execution 按台账落法写；"
+    "★conflict_notes 必须留空 []★——不要把正常的设定对齐写成「冲突裁决」。"
+)
+
+_LAB_PREWARN_SYSTEM = (
+    _PREWARN_SYSTEM + "\n5. 开篇章（无已写正文）时 conflict_notes 必须 []，"
+    "章纲与开局台账不一致只在 beat_execution 内按台账修正落法。"
+)
+
+
+def count_prior_written_chapters(
+    db: Session, project_id: UUID, before_chapter: int,
+) -> int:
+    """当前章之前已有正文的章数（开篇章判定用）。"""
+    if before_chapter <= 1:
+        return 0
+    return (
+        db.query(DabaiChapterOutline)
+        .filter(
+            DabaiChapterOutline.project_id == project_id,
+            DabaiChapterOutline.chapter_number < before_chapter,
+            DabaiChapterOutline.content.isnot(None),
+            DabaiChapterOutline.content != "",
+        )
+        .count()
+    )
+
+
+def _opening_canon_block(project: DabaiProject) -> str:
+    """开局剧情资产（debut=start）注入导演单，避免章纲与台账各说各话。"""
+    from dabai.ctx_rich import assets_block
+
+    ctx = {"story_assets": (project.extra or {}).get("story_assets") or {}}
+    block = assets_block(ctx, volume_number=1)
+    if not block.strip():
+        return ""
+    return block + (
+        "\n★开篇章：上表 debut=start 的资产为既定开局设定；"
+        "章纲若写错载体/获宝方式，按此块修正，不算与「已写正文」冲突。\n"
+    )
+
+
+def normalize_opening_prewarn(result: dict, *, opening_no_prior: bool) -> dict:
+    """开篇章且无已写正文：LLM 误填的 conflict_notes 降级为 setup_alignment。"""
+    if not opening_no_prior or not isinstance(result, dict):
+        return result
+    out = dict(result)
+    notes = [str(x).strip() for x in (out.get("conflict_notes") or []) if str(x).strip()]
+    if notes:
+        out["setup_alignment"] = notes
+        out["conflict_notes"] = []
+    return out
+
 
 class LabPreWarnError(RuntimeError):
     """导演单生成失败（strict 模式）。
@@ -70,6 +126,7 @@ def build_lab_prewarn_prompt(
     *,
     replace_existing: bool = False,
     bridge_evidence: str = "",
+    opening_no_prior: bool = False,
 ) -> tuple[str, str]:
     """构造实验书架导演单 (system, user)。
 
@@ -99,6 +156,9 @@ def build_lab_prewarn_prompt(
         parts.append(ctx.memory_block.strip())
     if ctx.clue_block.strip():
         parts.append(ctx.clue_block.strip())
+    canon = _opening_canon_block(project)
+    if canon.strip():
+        parts.append(canon.strip())
     if ledger_block.strip():
         parts.append(ledger_block.strip())
     if ctx.prev_full_block.strip():
@@ -118,11 +178,20 @@ def build_lab_prewarn_prompt(
         )
     parts.append("【本章章纲五拍（卷展开期生成，可能与上述事实漂移）】")
     parts.append(_build_lab_beat_block(ch))
+    if opening_no_prior:
+        parts.append(_OPENING_CHAPTER_RULE)
     if replace_existing:
         parts.append(
             "【重写要求】本章已有正文，beat_execution 须给出与常见模板不同的落法"
             "（换开笔切入/换扳机细节/换对话顺序），情节结果不变但写法须可区分。"
         )
+    parts.append(
+        "【可信度裁决（重要）】若本章含金手指获得/进阶或反败为胜/逆袭，必须在 setup_check "
+        "写明「能赢/能获得的依据出自前文哪条事实或线索」——优先引用【既定事实记忆】"
+        "/【未回收线索】/【系统面板】中已具备的境界·技能·法宝·伏笔；若前文确无铺垫，"
+        "给一条当场立得住的依据（来历/代价/限制/破绽）并在 beat_execution.trigger·yinbao "
+        "落实，禁止零铺垫硬翻、禁止临场冒出全新能力。本章无关键反转则填「无」。"
+    )
     parts.append(
         "对照以上资料完成裁决与指导，只返回 JSON：\n"
         "{\n"
@@ -132,15 +201,17 @@ def build_lab_prewarn_prompt(
         '    "on_stage": ["确认可出场的人物（须用【人物称谓锁定】中的名字）"],\n'
         '    "forbidden": ["禁止出现的能力/情节（如金手指再绑定、写回废人）"]\n'
         "  },\n"
-        '  "conflict_notes": ["章纲与事实冲突及弥合写法，≤40字；无则[]"],\n'
+        '  "conflict_notes": ["仅在有已写正文且与事实矛盾时填写，≤40字；开篇章或无矛盾则[]"],\n'
         '  "opening_directive": "开头如何承接上章末句，1-2句",\n'
+        '  "setup_check": "本章关键反转/获得的铺垫依据：引用前文哪条事实/线索/已具备能力，'
+        '或当场立得住的依据；本章无关键反转填「无」",\n'
         '  "beat_execution": {"yaqu": "...", "trigger": "...", "yinbao": "...", '
         '"payoff": "...", "hook": "..."},\n'
         '  "bridge_directives": ["仅确实需要交代位置/境界变化时；无则[]"],\n'
         '  "reminders": ["≤3条提醒"]\n'
         "}"
     )
-    return _PREWARN_SYSTEM, "\n\n".join(parts)
+    return _LAB_PREWARN_SYSTEM, "\n\n".join(parts)
 
 
 def _done_payload(result: dict, *, brief: str) -> dict:
@@ -151,7 +222,9 @@ def _done_payload(result: dict, *, brief: str) -> dict:
         "version": PREWARN_VERSION,
         "fact_lock": result.get("fact_lock") or {},
         "conflict_notes": (result.get("conflict_notes") or [])[:4],
+        "setup_alignment": (result.get("setup_alignment") or [])[:4],
         "opening_directive": str(result.get("opening_directive") or "")[:200],
+        "setup_check": str(result.get("setup_check") or "")[:200],
         "brief_injected": bool(brief),
     }
 
@@ -223,9 +296,18 @@ async def resolve_lab_pre_warn(
         from app.services.bootstrap.parse import parse_json
         from app.services.bootstrap.retry import call_with_retry
 
+        opening_no_prior = False
+        if db is not None:
+            opening_no_prior = count_prior_written_chapters(
+                db, project.id, ch.chapter_number or 1,
+            ) == 0 and int(ch.chapter_number or 1) == 1
+        elif not (ctx.prev_full_block or ctx.prev_tail or "").strip():
+            opening_no_prior = int(ch.chapter_number or 1) == 1
+
         system, user = build_lab_prewarn_prompt(
             project, ch, ctx, ledger_block,
             replace_existing=replace_existing, bridge_evidence=bridge_evidence,
+            opening_no_prior=opening_no_prior,
         )
         prewarn_sampling = (
             {"temperature": 0.45, "presence_penalty": 0.15}
@@ -239,6 +321,7 @@ async def resolve_lab_pre_warn(
         if not isinstance(result, dict):
             raise ValueError("导演单 JSON 解析失败")
         result = sanitize_prewarn_result(result, project)
+        result = normalize_opening_prewarn(result, opening_no_prior=opening_no_prior)
         result["version"] = PREWARN_VERSION
         # 上章正文指纹：上一章重写后据此判定本导演单已过期，强制重生成
         result["prev_content_hash"] = ctx.prev_content_hash

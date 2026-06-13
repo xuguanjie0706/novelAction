@@ -43,6 +43,8 @@ class DabaiProject(Base):
     linter_report = Column(JSON, default=dict)           # 大白文 linter 报告
     meta = Column(JSON, default=dict)                    # 卷数/章数/模型/失败步骤等
     failed_steps = Column(JSON, default=list)            # 失败步骤名
+    extra = Column(JSON, default=dict)                   # 规划层杂物：antagonist_ladder /
+    #   mystery_schedule / title_blurb / beat_sequence_vol{N}（卷展开重建 ctx 时回读）
     # 注：factions / characters / storylines 已拆为独立表（见下），不再用 JSON 列。
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -85,6 +87,7 @@ class DabaiFaction(Base):
     role = Column(Text)                  # 在爽点循环里的作用
     power_tier = Column(String(100))     # 最高战力档
     note = Column(Text)                  # 前期/后期作用
+    locations = Column(JSON, default=list)  # 驻地+周边场景池（章纲 location 轮换素材）
     sort_order = Column(Integer, default=0)
 
     project = relationship("DabaiProject", back_populates="factions")
@@ -125,6 +128,8 @@ class DabaiStoryline(Base):
     name = Column(String(120), nullable=False)
     type = Column(String(30))            # main/revenge/romance/mystery
     summary = Column(Text)
+    nodes = Column(JSON, default=list)   # 关键节点 [{planned_volume, node}]（卷骨架/章纲落位依据）
+    bound_characters = Column(JSON, default=list)  # 线绑定人物名
     sort_order = Column(Integer, default=0)
 
     project = relationship("DabaiProject", back_populates="storylines")
@@ -151,6 +156,7 @@ class DabaiVolume(Base):
     # ── 境界脊柱（主角本卷境界区间，对应 power_ladder.levels.rank）──
     realm_start_rank = Column(Integer)                   # 卷初主角境界档
     realm_end_rank = Column(Integer)                     # 卷末主角境界档（≥start，跨卷单调）
+    extra = Column(JSON, default=dict)                   # boss / storyline_moves / mystery_moves
 
     project = relationship("DabaiProject", back_populates="volumes")
 

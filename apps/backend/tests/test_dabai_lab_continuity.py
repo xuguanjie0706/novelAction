@@ -128,6 +128,27 @@ def test_location_bridge_skips_when_prev_tail_already_at_cave():
     assert _check_location_bridge(curr, prev, opening, prev_tail=prev_tail) is None
 
 
+def test_normalize_opening_prewarn_moves_conflict_to_setup():
+    from app.services.dabai.lab_pre_warn import normalize_opening_prewarn
+
+    raw = {
+        "conflict_notes": ["章纲捡幡与台账封印冲突：改为拨浪鼓碎裂露出残幡"],
+        "beat_execution": {"yaqu": "..."},
+    }
+    out = normalize_opening_prewarn(raw, opening_no_prior=True)
+    assert out["conflict_notes"] == []
+    assert "拨浪鼓" in out["setup_alignment"][0]
+
+
+def test_normalize_opening_prewarn_keeps_conflict_when_not_opening():
+    from app.services.dabai.lab_pre_warn import normalize_opening_prewarn
+
+    raw = {"conflict_notes": ["位置与上章矛盾"]}
+    out = normalize_opening_prewarn(raw, opening_no_prior=False)
+    assert out["conflict_notes"] == ["位置与上章矛盾"]
+    assert "setup_alignment" not in out
+
+
 def test_inject_bridge_scene_when_directives_present():
     ch = _chapter()
     plan = {

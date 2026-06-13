@@ -1,23 +1,25 @@
 /**
- * 写作工作区右侧栏 — 预警 / 分场 / 质检 / 记忆 四个随章面板（可折叠）。
+ * 写作工作区右侧栏 — 预警 / 分场 / 质检 / 记忆 / 档案 随章面板（可折叠）。
  * 数据均为章级：切章自动刷新；预警与分场另接收写章 SSE 实时状态。
  */
 import { useState } from 'react'
 import clsx from 'clsx'
-import { AlertTriangle, Brain, ChevronsLeft, ChevronsRight, Clapperboard, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, Brain, ChevronsLeft, ChevronsRight, Clapperboard, FileText, ShieldCheck } from 'lucide-react'
 import PreWarnCard, { type PreWarnLive } from './PreWarnCard'
 import ScenePlanCard, { type ScenePlanLive } from './ScenePlanCard'
 import QualityCard from './QualityCard'
 import MemoryCard from './MemoryCard'
+import ArchiveCard from './ArchiveCard'
 import type { DabaiChapter } from '../../../../types/dabai'
 
-type SideTab = 'prewarn' | 'sceneplan' | 'quality' | 'memory'
+type SideTab = 'prewarn' | 'sceneplan' | 'quality' | 'memory' | 'archive'
 
 const TABS: { id: SideTab; icon: typeof Brain; label: string }[] = [
   { id: 'prewarn', icon: AlertTriangle, label: '预警' },
   { id: 'sceneplan', icon: Clapperboard, label: '分场' },
   { id: 'quality', icon: ShieldCheck, label: '质检' },
   { id: 'memory', icon: Brain, label: '记忆' },
+  { id: 'archive', icon: FileText, label: '档案' },
 ]
 
 interface Props {
@@ -32,12 +34,14 @@ interface Props {
   qualityRefreshKey: number
   /** 写后自动复盘完成后 +1，触发记忆面板重拉。 */
   memoryRefreshKey: number
+  /** 质检侧栏「填入重写指令」→ 打开重写弹窗。 */
+  onApplyRewriteFromQuality?: (instruction: string) => void
 }
 
 export default function WorkspaceSidePanel({
   projectId, chapter, preWarnLive, preWarnRefreshKey,
   scenePlanLive, scenePlanRefreshKey,
-  qualityRefreshKey, memoryRefreshKey,
+  qualityRefreshKey, memoryRefreshKey, onApplyRewriteFromQuality,
 }: Props) {
   const [open, setOpen] = useState(true)
   const [tab, setTab] = useState<SideTab>('prewarn')
@@ -100,6 +104,7 @@ export default function WorkspaceSidePanel({
           <PreWarnCard
             projectId={projectId}
             chapterId={chapter.id}
+            chapterNumber={chapter.chapter_number}
             live={preWarnLive}
             refreshKey={preWarnRefreshKey}
           />
@@ -118,6 +123,7 @@ export default function WorkspaceSidePanel({
             chapterId={chapter.id}
             hasContent={hasContent}
             refreshKey={qualityRefreshKey}
+            onApplyRewrite={onApplyRewriteFromQuality}
           />
         )}
         {tab === 'memory' && chapter.id && (
@@ -126,6 +132,13 @@ export default function WorkspaceSidePanel({
             chapterId={chapter.id}
             hasContent={hasContent}
             refreshKey={memoryRefreshKey}
+          />
+        )}
+        {tab === 'archive' && chapter.id && (
+          <ArchiveCard
+            projectId={projectId}
+            chapterId={chapter.id}
+            refreshKey={qualityRefreshKey + memoryRefreshKey}
           />
         )}
       </div>

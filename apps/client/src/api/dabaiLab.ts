@@ -5,6 +5,7 @@
  */
 import { api } from './base'
 import type {
+  DabaiChapterArchive,
   DabaiLabAsset,
   DabaiLabClue,
   DabaiLabDebriefResult,
@@ -142,6 +143,20 @@ export const dabaiLabApi = {
   patchRelation(projectId: string, relationId: string, attitude: string, reason?: string) {
     return api.patch<{ ok: boolean; id: string; attitude: string }>(
       `/dabai/projects/${projectId}/relations/${relationId}`, { attitude, reason },
+    )
+  },
+
+  /** 单章情节档案（计划五拍 + 复盘实际 + 线索/资产/关系变更）。 */
+  getChapterArchive(projectId: string, chapterId: string) {
+    return api.get<DabaiChapterArchive>(
+      `/dabai/projects/${projectId}/chapters/${chapterId}/archive`,
+    )
+  },
+
+  /** 全书每章情节档案（章号升序）。 */
+  listArchive(projectId: string) {
+    return api.get<{ items: DabaiChapterArchive[]; total: number }>(
+      `/dabai/projects/${projectId}/archive`,
     )
   },
 }

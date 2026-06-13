@@ -40,6 +40,7 @@ export default function WriteDabailabWorkspace({
   const [qualityRefreshKey, setQualityRefreshKey] = useState(0)
   const [memoryRefreshKey, setMemoryRefreshKey] = useState(0)
   const [draftModalOpen, setDraftModalOpen] = useState(false)
+  const [rewritePrefill, setRewritePrefill] = useState('')
   const regenSnapshot = useRef('')
 
   useEffect(() => {
@@ -149,6 +150,12 @@ export default function WriteDabailabWorkspace({
       toast.error(generateBlockReason!)
       return
     }
+    setRewritePrefill('')
+    setDraftModalOpen(true)
+  }
+
+  const openRewriteFromQuality = (instruction: string) => {
+    setRewritePrefill(instruction)
     setDraftModalOpen(true)
   }
 
@@ -157,7 +164,11 @@ export default function WriteDabailabWorkspace({
       <DraftLaunchModal
         open={draftModalOpen}
         mode={wordCount > 0 || isRewriteChapter ? 'rewrite' : 'generate'}
-        onClose={() => setDraftModalOpen(false)}
+        initialInstruction={rewritePrefill}
+        onClose={() => {
+          setDraftModalOpen(false)
+          setRewritePrefill('')
+        }}
         onConfirm={opts => void runDraft(opts)}
       />
 
@@ -247,6 +258,7 @@ export default function WriteDabailabWorkspace({
         scenePlanRefreshKey={scenePlanRefreshKey}
         qualityRefreshKey={qualityRefreshKey}
         memoryRefreshKey={memoryRefreshKey}
+        onApplyRewriteFromQuality={openRewriteFromQuality}
       />
     </div>
   )

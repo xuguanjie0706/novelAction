@@ -63,12 +63,22 @@ def build_chapter_qc_feedback_block(
     if not row or not isinstance(row.report, dict):
         return ""
     rep = row.report
+    score = int(rep.get("overall_score") or 0)
+    rewrite_prompt = str(rep.get("rewrite_prompt") or "").strip()
+    if score < 80 and rewrite_prompt:
+        return (
+            f"【上一版质检反馈（{score}分；重写必须逐条修复，"
+            f"优先级高于「换写法」要求）】\n{rewrite_prompt[:1200]}"
+        )
     llm = rep.get("llm") if isinstance(rep.get("llm"), dict) else {}
     lines: list[str] = []
     for b in (rep.get("blockers") or [])[:2]:
         lines.append(f"  - [阻断]{str(b.get('message') or '')[:80]}")
-    for s in (llm.get("suggestions") or [])[:3]:
-        lines.append(f"  - {str(s)[:100]}")
+    chapter_tips = llm.get("chapter_suggestions") or llm.get("suggestions") or []
+    for s in chapter_tips[:3]:
+        lines.append(f"  - [本章]{str(s)[:100]}")
+    for s in (llm.get("future_chapter_suggestions") or [])[:2]:
+        lines.append(f"  - [后续]{str(s)[:100]}")
     for issue in (llm.get("beat_issues") or [])[:3]:
         lines.append(f"  - 五拍问题：{str(issue)[:60]}")
     for w in (rep.get("warnings") or [])[:3]:
@@ -79,6 +89,44 @@ def build_chapter_qc_feedback_block(
         f"【上一版质检反馈（{row.overall_score}分；重写必须逐条修复，"
         "优先级高于「换写法」要求）】\n" + "\n".join(dict.fromkeys(lines))
     )
+
+
+REWRITE_SCORE_THRESHOLD = 80
+
+
+def build_lab_rewrite_prompt(report: dict) -> str:
+    """规则合成重写提示词（LLM 未给出 rewrite_prompt 时的兜底）。"""
+    llm = report.get("llm") if isinstance(report.get("llm"), dict) else {}
+    score = int(report.get("overall_score") or 0)
+    lines = [f"【质检 {score} 分 · 重写本章正文，逐项修复下列问题】"]
+    for b in (report.get("blockers") or [])[:2]:
+        lines.append(f"- [阻断] {str(b.get('message') or '')[:100]}")
+    if llm.get("continuity_issue") and int(llm.get("continuity_score") or 100) < 80:
+        lines.append(f"- [衔接] {str(llm['continuity_issue'])[:100]}")
+    for issue in (llm.get("beat_issues") or [])[:3]:
+        lines.append(f"- [五拍] {str(issue)[:80]}")
+    if llm.get("hook_issue") and int(llm.get("hook_score") or 100) < 80:
+        lines.append(f"- [钩子] {str(llm['hook_issue'])[:100]}")
+    for s in (llm.get("chapter_suggestions") or llm.get("suggestions") or [])[:3]:
+        lines.append(f"- [本章] {str(s)[:100]}")
+    for s in (llm.get("future_chapter_suggestions") or [])[:2]:
+        lines.append(f"- [后续章注意] {str(s)[:100]}")
+    for w in (report.get("warnings") or [])[:4]:
+        lines.append(f"- [{w.get('rule_id')}] {str(w.get('message') or '')[:80]}")
+    lines.append("- 保留已通过的五拍与衔接，只改失分部分；禁止文采堆砌。")
+    return "\n".join(lines)[:1500]
+
+
+def attach_rewrite_prompt(report: dict, *, threshold: int = REWRITE_SCORE_THRESHOLD) -> dict:
+    """score<threshold 时落库顶层 rewrite_prompt（优先 LLM 产出，否则规则合成）。"""
+    score = int(report.get("overall_score") or 0)
+    llm = report.get("llm") if isinstance(report.get("llm"), dict) else {}
+    llm_rp = str((llm or {}).get("rewrite_prompt") or "").strip()
+    if score >= threshold:
+        report["rewrite_prompt"] = ""
+        return report
+    report["rewrite_prompt"] = (llm_rp or build_lab_rewrite_prompt(report))[:1500]
+    return report
 
 
 def build_project_qc_issue_block(

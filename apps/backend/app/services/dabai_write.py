@@ -5,7 +5,13 @@
 
 from __future__ import annotations
 
-from dabai.golden_finger_bind import is_awakening_chapter, prose_bind_instructions
+from dabai.golden_finger_bind import (
+    is_awakening_chapter,
+    is_gf_evolution_chapter,
+    is_reversal_chapter,
+    prose_bind_instructions,
+    prose_earned_reversal_instructions,
+)
 from dabai.non_system import prefers_non_system, prose_system_taboo_block
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 from app.services.dabai.lab_ledger import protagonist_name
@@ -139,21 +145,31 @@ def build_prose_prompt(
         if style_line else ""
     )
 
-    bind_block = ""
-    if (ch.chapter_number or 1) <= 1:
-        ch_dict = {
-            "chapter_number": ch.chapter_number,
-            "title": ch.title,
-            "yinbao": ch.yinbao,
-            "end_hook": ch.end_hook,
-            "shuang_type": ch.shuang_type,
-        }
-        if is_awakening_chapter(
-            ch_dict, golden_finger_name=gf.get("name", ""), artifact=artifact,
-        ):
-            bind_block = prose_bind_instructions(
-                gf_name=gf.get("name", ""), artifact=artifact,
-            )
+    # 关键节点可信度脚手架（②③）：不再限制在第1章——金手指首次觉醒、后续进阶/解锁、
+    # 反败为胜/逆袭章都需要「铺垫 + 立得住的依据」，否则读者觉得开挂硬翻。可叠加。
+    gf_name = gf.get("name", "")
+    ch_dict = {
+        "chapter_number": ch.chapter_number,
+        "title": ch.title,
+        "yinbao": ch.yinbao,
+        "end_hook": ch.end_hook,
+        "shuang_type": ch.shuang_type,
+        "shuang_payoff": ch.shuang_payoff,
+        "emotion_turn": ch.emotion_turn,
+        "yaqu_setup": ch.yaqu_setup,
+    }
+    milestone_parts: list[str] = []
+    if is_awakening_chapter(
+        ch_dict, golden_finger_name=gf_name, artifact=artifact,
+    ) or is_gf_evolution_chapter(ch_dict, golden_finger_name=gf_name):
+        milestone_parts.append(
+            prose_bind_instructions(gf_name=gf_name, artifact=artifact)
+        )
+    if is_reversal_chapter(ch_dict):
+        milestone_parts.append(
+            prose_earned_reversal_instructions(artifact=artifact)
+        )
+    bind_block = "".join(milestone_parts)
 
     has_continuity = bool(
         prev_tail.strip() or recent_plot_block.strip() or prev_full_block.strip()

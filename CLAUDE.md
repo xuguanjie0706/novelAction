@@ -495,6 +495,63 @@ lab 侧（dabai_* 表）补齐写作期四件套，与精品文链路隔离、�
   + 对主角态度徽章 + 张力。存量书（建于该步骤之前）只有惰性种子，需重新生成才有完整剧情资产；
   台账表未 migrate 时接口 500、前端静默为空——先 `alembic upgrade`。
 
+### 实验书架按次计费合并：设定链 9→6 次 + 章纲单次整卷（2026-06-12 五批）
+
+> 计费按调用次数，合并调用是主收益；且同次推理产出的同域设定彼此对齐更好。
+> 质量红线：title_blurb 不并入 volumes（0.85 vs 0.6 温度冲突），repair 闭环保留（lint 干净=0 次调用）。
+
+- **设定链 9→6 次**（`pipeline._MERGE_CARRIERS` 扩展）：
+  `golden_finger` 一次产出 金手指+境界阶梯+**反派阶梯**（Boss 档与境界档同次推理）；
+  `storylines` 一次产出 叙事规划三块（故事线+剧情资产/关系+谜题排程，prompt 末尾强调「三块是一盘棋」）；
+  `title_blurb` 后移到 volumes 之后（书名/简介可引用卷 Boss/大爆点，`_volumes_digest` 注入），独立保 0.85 高温档。
+- **章纲单次整卷（主路径）**：`volume_chapters` 一次返回 `{beat_sequence, chapter_outlines}`
+  （`prompts_chapter.volume_chapters`，system 加「先排完整表再展开」addendum）；
+  窗口 ≤ `single_call_max_chapters`（默认 40）才走单次；`cfg.max_tokens` 8192→**30000**；
+  失败/超大卷自动降级两段式（beat_sequence + 分批），再失败降级直接分批——三级兜底。
+  repair 闭环保留（单次路径同样过 `repair_batch`）。
+- **调用次数**：30 章/卷 bootstrap = 6 设定 + 1 章纲 + 0~1 修复 = **7~8 次**（此前 13~16）。
+- **web 路径接线**：`routers/dabai.py` `_build_call` 对 heavy steps（volume_chapters/章纲/修复）
+  传 `max_tokens=cfg.max_tokens`，其余设定步走网关默认（防小上限模型报错）；
+  `llm_task_profiles.py` 新增 `dabai.benchmark/golden_finger/factions/storylines/volumes/`
+  `title_blurb/volume_chapters/beat_sequence/chapter_outlines/chapter_repair` 采样档
+  （此前 dabai bootstrap 任务全走网关默认温度，CLI 的 STEP_TEMPERATURE 不生效于 web 路径）。
+- 验证：mock 全链 8 次调用通过；volume_chapters 失败降级两段式通过；60 章超大卷自动分批通过。
+
+### 实验书架 Bootstrap 全面升级：三新步骤 + 富上下文 + 章纲两段式 + 修复闭环（2026-06-12 四批）
+
+> 一次性落地「创建过程 prompt 优化 + 额外设定」全清单。不计 token 取向：
+> 下游步骤改注全量结构化档案，章纲全局规划与局部展开分离。
+
+- **三个新 Bootstrap 步骤**（`dabai/prompts_extra.py`，PIPELINE_STEPS 现 13 步）：
+  ① `antagonist_ladder`（金手指后）——每卷 Boss roster（名/势力/境界档/仇怨/压迫方式/下场），
+  Boss 档略高于卷主角区间、仇恨链逐卷升级；factions/characters 步必须为前 2-3 卷 Boss 建档；
+  ② `mystery_schedule`（story_assets 后）——2-4 个跨卷谜题揭示排程（每卷透一块、揭底卷前禁说破），
+  落 `extra.mystery_schedule` + `dabai_clues` 种子（标题去重）；
+  ③ `title_blurb`——书名 12-16 候选（6 策略+打分）+ 上架简介，chosen_title 回填 `dabai_projects.title`。
+- **prompt 模块重组**：`prompt_base.py`（SYS_BASE/ctx_brief/benchmark/ladder 块，防 import 环）+
+  `ctx_rich.py`（人物档案含 desire/wound/speech_kit、开局关系、资产台账、势力+场景池、
+  反派阶梯、谜题排程、故事线节点——全量注入 volumes/章纲，替代「只给人名」的 _ctx_brief）+
+  `prompts_chapter.py`（章纲两段式+修复）。
+- **既有步骤强化**：benchmark 加 confidence + 题材代称防幻觉；golden_finger 加
+  `first_10_shuang`（前10章爽点弹药库）+ `realm_milestones`（境界×金手指里程碑表，防脱钩）；
+  factions 加每势力 `locations` 场景池 + 工具人配角池 8-12 人 + 人物 `speech_kit`；
+  storylines 加 `nodes`（卷绑定关键节点）+ `bound_characters`；volumes 接住 Boss/资产/谜题/节点
+  （输出 `boss`/`storyline_moves`/`mystery_moves` → `dabai_volumes.extra`）；
+  字数分档（普通 2000-2200/大爆点 2400-2600）；emotion_turn 增普通章扳机示例（防全书濒死腔）。
+- **章纲两段式**（`steps.aiter_chapter_batches` 重构，bootstrap 与卷展开共用）：
+  阶段一 `beat_sequence`——一次（>60 章分段）排整卷节拍行（章号/标题/爽点/场景/靶子/境界/一句话），
+  全局协调轮换与爬升，失败降级直出；阶段二按 `chapter_batch_size`（默认 30→**10**）小批展开五拍，
+  prompt 锁定本批节拍行。节拍快照落 `dabai_projects.extra.beat_sequence_vol{N}`。
+- **修复闭环**（`dabai/repair.py`）：每批生成后 lint（REALM 由 `_enforce_realm` 硬保证不进修复；
+  DB-02 仅全书开局批、DB-08 小尾批跳过）→ 问题章+issues+相邻章回灌 `chapter_repair`（温度 0.4）
+  定向重写 → 按章号合并，修复章 realm_rank 强制还原；失败/空返回保留原批（增益不阻断）。
+- **migration `e8f9a0b1c2d3`**：`dabai_projects.extra` / `dabai_factions.locations` /
+  `dabai_storylines.nodes`+`bound_characters` / `dabai_volumes.extra`；
+  卷展开 `build_expand_ctx` 从 extra 回读反派阶梯/谜题排程（卷2+ 与 bootstrap 同富上下文）。
+- 前端：`DABAI_STEP_LABELS` 增 反派阶梯/谜题排程/书名·简介；detail 透出 extra/locations/nodes。
+- 验证：沙箱 mock 全链 13 步通过（beat 30 行+章纲 30 章+linter）；repair 闭环冒烟通过；
+  `test_dabai_linter` 4 用例通过。合入前请用 3.12 venv 跑 `pytest tests/`（沙箱无 venv）。
+
 ### 实验书架卷纲质检闭环（2026-06-12）
 
 > 修复「质检 Tab 只读 bootstrap 快照、卷展开不更新」的架构断层。
@@ -529,6 +586,31 @@ lab 侧（dabai_* 表）补齐写作期四件套，与精品文链路隔离、�
   打脸对象与憋屈手法轮换）；`dabai/linter.py` 增 `_lint_sameness`：DB-11（location 缺失/相邻雷同，
   存量书全空时跳过防误报）+ DB-12（相邻标题前 2 字相同=句式坍缩）。location 贯穿
   schemas→persist→`_detail`→前端 `DabaiBeatDisplay.locationName`（节拍卡已有槽位，直接接上）。
+
+### 实验书架情节档案 + 双路检索（2026-06-14）
+
+> 解决两件事：①写章/回看时没有一个地方「完整展示这一章实际写了什么」（核心事件散落在记忆/线索/台账各 tab）；
+> ②dabai 检索只有 近期窗口 + 重要度兜底，**无语义/实体召回**——老的低重要度事实掉出窗口后，
+> 旧角色再登场时其身份/恩怨无法被召回，长篇衔接断层主因之一。
+
+- **情节档案（聚合视图，无新表）**：`services/dabai/lab_chapter_archive.py`
+  （`build_project_archive` 全书 / `build_chapter_archive` 单章）按章组合
+  计划五拍(`dabai_chapter_outlines`) + 复盘实际(核心事件/摘要 `dabai_memories`)
+  + 线索埋设·回收(`dabai_clues`) + 资产获得·消耗(`dabai_assets`) + 关系态度变更(`dabai_relations`)
+  + 首次出场(扫 involved/witnesses)。端点 `routers/dabai_lab_archive.py`（独立文件防 dabai_lab_ai.py 膨胀）：
+  GET `/dabai/projects/{id}/archive`（全量）+ `chapters/{cid}/archive`（单章）。
+  前端：共享 `ArchiveSections.tsx`；**右侧栏新增「档案」tab**（`side/ArchiveCard.tsx`，随章刷新，
+  refreshKey=质检+复盘）；**左侧栏新增「档案」tab**（`panels/ArchivePanel.tsx`，全书可展开列表 + 已写/已复盘筛选）。
+- **检索·实体召回（无新表）**：`lab_draft_context._build_entity_recall_block`——按本章
+  `involved_characters + witnesses` 的人名 tags，捞回**窗口外**历史关键事实（不受重要度限制），
+  注入 `memory_block`。`build_lab_draft_context`（同步）默认启用。
+- **检索·pgvector 语义召回**：`dabai_memories` 加 `embedding` 列（migration `f9a0b1c2d3e4`，
+  仅当 pgvector 扩展存在；维度=`EMBEDDING_DIM`）；复盘落库后 `lab_embedding.embed_dabai_memories_async`
+  异步向量化（summary 跳过）；`semantic_search_dabai` 余弦召回。
+  新增 `build_lab_draft_context_async`（异步壳）= 同步块 + 语义召回块；写作三路（draft / 导演单 / 分场，
+  均 async）改用之。pgvector 不可用 / 向量化失败时返回空块，自动降级到实体召回 + 时序兜底。
+  存量补跑：`python verify_pgvector.py --reembed-dabai`。
+- 注意：沙箱无 3.12 venv，仅过 py_compile + 前端 tsc（新增文件零类型错误）；合入前请用 venv 跑后端测试 + `alembic upgrade head`。
 
 ### 大白文（dabaiwen）写章上下文链路（2026-06-10 重修）
 

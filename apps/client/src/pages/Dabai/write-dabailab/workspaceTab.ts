@@ -1,8 +1,8 @@
 export type WorkspaceTab =
-  | 'write' | 'volumes' | 'characters' | 'world' | 'quality' | 'memory' | 'clues' | 'ledger'
+  | 'write' | 'volumes' | 'characters' | 'world' | 'quality' | 'memory' | 'clues' | 'ledger' | 'archive'
 
 export const WORKSPACE_TABS: WorkspaceTab[] = [
-  'write', 'volumes', 'characters', 'world', 'quality', 'memory', 'clues', 'ledger',
+  'write', 'volumes', 'characters', 'world', 'quality', 'memory', 'clues', 'ledger', 'archive',
 ]
 
 export function parseWorkspaceTab(raw: string | null): WorkspaceTab {

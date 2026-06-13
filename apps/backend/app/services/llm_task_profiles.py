@@ -123,6 +123,23 @@ TASK_PROFILES: dict[str, dict] = {
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
     },
+    # ── dabai Bootstrap 建书链（与 dabai/config.STEP_TEMPERATURE 对齐；按次计费合并步）──
+    "dabai.benchmark": {"temperature": 0.4, "top_p": 0.9},     # 对标分析要稳，少幻觉
+    "dabai.golden_finger": {"temperature": 0.65, "top_p": 0.92},  # 金手指+境界+反派阶梯（合并步折中）
+    "dabai.factions": {"temperature": 0.6, "top_p": 0.92},     # 势力+人物（含配角池）
+    "dabai.storylines": {"temperature": 0.6, "top_p": 0.92},   # 叙事规划三块（线+资产+谜题）
+    "dabai.volumes": {"temperature": 0.6, "top_p": 0.9},       # 卷骨架要稳
+    "dabai.title_blurb": {"temperature": 0.85, "top_p": 0.95},  # 书名要跳脱（独立成步的原因）
+    "dabai.volume_chapters": {
+        # 单次整卷 beat+五拍：介于规划 0.6 与展开 0.75 之间；长输出
+        "temperature": 0.7,
+        "top_p": 0.92,
+        "frequency_penalty": 0.15,
+        "presence_penalty": 0.1,
+    },
+    "dabai.beat_sequence": {"temperature": 0.6, "top_p": 0.9},   # 降级路径：全局节拍规划
+    "dabai.chapter_outlines": {"temperature": 0.75, "top_p": 0.92},  # 降级路径：分批五拍
+    "dabai.chapter_repair": {"temperature": 0.4, "top_p": 0.85},  # 定向修复：只修不创
     "suggest.stream": {
         # 写作建议：偏自由，但不要走偏
         "temperature": 0.8,

@@ -1,14 +1,19 @@
 /**
  * 质检卡片 — 章节质检报告（规则 + LLM：衔接/五拍/钩子）。
  * 切章时拉最新落库报告；「跑质检」按当前模型线路调用并落库。
+ * score<80 或存在建议时，可一键填入「按要素重写」弹窗。
  */
 import { useEffect, useState } from 'react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
-import { Loader2, ShieldCheck } from 'lucide-react'
+import { Loader2, PenLine, ShieldCheck } from 'lucide-react'
 import { dabaiLabApi } from '../../../../api/dabaiLab'
 import type { DabaiLabQualityReport } from '../../../../types/dabaiLab'
 import { llmProviderIdFromRoute, modelProfileFromRoute, useAppStore } from '../../../../store'
+import {
+  canApplyQualityRewrite,
+  formatQualityRewriteInstruction,
+} from '../../../../utils/dabaiQualityRewrite'
 import { BEAT_KEYS, BEAT_LABELS } from './labels'
 
 interface Props {
@@ -17,6 +22,8 @@ interface Props {
   hasContent: boolean
   /** 自增信号：写后自动质检完成后 +1，触发重拉落库报告。 */
   refreshKey: number
+  /** 将质检建议填入重写弹窗。 */
+  onApplyRewrite?: (instruction: string) => void
 }
 
 function scoreColor(v: number): string {
@@ -40,7 +47,9 @@ function ScoreRow({ label, value }: { label: string; value: number }) {
   )
 }
 
-export default function QualityCard({ projectId, chapterId, hasContent, refreshKey }: Props) {
+export default function QualityCard({
+  projectId, chapterId, hasContent, refreshKey, onApplyRewrite,
+}: Props) {
   const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
   const [report, setReport] = useState<DabaiLabQualityReport | null>(null)
   const [running, setRunning] = useState(false)
@@ -72,8 +81,27 @@ export default function QualityCard({ projectId, chapterId, hasContent, refreshK
     }
   }
 
+  const applyRewrite = () => {
+    if (!report || !onApplyRewrite) return
+    const instruction = formatQualityRewriteInstruction(report)
+    if (!instruction.trim()) {
+      toast.error('暂无可用的重写建议')
+      return
+    }
+    onApplyRewrite(instruction)
+    toast.success('已填入重写指令，请确认后启动')
+  }
+
   const issues = [...(report?.blockers ?? []), ...(report?.warnings ?? [])]
   const llm = report?.llm
+  const chapterTips = llm?.chapter_suggestions?.length
+    ? llm.chapter_suggestions
+    : (llm?.suggestions ?? [])
+  const futureTips = llm?.future_chapter_suggestions ?? []
+  const showRewritePrompt = Boolean(
+    report && (report.overall_score ?? 100) < 80 && report.rewrite_prompt?.trim(),
+  )
+  const canRewrite = canApplyQualityRewrite(report) && Boolean(onApplyRewrite)
 
   return (
     <div className="space-y-3 text-xs">
@@ -89,6 +117,17 @@ export default function QualityCard({ projectId, chapterId, hasContent, refreshK
         {running ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />}
         {hasContent ? (running ? '质检中…' : '重新跑质检') : '本章尚无正文'}
       </button>
+
+      {canRewrite ? (
+        <button
+          type="button"
+          onClick={applyRewrite}
+          className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 font-semibold text-rose-600 hover:bg-rose-100"
+        >
+          <PenLine size={13} />
+          填入重写指令
+        </button>
+      ) : null}
 
       {report ? (
         <>
@@ -142,11 +181,29 @@ export default function QualityCard({ projectId, chapterId, hasContent, refreshK
             </ul>
           )}
 
-          {(llm?.suggestions?.length ?? 0) > 0 && (
+          {showRewritePrompt ? (
+            <div className="rounded-lg border border-rose-100 bg-rose-50/60 p-2">
+              <p className="mb-1 text-[11px] font-semibold text-rose-700">重写提示词（&lt;80分）</p>
+              <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-gray-700">
+                {report.rewrite_prompt}
+              </p>
+            </div>
+          ) : null}
+
+          {chapterTips.length > 0 && (
             <div>
-              <p className="mb-1 text-[11px] font-semibold text-gray-500">修改建议</p>
+              <p className="mb-1 text-[11px] font-semibold text-gray-500">本章建议</p>
               <ul className="space-y-1 text-gray-700">
-                {llm!.suggestions.map((s, i) => <li key={i}>· {s}</li>)}
+                {chapterTips.map((s, i) => <li key={i}>· {s}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {futureTips.length > 0 && (
+            <div>
+              <p className="mb-1 text-[11px] font-semibold text-gray-500">后续章节建议</p>
+              <ul className="space-y-1 text-gray-700">
+                {futureTips.map((s, i) => <li key={i}>· {s}</li>)}
               </ul>
             </div>
           )}

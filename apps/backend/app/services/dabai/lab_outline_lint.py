@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from dabai.config import DabaiConfig
 from dabai.linter import Issue, LinterReport, lint_chapters
 
-from app.models.dabai import DabaiChapterOutline, DabaiProject, DabaiVolume
+from app.models.dabai import DabaiChapterOutline, DabaiCharacter, DabaiProject, DabaiVolume
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,8 @@ def cfg_from_project(project: DabaiProject) -> DabaiConfig:
         mock=False,
         volume_count=int(meta.get("volume_count", 6)),
         volume_chapters=int(meta.get("volume_chapters", 30)),
-        chapter_batch_size=int(meta.get("chapter_batch_size", 30)),
+        outline_expand_size=int(meta.get("outline_expand_size", 15)),
+        chapter_batch_size=int(meta.get("chapter_batch_size", 5)),
         big_beat_every=int(meta.get("big_beat_every", 5)),
     )
 
@@ -115,6 +116,21 @@ def _pending_report() -> dict:
     }
 
 
+def _volume_completeness_issues(ch_dicts: list[dict], volumes: list[dict]) -> list[Issue]:
+    """按卷检查章纲是否写满 planned_chapters（缺章即 critical）。"""
+    issues: list[Issue] = []
+    for g_lo, g_hi, vol in _chapter_ranges(volumes):
+        planned = g_hi - g_lo + 1
+        actual = sum(1 for c in ch_dicts if g_lo <= c["chapter_number"] <= g_hi)
+        if actual < planned:
+            issues.append(Issue(
+                "DB-14", "critical", None,
+                f"第{vol.get('volume_number')}卷章纲不完整：仅 {actual}/{planned} 章",
+                "请侧栏「补全章纲」或「重做章纲」按节拍表补全",
+            ))
+    return issues
+
+
 def run_dabai_project_linter(
     db: Session,
     project: DabaiProject,
@@ -154,14 +170,22 @@ def run_dabai_project_linter(
     vol_dicts = _volume_dicts(volumes)
     gf_name = (project.golden_finger or {}).get("name", "")
 
+    char_rows = (
+        db.query(DabaiCharacter)
+        .filter(DabaiCharacter.project_id == project.id)
+        .order_by(DabaiCharacter.sort_order)
+        .all()
+    )
+    lint_ctx = {"characters": [{"name": c.name} for c in char_rows]}
     base = lint_chapters(
         ch_dicts, cfg,
         realm_max=_realm_max(project),
         realm_range=None,
         volumes=vol_dicts,
         golden_finger_name=gf_name,
+        ctx=lint_ctx,
     )
-    extra = _realm03_issues(ch_dicts, vol_dicts)
+    extra = _realm03_issues(ch_dicts, vol_dicts) + _volume_completeness_issues(ch_dicts, vol_dicts)
     merged = LinterReport(issues=list(base.issues) + extra)
     report = merged.as_dict()
     report["chapter_count"] = len(chapters)

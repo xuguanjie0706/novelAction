@@ -26,15 +26,18 @@ OUTPUT_DIR = Path(__file__).parent / "outputs"
 
 _SETTING_STEPS = {
     "benchmark", "positioning", "golden_finger", "power_ladder",
-    "factions", "characters", "storylines", "story_assets", "volumes",
+    "antagonist_ladder", "factions", "characters", "storylines",
+    "story_assets", "mystery_schedule", "title_blurb", "volumes",
 }
 
 # 合并步：carrier 一次 LLM 调用同时产出多个 ctx 键；derived 复用同次结果，不再调 LLM。
-# 合并动机：同类设定本就是一次连续推理，拆多次既费 token 又容易彼此对不齐。
+# 合并动机：按次计费下省调用是主收益；且同类设定本就是一次连续推理，
+# 同次产出比拆多次更不易彼此对不齐（境界档 vs Boss 档、谜题 vs 故事线）。
 _MERGE_CARRIERS: dict[str, tuple[str, ...]] = {
     "benchmark": ("benchmark", "positioning"),       # 对标分析 + 立项定位
-    "golden_finger": ("golden_finger", "power_ladder"),  # 金手指 + 境界阶梯（力量体系）
+    "golden_finger": ("golden_finger", "power_ladder", "antagonist_ladder"),  # 力量体系 + 对立面
     "factions": ("factions", "characters"),          # 势力 + 人物（阵营卡司）
+    "storylines": ("storylines", "story_assets", "mystery_schedule"),  # 叙事规划三块
 }
 _MERGE_DERIVED: dict[str, str] = {
     derived: carrier
@@ -121,6 +124,7 @@ async def aiter_bootstrap(cfg: DabaiConfig, call: CallFn) -> AsyncIterator[dict]
             realm_range=(v1.get("realm_start_rank"), v1.get("realm_end_rank")),
             volumes=vols,
             golden_finger_name=gf_name,
+            ctx=ctx,
         ).as_dict()
         yield {"event": "linter_done", "data": report}
 
@@ -142,6 +146,7 @@ class BootstrapResult:
             "meta": {
                 "volume_count": self.cfg.volume_count,
                 "volume_chapters": self.cfg.volume_chapters,
+                "outline_expand_size": self.cfg.outline_expand_size,
                 "chapter_batch_size": self.cfg.chapter_batch_size,
                 "mock": self.cfg.mock, "model": self.cfg.model,
                 "failed_steps": self.failed_steps,
@@ -150,11 +155,15 @@ class BootstrapResult:
             "positioning": self.ctx.get("positioning"),
             "golden_finger": self.ctx.get("golden_finger"),
             "power_ladder": self.ctx.get("power_ladder"),
+            "antagonist_ladder": self.ctx.get("antagonist_ladder"),
             "factions": self.ctx.get("factions"),
             "characters": self.ctx.get("characters"),
             "storylines": self.ctx.get("storylines"),
             "story_assets": self.ctx.get("story_assets"),
+            "mystery_schedule": self.ctx.get("mystery_schedule"),
+            "title_blurb": self.ctx.get("title_blurb"),
             "volumes": self.ctx.get("volumes"),
+            "beat_sequence": self.ctx.get("beat_sequence"),
             "chapter_outlines": self.ctx.get("chapter_outlines"),
             "linter_report": self.linter_report,
         }

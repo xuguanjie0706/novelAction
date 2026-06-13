@@ -212,6 +212,15 @@ async def run_lab_debrief(
         logger.warning("面板快照写入失败 ch=%s: %s", ch.id, _snap_err)
 
     db.commit()
+
+    # 复盘记忆落库后异步向量化（pgvector 语义召回；未装 pgvector 自动跳过）
+    try:
+        from app.database import SessionLocal
+        from app.services.dabai.lab_embedding import embed_dabai_memories_async
+        embed_dabai_memories_async(memories, SessionLocal)
+    except Exception as _embed_err:  # noqa: BLE001
+        logger.warning("dabai 记忆向量化触发失败 ch=%s: %s", ch.id, _embed_err)
+
     payload = {
         "version": DEBRIEF_VERSION,
         "summary": str(result.get("summary") or "")[:200],

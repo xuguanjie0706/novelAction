@@ -19,6 +19,8 @@ export interface PreWarnLive {
 interface Props {
   projectId: string
   chapterId: string
+  /** 全书章号：第 1 章开写时 conflict 文案与后续章不同。 */
+  chapterNumber: number
   live: PreWarnLive | null
   /** 自增信号：pre_warn_done 后 +1，触发重拉落库记录。 */
   refreshKey: number
@@ -33,7 +35,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-export default function PreWarnCard({ projectId, chapterId, live, refreshKey }: Props) {
+export default function PreWarnCard({ projectId, chapterId, chapterNumber, live, refreshKey }: Props) {
   const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
   const [record, setRecord] = useState<DabaiPreWarnRecord | null>(null)
   const [loading, setLoading] = useState(false)
@@ -101,7 +103,9 @@ export default function PreWarnCard({ projectId, chapterId, live, refreshKey }: 
           </p>
         ) : null}
         <p className="text-gray-400">
-          {loading ? '加载中…' : '裁决章纲 vs 已写事实；首次写章会自动生成，也可在此手动生成'}
+          {loading ? '加载中…' : chapterNumber <= 1
+            ? '开篇章：对齐章纲与开局台账；首次写章会自动生成'
+            : '裁决章纲 vs 已写事实；首次写章会自动生成，也可在此手动生成'}
         </p>
       </div>
     )
@@ -140,6 +144,15 @@ export default function PreWarnCard({ projectId, chapterId, live, refreshKey }: 
           </p>
         )}
       </Section>
+
+      {(r.setup_alignment?.length ?? 0) > 0 && (
+        <Section title="开局写法对齐（章纲按台账微调）">
+          <ul className="space-y-1 text-gray-600">
+            {r.setup_alignment!.map((n, i) => <li key={i}>· {n}</li>)}
+          </ul>
+          <p className="mt-1 text-[10px] text-gray-400">非报错：Bootstrap 台账与章纲表述不一致时的落法说明。</p>
+        </Section>
+      )}
 
       {(r.conflict_notes?.length ?? 0) > 0 && (
         <Section title="冲突裁决（章纲 vs 已写事实）">

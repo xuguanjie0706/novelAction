@@ -38,6 +38,7 @@ export default function DabaiCreateDialog({
     '阴尸宗收尸弟子李夜，乱葬岗得残破万魂幡，血祭认主后幡内亡魂代修反哺——魔门弱肉强食，不要系统面板无叮提示',
   )
   const [volumeChapters, setVolumeChapters] = useState(30)
+  const outlineExpandSize = 15
 
   if (!open) return null
 
@@ -49,8 +50,9 @@ export default function DabaiCreateDialog({
       ...routeLlmProviderPayload(aiBackendRoute),
       volume_count: 6,
       volume_chapters: volumeChapters,
+      outline_expand_size: outlineExpandSize,
       big_beat_every: 5,
-      chapter_batch_size: 30,
+      chapter_batch_size: 5,
     })
   }
 
@@ -87,6 +89,9 @@ export default function DabaiCreateDialog({
             />
             章
           </label>
+          <span className="text-[11px] text-gray-400">
+            建书先展开 {outlineExpandSize} 章，满卷需展开 {Math.max(1, Math.ceil(volumeChapters / outlineExpandSize))} 次
+          </span>
         </div>
         {generating && steps.length > 0 && (
           <ol className="mt-4 flex flex-wrap gap-1.5">

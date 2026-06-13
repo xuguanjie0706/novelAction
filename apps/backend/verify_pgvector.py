@@ -363,6 +363,47 @@ async def do_reembed() -> None:
         traceback.print_exc()
 
 
+async def do_reembed_dabai() -> None:
+    """补跑实验书架 dabai_memories 缺失 embedding（--reembed-dabai）。"""
+    _section("补跑 dabai_memories 缺失 embedding（--reembed-dabai）")
+    try:
+        from app.database import SessionLocal
+        from app.models.dabai_lab import HAS_PGVECTOR, DabaiMemory
+        from app.services.embedding_service import embed_texts, _validate_embedding_dims
+
+        if not HAS_PGVECTOR:
+            _fail("pgvector 未安装，dabai_memories 无 embedding 列")
+            return
+        with SessionLocal() as db:
+            rows = (
+                db.query(DabaiMemory)
+                .filter(DabaiMemory.embedding == None,  # noqa: E711
+                        DabaiMemory.mem_type != "summary")
+                .all()
+            )
+            targets = [r for r in rows if (r.content or "").strip()]
+            if not targets:
+                _ok("无缺失 embedding，无需补跑")
+                return
+            _info(f"待补跑 {len(targets)} 条……")
+            t0 = time.perf_counter()
+            ok_count = 0
+            for i in range(0, len(targets), 32):
+                batch = targets[i:i + 32]
+                vectors = await embed_texts([r.content[:2000] for r in batch])
+                if not vectors or len(vectors) != len(batch):
+                    continue
+                for row, vec in zip(batch, vectors):
+                    row.embedding = _validate_embedding_dims(vec)
+                    ok_count += 1
+                db.commit()
+            _ok(f"补跑完成：成功 {ok_count}/{len(targets)} 条，耗时 {time.perf_counter() - t0:.1f} s")
+    except Exception as exc:
+        _fail(f"补跑失败：{exc}")
+        import traceback
+        traceback.print_exc()
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # 主函数
 # ────────────────────────────────────────────────────────────────────────────
@@ -381,6 +422,8 @@ async def main() -> None:
     parser.add_argument("--query", default="主角", help="语义搜索测试用的查询词（默认 '主角'）")
     parser.add_argument("--top-k", type=int, default=3, help="语义搜索返回条数（默认 3）")
     parser.add_argument("--reembed", action="store_true", help="批量补跑缺失 embedding 后退出")
+    parser.add_argument("--reembed-dabai", action="store_true",
+                        help="批量补跑实验书架 dabai_memories 缺失 embedding 后退出")
     args = parser.parse_args()
 
     print(_c("1;36", "\n  pgvector 索引验证报告"))
@@ -421,6 +464,12 @@ async def main() -> None:
     # --reembed
     if args.reembed:
         await do_reembed()
+        print(f"\n{SEP}\n")
+        return
+
+    # --reembed-dabai
+    if args.reembed_dabai:
+        await do_reembed_dabai()
         print(f"\n{SEP}\n")
         return
 

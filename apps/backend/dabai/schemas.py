@@ -43,9 +43,9 @@ STEP_CONTRACT: dict[str, dict[str, Any]] = {
                      "golden_three_strategy", "pace_type", "taboo_lines"],
     },
     "golden_finger": {
-        # 合并步：一次调用产出 golden_finger + power_ladder（力量体系）
+        # 合并步：一次调用产出 golden_finger + power_ladder + antagonist_ladder（力量与对立面）
         "shape": "object",
-        "required": ["golden_finger", "power_ladder"],
+        "required": ["golden_finger", "power_ladder", "antagonist_ladder"],
     },
     "factions": {
         # 合并步：一次调用产出 factions + characters（阵营卡司）
@@ -53,27 +53,130 @@ STEP_CONTRACT: dict[str, dict[str, Any]] = {
         "required": ["factions", "characters"],
     },
     "storylines": {
-        "shape": "list",
-        "item_required": ["name", "type", "summary"],
+        # 合并步：一次调用产出 叙事规划三块（storylines + story_assets + mystery_schedule）
+        "shape": "object",
+        "required": ["storylines", "story_assets", "mystery_schedule"],
     },
     "story_assets": {
         # 剧情资产 + 初始关系（一次调用两块；落 dabai_assets/dabai_clues/dabai_relations）
         "shape": "object",
         "required": ["plot_assets", "initial_relations"],
     },
+    "antagonist_ladder": {
+        # 卷级反派阶梯：每卷 Boss roster（落 dabai_projects.extra）
+        "shape": "list",
+        "item_required": ["volume_number", "boss_name", "motive"],
+    },
+    "mystery_schedule": {
+        # 跨卷谜题揭示排程（落 dabai_projects.extra + dabai_clues 种子）
+        "shape": "object",
+        "required": ["mysteries"],
+    },
+    "title_blurb": {
+        # 书名海选 + 上架简介（chosen_title 回填 dabai_projects.title）
+        "shape": "object",
+        "required": ["title_candidates", "chosen_title", "blurb"],
+    },
     "volumes": {
         "shape": "list",
         "item_required": ["volume_number", "title", "phase", "big_beats", "volume_climax"],
+    },
+    "volume_chapters": {
+        # 单次整卷：节拍序列 + 五拍章纲（按次计费主路径；降级走 beat_sequence + chapter_outlines）
+        "shape": "object",
+        "required": ["beat_sequence", "chapter_outlines"],
+    },
+    "beat_sequence": {
+        # 章纲阶段一：每章一行节拍（施工图，落 dabai_projects.extra）
+        "shape": "list",
+        "item_required": ["chapter_number", "title", "shuang_type", "location"],
     },
     "chapter_outlines": {
         "shape": "list",
         "item_required": ["chapter_number", "title", "shuang_type",
                           "yaqu_setup", "shuang_payoff", "end_hook"],
     },
+    "chapter_repair": {
+        # 定向修复：返回修正后的问题章（可为空数组=放弃修复，调用方保留原批）
+        "shape": "list",
+        "item_required": ["chapter_number", "title"],
+    },
 }
 
 
-def validate_step(step: str, data: Any) -> list[str]:
+def expected_count_from_meta(meta: dict | None) -> int | None:
+    """从 batch/global 区间推导本批期望章数（meta 缺省时返回 None）。"""
+    if not meta:
+        return None
+    if meta.get("expected_count") is not None:
+        return int(meta["expected_count"])
+    gbs, gbe = meta.get("global_start"), meta.get("global_end")
+    if gbs is not None and gbe is not None:
+        return int(gbe) - int(gbs) + 1
+    bs, be = meta.get("batch_start"), meta.get("batch_end")
+    if bs is not None and be is not None:
+        return int(be) - int(bs) + 1
+    return None
+
+
+def _validate_chapter_item_quality(step: str, item: dict, idx: int) -> list[str]:
+    """五拍字段最短长度（生成期拦截空泛/摘要式章纲）。"""
+    if step not in ("chapter_outlines", "volume_chapters"):
+        return []
+    errors: list[str] = []
+    for field, min_len in (
+        ("yaqu_setup", 10),
+        ("emotion_turn", 6),
+        ("yinbao", 6),
+        ("shuang_payoff", 10),
+    ):
+        val = (item.get(field) or "").strip()
+        if len(val) < min_len:
+            errors.append(f"{step}[{idx}] {field} 过短（至少 {min_len} 字，须可拍画面）")
+    if not (item.get("witnesses") or _payoff_has_witness(item.get("shuang_payoff", ""))):
+        errors.append(f"{step}[{idx}] 缺见证者（witnesses 或 shuang_payoff 含当众/众人等）")
+    return errors
+
+
+def _payoff_has_witness(payoff: str) -> bool:
+    return any(k in payoff for k in ("当着", "当众", "众人", "全场", "围观", "面前"))
+
+
+def validate_chapter_coverage(step: str, data: Any, meta: dict | None) -> list[str]:
+    """章纲/节拍数量必须与窗口一致；禁止模型只回大爆点摘要。"""
+    expected = expected_count_from_meta(meta)
+    if not expected or expected < 1:
+        return []
+    errors: list[str] = []
+    if step == "volume_chapters" and isinstance(data, dict):
+        beats = data.get("beat_sequence") or []
+        chapters = data.get("chapter_outlines") or []
+        if len(beats) != expected:
+            errors.append(
+                f"beat_sequence 数量不符：期望 {expected} 行，实际 {len(beats)} 行"
+            )
+        if len(chapters) != expected:
+            errors.append(
+                f"chapter_outlines 数量不符：期望 {expected} 章，实际 {len(chapters)} 章"
+                "（禁止只写大爆点/跳章摘要，须逐章完整五拍）"
+            )
+        for i, item in enumerate(chapters if isinstance(chapters, list) else []):
+            if isinstance(item, dict):
+                errors.extend(_validate_chapter_item_quality(step, item, i))
+        return errors
+    if step in ("beat_sequence", "chapter_outlines") and isinstance(data, list):
+        if len(data) != expected:
+            errors.append(
+                f"{step} 数量不符：期望 {expected} 章，实际 {len(data)} 章"
+            )
+        if step == "chapter_outlines":
+            for i, item in enumerate(data):
+                if isinstance(item, dict):
+                    errors.extend(_validate_chapter_item_quality(step, item, i))
+    return errors
+
+
+def validate_step(step: str, data: Any, meta: dict | None = None) -> list[str]:
     """返回缺失/形态错误列表（空列表=通过）。不抛异常，交由调用方决定重试。"""
     contract = STEP_CONTRACT.get(step)
     if not contract:
@@ -85,6 +188,13 @@ def validate_step(step: str, data: Any) -> list[str]:
         for key in contract.get("required", []):
             if key not in data or data[key] in (None, "", []):
                 errors.append(f"{step} 缺字段：{key}")
+        if step == "volume_chapters":
+            chapters = (data.get("chapter_outlines") or []) if isinstance(data, dict) else []
+            for i, item in enumerate(chapters if isinstance(chapters, list) else []):
+                if isinstance(item, dict):
+                    for key in STEP_CONTRACT["chapter_outlines"].get("item_required", []):
+                        if key not in item or item[key] in (None, "", []):
+                            errors.append(f"volume_chapters.chapter_outlines[{i}] 缺字段：{key}")
     else:  # list
         if not isinstance(data, list) or not data:
             return [f"{step} 期望非空 list，实际 {type(data).__name__}"]
@@ -95,6 +205,7 @@ def validate_step(step: str, data: Any) -> list[str]:
             for key in contract.get("item_required", []):
                 if key not in item or item[key] in (None, "", []):
                     errors.append(f"{step}[{i}] 缺字段：{key}")
+    errors.extend(validate_chapter_coverage(step, data, meta))
     return errors
 
 
@@ -135,11 +246,37 @@ def _normalize_volume(v: dict) -> dict:
     return v
 
 
+def normalize_beat_row(item: dict, idx: int) -> dict:
+    """节拍行容错归一化：补默认、矫正类型。"""
+    return {
+        "chapter_number": _coerce_int(item.get("chapter_number"), idx + 1),
+        "title": (item.get("title") or f"第{idx + 1}章").strip(),
+        "shuang_type": (item.get("shuang_type") or "").strip(),
+        "location": (item.get("location") or "").strip(),
+        "slap_target": (item.get("slap_target") or "").strip(),
+        "realm_rank": _coerce_int(item.get("realm_rank"), 0) or None,
+        "is_big_beat": bool(item.get("is_big_beat", False)),
+        "one_line": (item.get("one_line") or "").strip(),
+    }
+
+
 def normalize_step(step: str, data: Any) -> Any:
     """步骤级归一化入口。章纲/卷需要境界字段容错，其余直接透传。"""
-    if step == "chapter_outlines" and isinstance(data, list):
+    if step in ("chapter_outlines", "chapter_repair") and isinstance(data, list):
         return [normalize_chapter(it if isinstance(it, dict) else {}, i)
                 for i, it in enumerate(data)]
+    if step == "beat_sequence" and isinstance(data, list):
+        return [normalize_beat_row(it if isinstance(it, dict) else {}, i)
+                for i, it in enumerate(data)]
+    if step == "volume_chapters" and isinstance(data, dict):
+        beats = data.get("beat_sequence")
+        chapters = data.get("chapter_outlines")
+        return {
+            "beat_sequence": normalize_step(
+                "beat_sequence", beats if isinstance(beats, list) else []),
+            "chapter_outlines": normalize_step(
+                "chapter_outlines", chapters if isinstance(chapters, list) else []),
+        }
     if step == "volumes" and isinstance(data, list):
         return [_normalize_volume(v) if isinstance(v, dict) else v for v in data]
     return data

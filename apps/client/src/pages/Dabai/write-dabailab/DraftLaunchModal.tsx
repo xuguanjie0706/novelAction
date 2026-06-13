@@ -24,6 +24,8 @@ export const REWRITE_LAUNCH_DEFAULTS: DraftLaunchOptions = {
 interface Props {
   open: boolean
   mode: 'generate' | 'rewrite'
+  /** 打开弹窗时预填写作指令（如质检「填入重写」）。 */
+  initialInstruction?: string
   onClose: () => void
   onConfirm: (opts: DraftLaunchOptions) => void
 }
@@ -39,12 +41,19 @@ const STEP_CHECKS: {
   { key: 'rerunDebrief', label: '重新总结（复盘）', hint: '记忆与线索提取' },
 ]
 
-export default function DraftLaunchModal({ open, mode, onClose, onConfirm }: Props) {
+export default function DraftLaunchModal({
+  open, mode, initialInstruction, onClose, onConfirm,
+}: Props) {
   const [opts, setOpts] = useState<DraftLaunchOptions>(REWRITE_LAUNCH_DEFAULTS)
 
   useEffect(() => {
-    if (open) setOpts(REWRITE_LAUNCH_DEFAULTS)
-  }, [open, mode])
+    if (open) {
+      setOpts({
+        ...REWRITE_LAUNCH_DEFAULTS,
+        userInstruction: initialInstruction?.trim() ?? '',
+      })
+    }
+  }, [open, mode, initialInstruction])
 
   if (!open) return null
 

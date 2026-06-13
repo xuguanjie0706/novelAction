@@ -13,6 +13,7 @@ import LinterPanel from './panels/LinterPanel'
 import MemoryLibraryPanel from './panels/MemoryLibraryPanel'
 import CluesPanel from './panels/CluesPanel'
 import LedgerPanel from './panels/LedgerPanel'
+import ArchivePanel from './panels/ArchivePanel'
 import { useWriteDabailab } from './useWriteDabailab'
 import { makeRealmLabel } from './realmLabel'
 import { parseWorkspaceTab } from './workspaceTab'
@@ -114,6 +115,7 @@ export default function WriteDabailabPage() {
               {tab === 'memory' && <MemoryLibraryPanel projectId={projectId!} />}
               {tab === 'clues' && <CluesPanel projectId={projectId!} />}
               {tab === 'ledger' && <LedgerPanel projectId={projectId!} />}
+              {tab === 'archive' && <ArchivePanel projectId={projectId!} />}
             </div>
           )}
         </main>

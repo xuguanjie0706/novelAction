@@ -39,9 +39,9 @@ export default function WriteDabailabSidebar({
   groups, activeId, realmName, onSelect, projectId, onExpanded, onExport,
 }: Props) {
   const expandState = useVolumeExpand(projectId, onExpanded)
-  /** 仅未满卷（已有章数 < planned）渲染「展开/补全章纲」入口。 */
+  /** 有卷 id 即显示展开/补全/重做（满卷仍可「重做」）。 */
   const volumeAction = (g: VolumeGroup) =>
-    g.volume.id && g.chapters.length < g.volume.planned_chapters ? (
+    g.volume.id ? (
       <VolumeExpandButton
         volume={g.volume}
         existingCount={g.chapters.length}

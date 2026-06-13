@@ -61,12 +61,15 @@ export function dabaiGenerateStream(
   return streamSse('/api/v1/dabai/projects/stream', payload, onEvent, signal)
 }
 
-/** 按卷展开章纲请求体（线路默认 gemini）。 */
 export interface DabaiExpandRequest {
   model_profile?: 'local' | 'gemini'
   llm_provider_id?: string
   /** 满卷删旧重做（未满卷为增量补全，无需此参数）。 */
   force?: boolean
+  /** 窗口内五拍 LLM 批大小。 */
+  chapter_batch_size?: number
+  /** 单次章纲展开窗口（默认 15；30 章卷补全第二次时仍用 15）。 */
+  outline_expand_size?: number
 }
 
 /** 按卷展开章纲 SSE 事件。 */

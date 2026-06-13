@@ -12,8 +12,8 @@ export interface VolumeExpandState {
   expandingId: string | null
   /** 进度文案，如「12/30 章」。 */
   progress: string
-  /** 触发展开；运行中重复点击被忽略。 */
-  expand: (volume: DabaiVolume) => void
+  /** 触发展开；force=true 时删旧章纲整卷重做。 */
+  expand: (volume: DabaiVolume, force?: boolean) => void
 }
 
 export function useVolumeExpand(projectId: string, onDone: () => void): VolumeExpandState {
@@ -21,13 +21,17 @@ export function useVolumeExpand(projectId: string, onDone: () => void): VolumeEx
   const [progress, setProgress] = useState('')
   const runningRef = useRef(false)
 
-  const expand = useCallback((volume: DabaiVolume) => {
+  const expand = useCallback((volume: DabaiVolume, force = false) => {
     if (runningRef.current || !volume.id) return
     runningRef.current = true
     setExpandingId(volume.id)
     setProgress('')
     let failed = false
-    dabaiExpandVolumeStream(projectId, volume.id, {}, ev => {
+    dabaiExpandVolumeStream(projectId, volume.id, {
+      force,
+      chapter_batch_size: 5,
+      outline_expand_size: 15,
+    }, ev => {
       if (ev.event === 'chapter_batch') {
         setProgress(`${ev.total} 章`)
       } else if (ev.event === 'linter_done') {

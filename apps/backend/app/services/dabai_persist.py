@@ -81,18 +81,35 @@ class DabaiPersister:
         self.db.refresh(self.project)
         return self.project
 
+    def merge_extra(self, updates: dict) -> None:
+        """合并写 project.extra（JSON 列须整体替换才能触发脏标记）。"""
+        p = self.project
+        p.extra = {**(p.extra or {}), **{k: v for k, v in updates.items()
+                                         if v is not None}}
+
     def save_step(self, step: str, data: Any) -> None:
         """按步骤把产物写入对应列/表，立即 commit。"""
         p = self.project
         assert p is not None
         if step in ("benchmark", "positioning", "golden_finger", "power_ladder"):
             setattr(p, step, data or {})
+        elif step == "antagonist_ladder":
+            self.merge_extra({"antagonist_ladder": data or []})
+        elif step == "mystery_schedule":
+            self.merge_extra({"mystery_schedule": data or {}})
+            self._save_mystery_clues(data or {})
+        elif step == "title_blurb":
+            self.merge_extra({"title_blurb": data or {}})
+            chosen = str((data or {}).get("chosen_title") or "").strip()
+            if chosen:
+                p.title = chosen[:120]
         elif step == "factions":
             for i, f in enumerate(data or []):
                 self.db.add(DabaiFaction(
                     project_id=p.id, name=f.get("name", ""), stance=f.get("stance"),
                     role=f.get("role"), power_tier=f.get("power_tier"),
-                    note=f.get("note"), sort_order=i,
+                    note=f.get("note"), locations=f.get("locations") or [],
+                    sort_order=i,
                 ))
         elif step == "characters":
             for i, c in enumerate(data or []):
@@ -108,13 +125,45 @@ class DabaiPersister:
             for i, s in enumerate(data or []):
                 self.db.add(DabaiStoryline(
                     project_id=p.id, name=s.get("name", ""), type=s.get("type"),
-                    summary=s.get("summary"), sort_order=i,
+                    summary=s.get("summary"), nodes=s.get("nodes") or [],
+                    bound_characters=s.get("bound_characters") or [], sort_order=i,
                 ))
         elif step == "story_assets":
             self._save_story_assets(data or {})
+            # 规划快照：vol 2+ build_expand_ctx 回读，给 chapter_design_context 提供
+            # relations_block（开局关系张力）与 assets_block（剧情资产台账）上下文。
+            # 不存则 vol 2+ 的全量章纲路径（volume_chapters/beat_sequence/chapter_outlines）
+            # 的 assets/relations 注入块均为空串。
+            self.merge_extra({"story_assets": data or {}})
         elif step == "volumes":
             self._save_volumes(data or [])
         self.db.commit()
+
+    def _save_mystery_clues(self, data: dict) -> None:
+        """谜题排程 → dabai_clues 种子（open，复盘期回收；按标题去重防与资产线索重复）。"""
+        p = self.project
+        existing = {
+            (c.title or "").strip()
+            for c in self.db.query(DabaiClue.title)
+            .filter(DabaiClue.project_id == p.id).all()
+        }
+        for m in (data.get("mysteries") or [])[:6]:
+            if not isinstance(m, dict):
+                continue
+            title = str(m.get("name") or "").strip()[:120]
+            if not title or title in existing:
+                continue
+            desc = (
+                f"[谜题] {str(m.get('hook_question') or '')[:60]}"
+                f"（第{m.get('final_reveal_volume', '?')}卷揭底；"
+                f"真相：{str(m.get('essence') or '')[:80]}）"
+            )
+            self.db.add(DabaiClue(
+                project_id=p.id, title=title, clue_type="foreshadow",
+                description=desc, chapter_planted=0, status="open",
+                source="bootstrap",
+            ))
+            existing.add(title)
 
     def _protagonist_name(self) -> str:
         """主角名（characters 步已落库后调用）。"""
@@ -179,6 +228,8 @@ class DabaiPersister:
         p = self.project
         rows: list[DabaiVolume] = []
         for v in vols:
+            extra = {k: v[k] for k in ("boss", "storyline_moves", "mystery_moves")
+                     if v.get(k)}
             row = DabaiVolume(
                 project_id=p.id,
                 volume_number=int(v.get("volume_number", len(rows) + 1)),
@@ -188,6 +239,7 @@ class DabaiPersister:
                 volume_climax=v.get("volume_climax"), end_hook=v.get("end_hook"),
                 realm_start_rank=v.get("realm_start_rank"),
                 realm_end_rank=v.get("realm_end_rank"),
+                extra=extra,
             )
             self.db.add(row)
             rows.append(row)
@@ -210,8 +262,13 @@ class DabaiPersister:
         self.db.commit()
         return self._chapter_seq
 
-    def finalize(self, linter_report: dict | None, failed_steps: list[str], meta: dict) -> DabaiProject:
+    def finalize(
+        self, linter_report: dict | None, failed_steps: list[str], meta: dict,
+        extra_update: dict | None = None,
+    ) -> DabaiProject:
         p = self.project
+        if extra_update:
+            self.merge_extra(extra_update)
         p.linter_report = linter_report or {}
         p.failed_steps = failed_steps or []
         p.meta = meta or {}
@@ -229,13 +286,15 @@ def persist_bootstrap_result(db: Session, result: Any, user_id: UUID | None) -> 
     persister = DabaiPersister(db, result.cfg, user_id)
     persister.create()
     for step in ("benchmark", "positioning", "golden_finger", "power_ladder",
-                 "factions", "characters", "storylines", "story_assets", "volumes"):
+                 "antagonist_ladder", "factions", "characters", "storylines",
+                 "story_assets", "mystery_schedule", "volumes", "title_blurb"):
         if ctx.get(step) is not None:
             persister.save_step(step, ctx[step])
     if ctx.get("chapter_outlines"):
         persister.save_chapter_batch(ctx["chapter_outlines"])
     project = persister.finalize(
         result.linter_report, result.failed_steps, result.to_json().get("meta", {}),
+        extra_update={"beat_sequence_vol1": ctx.get("beat_sequence") or None},
     )
     if persister._chapter_seq > 0 and not result.failed_steps:
         from app.services.dabai.lab_outline_lint import run_dabai_project_linter

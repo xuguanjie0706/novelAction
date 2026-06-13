@@ -35,6 +35,58 @@ _MATURE_USE_MARKERS = (
     "吸干", "转化", "再跳", "修为点", "闻丹", "捏碎", "撒碎", "休了你", "当面休",
 )
 
+# 反败为胜/逆袭类章节信号（payoff 须有「能赢的依据」铺垫，否则读者觉得开挂硬翻）
+_REVERSAL_MARKERS = (
+    "反败为胜", "逆袭", "翻盘", "反杀", "绝地反击", "扮猪吃虎", "以弱胜强",
+    "反压制", "绝处逢生", "触底反弹", "弱势翻", "逆风翻盘", "反制",
+)
+# 金手指进阶/解锁新能力里程碑信号（首次觉醒之外，任意章节）
+_GF_EVOLUTION_MARKERS = (
+    "进化", "升级", "解锁", "新能力", "第二阶段", "觉醒新", "晋阶", "二段",
+    "突破上限", "蜕变", "新形态", "新功能", "新权限", "新模块",
+)
+
+# 关键反转/获得须兑现前文铺垫（②③共用：注入 bind / reversal 脚手架末尾）
+_SETUP_CONSUME_LINE = (
+    "  ★铺垫依据（立得住）：本章关键反转/获得须兑现【既定事实记忆】或【未回收线索】中"
+    "已埋的一条；若前文确无铺垫，至少当场补一句立得住的依据（来历/代价/限制/破绽），"
+    "禁止凭空逆袭、禁止临场冒出全新能力。★\n"
+)
+
+
+def is_reversal_chapter(ch: dict) -> bool:
+    """章纲是否为反败为胜/逆袭类章节（payoff 须有「能赢的依据」铺垫）。"""
+    blob = " ".join([
+        ch.get("title") or "",
+        ch.get("shuang_type") or "",
+        ch.get("yinbao") or "",
+        ch.get("shuang_payoff") or ch.get("payoff") or "",
+        ch.get("emotion_turn") or "",
+    ])
+    return any(m in blob for m in _REVERSAL_MARKERS)
+
+
+def is_gf_evolution_chapter(ch: dict, *, golden_finger_name: str = "") -> bool:
+    """金手指进阶/解锁新能力里程碑（任意章节；区别于首次觉醒与熟练打脸）。
+
+    仅在出现明确进阶词且语境与金手指相关时为真，降低对普通打脸章的误报。
+    """
+    blob = " ".join([
+        ch.get("title") or "",
+        ch.get("yinbao") or "",
+        ch.get("shuang_payoff") or ch.get("payoff") or "",
+        ch.get("emotion_turn") or "",
+        ch.get("yaqu_setup") or "",
+    ])
+    if not any(m in blob for m in _GF_EVOLUTION_MARKERS):
+        return False
+    gf = (golden_finger_name or "").strip()
+    if gf and gf in blob:
+        return True
+    return any(
+        k in blob for k in ("系统", "金手指", "能力", "外挂", "传承", "功法", "神通")
+    )
+
 
 def is_awakening_chapter(
     ch: dict,
@@ -124,6 +176,7 @@ def prose_bind_instructions(*, gf_name: str = "", is_meta_protagonist: bool = Fa
             "  ① 疑：先疑为血炼夺命或幻觉，勿秒懂全套机制；\n"
             "  ② 证：精血骤止、幡面异动、魔诀灌脑或暖流入体等可感反馈；\n"
             "  ③ 择：赌命认主、被迫放血或咬牙接受灌脑；禁止「叮」/面板/任务栏。\n"
+            + _SETUP_CONSUME_LINE
         )
     return (
         "\n【金手指绑定节拍 · 本章硬约束】\n"
@@ -133,6 +186,30 @@ def prose_bind_instructions(*, gf_name: str = "", is_meta_protagonist: bool = Fa
         "  ③ 择：主动选择用挤出/哑声/赌命，或系统濒死强绑；禁止「虽然不知道这是什么"
         "但疯狂咆哮提取」式硬切。\n"
         "  触发文案对齐当下情绪（不甘/复仇/濒死），勿写无关的「吞噬欲望」。\n"
+        + _SETUP_CONSUME_LINE
+    )
+
+
+def prose_earned_reversal_instructions(*, artifact: bool = False) -> str:
+    """反败为胜/逆袭章正文硬约束：让翻盘「立得住」，而非凭空开挂硬翻。
+
+    与金手指绑定脚手架可叠加（既觉醒又翻盘的章节两块都注入）。
+    """
+    note = (
+        "动用器物认主后的新威能/精血底牌"
+        if artifact
+        else "动用【系统面板】/【台账】里已具备的境界·技能·法宝"
+    )
+    return (
+        "\n【反败为胜节拍 · 本章硬约束（让翻盘立得住，禁止凭空开挂）】\n"
+        "  ① 劣势确立：先把主角的被动/代价写实（受制于谁、差距多大、输了会怎样），勿一笔带过；\n"
+        f"  ② 翻盘依据：主角能赢必须有据可循——{note}、本章前文已埋的破绽/底牌，"
+        "禁止临场冒出全新能力；\n"
+        "  ③ 对手为何措手不及：给一个合理原因（轻敌、信息差、被引诱、规则盲区），"
+        "别让对手无脑挨打；\n"
+        "  ④ 代价/张力：翻盘带一点代价或险象（消耗、反噬、险胜），不要零成本碾压；\n"
+        "  ⑤ 见证者反应分级递进（愣住→不信→震惊→心服/恐惧），落到章末钩子。\n"
+        + _SETUP_CONSUME_LINE
     )
 
 

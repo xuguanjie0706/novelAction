@@ -213,6 +213,66 @@ def _build_memory_block(
     return "【既定事实记忆（复盘提取，不可违背）】\n" + "\n".join(sections)
 
 
+# 实体召回：本章出场人物的历史关键事实最多注入条数
+_ENTITY_RECALL_MAX = 10
+# 实体召回候选扫描上限（窗口外老记忆按章倒序取这么多再按人名过滤）
+_ENTITY_SCAN_LIMIT = 500
+
+
+def _chapter_stage_names(ch: DabaiChapterOutline) -> list[str]:
+    """本章出场人物名（involved_characters + witnesses，去重去空）。"""
+    seen: dict[str, None] = {}
+    for raw in list(ch.involved_characters or []) + list(ch.witnesses or []):
+        name = str(raw or "").strip()
+        if name and name not in seen:
+            seen[name] = None
+    return list(seen)
+
+
+def _build_entity_recall_block(
+    db: Session, project: DabaiProject, ch: DabaiChapterOutline,
+) -> str:
+    """实体召回：按本章出场人物的 tags，捞回「窗口外」的历史关键事实。
+
+    解决「老的低重要度事实掉出近期窗口 + dabai 无语义检索 → 旧角色再登场时
+    其身份/恩怨无法被召回」的长篇衔接断层。只召回 chapter < 近期窗口 的记忆，
+    避免与 ``_build_memory_block`` 的近期全量轨重复。
+    """
+    names = _chapter_stage_names(ch)
+    if not names:
+        return ""
+    cur = ch.chapter_number or 0
+    recent_from = cur - _RECENT_WINDOW
+    if recent_from <= 1:
+        return ""  # 开篇阶段没有「窗口外」历史，跳过
+    name_set = set(names)
+    rows = (
+        db.query(DabaiMemory)
+        .filter(
+            DabaiMemory.project_id == project.id,
+            DabaiMemory.mem_type != "summary",
+            DabaiMemory.chapter_number < recent_from,
+        )
+        .order_by(DabaiMemory.chapter_number.desc())
+        .limit(_ENTITY_SCAN_LIMIT)
+        .all()
+    )
+    matched = [m for m in rows if name_set & {str(t).strip() for t in (m.tags or [])}]
+    if not matched:
+        return ""
+    matched.sort(key=lambda m: (m.importance or 0, m.chapter_number or 0), reverse=True)
+    top = sorted(matched[:_ENTITY_RECALL_MAX], key=lambda m: m.chapter_number or 0)
+    lines = [
+        f"  - 第{m.chapter_number}章[{_MEM_LABELS.get(m.mem_type, m.mem_type)}] {m.content}"
+        for m in top
+    ]
+    who = "、".join(names[:8])
+    return (
+        f"▸本章出场人物（{who}）的既往关键事实（防遗忘，须与之衔接）：\n"
+        + "\n".join(lines)
+    )
+
+
 def _build_clue_block(
     db: Session, project: DabaiProject, ch: DabaiChapterOutline, top_k: int = 12,
 ) -> str:
@@ -390,13 +450,80 @@ def build_lab_draft_context(
             prev_full_block = _build_prev_full_block(prev.content or "")
             prev_content_hash = content_fingerprint(prev.content or "")
 
+    memory_block = _build_memory_block(db, project, ch, summaries)
+    entity_block = _build_entity_recall_block(db, project, ch)
+    if entity_block:
+        memory_block = (memory_block + "\n" + entity_block).strip() if memory_block else (
+            "【既定事实记忆（复盘提取，不可违背）】\n" + entity_block
+        )
+
     return LabDraftContext(
         prev_tail=prev_tail,
         recent_plot_block=_build_recent_plot_block(db, project, ch, summaries, hooks),
-        memory_block=_build_memory_block(db, project, ch, summaries),
+        memory_block=memory_block,
         clue_block=_build_clue_block(db, project, ch),
         panel_block=_build_panel_block(db, project, ch),
         prev_full_block=prev_full_block,
         prev_hook_block=_build_prev_hook_block(prev, hooks),
         prev_content_hash=prev_content_hash,
     )
+
+
+def _semantic_query_text(ch: DabaiChapterOutline) -> str:
+    """以本章五拍要素 + 出场人物拼出语义检索 query。"""
+    parts = [
+        str(ch.title or ""), str(ch.shuang_type or ""), str(ch.yaqu_setup or ""),
+        str(ch.emotion_turn or ""), str(ch.yinbao or ""), str(ch.shuang_payoff or ""),
+        "、".join(_chapter_stage_names(ch)),
+    ]
+    return " ".join(p for p in parts if p.strip())[:1000]
+
+
+async def _build_semantic_recall_block(
+    db: Session, project: DabaiProject, ch: DabaiChapterOutline,
+) -> str:
+    """pgvector 语义召回：与本章情节最相关的既往事实（跨越近期窗口的旧事实）。
+
+    只保留窗口外命中（窗口内已由 ``_build_memory_block`` 近期轨全量注入），
+    pgvector 不可用时 ``semantic_search_dabai`` 返回 []，本块为空。
+    """
+    from app.services.dabai.lab_embedding import semantic_search_dabai
+
+    cur = ch.chapter_number or 0
+    recent_from = cur - _RECENT_WINDOW
+    query = _semantic_query_text(ch)
+    if not query:
+        return ""
+    hits = await semantic_search_dabai(db, project.id, query, top_k=8, max_chapter=cur)
+    hits = [m for m in hits if (m.chapter_number or 0) < recent_from]
+    if not hits:
+        return ""
+    hits.sort(key=lambda m: m.chapter_number or 0)
+    lines = [
+        f"  - 第{m.chapter_number}章[{_MEM_LABELS.get(m.mem_type, m.mem_type)}] {m.content}"
+        for m in hits
+    ]
+    return "▸与本章情节语义最相关的既往事实：\n" + "\n".join(lines)
+
+
+async def build_lab_draft_context_async(
+    db: Session,
+    project: DabaiProject,
+    ch: DabaiChapterOutline,
+    *,
+    semantic: bool = True,
+) -> LabDraftContext:
+    """异步组装写章上下文：同步块 + pgvector 语义召回块（追加进 memory_block）。
+
+    供 async 写作路径（draft / 导演单 / 分场）调用；纯同步场景仍可用
+    ``build_lab_draft_context``（仅缺语义召回轨，实体召回不受影响）。
+    """
+    ctx = build_lab_draft_context(db, project, ch)
+    if semantic:
+        block = await _build_semantic_recall_block(db, project, ch)
+        if block:
+            ctx.memory_block = (
+                (ctx.memory_block + "\n" + block).strip() if ctx.memory_block
+                else "【既定事实记忆（复盘提取，不可违背）】\n" + block
+            )
+    return ctx

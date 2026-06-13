@@ -20,6 +20,13 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
 from app.database import Base
+from app.config import settings
+
+try:
+    from pgvector.sqlalchemy import Vector
+    HAS_PGVECTOR = True
+except ImportError:  # pgvector 未安装时优雅降级（不定义 embedding 列）
+    HAS_PGVECTOR = False
 
 
 class DabaiPreWarnRecord(Base):
@@ -125,6 +132,13 @@ class DabaiMemory(Base):
     content = Column(Text, nullable=False)
     importance = Column(Integer, default=3)          # 1-5
     tags = Column(JSON, default=list)                # 涉及人名等
+
+    # pgvector 语义召回（维度由 EMBEDDING_DIM 决定，默认 BAAI/bge-m3=1024）；
+    # 复盘落库后由 lab_embedding.embed_dabai_memories_async 异步写入。
+    # pgvector 未安装则跳过该列，检索自动降级为 实体召回 + 重要度/时效兜底。
+    if HAS_PGVECTOR:
+        embedding = Column(Vector(settings.EMBEDDING_DIM))
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 

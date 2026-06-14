@@ -181,6 +181,7 @@ async def aiter_chapter_batches(
     chapter_offset: int = 0,
     prev_tail: str = "",
     realm_floor: int | None = None,
+    use_expand_window: bool = True,
 ) -> AsyncIterator[tuple[list[dict], int, int]]:
     """两段式逐批生成目标卷章纲，yield (batch_chapters, global_start, global_end)。
 
@@ -191,6 +192,10 @@ async def aiter_chapter_batches(
 
     批间承接两条线：① 爽点钩子(prev_tail)；② 境界脊柱(realm_floor，单调不减、写库强保证)。
 
+    use_expand_window:
+      True（默认，写作期卷展开/增量补全）：单次最多 outline_expand_size 章（如 15）。
+      False（bootstrap 建书）：一次生成卷内全部 planned_chapters（如 30）。
+
     卷展开（写作期，卷2+ / 增量补全）专用参数：
       start_chapter: 卷内起始章（1-based）。未满卷增量补全时从已有章数+1 起批。
       chapter_offset: 全局章号偏移（= 之前各卷 planned_chapters 之和）。落库与 prompt
@@ -200,10 +205,11 @@ async def aiter_chapter_batches(
     """
     from dabai.repair import repair_batch
 
-    planned = cfg.outline_window_end(
-        int(target_volume.get("planned_chapters", cfg.volume_chapters)),
-        start_chapter,
-    )
+    vol_planned = int(target_volume.get("planned_chapters", cfg.volume_chapters))
+    if use_expand_window:
+        planned = cfg.outline_window_end(vol_planned, start_chapter)
+    else:
+        planned = vol_planned
     ctx["_target_volume"] = target_volume
     rmax = _realm_max(ctx)
     vr_lo = target_volume.get("realm_start_rank") or 1

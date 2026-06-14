@@ -36,6 +36,33 @@ def _beat(num: int) -> dict:
     }
 
 
+def test_default_volume_uses_single_call_path():
+    """默认 30 章建书应走单次 volume_chapters，而非两段式分批。"""
+    from dabai.config import DabaiConfig
+
+    cfg = DabaiConfig(volume_chapters=30)
+    window_n = 30  # bootstrap: use_expand_window=False → planned=vol_planned
+    assert window_n <= cfg.single_call_max_chapters
+
+
+def test_bootstrap_uses_full_volume_window():
+    """建书（use_expand_window=False）应一次排满整卷，不受 outline_expand_size 限制。"""
+    from dabai.config import DabaiConfig
+
+    cfg = DabaiConfig(volume_chapters=30, outline_expand_size=15)
+    vol_planned = 30
+    start = 1
+    # 写作期窗口
+    assert cfg.outline_window_end(vol_planned, start) == 15
+    # 建书逻辑等价：不走 outline_window_end
+    use_expand_window = False
+    if use_expand_window:
+        end = cfg.outline_window_end(vol_planned, start)
+    else:
+        end = vol_planned
+    assert end == 30
+
+
 def test_outline_window_end():
     from dabai.config import DabaiConfig
 

@@ -65,3 +65,16 @@ export function formatQualityRewriteInstruction(report: DabaiLabQualityReport): 
 
   return lines.join('\n').trim()
 }
+
+/** 是否可「按本章建议直接修订」（不含后续章-only 建议）。 */
+export function canQcPatchRewrite(report: DabaiLabQualityReport | null | undefined): boolean {
+  if (!report) return false
+  const llm = report.llm
+  if (report.rewrite_prompt?.trim()) return true
+  if ((report.blockers?.length ?? 0) > 0 || (report.warnings?.length ?? 0) > 0) return true
+  if ((llm?.chapter_suggestions?.length ?? 0) > 0 || (llm?.suggestions?.length ?? 0) > 0) return true
+  if ((llm?.beat_issues?.length ?? 0) > 0) return true
+  if (llm?.continuity_issue?.trim() && (llm.continuity_score ?? 100) < 80) return true
+  if (llm?.hook_issue?.trim() && (llm.hook_score ?? 100) < 80) return true
+  return false
+}

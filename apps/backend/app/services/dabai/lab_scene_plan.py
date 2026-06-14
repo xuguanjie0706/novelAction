@@ -25,6 +25,11 @@ from app.services.dabai.lab_prompt_shared import (
     has_location_gap,
     inject_prewarn_into_scene_plan,
 )
+from app.services.dabai.lab_word_budget import (
+    chapter_word_target,
+    finalize_scene_plan_result,
+    scene_plan_from_row,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +58,8 @@ _SCENEPLAN_SYSTEM = (
     "4. sensory_anchor 给一个具体可感的细节锚点（断剑上的缺口/掌心的汗/"
     "丹炉的焦味），正文用它落地，一场一个就够；\n"
     "5. 尊重给定的事实基准（前情/面板/台账/导演单），禁止编造未持有的能力；\n"
-    "6. word_budget 总和≈目标字数，爽点场占大头。\n"
+    "6. word_budget：各场预算之和必须 **严格等于** 章纲目标字数（见 user 首行），"
+    "爽点/引爆场占大头，位移承接场可偏短；禁止自行放大总预算。\n"
     "只返回 JSON，不要任何解释。"
 )
 
@@ -82,10 +88,11 @@ def build_sceneplan_prompt(
 ) -> tuple[str, str]:
     """构造分场调度 (system, user)。复用写章同一份上下文，不重复查库。"""
     gf = project.golden_finger or {}
-    target = ch.expected_words or 2000
+    target = chapter_word_target(ch)
+    per_scene = max(target // 3, 400)
     parts = [
         f"《{project.title or project.logline}》第{ch.chapter_number}章 分场调度。"
-        f"目标字数 {target}。",
+        f"★章纲目标字数 {target}（各场 word_budget 合计必须等于 {target}，不得超出）★。",
         f"金手指：{gf.get('name', '')}（{gf.get('core_ability', '')}）",
     ]
     ladder_block = build_power_ladder_block(project)
@@ -140,11 +147,11 @@ def build_sceneplan_prompt(
         '      "dialogue_ammo": ["关键台词原话2-3句"],\n'
         '      "sensory_anchor": "1个具体感官细节",\n'
         '      "end_turn": "本场结尾的转折/递进（勾下一场）",\n'
-        f'      "word_budget": {max(target // 3, 400)}\n'
+        f'      "word_budget": {per_scene}\n'
         "    }\n"
         "  ]\n"
         "}\n"
-        "scenes 共 2-4 场，word_budget 合计≈目标字数。"
+        f"scenes 共 2-4 场，word_budget 合计必须等于 {target}（示例单场约 {per_scene}，按节拍自行分配）。"
     )
     return _SCENEPLAN_SYSTEM, "\n\n".join(parts)
 
@@ -154,7 +161,14 @@ def format_scene_block(result: dict) -> str:
     scenes = result.get("scenes")
     if not isinstance(scenes, list) or not scenes:
         return ""
-    lines = ["【分场调度（正文必须按场推进，禁止合并/跳场/自创新场）】"]
+    total = int(result.get("word_budget_total") or 0)
+    if total <= 0:
+        total = sum(int(s.get("word_budget") or 0) for s in scenes if isinstance(s, dict))
+    lines = [
+        "【分场调度（正文必须按场推进，禁止合并/跳场/自创新场；篇幅以各场 word_budget 为硬上限）】",
+    ]
+    if total > 0:
+        lines.append(f"  全章预算合计 {total} 字（已与章纲 expected_words 对齐）")
     opening = str(result.get("opening_line") or "").strip()
     if opening:
         lines.append(f"  开篇指令（按指令自行开写，禁止照抄本行字句当正文首句）：{opening}")
@@ -176,10 +190,14 @@ def format_scene_block(result: dict) -> str:
         if sc.get("end_turn"):
             lines.append(f"    场末转折：{sc['end_turn']}")
     lines.append(
-        "  ★每场写细：动作拆成连续画面、对话有来回（一问一答一反应），"
-        "见证者反应按 愣住→不信→震惊→心服 的台阶走，禁止一句话带过一场戏。"
+        "  ★每场写细但控字：动作拆成连续画面、对话有来回，"
+        "见证者反应按 愣住→不信→震惊→心服 走台阶；不得超过各场 word_budget 上限。"
     )
     return "\n".join(lines)
+
+
+def _result_from_row(row: DabaiScenePlan, ch: DabaiChapterOutline) -> dict | None:
+    return scene_plan_from_row(row.opening_line, row.scenes, ch)
 
 
 def load_lab_scene_plan(db: Session, chapter_id: UUID) -> str:
@@ -203,6 +221,31 @@ def load_lab_scene_plan(db: Session, chapter_id: UUID) -> str:
     return ""
 
 
+def load_lab_scene_plan_with_result(
+    db: Session,
+    ch: DabaiChapterOutline,
+) -> tuple[str, dict | None]:
+    """读取本章最新分场块 + 归一化后的 result dict。"""
+    row = (
+        db.query(DabaiScenePlan)
+        .filter(DabaiScenePlan.chapter_id == ch.id)
+        .order_by(DabaiScenePlan.created_at.desc())
+        .first()
+    )
+    if not row:
+        return "", None
+    brief = (row.brief or "").strip()
+    result = _result_from_row(row, ch)
+    if result:
+        brief = format_scene_block(result) or brief
+    elif row.scenes:
+        brief = format_scene_block({
+            "opening_line": row.opening_line or "",
+            "scenes": row.scenes,
+        })
+    return brief, result
+
+
 def refresh_lab_scene_block(
     db: Session,
     ch: DabaiChapterOutline,
@@ -210,7 +253,7 @@ def refresh_lab_scene_block(
     prev_ch: DabaiChapterOutline | None,
     prev_tail: str,
     pre_warn_result: dict | None,
-) -> str:
+) -> tuple[str, dict | None]:
     """重写正文时按最新上章结尾重算分场块（剔除过时的位移承接场）。"""
     row = (
         db.query(DabaiScenePlan)
@@ -219,7 +262,7 @@ def refresh_lab_scene_block(
         .first()
     )
     if not row or not row.scenes:
-        return load_lab_scene_plan(db, ch.id)
+        return load_lab_scene_plan_with_result(db, ch)
     refreshed = inject_prewarn_into_scene_plan(
         {"opening_line": row.opening_line or "", "scenes": row.scenes},
         pre_warn_result,
@@ -227,7 +270,11 @@ def refresh_lab_scene_block(
         prev_ch,
         prev_tail=prev_tail,
     )
-    return format_scene_block(refreshed) or load_lab_scene_plan(db, ch.id)
+    refreshed = finalize_scene_plan_result(refreshed, ch)
+    brief = format_scene_block(refreshed)
+    if brief:
+        return brief, refreshed
+    return load_lab_scene_plan_with_result(db, ch)
 
 
 def persist_scene_plan(
@@ -267,14 +314,14 @@ async def resolve_lab_scene_plan(
     *,
     replace_existing: bool = False,
     strict: bool = False,
-) -> tuple[str, dict]:
+) -> tuple[str, dict, dict | None]:
     """生成分场调度单；传 db 时落库（持久化优先）。
 
     失败行为：strict=True 抛 ``LabScenePlanError`` 中止写章（正文质量优先，
     五拍直写是断层与同质化的温床）；strict=False 降级空块继续（兼容旧调用方）。
 
     Returns:
-        (scene_block 注入块, SSE scene_plan_done 事件 payload)。
+        (scene_block 注入块, SSE scene_plan_done 事件 payload, 归一化后的 result dict)。
     """
     try:
         from app.services.bootstrap.parse import parse_json
@@ -297,6 +344,7 @@ async def resolve_lab_scene_plan(
         result = inject_prewarn_into_scene_plan(
             result, pre_warn_result, ch, prev_ch, prev_tail=ctx.prev_tail,
         )
+        result = finalize_scene_plan_result(result, ch)
         brief = format_scene_block(result)
         if not brief:
             raise ValueError("分场结构残缺（scenes 为空）")
@@ -315,7 +363,8 @@ async def resolve_lab_scene_plan(
             "version": SCENEPLAN_VERSION,
             "scene_count": len(scenes),
             "scene_names": [str(s.get("name", "")) for s in scenes if isinstance(s, dict)][:5],
-        }
+            "word_budget_total": result.get("word_budget_total"),
+        }, result
     except Exception as exc:  # noqa: BLE001
         logger.warning("dabai-lab 分场%s chapter=%s: %s",
                        "失败（strict 中止）" if strict else "降级", ch.id, exc)
@@ -330,4 +379,4 @@ async def resolve_lab_scene_plan(
             "version": SCENEPLAN_VERSION,
             "scene_count": 0,
             "error": f"分场调度失败（已降级为五拍直写）：{exc}",
-        }
+        }, None

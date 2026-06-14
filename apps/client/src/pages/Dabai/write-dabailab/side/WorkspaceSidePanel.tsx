@@ -36,12 +36,16 @@ interface Props {
   memoryRefreshKey: number
   /** 质检侧栏「填入重写指令」→ 打开重写弹窗。 */
   onApplyRewriteFromQuality?: (instruction: string) => void
+  /** 质检侧栏「按本章建议重写」→ 轻量修订。 */
+  onQcPatchRewrite?: () => void
+  qcPatchRunning?: boolean
 }
 
 export default function WorkspaceSidePanel({
   projectId, chapter, preWarnLive, preWarnRefreshKey,
   scenePlanLive, scenePlanRefreshKey,
   qualityRefreshKey, memoryRefreshKey, onApplyRewriteFromQuality,
+  onQcPatchRewrite, qcPatchRunning,
 }: Props) {
   const [open, setOpen] = useState(true)
   const [tab, setTab] = useState<SideTab>('prewarn')
@@ -141,6 +145,8 @@ export default function WorkspaceSidePanel({
               hasContent={hasContent}
               refreshKey={qualityRefreshKey}
               onApplyRewrite={onApplyRewriteFromQuality}
+              onQcPatchRewrite={onQcPatchRewrite}
+              qcPatchRunning={qcPatchRunning}
             />
           )}
           {tab === 'memory' && chapter.id && (

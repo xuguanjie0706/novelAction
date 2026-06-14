@@ -10,6 +10,7 @@ import { useAuthStore } from './store/authStore'
 const LoginPage = lazy(() => import('./pages/LoginPage'))
 const FanqiePage = lazy(() => import('./pages/FanqiePage'))
 const DabaiPage = lazy(() => import('./pages/DabaiPage'))
+const DabaiDetailPage = lazy(() => import('./pages/Dabai/detail'))
 const WriteDabailabPage = lazy(() => import('./pages/Dabai/write-dabailab'))
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage'))
 const BookshelfPage = lazy(() => import('./pages/BookshelfPage'))
@@ -154,6 +155,14 @@ export default function App() {
           element={
             <PrivateRoute>
               {withSuspense(<DabaiPage />)}
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/dabai/:projectId"
+          element={
+            <PrivateRoute>
+              {withSuspense(<DabaiDetailPage />)}
             </PrivateRoute>
           }
         />

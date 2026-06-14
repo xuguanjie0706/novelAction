@@ -61,13 +61,12 @@ def _prev_chapter_tail(db: Session, project_id: str, chapter: Chapter) -> str:
     return clean[-800:] if len(clean) > 800 else clean
 
 
-def dabai_draft_max_tokens(expected_words: int) -> int:
-    """dabai 正文 completion 预算：对齐 prompt 字数上限（目标+200），避免失控超长。"""
+def dabai_draft_max_tokens(word_hi: int) -> int:
+    """dabai 正文 completion 预算：对齐正文 prompt 硬上限（分场合计或章纲 hi），防失控超长。"""
     from app.services.llm_token_budgets import ensure_min_completion_tokens
 
-    target = int(expected_words or 2000)
-    hi = target + 200
-    cap = max(1600, int(hi * 1.08))
+    hi = max(1200, int(word_hi or 2200))
+    cap = max(1200, int(hi * 1.06))
     return min(ensure_min_completion_tokens(cap), 4096)
 
 
@@ -97,6 +96,7 @@ async def stream_dabai_chapter_draft(
         inputs = await prepare_dabai_draft_inputs(db, project, chapter, project_id)
     plan = inputs.plan
     expected = int((plan.expected_words if plan else None) or 2000)
+    word_hi = expected + 200
 
     system, prompt = build_dabai_draft_prompt(
         project,
@@ -116,7 +116,7 @@ async def stream_dabai_chapter_draft(
         system,
         prompt,
         task="dabai.write",
-        max_tokens=dabai_draft_max_tokens(expected),
+        max_tokens=dabai_draft_max_tokens(word_hi),
         context=ctx,
     ):
         if chunk:

@@ -90,7 +90,7 @@ export default function DabaiCreateDialog({
             章
           </label>
           <span className="text-[11px] text-gray-400">
-            建书先展开 {outlineExpandSize} 章，满卷需展开 {Math.max(1, Math.ceil(volumeChapters / outlineExpandSize))} 次
+            建书一次生成 {volumeChapters} 章；后续补全/新卷按 {outlineExpandSize} 章展开
           </span>
         </div>
         {generating && steps.length > 0 && (

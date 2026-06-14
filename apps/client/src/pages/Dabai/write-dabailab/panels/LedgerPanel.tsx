@@ -231,15 +231,17 @@ function RelationSection({ projectId }: { projectId: string }) {
   )
 }
 
-export default function LedgerPanel({ projectId }: { projectId: string }) {
+export default function LedgerPanel({ projectId, embedded = false }: { projectId: string; embedded?: boolean }) {
   const [sub, setSub] = useState<'assets' | 'relations'>('assets')
   return (
-    <div className="mx-auto max-w-3xl space-y-4 p-4">
-      <div className="flex items-center gap-2">
-        <Package size={16} className="text-amber-500" />
-        <h2 className="text-sm font-semibold text-gray-900">台账</h2>
-        <span className="text-xs text-gray-400">复盘自动维护 · 写章/导演单注入约束</span>
-      </div>
+    <div className={embedded ? 'space-y-4' : 'mx-auto max-w-3xl space-y-4 p-4'}>
+      {!embedded ? (
+        <div className="flex items-center gap-2">
+          <Package size={16} className="text-amber-500" />
+          <h2 className="text-sm font-semibold text-gray-900">台账</h2>
+          <span className="text-xs text-gray-400">复盘自动维护 · 写章/导演单注入约束</span>
+        </div>
+      ) : null}
       <div className="flex gap-1">
         {([['assets', '资产', Package], ['relations', '关系', Users2]] as const).map(([id, label, Icon]) => (
           <button

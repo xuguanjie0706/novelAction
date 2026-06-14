@@ -527,7 +527,7 @@ async def lab_scene_plan_run(
     ledger_block = build_ledger_block(db, project, ch)
     replace_existing = bool((ch.content or "").strip())
     svc = _build_ai(req, db, user)
-    brief, evt = await resolve_lab_scene_plan(
+    brief, evt, _result = await resolve_lab_scene_plan(
         svc, project, ch, draft_ctx, db=db,
         pre_warn_block=pre_warn_block, ledger_block=ledger_block,
         pre_warn_result=pre_warn_result,

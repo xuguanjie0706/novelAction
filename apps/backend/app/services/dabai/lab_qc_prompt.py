@@ -13,6 +13,7 @@ from app.services.dabai.lab_prompt_shared import (
     needs_location_bridge,
     opening_continues_prev_tail,
 )
+from app.services.dabai.intensity import intensity_qc_note, resolve_dabai_intensity
 from dabai.golden_finger_bind import is_awakening_chapter, prose_bind_instructions
 from dabai.non_system import prefers_non_system
 
@@ -35,8 +36,12 @@ _LAB_QC_SYSTEM = (
     "出现上帝视角旁白（写主角不可能知道的他人内心/幕后真相/未来结果/设定来历全貌）、"
     "或作者下场分析点评（『其实这是…』『殊不知…』『这正是…的奥妙』），"
     "或新事物（道具/金手指/能力/陌生人）登场时主角不懵、无人解释也无自我疑问、"
-    "却被旁白或主角直接报出名称来历用法数值——均属缺陷，"
-    "须在 chapter_suggestions 写一条 [视角] 前缀的修复建议，并相应压低 hook_score/beats 评价。"
+    "却被旁白或主角直接报出名称来历用法数值，"
+    "或其他角色（配角/反派/路人）凭空知道未公开的真相/主角底牌却无交代来源——均属缺陷，"
+    "须在 chapter_suggestions 写一条 [视角] 前缀的修复建议，并相应压低 hook_score/beats 评价。\n"
+    "【可信度验收】对主角有利的转机/巧合/碾压若无前文铺垫、也无当场交代的依据"
+    "（来历/动机/代价/对方破绽或轻敌），属「开挂硬翻/天降好运」缺陷，"
+    "须在 chapter_suggestions 写一条 [可信] 前缀的修复建议并压低 beats 评价。"
 )
 
 def golden_chapter_calibration(
@@ -139,6 +144,9 @@ def build_lab_qc_prompt(
         mid = content[c - 400: c + 400]
 
     parts = [f"《第{ch.chapter_number}章 {ch.title or ''}》质检。"]
+    intensity_note = intensity_qc_note(resolve_dabai_intensity(project))
+    if intensity_note:
+        parts.append(intensity_note)
     cal = golden_chapter_calibration(ch, project)
     if cal:
         parts.append(cal)

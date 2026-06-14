@@ -4,6 +4,56 @@ from app.services.dabai.lab_qc_feedback import (
     attach_rewrite_prompt,
     build_lab_rewrite_prompt,
 )
+from app.services.dabai.lab_qc_patch import (
+    build_qc_patch_prompt,
+    report_actionable_for_patch,
+)
+
+
+def test_build_qc_patch_prompt_chapter_only():
+    ch = type("Ch", (), {
+        "chapter_number": 3,
+        "title": "打脸",
+        "end_hook": "神秘人现身",
+        "expected_words": 2200,
+        "shuang_type": "",
+    })()
+    report = {
+        "overall_score": 76,
+        "llm": {
+            "continuity_score": 85,
+            "beat_score": 70,
+            "hook_score": 65,
+            "beats": {"shuang_payoff": "partial", "end_hook": "pass"},
+            "chapter_suggestions": ["加强见证者三级反应"],
+            "future_chapter_suggestions": ["下章换场景"],
+            "hook_issue": "钩子太虚",
+        },
+        "warnings": [{"rule_id": "DBQ-03", "message": "章末套话"}],
+    }
+    system, user = build_qc_patch_prompt(
+        ch, prior_content="林凡冷笑。" * 20, report=report, title="测试书",
+    )
+    assert "外科手术" in system
+    assert "林凡冷笑" in user
+    assert "加强见证者" in user
+    assert "钩子太虚" in user
+    assert "下章换场景" not in user
+    assert "神秘人现身" in user
+
+
+def test_report_actionable_for_patch_future_only_false():
+    assert not report_actionable_for_patch({
+        "overall_score": 90,
+        "llm": {"future_chapter_suggestions": ["下章注意"]},
+    })
+
+
+def test_report_actionable_for_patch_with_chapter_tip():
+    assert report_actionable_for_patch({
+        "overall_score": 88,
+        "llm": {"chapter_suggestions": ["payoff 再具体"]},
+    })
 
 
 def test_attach_rewrite_prompt_below_threshold():

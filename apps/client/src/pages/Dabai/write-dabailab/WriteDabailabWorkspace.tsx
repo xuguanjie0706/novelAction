@@ -11,7 +11,7 @@ import DraftLaunchModal, { type DraftLaunchOptions } from './DraftLaunchModal'
 import WorkspaceSidePanel from './side/WorkspaceSidePanel'
 import type { PreWarnLive } from './side/PreWarnCard'
 import type { ScenePlanLive } from './side/ScenePlanCard'
-import { dabaiApi, dabaiDraftStream } from '../../../api/dabai'
+import { dabaiApi, dabaiDraftStream, type DabaiDraftRequest } from '../../../api/dabai'
 import type { DabaiChapter } from '../../../types/dabai'
 import type { DabaiBeatDisplay } from '../../../utils/dabaiOutlineDisplay'
 import { llmProviderIdFromRoute, modelProfileFromRoute, useAppStore } from '../../../store'
@@ -68,9 +68,9 @@ export default function WriteDabailabWorkspace({
     }
   }
 
-  const runDraft = async (opts: DraftLaunchOptions) => {
+  const runStreamDraft = async (payload: DabaiDraftRequest, opts?: { skipBlockCheck?: boolean }) => {
     if (!chapter.id) return
-    if (generateBlockReason) {
+    if (!opts?.skipBlockCheck && generateBlockReason) {
       toast.error(generateBlockReason)
       return
     }
@@ -79,7 +79,6 @@ export default function WriteDabailabWorkspace({
     setBusy(true)
     let acc = ''
     let gotChunk = false
-    const isRewrite = Boolean(chapter.content?.trim())
     try {
       await dabaiDraftStream(
         projectId,
@@ -89,11 +88,7 @@ export default function WriteDabailabWorkspace({
           ...(llmProviderIdFromRoute(aiBackendRoute)
             ? { llm_provider_id: llmProviderIdFromRoute(aiBackendRoute) }
             : {}),
-          user_instruction: opts.userInstruction.trim() || undefined,
-          rerun_pre_warn: isRewrite ? opts.rerunPreWarn : false,
-          rerun_scene_plan: isRewrite ? opts.rerunScenePlan : false,
-          rerun_quality: isRewrite ? opts.rerunQuality : true,
-          rerun_debrief: isRewrite ? opts.rerunDebrief : true,
+          ...payload,
         },
         ev => {
           if (ev.event === 'chunk') {
@@ -141,6 +136,36 @@ export default function WriteDabailabWorkspace({
     } finally {
       setBusy(false)
     }
+  }
+
+  const runDraft = async (opts: DraftLaunchOptions) => {
+    const isRewrite = Boolean(chapter.content?.trim())
+    await runStreamDraft({
+      user_instruction: opts.userInstruction.trim() || undefined,
+      rewrite_mode: 'full',
+      rerun_pre_warn: isRewrite ? opts.rerunPreWarn : false,
+      rerun_scene_plan: isRewrite ? opts.rerunScenePlan : false,
+      rerun_quality: isRewrite ? opts.rerunQuality : true,
+      rerun_debrief: isRewrite ? opts.rerunDebrief : true,
+    })
+  }
+
+  const runQcPatchRewrite = async () => {
+    if (!text.trim()) {
+      toast.error('本章尚无正文')
+      return
+    }
+    const ok = window.confirm(
+      '将仅根据本章正文与质检建议做定点修订，不重新跑预警/分场。\n\n继续？',
+    )
+    if (!ok) return
+    await runStreamDraft({
+      rewrite_mode: 'qc_patch',
+      rerun_pre_warn: false,
+      rerun_scene_plan: false,
+      rerun_quality: true,
+      rerun_debrief: true,
+    }, { skipBlockCheck: true })
   }
 
   const wordCount = text.length
@@ -311,6 +336,8 @@ export default function WriteDabailabWorkspace({
         qualityRefreshKey={qualityRefreshKey}
         memoryRefreshKey={memoryRefreshKey}
         onApplyRewriteFromQuality={openRewriteFromQuality}
+        onQcPatchRewrite={() => void runQcPatchRewrite()}
+        qcPatchRunning={busy}
       />
     </div>
   )

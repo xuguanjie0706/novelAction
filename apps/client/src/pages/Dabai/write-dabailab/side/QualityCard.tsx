@@ -6,12 +6,13 @@
 import { useEffect, useState } from 'react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
-import { Loader2, PenLine, ShieldCheck } from 'lucide-react'
+import { Loader2, PenLine, ShieldCheck, Wand2 } from 'lucide-react'
 import { dabaiLabApi } from '../../../../api/dabaiLab'
 import type { DabaiLabQualityReport } from '../../../../types/dabaiLab'
 import { llmProviderIdFromRoute, modelProfileFromRoute, useAppStore } from '../../../../store'
 import {
   canApplyQualityRewrite,
+  canQcPatchRewrite,
   formatQualityRewriteInstruction,
 } from '../../../../utils/dabaiQualityRewrite'
 import { BEAT_KEYS, BEAT_LABELS } from './labels'
@@ -24,6 +25,10 @@ interface Props {
   refreshKey: number
   /** 将质检建议填入重写弹窗。 */
   onApplyRewrite?: (instruction: string) => void
+  /** 按本章质检建议直接修订（轻上下文，不弹窗）。 */
+  onQcPatchRewrite?: () => void
+  /** 轻量修订进行中。 */
+  qcPatchRunning?: boolean
 }
 
 function scoreColor(v: number): string {
@@ -49,6 +54,7 @@ function ScoreRow({ label, value }: { label: string; value: number }) {
 
 export default function QualityCard({
   projectId, chapterId, hasContent, refreshKey, onApplyRewrite,
+  onQcPatchRewrite, qcPatchRunning = false,
 }: Props) {
   const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
   const [report, setReport] = useState<DabaiLabQualityReport | null>(null)
@@ -102,6 +108,7 @@ export default function QualityCard({
     report && (report.overall_score ?? 100) < 80 && report.rewrite_prompt?.trim(),
   )
   const canRewrite = canApplyQualityRewrite(report) && Boolean(onApplyRewrite)
+  const canQcPatch = canQcPatchRewrite(report) && hasContent && Boolean(onQcPatchRewrite)
 
   return (
     <div className="space-y-3 text-xs">
@@ -118,15 +125,40 @@ export default function QualityCard({
         {hasContent ? (running ? '质检中…' : '重新跑质检') : '本章尚无正文'}
       </button>
 
-      {canRewrite ? (
-        <button
-          type="button"
-          onClick={applyRewrite}
-          className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 font-semibold text-rose-600 hover:bg-rose-100"
-        >
-          <PenLine size={13} />
-          填入重写指令
-        </button>
+      {canRewrite || canQcPatch ? (
+        <div className="flex gap-2">
+          {canRewrite ? (
+            <button
+              type="button"
+              onClick={applyRewrite}
+              className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5 font-semibold text-rose-600 hover:bg-rose-100"
+            >
+              <PenLine size={13} />
+              填入重写指令
+            </button>
+          ) : null}
+          {canQcPatch ? (
+            <button
+              type="button"
+              disabled={qcPatchRunning || running}
+              onClick={() => onQcPatchRewrite?.()}
+              title="仅用本章正文+质检建议修订，不重新跑预警/分场"
+              className={clsx(
+                'inline-flex flex-1 items-center justify-center gap-1 rounded-lg border px-2 py-1.5 font-semibold',
+                qcPatchRunning || running
+                  ? 'cursor-not-allowed border-gray-100 bg-gray-50 text-gray-300'
+                  : 'border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100',
+              )}
+            >
+              {qcPatchRunning ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <Wand2 size={13} />
+              )}
+              按本章建议重写
+            </button>
+          ) : null}
+        </div>
       ) : null}
 
       {report ? (

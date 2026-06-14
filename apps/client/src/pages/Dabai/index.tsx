@@ -127,7 +127,7 @@ export default function DabaiShelfPage() {
                   <DabaiShelfCard
                     key={item.id}
                     item={item}
-                    onOpen={() => navigate(`/dabai/${item.id}/write-dabailab`)}
+                    onOpen={() => navigate(`/dabai/${item.id}`)}
                     onDelete={() => void handleDelete(item.id)}
                     deleting={deletingId === item.id}
                   />

@@ -7,6 +7,7 @@ import { api } from './base'
 import type {
   DabaiExportPreview,
   DabaiGenerateRequest,
+  DabaiIntensity,
   DabaiProjectDetail,
   DabaiProjectSummary,
   DabaiStreamEvent,
@@ -103,6 +104,8 @@ export interface DabaiDraftRequest {
   llm_provider_id?: string
   /** 作者写作指令，可为空；注入正文 prompt 最高优先级块。 */
   user_instruction?: string
+  /** full=按要素重写；qc_patch=仅本章正文+质检建议修订。 */
+  rewrite_mode?: 'full' | 'qc_patch'
   rerun_pre_warn?: boolean
   rerun_scene_plan?: boolean
   rerun_quality?: boolean
@@ -168,6 +171,13 @@ export const dabaiApi = {
   /** 删除项目。 */
   remove(id: string) {
     return api.delete<{ ok: boolean; deleted: string }>(`/dabai/projects/${id}`)
+  },
+
+  /** 设置叙事烈度档（降调/标准/够炸）；双写 positioning + extra。 */
+  setIntensity(id: string, intensity: DabaiIntensity) {
+    return api.patch<{ id: string; intensity: string }>(
+      `/dabai/projects/${id}/settings`, { intensity },
+    )
   },
 
   /** 全书章纲 linter 重跑（读库最新章纲，写回 linter_report）。 */

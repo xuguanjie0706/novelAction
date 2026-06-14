@@ -14,10 +14,16 @@ from dabai.golden_finger_bind import (
 )
 from dabai.non_system import prefers_non_system, prose_system_taboo_block
 from app.models.dabai import DabaiChapterOutline, DabaiProject
+from app.services.dabai.intensity import intensity_prose_block
 from app.services.dabai.lab_ledger import protagonist_name
 from app.services.dabai.lab_prompt_shared import (
     POV_LIMITED_RULES,
     build_witness_lock_block,
+)
+from app.services.dabai.lab_word_budget import (
+    chapter_word_target,
+    format_per_scene_budget_lines,
+    resolve_prose_word_bounds,
 )
 
 _SYSTEM_BASE = (
@@ -25,11 +31,14 @@ _SYSTEM_BASE = (
     "1. 大白话、口语化，短句多、对话多，一看就懂，不要文绉绉、不要堆环境描写；\n"
     "2. 节奏快但【不跳】：爽点可以当众爆发，但任何情绪/态度的反转都必须先有铺垫——\n"
     "   反转前给一个『扳机』（一个眼神、一句话、一个动作、一段回忆闪念），\n"
-    "   哪怕只有一两句，严禁从一种情绪直接硬切到另一种；\n"
+    "   扳机要写在反转之前、且能解释这个反转，哪怕只有一两句；严禁从一种情绪直接硬切到另一种；\n"
     "3. 见证者反应要【分级递进】：先愣住/不信 → 再将信将疑 → 然后震惊 → 最后心服或恐惧；\n"
     "4. 金手指当章见效，主角不窝囊；\n"
-    "5. 分自然段，结尾必须落在给定的『章末钩子』上；\n"
-    "6. 只输出正文，不要标题、不要小标题、不要旁白说明。"
+    "5. ★可信度（立得住）：凡对主角有利的转机/巧合/碾压，要么兑现前文已埋的事实或线索，"
+    "要么当场补一句站得住的依据（来历、动机、代价、对方的破绽或轻敌）；"
+    "禁止无铺垫的天降好运、对手莫名认怂、配角恰好全懂、敌人无故自曝底牌；\n"
+    "6. 分自然段，结尾必须落在给定的『章末钩子』上；\n"
+    "7. 只输出正文，不要标题、不要小标题、不要旁白说明。"
 )
 
 _SYSTEM_BASE_ARTIFACT = (
@@ -37,11 +46,14 @@ _SYSTEM_BASE_ARTIFACT = (
     "1. 大白话、口语化，短句多、对话多，一看就懂，不要文绉绉、不要堆环境描写；\n"
     "2. 节奏快但【不跳】：爽点可以当众爆发，但任何情绪/态度的反转都必须先有铺垫——\n"
     "   反转前给一个『扳机』（一个眼神、一句话、器物异鸣、精血倒流、一段回忆闪念），\n"
-    "   哪怕只有一两句，严禁从一种情绪直接硬切到另一种；\n"
+    "   扳机要写在反转之前、且能解释这个反转，哪怕只有一两句；严禁从一种情绪直接硬切到另一种；\n"
     "3. 见证者反应要【分级递进】：先愣住/不信 → 再将信将疑 → 然后震惊 → 最后心服或恐惧；\n"
     "4. 金手指当章见效，主角不窝囊；\n"
-    "5. 分自然段，结尾必须落在给定的『章末钩子』上；\n"
-    "6. 只输出正文，不要标题、不要小标题、不要旁白说明。"
+    "5. ★可信度（立得住）：凡对主角有利的转机/巧合/碾压，要么兑现前文已埋的事实或线索，"
+    "要么当场补一句站得住的依据（来历、动机、代价、对方的破绽或轻敌）；"
+    "禁止无铺垫的天降好运、对手莫名认怂、配角恰好全懂、敌人无故自曝底牌；\n"
+    "6. 分自然段，结尾必须落在给定的『章末钩子』上；\n"
+    "7. 只输出正文，不要标题、不要小标题、不要旁白说明。"
 )
 
 _CONTINUITY_RULES = (
@@ -49,6 +61,11 @@ _CONTINUITY_RULES = (
     "   已发生的事不可推翻——金手指若已绑定禁止再写绑定流程；主角若已逆袭禁止写回废人/经脉尽断；\n"
     "   章纲憋屈拍须在当前事实下 reinterpret，不可把剧情时间线倒回上一章之前；\n"
     "8. 五拍各用紧凑篇幅，禁止重复铺陈同一桥段；严禁超过目标字数上限。"
+)
+
+_WORD_RULES_SCENE = (
+    "8. 篇幅以【分场调度】各场 word_budget 为硬上限：逐场不得超标，全章合计严禁超过分配上限；"
+    "禁止重复铺陈同一桥段凑字数。"
 )
 
 # 开篇指令单源化：有导演单时，开篇怎么承接（紧接续写还是先写位移）以导演单
@@ -59,6 +76,21 @@ _CONTINUITY_RULES_PREWARN = (
     "   已发生的事不可推翻——金手指若已绑定禁止再写绑定流程；主角若已逆袭禁止写回废人/经脉尽断；\n"
     "   章纲憋屈拍须在当前事实下 reinterpret，不可把剧情时间线倒回上一章之前；\n"
     "8. 五拍各用紧凑篇幅，禁止重复铺陈同一桥段；严禁超过目标字数上限。"
+)
+
+_CONTINUITY_RULES_SCENE = (
+    "7. 衔接硬约束：若非第1章，开头必须正面承接【上章结尾】末句场景；\n"
+    "   已发生的事不可推翻——金手指若已绑定禁止再写绑定流程；主角若已逆袭禁止写回废人/经脉尽断；\n"
+    "   章纲憋屈拍须在当前事实下 reinterpret，不可把剧情时间线倒回上一章之前；\n"
+    + _WORD_RULES_SCENE
+)
+
+_CONTINUITY_RULES_PREWARN_SCENE = (
+    "7. 衔接硬约束：开头必须按【写前导演单】的「开头写法」执行，正面承接上一章正文实际结尾；\n"
+    "   导演单给出「衔接交代」时必须先写位移/转场，没给则紧接上章末句同一瞬间续写，禁止自行另起场景；\n"
+    "   已发生的事不可推翻——金手指若已绑定禁止再写绑定流程；主角若已逆袭禁止写回废人/经脉尽断；\n"
+    "   章纲憋屈拍须在当前事实下 reinterpret，不可把剧情时间线倒回上一章之前；\n"
+    + _WORD_RULES_SCENE
 )
 
 
@@ -94,16 +126,23 @@ def build_prose_prompt(
     narrative_state_block: str = "",
     location_bridge_block: str = "",
     qc_feedback_block: str = "",
+    forward_qc_block: str = "",
+    scene_plan: dict | None = None,
     replace_existing: bool = False,
     prior_content: str = "",
     user_instruction: str = "",
+    intensity: str = "standard",
 ) -> tuple[str, str]:
     """据项目设定 + 本章五拍 + 分场调度 + 衔接上下文，构造正文写作 (system, user)。
+
+    intensity: 叙事烈度档（restrained/standard/loud）；restrained 注入「降调克制」
+               system 块（见证者封顶、禁喊口号/感叹号堆砌、payoff 冷处理）。
 
     panel_block: 系统面板快照块（上章末存档的数值绝对基准），注入在 ledger 之前，
                  让模型在写任何战斗/修炼场景前先知道精确的境界/技能/冷却状态。
     scene_block: 分场调度块（lab_scene_plan 产物）。有分场时正文按场推进、
                  落实台词弹药与感官锚点；空串=降级为五拍直写。
+    scene_plan: 归一化后的分场 JSON（含 scenes/word_budget）；有则正文篇幅只认分场合计。
     prev_full_block: 上一章完整正文块（已发生事实最高基准；正文质量优先，token 不设限）。
     prev_hook_block: 上章末钩单列硬约束（复盘实际钩子优先）。
     narrative_state_block: Layer 2 情节时间轴+世界快照（与章纲生成同源，置于前情块之前）。
@@ -124,9 +163,14 @@ def build_prose_prompt(
     levels = "、".join(x.get("name", "") for x in level_list[:7])
     chars = "、".join(c.name for c in project.characters[:8])
     protag = protagonist_name(project)
-    target = ch.expected_words or 2000
-    hi = target + 200
-    lo = max(1600, target - 200)
+    scene_bounds = resolve_prose_word_bounds(scene_plan, ch)
+    if scene_bounds:
+        target, lo, hi = scene_bounds
+    else:
+        target = chapter_word_target(ch)
+        lo = max(1600, target - 200)
+        hi = target + 200
+    has_scene_plan = bool(scene_block.strip() and scene_bounds)
 
     realm_name = next(
         (l.get("name") for l in level_list if int(l.get("rank", -1)) == (ch.realm_rank or -1)),
@@ -181,10 +225,17 @@ def build_prose_prompt(
     )
     system = (_SYSTEM_BASE_ARTIFACT if artifact else _SYSTEM_BASE)
     system += POV_LIMITED_RULES
+    system += intensity_prose_block(intensity)
     if has_continuity:
-        system += (
-            _CONTINUITY_RULES_PREWARN if pre_warn_block.strip() else _CONTINUITY_RULES
-        )
+        if has_scene_plan:
+            system += (
+                _CONTINUITY_RULES_PREWARN_SCENE if pre_warn_block.strip()
+                else _CONTINUITY_RULES_SCENE
+            )
+        else:
+            system += (
+                _CONTINUITY_RULES_PREWARN if pre_warn_block.strip() else _CONTINUITY_RULES
+            )
     if artifact:
         system += prose_system_taboo_block()
 
@@ -234,17 +285,26 @@ def build_prose_prompt(
         )
     if replace_existing and qc_feedback_block.strip():
         user_parts.append(qc_feedback_block.strip())
+    if forward_qc_block.strip():
+        user_parts.append(forward_qc_block.strip())
 
     user_parts.append("【本章爽点节拍（章节要素，必须逐项落实）】")
     user_parts.append(_build_lab_beat_block(ch))
 
     if scene_block.strip():
+        per_scene = ""
+        if scene_plan and isinstance(scene_plan.get("scenes"), list):
+            per_scene = format_per_scene_budget_lines(scene_plan["scenes"])
         task = (
             f"按上面【分场调度】逐场写出第{ch.chapter_number}章正文，五拍是总纲、分场是施工图。"
-            f"目标 {target} 字（允许 {lo}～{hi}），严禁超过 {hi} 字。"
-            "每场按其 word_budget 写足：动作拆成连续画面、对话有来回、"
+            f"全章合计 {target} 字（允许 {lo}～{hi}），★严禁超过 {hi} 字★。"
+            "每场按其 word_budget 写足但不得超标：动作拆成连续画面、对话有来回、"
             "台词弹药必须用上（可微调措辞）、感官锚点落进正文；"
             "场与场之间用场末转折自然过渡，禁止『与此同时』式硬切。"
+        )
+        if per_scene:
+            task += f"\n【逐场篇幅上限（硬约束）】\n{per_scene}"
+        task += (
             "若有开篇指令，须按其方向开写，禁止把指令原文复制成正文首句。"
             "禁止套用「疼！钻心的疼！」等烂大街起手式。直接开写正文。"
         )

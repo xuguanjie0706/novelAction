@@ -100,6 +100,30 @@ export interface DabaiProjectDetail {
   chapter_outlines: DabaiChapter[]
 }
 
+/** 叙事烈度档：克制（降调）/ 标准 / 够炸。 */
+export type DabaiIntensity = 'restrained' | 'standard' | 'loud'
+
+export const DABAI_INTENSITY_LABELS: Record<DabaiIntensity, string> = {
+  restrained: '克制',
+  standard: '标准',
+  loud: '够炸',
+}
+
+export const DABAI_INTENSITY_HINTS: Record<DabaiIntensity, string> = {
+  restrained: '降调：见证者反应收着写，禁喊口号/感叹号堆砌，爽点冷处理',
+  standard: '默认爽文力度',
+  loud: '更外放（暂同标准）',
+}
+
+/** 从详情的 positioning / extra 解析当前烈度档。 */
+export function resolveDabaiIntensity(d: {
+  positioning?: Record<string, unknown>
+  extra?: Record<string, unknown>
+}): DabaiIntensity {
+  const raw = (d.positioning?.intensity ?? d.extra?.intensity) as string | undefined
+  return raw === 'restrained' || raw === 'loud' ? raw : 'standard'
+}
+
 export interface DabaiProjectSummary {
   id: string
   logline: string
@@ -120,7 +144,7 @@ export interface DabaiGenerateRequest {
   llm_provider_id?: string
   volume_count: number
   volume_chapters: number
-  /** 单次章纲展开窗口（如 30 章卷、15 窗口 = 展开 2 次）。 */
+  /** 写作期卷展开窗口（建书整卷；后续补全/新卷如 30 章卷、15 窗口 = 展开 2 次）。 */
   outline_expand_size?: number
   big_beat_every: number
   chapter_batch_size?: number

@@ -172,6 +172,57 @@ def build_chapter_range_qc_block(
     )
 
 
+def build_forward_qc_block(
+    db: Session,
+    project_id: UUID,
+    *,
+    target_chapter: int,
+    lookback: int = 2,
+) -> str:
+    """前序章节质检的「后续章节建议」→ 注入目标章正文 prompt（首写也注入）。
+
+    修「前瞻建议只进章纲/重写」的缺口：QC 给第 N 章的 future_chapter_suggestions
+    此前仅在卷展开或本章重写时可见；写第 N 章正文（首稿）时拿不到。
+    取目标章前 ``lookback`` 章（最贴近本章）最新报告的 future_chapter_suggestions
+    注入，让前瞻建议真正落到正文。
+
+    Args:
+        target_chapter: 即将写作的章号 N。
+        lookback: 回看前几章（默认 2：第 N-1、N-2 章的前瞻建议最相关）。
+    """
+    if target_chapter <= 1:
+        return ""
+    lines: list[str] = []
+    for row in _latest_reports_per_chapter(db, project_id):
+        rep = row.report if isinstance(row.report, dict) else {}
+        ch_num = (
+            db.query(DabaiChapterOutline.chapter_number)
+            .filter(DabaiChapterOutline.id == row.chapter_id)
+            .scalar()
+        )
+        if ch_num is None:
+            continue
+        src = int(ch_num)
+        if not (target_chapter - lookback <= src < target_chapter):
+            continue
+        llm = rep.get("llm") if isinstance(rep.get("llm"), dict) else {}
+        for s in (llm.get("future_chapter_suggestions") or [])[:3]:
+            text = str(s).strip()
+            if text:
+                lines.append(f"  - [第{src}章质检前瞻] {text[:140]}")
+    if not lines:
+        return ""
+    deduped = list(dict.fromkeys(lines))[:5]
+    return (
+        "【前序质检给本章的建议（须在正文落实，不是背景设定）】\n"
+        + "\n".join(deduped)
+        + "\n  执行要求：把上述建议当成本章要兑现的情节目标，"
+        "顺着五拍自然写进剧情/动作/台词里——仍须守铺垫（关键转机先给依据）、"
+        "限知视角（不剧透主角不可能知道的、不让他人凭空知情）与本书叙事烈度档；"
+        "不要把建议原文当旁白说明贴出来。"
+    )
+
+
 def build_project_qc_issue_block(
     db: Session, project_id: UUID, *, top_n: int = 3, min_count: int = 2,
 ) -> str:

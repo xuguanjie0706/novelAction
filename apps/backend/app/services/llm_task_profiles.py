@@ -123,6 +123,13 @@ TASK_PROFILES: dict[str, dict] = {
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
     },
+    "dabai.qc_patch": {
+        # 按本章质检建议外科手术式修订：稳、少发挥，保留已通过段落
+        "temperature": 0.55,
+        "top_p": 0.88,
+        "frequency_penalty": 0.1,
+        "presence_penalty": 0.1,
+    },
     # ── dabai Bootstrap 建书链（与 dabai/config.STEP_TEMPERATURE 对齐；按次计费合并步）──
     "dabai.benchmark": {"temperature": 0.4, "top_p": 0.9},     # 对标分析要稳，少幻觉
     "dabai.golden_finger": {"temperature": 0.65, "top_p": 0.92},  # 金手指+境界+反派阶梯（合并步折中）

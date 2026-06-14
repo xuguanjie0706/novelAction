@@ -117,17 +117,26 @@ def _pending_report() -> dict:
 
 
 def _volume_completeness_issues(ch_dicts: list[dict], volumes: list[dict]) -> list[Issue]:
-    """按卷检查章纲是否写满 planned_chapters（缺章即 critical）。"""
+    """章纲展开进度提示（非质量缺陷）。
+
+    设计动机：dabai 章纲按卷**懒展开**（Bootstrap 只出卷骨架，写作期再逐卷展开）。
+    因此「未展开」是正常状态，不能当 critical 把整书拖成 blocked/40 分。
+      - actual == 0（整卷未展开）：跳过——正常懒状态，不报。
+      - 0 < actual < planned（已展开但未补满）：medium 进度提示（非阻断），
+        提醒还差多少章待补全，但不拉低到 blocked。
+    满卷（actual >= planned）不报。
+    """
     issues: list[Issue] = []
     for g_lo, g_hi, vol in _chapter_ranges(volumes):
         planned = g_hi - g_lo + 1
         actual = sum(1 for c in ch_dicts if g_lo <= c["chapter_number"] <= g_hi)
-        if actual < planned:
-            issues.append(Issue(
-                "DB-14", "critical", None,
-                f"第{vol.get('volume_number')}卷章纲不完整：仅 {actual}/{planned} 章",
-                "请侧栏「补全章纲」或「重做章纲」按节拍表补全",
-            ))
+        if actual == 0 or actual >= planned:
+            continue
+        issues.append(Issue(
+            "DB-14", "medium", None,
+            f"第{vol.get('volume_number')}卷章纲展开中：已 {actual}/{planned} 章，还有 {planned - actual} 章待补全",
+            "可在侧栏「补全章纲」继续按节拍表展开（不影响已展开章纲质量）",
+        ))
     return issues
 
 

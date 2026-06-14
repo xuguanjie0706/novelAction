@@ -97,7 +97,9 @@ async def aiter_bootstrap(cfg: DabaiConfig, call: CallFn) -> AsyncIterator[dict]
                 if not vols:
                     raise DabaiStepError("章纲步缺少卷骨架")
                 all_ch: list[dict] = []
-                async for batch, bs, be in steps.aiter_chapter_batches(ctx, call, cfg, vols[0]):
+                async for batch, bs, be in steps.aiter_chapter_batches(
+                    ctx, call, cfg, vols[0], use_expand_window=False,
+                ):
                     all_ch.extend(batch)
                     yield {"event": "chapter_batch", "data": batch,
                            "batch_start": bs, "batch_end": be}

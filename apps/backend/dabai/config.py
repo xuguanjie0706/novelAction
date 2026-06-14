@@ -58,10 +58,10 @@ class DabaiConfig:
     # 规模
     volume_count: int = 6           # 第一版卷数（卷骨架步会生成这么多卷）
     volume_chapters: int = 30       # 每卷规划章数（卷骨架 planned_chapters）
-    outline_expand_size: int = 15   # 单次章纲展开窗口（建书/补全各最多这么多个；30 章卷=展开 2 次）
+    outline_expand_size: int = 15   # 写作期卷展开窗口（每次最多这么多个；30 章卷=展开 2 次；建书走整卷）
     chapter_batch_size: int = 5     # 窗口内五拍 LLM 批大小（15 章窗=3 批）
     beat_chunk_size: int = 60       # 【降级路径】节拍序列单次调用最大章数
-    single_call_max_chapters: int = 8   # >8 章强制两段式（beat 规划 + 小批五拍，质量优于单次整卷）
+    single_call_max_chapters: int = 40  # ≤40 章走单次 volume_chapters（beat+五拍同次）；更大卷/失败降级两段式
     repair_rounds: int = 1          # linter 问题定向修复轮数（0=关闭闭环；lint 干净时 0 次调用）
     first_volume_only: bool = True  # 章纲默认只展开第 1 卷（懒展开，省 token）
     # 大白文调性

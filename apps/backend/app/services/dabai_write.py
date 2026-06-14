@@ -15,7 +15,10 @@ from dabai.golden_finger_bind import (
 from dabai.non_system import prefers_non_system, prose_system_taboo_block
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 from app.services.dabai.lab_ledger import protagonist_name
-from app.services.dabai.lab_prompt_shared import build_witness_lock_block
+from app.services.dabai.lab_prompt_shared import (
+    POV_LIMITED_RULES,
+    build_witness_lock_block,
+)
 
 _SYSTEM_BASE = (
     "你是番茄/七猫大白文写手，专写移动端爽文正文。硬要求：\n"
@@ -88,6 +91,7 @@ def build_prose_prompt(
     panel_block: str = "",
     prev_full_block: str = "",
     prev_hook_block: str = "",
+    narrative_state_block: str = "",
     location_bridge_block: str = "",
     qc_feedback_block: str = "",
     replace_existing: bool = False,
@@ -102,6 +106,7 @@ def build_prose_prompt(
                  落实台词弹药与感官锚点；空串=降级为五拍直写。
     prev_full_block: 上一章完整正文块（已发生事实最高基准；正文质量优先，token 不设限）。
     prev_hook_block: 上章末钩单列硬约束（复盘实际钩子优先）。
+    narrative_state_block: Layer 2 情节时间轴+世界快照（与章纲生成同源，置于前情块之前）。
     location_bridge_block: 规则层位移硬约束。开篇指令单源化：有 pre_warn_block
                  时调用方应传空串（位移裁决已并入导演单），仅导演单缺席时兜底注入。
     qc_feedback_block: 上一版质检反馈（lab_qc_feedback 产物），仅重写时注入——
@@ -175,6 +180,7 @@ def build_prose_prompt(
         prev_tail.strip() or recent_plot_block.strip() or prev_full_block.strip()
     )
     system = (_SYSTEM_BASE_ARTIFACT if artifact else _SYSTEM_BASE)
+    system += POV_LIMITED_RULES
     if has_continuity:
         system += (
             _CONTINUITY_RULES_PREWARN if pre_warn_block.strip() else _CONTINUITY_RULES
@@ -192,6 +198,8 @@ def build_prose_prompt(
     ]
     user_parts = [p for p in user_parts if p]
 
+    if narrative_state_block.strip():
+        user_parts.append(narrative_state_block.strip())
     if recent_plot_block.strip():
         user_parts.append(recent_plot_block.strip())
     if panel_block.strip():

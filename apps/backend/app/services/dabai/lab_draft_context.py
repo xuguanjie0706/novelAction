@@ -50,6 +50,7 @@ class LabDraftContext:
     prev_full_block: str = ""     # 上一章完整正文（已发生事实的最高基准）
     prev_hook_block: str = ""     # 上章末钩硬约束（复盘实际钩子优先，章纲计划兜底）
     prev_content_hash: str = ""   # 上章正文指纹（导演单/分场陈旧失效检测）
+    narrative_state_block: str = ""  # Layer 2 情节时间轴+世界快照（与章纲 prompt 同源）
 
 
 def content_fingerprint(text: str) -> str:
@@ -457,6 +458,12 @@ def build_lab_draft_context(
             "【既定事实记忆（复盘提取，不可违背）】\n" + entity_block
         )
 
+    from app.services.dabai.lab_narrative_state import build_narrative_state_block
+
+    narrative_state_block = build_narrative_state_block(
+        db, project, before_chapter=cur,
+    )
+
     return LabDraftContext(
         prev_tail=prev_tail,
         recent_plot_block=_build_recent_plot_block(db, project, ch, summaries, hooks),
@@ -466,6 +473,7 @@ def build_lab_draft_context(
         prev_full_block=prev_full_block,
         prev_hook_block=_build_prev_hook_block(prev, hooks),
         prev_content_hash=prev_content_hash,
+        narrative_state_block=narrative_state_block,
     )
 
 
@@ -503,7 +511,14 @@ async def _build_semantic_recall_block(
         f"  - 第{m.chapter_number}章[{_MEM_LABELS.get(m.mem_type, m.mem_type)}] {m.content}"
         for m in hits
     ]
-    return "▸与本章情节语义最相关的既往事实：\n" + "\n".join(lines)
+    # 该块由写正文/写前导演单/分场调度三处共享同一份上下文注入（一次召回）：
+    # 写正文时作为衔接事实；导演单裁决章纲冲突时优先引用其中的恩怨/承诺/能力来历；
+    # 分场调度时据此避免重复已写过的桥段。
+    return (
+        "▸与本章情节语义最相关的既往事实（裁决/调度时优先参考：旧角色恩怨、"
+        "已立承诺、能力与道具来历；禁止与之矛盾或重复已写桥段）：\n"
+        + "\n".join(lines)
+    )
 
 
 async def build_lab_draft_context_async(

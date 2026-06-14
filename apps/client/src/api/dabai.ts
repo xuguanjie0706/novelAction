@@ -185,6 +185,20 @@ export const dabaiApi = {
     )
   },
 
+  /**
+   * 清空本章正文及写作期派生数据（预警/分场/质检/记忆/复盘台账变更）。
+   * 章纲五拍保留；后续章已有正文时会拒绝。
+   */
+  clearChapterWriting(projectId: string, chapterId: string) {
+    return api.delete<{
+      ok: boolean
+      chapter_id: string
+      chapter_number: number
+      status: string
+      cleared: Record<string, number>
+    }>(`/dabai/projects/${projectId}/chapters/${chapterId}/writing`)
+  },
+
   /** 导出合规预检。 */
   exportPreview(projectId: string, platform = 'general') {
     return api.get<DabaiExportPreview>(`/dabai/projects/${projectId}/export/preview`, {

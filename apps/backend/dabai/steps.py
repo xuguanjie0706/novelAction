@@ -60,6 +60,23 @@ def _tail_of(batch: list[dict]) -> str:
     return (last.get("end_hook") or last.get("shuang_payoff") or "").strip()
 
 
+def _after_outline_batch(ctx: dict, batch: list[dict]) -> None:
+    """批后更新：已生成章纲累积 + 下批承接块（bootstrap 无 DB 路径）。"""
+    if not batch:
+        return
+    from app.services.dabai.lab_narrative_state import (
+        format_bridge_from_outline,
+        format_generated_outlines_block,
+    )
+    acc = ctx.setdefault("generated_chapter_outlines", [])
+    acc.extend(batch)
+    ctx["generated_outlines_block"] = format_generated_outlines_block(acc)
+    last = batch[-1]
+    next_num = int(last.get("chapter_number") or 0) + 1
+    ctx["bridge_block"] = format_bridge_from_outline(last, next_num)
+    ctx["prev_tail"] = _tail_of(batch)
+
+
 def _realm_max(ctx: dict) -> int | None:
     levels = (ctx.get("power_ladder") or {}).get("levels") or []
     ranks = [int(l.get("rank", 0)) for l in levels if str(l.get("rank", "")).strip()]
@@ -96,6 +113,7 @@ async def _gen_volume_single(
         "global_start": chapter_offset + start_chapter,
         "global_end": chapter_offset + planned,
         "prev_tail": prev_tail, "realm_floor": realm_floor,
+        "bridge_block": ctx.get("bridge_block") or "",
     }
     try:
         data = await run_step(
@@ -137,6 +155,7 @@ async def _gen_beat_rows(
             ctx["_beat_window"] = {
                 "global_start": chapter_offset + s, "global_end": chapter_offset + e,
                 "prev_tail": tail, "realm_floor": running,
+                "bridge_block": ctx.get("bridge_block") or "",
             }
             chunk = await run_step(
                 "beat_sequence", ctx, call, cfg,
@@ -192,6 +211,8 @@ async def aiter_chapter_batches(
     gf_name = (ctx.get("golden_finger") or {}).get("name", "")
     prev_tail = (prev_tail or "").strip()
     running = max(int(realm_floor or 0), int(vr_lo))  # 主角当前境界档，跨批延续
+    ctx.setdefault("generated_chapter_outlines", [])
+    ctx["prev_tail"] = prev_tail
 
     # ── 主路径：单次整卷 beat+五拍（按次计费；窗口 ≤ single_call_max_chapters）──
     window_n = planned - start_chapter + 1
@@ -238,6 +259,7 @@ async def aiter_chapter_batches(
             "batch_start": bs, "batch_end": be,
             "global_start": gbs, "global_end": gbe,
             "prev_tail": prev_tail, "realm_floor": running,
+            "bridge_block": ctx.get("bridge_block") or "",
             "beat_rows": [r for r in beats
                           if gbs <= int(r.get("chapter_number") or 0) <= gbe],
         }
@@ -258,7 +280,8 @@ async def aiter_chapter_batches(
         if repaired is not batch:
             batch = repaired
             running = _enforce_realm(batch, running_start, vr_hi, rmax)
-        prev_tail = _tail_of(batch)
+        _after_outline_batch(ctx, batch)
+        prev_tail = ctx.get("prev_tail") or _tail_of(batch)
         yield batch, gbs, gbe
     ctx.pop("_batch", None)
     ctx.pop("_target_volume", None)

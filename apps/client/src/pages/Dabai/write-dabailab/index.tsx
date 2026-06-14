@@ -85,6 +85,7 @@ export default function WriteDabailabPage() {
                   beat={dabaiBeatFromChapter(activeChapter, realmName)}
                   generateBlockReason={generateBlockReason}
                   onSaved={() => void afterSave(activeChapter.id!)}
+                  onCleared={() => void afterSave(activeChapter.id!)}
                 />
               ) : (
                 <div className="flex h-full flex-1 flex-col items-center justify-center gap-3 text-center text-gray-400">

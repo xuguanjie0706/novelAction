@@ -13,9 +13,9 @@ from sqlalchemy.orm import Session
 
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 from app.models.dabai_lab import DabaiQualityReport
-from app.services.dabai.lab_draft_context import build_lab_draft_context
+from app.services.dabai.lab_draft_context import LabDraftContext, build_lab_draft_context
 from dabai.first_chapter_opening import witness_stems
-from app.services.dabai.lab_pre_warn import _build_lab_beat_block
+from app.services.dabai.lab_qc_prompt import build_lab_qc_prompt
 from app.services.dabai.lab_prompt_shared import (
     has_location_gap,
     needs_location_bridge,
@@ -27,7 +27,7 @@ from app.services.dabai.lab_prompt_shared import (
 
 logger = logging.getLogger(__name__)
 
-LAB_QC_VERSION = "dabai-lab-qc-v2"
+LAB_QC_VERSION = "dabai-lab-qc-v3"
 
 # 见证者群体类同义词组（DLB-02 语义匹配；禁止在此硬编码具体书的人名/家族名）
 # 章纲词与正文词落在同一组即视为出现（如章纲「围观家奴」↔ 正文「家仆」）
@@ -156,6 +156,7 @@ def _rule_report(
     ch: DabaiChapterOutline,
     db: Session | None = None,
     project: DabaiProject | None = None,
+    ctx: LabDraftContext | None = None,
 ) -> dict:
     """规则层：零 LLM 成本的硬检查。DLB-04 境界倒退为唯一阻断，其余 warning。"""
     content = _plain_content(ch)
@@ -179,10 +180,13 @@ def _rule_report(
     witnesses = [str(w) for w in (ch.witnesses or []) if str(w).strip()]
     missing = [w for w in witnesses if not _witness_in_content(w, content)]
     if witnesses and missing:
-        warnings.append({
-            "rule_id": "DLB-02",
-            "message": f"章纲见证者未出现在正文：{'、'.join(missing[:5])}",
-        })
+        msg = f"章纲见证者未出现在正文：{'、'.join(missing[:5])}"
+        warn: dict = {"rule_id": "DLB-02", "message": msg}
+        # 黄金第2章常为金手指私密验证，见证者误报率高 → 交 LLM 按分档口径裁决
+        if (ch.chapter_number or 0) == 2:
+            warn["llm_overridable"] = True
+            warn["message"] = msg + "（黄金第2章：若 payoff 为系统/认主私密反馈可忽略）"
+        warnings.append(warn)
 
     if db is not None and project is not None and (ch.chapter_number or 0) > 1:
         prev = (
@@ -194,8 +198,9 @@ def _rule_report(
             .first()
         )
         if prev:
-            prev_tail = (prev.content or "").strip()
-            prev_tail = prev_tail[-800:] if len(prev_tail) > 800 else prev_tail
+            prev_tail = (ctx.prev_tail if ctx else "") or (prev.content or "").strip()
+            if prev_tail and len(prev_tail) > 1200:
+                prev_tail = prev_tail[-1200:]
             bridge = _check_location_bridge(ch, prev, content, prev_tail=prev_tail)
             if bridge:
                 warnings.append(bridge)
@@ -249,89 +254,6 @@ def _next_chapters_block(
     return "\n".join(parts)
 
 
-def _build_lab_qc_prompt(
-    ch: DabaiChapterOutline,
-    *,
-    prev_tail: str,
-    prev_ch: DabaiChapterOutline | None = None,
-    bridge_evidence: str = "",
-    next_chapters_block: str = "",
-) -> tuple[str, str]:
-    """构造 LLM 质检 (system, user)。正文取头 4500 + 中段抽样 + 尾 1200。
-
-    bridge_evidence: 规则层 DLB-03 证据文案。注入后由 LLM 按正文裁决衔接断层，
-                     规则层不再事后压分（裁决权单轨，见 _merge_report 丢弃 overridable）。
-    """
-    from app.services.dabai.quality_check import _QC_SYSTEM
-
-    content = _plain_content(ch)
-    head = content[:4500]
-    tail = content[-1200:] if len(content) > 5700 else ""
-    # 中段抽样：head+tail 之外仍有正文时补 800 字，重复铺陈多发于中段
-    mid = ""
-    if len(content) > 6500:
-        c = len(content) // 2
-        mid = content[c - 400: c + 400]
-
-    parts = [f"《第{ch.chapter_number}章 {ch.title or ''}》质检。"]
-    if prev_tail.strip():
-        parts.append(f"【上章结尾（本章开头应承接）】\n{prev_tail.strip()[-600:]}")
-    if prev_ch and prev_tail.strip():
-        prev_loc = (prev_ch.location or "").strip()
-        curr_loc = (ch.location or "").strip()
-        head = content[:450]
-        outline_gap = has_location_gap(prev_loc, curr_loc)
-        continues = opening_continues_prev_tail(prev_tail, head)
-        if outline_gap and (continues or not needs_location_bridge(prev_ch, ch, prev_tail)):
-            parts.append(
-                "【衔接判定说明】上章章纲场景载体可能滞后，或本章开篇紧接上章末句同一瞬间。"
-                "衔接分必须以【上章结尾】与【本章开头】正文为准：若人物/场景/动作连续，"
-                "即使章纲 location 不同或缺少位移动词，continuity_score 也应 ≥85，"
-                "continuity_issue 留空；禁止要求从章纲 location 重新走一遍或否定已发生的承接。"
-            )
-    if bridge_evidence.strip():
-        parts.append(
-            "【规则层证据（仅供参考，最终以正文为准裁决）】\n"
-            f"{bridge_evidence.strip()}\n"
-            "请基于【上章结尾】与【本章开头】正文判断是否真有衔接断层："
-            "若正文已交代位移过程、或开篇紧接上章末句同一瞬间，则不扣分；"
-            "若确属无交代瞬移到新场景，continuity_score 应 ≤60 并写明 continuity_issue。"
-        )
-    parts.append(f"【章纲五拍要素】\n{_build_lab_beat_block(ch)}")
-    if next_chapters_block.strip():
-        parts.append(
-            "【后续章纲预览（供 future_chapter_suggestions 参考；勿剧透未写内容）】\n"
-            f"{next_chapters_block.strip()}"
-        )
-    parts.append(f"【本章正文（开头部分）】\n{head}")
-    if mid:
-        parts.append(f"【本章正文（中段抽样，重点查重复铺陈/口水循环）】\n{mid}")
-    if tail:
-        parts.append(f"【本章正文（结尾部分）】\n{tail}")
-    parts.append(
-        "逐项检查后只返回 JSON：\n"
-        "{\n"
-        '  "continuity_score": 0-100,  // 开头是否承接【上章结尾】末句与钩子；'
-        '以正文末句场景为准（非章纲location）；单章内已位移时不因缺位移动词扣分\n'
-        '  "continuity_issue": "一句话，无问题留空",\n'
-        '  "beats": {"yaqu": "pass|partial|miss", "trigger": "...", "yinbao": "...", '
-        '"payoff": "...", "hook": "..."},  // 五拍是否逐项落实（payoff 须有见证者反应）\n'
-        '  "beat_issues": ["未落实拍的具体问题，每条≤30字"],\n'
-        '  "hook_score": 0-100,  // 章末钩子强度：能否让读者点开下一章\n'
-        '  "hook_issue": "一句话，无问题留空",\n'
-        '  "repetition_issue": "明显的重复铺陈/口水循环，无则留空",\n'
-        '  "chapter_suggestions": ["≤3条针对【本章正文】的可执行修改建议，禁止文采类"],\n'
-        '  "future_chapter_suggestions": ["≤2条对后续章节写作/章纲执行的提醒'
-        '（基于本章遗留问题与【后续章纲预览】，勿编造未给出的章纲）"],\n'
-        '  "rewrite_prompt": "若本章综合质量不佳（衔接/五拍/钩子有明显短板），'
-        '写一段150字内可直接交给写手的重写指令（先写必须保留什么，再写必须改什么）；'
-        '质量尚可则留空",\n'
-        '  "suggestions": ["与 chapter_suggestions 相同，兼容旧字段"]\n'
-        "}"
-    )
-    return _QC_SYSTEM, "\n\n".join(parts)
-
-
 async def run_lab_quality(
     svc,
     db: Session,
@@ -352,14 +274,14 @@ async def run_lab_quality(
     from app.services.dabai.quality_check import _merge_report
     from app.services.dabai.lab_qc_feedback import attach_rewrite_prompt
 
-    rule = _rule_report(ch, db=db, project=project)
+    ctx = build_lab_draft_context(db, project, ch)
+    rule = _rule_report(ch, db=db, project=project, ctx=ctx)
     bridge_evidence = next(
         (str(w.get("message") or "") for w in (rule.get("warnings") or [])
          if w.get("rule_id") == "DLB-03"),
         "",
     )
 
-    ctx = None
     llm_data: dict | None = None
     llm_status = "skipped"
     if with_llm:
@@ -368,7 +290,6 @@ async def run_lab_quality(
             from app.services.bootstrap.parse import parse_json
             from app.services.bootstrap.retry import call_with_retry
 
-            ctx = build_lab_draft_context(db, project, ch)
             prev_ch = None
             if (ch.chapter_number or 0) > 1:
                 prev_ch = (
@@ -379,10 +300,13 @@ async def run_lab_quality(
                     )
                     .first()
                 )
-            system, user = _build_lab_qc_prompt(
-                ch, prev_tail=ctx.prev_tail, prev_ch=prev_ch,
+            plain = _plain_content(ch)
+            system, user = build_lab_qc_prompt(
+                project, ch, ctx,
+                prev_ch=prev_ch,
                 bridge_evidence=bridge_evidence,
                 next_chapters_block=_next_chapters_block(db, project, ch),
+                plain_content=plain,
             )
             raw = await call_with_retry(
                 svc, system, user, max_tokens=1800, task="dabai.quality",

@@ -10,6 +10,7 @@ import type {
   DabaiLabClue,
   DabaiLabDebriefResult,
   DabaiLabMemory,
+  DabaiLabMemorySearchResult,
   DabaiLabQualityReport,
   DabaiLabRelation,
   DabaiPreWarnRecord,
@@ -56,6 +57,17 @@ export const dabaiLabApi = {
     return api.get<{ items: DabaiLabMemory[]; total: number }>(
       `/dabai/projects/${projectId}/memory`,
       { params: chapterId ? { chapter_id: chapterId } : {} },
+    )
+  },
+
+  /** 记忆库检索：semantic=pgvector 语义召回；exact=子串匹配。 */
+  searchMemory(
+    projectId: string, query: string,
+    mode: 'semantic' | 'exact' = 'semantic', topK = 20,
+  ) {
+    return api.get<DabaiLabMemorySearchResult>(
+      `/dabai/projects/${projectId}/memory/search`,
+      { params: { q: query, mode, top_k: topK } },
     )
   },
 

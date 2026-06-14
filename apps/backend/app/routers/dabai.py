@@ -469,6 +469,7 @@ async def draft_chapter_stream(
                 panel_block=draft_ctx.panel_block,
                 prev_full_block=draft_ctx.prev_full_block,
                 prev_hook_block=draft_ctx.prev_hook_block,
+                narrative_state_block=draft_ctx.narrative_state_block,
                 location_bridge_block=location_bridge_block,
                 qc_feedback_block=qc_feedback_block,
                 replace_existing=replace_existing,

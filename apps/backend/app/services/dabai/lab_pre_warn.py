@@ -127,6 +127,7 @@ def build_lab_prewarn_prompt(
     replace_existing: bool = False,
     bridge_evidence: str = "",
     opening_no_prior: bool = False,
+    locked_spec_block: str = "",
 ) -> tuple[str, str]:
     """构造实验书架导演单 (system, user)。
 
@@ -147,6 +148,8 @@ def build_lab_prewarn_prompt(
     witness_block = build_witness_lock_block(ch)
     if witness_block:
         parts.append(witness_block)
+    if ctx.narrative_state_block.strip():
+        parts.append(ctx.narrative_state_block.strip())
     if ctx.recent_plot_block.strip():
         parts.append(ctx.recent_plot_block.strip())
     if ctx.panel_block.strip():
@@ -161,6 +164,8 @@ def build_lab_prewarn_prompt(
         parts.append(canon.strip())
     if ledger_block.strip():
         parts.append(ledger_block.strip())
+    if locked_spec_block.strip():
+        parts.append(locked_spec_block.strip())
     if ctx.prev_full_block.strip():
         parts.append(ctx.prev_full_block.strip())
     elif ctx.prev_tail.strip():
@@ -193,6 +198,13 @@ def build_lab_prewarn_prompt(
         "落实，禁止零铺垫硬翻、禁止临场冒出全新能力。本章无关键反转则填「无」。"
     )
     parts.append(
+        "【技能/道具规格锁定（重要）】若本章有功法/法宝/金手指能力首次登场、首次施展或"
+        "关键升级，必须在 asset_specs 为它写明详细规格：用法（怎么发动、效果是什么）、"
+        "代价（消耗/反噬/冷却/副作用）、进阶（怎么变强、阶位路线）、限制（破绽/前置条件）。"
+        "★已在【已锁定技能/道具规格】出现的，沿用其设定、可补未写的字段，禁止改写已有用法/代价。"
+        "本章没有关键功法道具出场则 asset_specs 留空 []。分场与正文将照此规格写，不得另编。"
+    )
+    parts.append(
         "对照以上资料完成裁决与指导，只返回 JSON：\n"
         "{\n"
         '  "fact_lock": {\n'
@@ -201,13 +213,19 @@ def build_lab_prewarn_prompt(
         '    "on_stage": ["确认可出场的人物（须用【人物称谓锁定】中的名字）"],\n'
         '    "forbidden": ["禁止出现的能力/情节（如金手指再绑定、写回废人）"]\n'
         "  },\n"
-        '  "conflict_notes": ["仅在有已写正文且与事实矛盾时填写，≤40字；开篇章或无矛盾则[]"],\n'
+        '  "conflict_notes": ["只填「真矛盾」（按章纲写就会与已写事实硬碰、读者一眼穿帮：'
+        '已死/已离场者出场、境界倒退或无依据跳级、立场状态明显相反如已吓破胆却逞凶、'
+        '已消耗资产再用、地点时间线硬冲突），每条≤40字；粗线条补细节/顺势演进/措辞差异'
+        '一律不算，留空[]；开篇章或无硬伤则[]"],\n'
         '  "opening_directive": "开头如何承接上章末句，1-2句",\n'
         '  "setup_check": "本章关键反转/获得的铺垫依据：引用前文哪条事实/线索/已具备能力，'
         '或当场立得住的依据；本章无关键反转填「无」",\n'
         '  "beat_execution": {"yaqu": "...", "trigger": "...", "yinbao": "...", '
         '"payoff": "...", "hook": "..."},\n'
         '  "bridge_directives": ["仅确实需要交代位置/境界变化时；无则[]"],\n'
+        '  "asset_specs": [{"name": "功法/道具名", "kind": "skill|item|golden_finger", '
+        '"usage": "用法（怎么用、效果）", "cost": "代价（消耗/反噬/冷却）", '
+        '"progression": "进阶路线", "restriction": "限制/破绽"}],\n'
         '  "reminders": ["≤3条提醒"]\n'
         "}"
     )
@@ -304,10 +322,14 @@ async def resolve_lab_pre_warn(
         elif not (ctx.prev_full_block or ctx.prev_tail or "").strip():
             opening_no_prior = int(ch.chapter_number or 1) == 1
 
+        locked_spec_block = ""
+        if db is not None:
+            from app.services.dabai.lab_asset_spec import build_locked_spec_block
+            locked_spec_block = build_locked_spec_block(db, project, ch)
         system, user = build_lab_prewarn_prompt(
             project, ch, ctx, ledger_block,
             replace_existing=replace_existing, bridge_evidence=bridge_evidence,
-            opening_no_prior=opening_no_prior,
+            opening_no_prior=opening_no_prior, locked_spec_block=locked_spec_block,
         )
         prewarn_sampling = (
             {"temperature": 0.45, "presence_penalty": 0.15}
@@ -330,6 +352,11 @@ async def resolve_lab_pre_warn(
             raise ValueError("导演单结构残缺（fact_lock/beat_execution 缺失）")
         if db is not None:
             try:
+                from app.services.dabai.lab_asset_spec import apply_asset_specs
+                spec_logs = apply_asset_specs(db, project, ch, result.get("asset_specs"))
+                if spec_logs:
+                    logger.info("dabai-lab 锁定技能/道具规格 chapter=%s: %s",
+                                ch.chapter_number, "；".join(spec_logs))
                 persist_lab_pre_warn(db, project, ch, result, brief)
             except Exception as persist_exc:  # noqa: BLE001
                 logger.warning("dabai-lab 导演单落库失败 chapter=%s: %s", ch.id, persist_exc)

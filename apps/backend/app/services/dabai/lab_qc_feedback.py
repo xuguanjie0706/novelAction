@@ -129,6 +129,49 @@ def attach_rewrite_prompt(report: dict, *, threshold: int = REWRITE_SCORE_THRESH
     return report
 
 
+def build_chapter_range_qc_block(
+    db: Session,
+    project_id: UUID,
+    *,
+    chapter_from: int,
+    chapter_to: int,
+) -> str:
+    """按目标章号过滤质检报告中的 future_chapter_suggestions / 邻章建议。"""
+    lines: list[str] = []
+    for row in _latest_reports_per_chapter(db, project_id):
+        rep = row.report if isinstance(row.report, dict) else {}
+        ch_num = (
+            db.query(DabaiChapterOutline.chapter_number)
+            .filter(DabaiChapterOutline.id == row.chapter_id)
+            .scalar()
+        )
+        if ch_num is None:
+            continue
+        src = int(ch_num)
+        if src >= chapter_from:
+            continue
+        llm = rep.get("llm") if isinstance(rep.get("llm"), dict) else {}
+        for s in (llm.get("future_chapter_suggestions") or [])[:3]:
+            text = str(s).strip()
+            if text:
+                lines.append(f"  - [第{src}章质检→后续] {text[:120]}")
+        score = int(rep.get("overall_score") or 0)
+        if score < 70:
+            for w in (rep.get("warnings") or [])[:2]:
+                rid = str(w.get("rule_id") or "")
+                if rid in _RULE_GUIDANCE:
+                    lines.append(
+                        f"  - [第{src}章×{rid}] {_RULE_GUIDANCE[rid][:80]}"
+                    )
+    if not lines:
+        return ""
+    deduped = list(dict.fromkeys(lines))[:12]
+    return (
+        f"【已写章节对第{chapter_from}～{chapter_to}章章纲的规避建议】\n"
+        + "\n".join(deduped)
+    )
+
+
 def build_project_qc_issue_block(
     db: Session, project_id: UUID, *, top_n: int = 3, min_count: int = 2,
 ) -> str:

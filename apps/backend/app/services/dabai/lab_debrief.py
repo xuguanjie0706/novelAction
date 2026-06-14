@@ -50,7 +50,8 @@ def _build_debrief_prompt(
 
     parts = [
         f"《{project.title or project.logline}》第{ch.chapter_number}章《{ch.title or ''}》复盘。",
-        "【标准人名清单（记忆 tags 必须用以下名字，禁止「主角」等代称）】\n" + "、".join(names[:30]),
+        "【已建档人物（记忆 tags 必须用这些名字，禁止「主角」等代称；"
+        "这些人勿放入 new_characters）】\n" + "、".join(names[:40]),
     ]
     if clue_lines:
         parts.append("【当前未回收线索（判断本章是否回收）】\n" + "\n".join(clue_lines))
@@ -85,6 +86,13 @@ def _build_debrief_prompt(
         '  "relation_changes": [  // 人物对主角态度的实际变化（如打脸后跪服）；无则[]\n'
         '    {"from": "主角人名", "to": "对方人名", "attitude": "敌对|轻视|忌惮|臣服|效忠|盟友|暧昧|中立",\n'
         '     "reason": "≤30字变化原因"}\n'
+        "  ],\n"
+        '  "new_characters": [  // 本章首次登场、且后续会复现的长期角色；无则[]\n'
+        '    // ⚠仅收录：新收的小弟/新登场的女主或宿敌/重要新反派/关键导师等会反复出现的角色。\n'
+        '    // ⚠禁止收录：一次性工具人、被打脸即退场的炮灰、路人、群演。已建档人名也不要重复。\n'
+        '    {"name": "人名", "role": "主角阵营|宿敌|女主|导师|反派|盟友", "tier": "核心|配角",\n'
+        '     "start_realm": "登场时境界，无则null", "persona": "≤30字性格/说话风格",\n'
+        '     "function": "≤30字在故事里的作用"}\n'
         "  ],\n"
         '  "realm_snapshot": {   // 章末主角境界精确快照（系统文核心；必填）\n'
         '    "realm": "大境界名称，如筑基期",\n'
@@ -130,6 +138,55 @@ def _persist_memories(
         ))
     db.add_all(rows)
     return rows
+
+
+_NEW_CHAR_ROLES = {"主角阵营", "宿敌", "女主", "导师", "反派", "盟友", "配角", "核心"}
+
+
+def _persist_new_characters(
+    db: Session, project: DabaiProject, ch: DabaiChapterOutline, result: dict,
+) -> list[str]:
+    """写作期新长期角色建档（按名字去重，已存在则跳过，不覆盖 bootstrap 档案）。
+
+    工具人/炮灰由复盘 prompt 约束不收录；此处再按名字与既有人物去重兜底。
+    """
+    from app.models.dabai import DabaiCharacter
+
+    existing = {
+        (c.name or "").strip()
+        for c in db.query(DabaiCharacter.name)
+        .filter(DabaiCharacter.project_id == project.id)
+    }
+    created: list[str] = []
+    max_order = (
+        db.query(DabaiCharacter.sort_order)
+        .filter(DabaiCharacter.project_id == project.id)
+        .order_by(DabaiCharacter.sort_order.desc())
+        .limit(1)
+        .scalar()
+    ) or 0
+    for item in list(result.get("new_characters") or [])[:6]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()[:100]
+        if not name or name in existing:
+            continue
+        tier = str(item.get("tier") or "配角").strip()[:20]
+        max_order += 1
+        db.add(DabaiCharacter(
+            project_id=project.id,
+            name=name,
+            role=str(item.get("role") or "")[:60],
+            tier=tier if tier in ("核心", "配角") else "配角",
+            start_realm=str(item.get("start_realm") or "")[:60] or None,
+            persona=str(item.get("persona") or "")[:300] or None,
+            function=str(item.get("function") or "")[:300] or None,
+            extra={"source": "debrief", "debut_chapter": ch.chapter_number},
+            sort_order=max_order,
+        ))
+        existing.add(name)
+        created.append(name)
+    return created
 
 
 def _persist_clues(
@@ -200,6 +257,7 @@ async def run_lab_debrief(
 
     memories = _persist_memories(db, project, ch, result)
     created, resolved = _persist_clues(db, project, ch, result, open_clues)
+    new_characters = _persist_new_characters(db, project, ch, result)
     asset_logs, relation_logs = apply_ledger_changes(db, project, ch, result)
     prune_noise_assets(db, project)
     realm_label = sync_protagonist_realm(db, project, ch, memories=memories)
@@ -229,6 +287,7 @@ async def run_lab_debrief(
         "resolved_clues": [c.title for c in resolved],
         "asset_changes": asset_logs,
         "relation_changes": relation_logs,
+        "new_characters": new_characters,
     }
     if realm_label:
         payload["protagonist_realm"] = realm_label

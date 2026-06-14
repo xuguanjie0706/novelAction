@@ -21,13 +21,45 @@ from dabai.prompt_base import SYS_BASE, benchmark_block, ctx_brief, ladder_block
 
 
 def _carry_block(prev_tail: str, gbs: int) -> str:
+    """Legacy 120 字钩子承接（无 bridge_block 时降级）。"""
     prev_tail = (prev_tail or "").strip()
     if not prev_tail:
         return ""
     return (
-        f"\n【上文结尾（硬性承接）】前一章（可能是上一卷末章）的爽点收尾/钩子是："
-        f"「{prev_tail[:120]}」。第{gbs}章必须顺着它起，"
-        "不得另起炉灶、不得回到已解决的旧危机。\n"
+        f"\n【上文结尾（硬性承接）】前一章末钩/爽点：「{prev_tail[:200]}」。"
+        f"第{gbs}章必须顺着它起，不得另起炉灶、不得回到已解决的旧危机。\n"
+    )
+
+
+def _bridge_block(ctx: dict, batch: dict, gbs: int) -> str:
+    """硬承接包：DB 正文末段 / 完整五拍 / 本 run 已生成末章 / 钩子兜底。"""
+    bridge = (batch.get("bridge_block") or ctx.get("bridge_block") or "").strip()
+    if bridge:
+        return bridge if bridge.startswith("\n") else "\n" + bridge + "\n"
+    return _carry_block(batch.get("prev_tail") or ctx.get("prev_tail") or "", gbs)
+
+
+def _generated_outlines_block(ctx: dict) -> str:
+    """本 run 已生成章纲（bootstrap/卷展开批间）。"""
+    block = (ctx.get("generated_outlines_block") or "").strip()
+    if block:
+        return "\n" + block + "\n"
+    outlines = ctx.get("generated_chapter_outlines") or []
+    if not outlines:
+        return ""
+    from app.services.dabai.lab_narrative_state import format_generated_outlines_block
+    return "\n" + format_generated_outlines_block(outlines) + "\n"
+
+
+def _narrative_state_head(ctx: dict) -> str:
+    """Layer 2 情节状态（优先 narrative_state，兼容 story_so_far）。"""
+    story = (ctx.get("narrative_state") or ctx.get("story_so_far") or "").strip()
+    if not story:
+        return ""
+    return (
+        "\n【前情与既定事实（全部已发生或已锁定计划；章纲必须自洽；"
+        "禁止矛盾、禁止重置、禁止已臣服/已死人物无故复活/翻脸）】\n"
+        + story + "\n"
     )
 
 
@@ -57,14 +89,11 @@ def _volume_head(ctx: dict, vol: dict) -> str:
         head += f"本卷故事线推进：{extra['storyline_moves']}\n"
     if extra.get("mystery_moves"):
         head += f"本卷谜题透出：{extra['mystery_moves']}\n"
-    story = (ctx.get("story_so_far") or "").strip()
-    if story:
-        head = (
-            "\n【前情与既定事实（全部已发生，章纲必须与之自洽；禁止矛盾、禁止重置、"
-            "禁止让已死/已臣服人物无故复活/翻脸）】\n" + story + "\n\n"
-        ) + head
+    narrative = _narrative_state_head(ctx)
+    if narrative:
+        head = narrative + "\n" + head
     qc = (ctx.get("qc_feedback") or "").strip()
-    if qc:
+    if qc and qc not in (ctx.get("narrative_state") or ""):
         head += "\n" + qc + "\n"
     return head
 
@@ -121,7 +150,8 @@ def beat_sequence(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         + chapter_design_context(ctx, vol.get("volume_number"))
         + _volume_head(ctx, vol)
         + ladder_block(ctx)
-        + _carry_block(w.get("prev_tail", ""), gbs)
+        + _generated_outlines_block(ctx)
+        + _bridge_block(ctx, w, gbs)
         + _realm_spine_block(vol, w.get("realm_floor"))
         + f"\n为《{vol.get('title', '')}》排出全书第 {gbs}～{gbe} 章（共 {n} 章）的"
         "【爽点节拍序列】，每章一行。返回 JSON 数组：\n"
@@ -180,6 +210,8 @@ def _chapter_system(cfg: DabaiConfig) -> str:
         "  - 打脸对象与见证者轮换：禁止同一人连续 3 章当靶子，witnesses 阵容逐章有变化；\n"
         "  - 憋屈手法轮换：言语羞辱/资源克扣/规则刁难/当众污蔑/抢功嫁祸/退婚悔约 轮着来，"
         "禁止每章都是『嘲讽主角是废物』一招。\n"
+        "【导演预演】你在为下游写手排可拍分镜表：每个字段须具体到谁、在哪、"
+        "怎么压/怎么打、见证者如何反应；禁止「局势紧张」「悬念丛生」等抽象套话。\n"
         "【字数分档】普通章 expected_words 2000-2200；is_big_beat 大爆点章 2400-2600；"
         f"黄金前 {cfg.golden_chapters} 章 1800-2200（快进快出）。"
     )
@@ -271,7 +303,8 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         f"可用爽点类型：{'、'.join(cfg.shuang_pool)}\n"
         + ladder_block(ctx)
         + _beat_rows_block(batch.get("beat_rows") or [])
-        + _carry_block(batch.get("prev_tail", ""), gbs)
+        + _generated_outlines_block(ctx)
+        + _bridge_block(ctx, batch, gbs)
         + _realm_spine_block(vol, batch.get("realm_floor"))
         + _special_blocks(ctx, cfg, gbs, gbe)
         + _expand_rules(cfg, gbs, ctx) + "\n"
@@ -309,7 +342,8 @@ def volume_chapters(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         f"一次完成全书第 {gbs}～{gbe} 章（共 {count} 章）的节拍序列与五拍章纲。\n"
         f"可用爽点类型：{'、'.join(cfg.shuang_pool)}\n"
         + ladder_block(ctx)
-        + _carry_block(batch.get("prev_tail", ""), gbs)
+        + _generated_outlines_block(ctx)
+        + _bridge_block(ctx, batch, gbs)
         + _realm_spine_block(vol, batch.get("realm_floor"))
         + _special_blocks(ctx, cfg, gbs, gbe)
         + _beat_rules(cfg)

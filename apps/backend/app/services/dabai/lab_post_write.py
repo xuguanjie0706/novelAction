@@ -71,7 +71,8 @@ async def _run_post_write_pipeline(
                                    "new_clues": result.get("new_clues"),
                                    "resolved_clues": result.get("resolved_clues"),
                                    "asset_changes": result.get("asset_changes"),
-                                   "relation_changes": result.get("relation_changes")})
+                                   "relation_changes": result.get("relation_changes"),
+                                   "new_characters": result.get("new_characters")})
             except Exception as exc:  # noqa: BLE001
                 logger.warning("dabai-lab 写后复盘失败 chapter=%s：%s", chapter_id, exc)
                 db.rollback()

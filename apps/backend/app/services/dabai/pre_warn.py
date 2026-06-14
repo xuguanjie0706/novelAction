@@ -49,8 +49,14 @@ _BEAT_LABELS = {
 
 _PREWARN_SYSTEM = (
     "你是番茄/七猫大白文的责编兼导演，在作者落笔前出一份「导演单」。硬要求：\n"
-    "1. 事实以【主角当前状态】【本章出场人物当前状态】【前情提要】【相关记忆】为准；"
-    "章纲五拍与既有事实冲突时，以事实为准，并在 conflict_notes 给出弥合写法；\n"
+    "1. 事实以【主角当前状态】【本章出场人物当前状态】【前情提要】【相关记忆】为准；\n"
+    "1a. ★conflict_notes 只收录「真矛盾」——即：按章纲字面写就会与已写事实直接打架、"
+    "读者一眼看出穿帮的硬伤。仅限这几类：已死/已离场的人物被要求出场；主角境界倒退或"
+    "无依据跳级（与面板/记忆不符）；人物立场或状态明显相反（如前文已吓破胆/已臣服，"
+    "章纲却让其逞凶/再敌对）；已消耗或已失去的资产被要求再用；地点或时间线硬冲突。\n"
+    "1b. ★以下一律不算冲突，conflict_notes 留空 []，直接在 beat_execution 里按事实自然落笔即可："
+    "章纲是粗线条而正文需补细节；情节顺势演进、措辞不同；程度或语气的轻微差异。"
+    "宁可漏报，不要把正常细化写成「冲突裁决」；本章无硬伤就返回 []；\n"
     "2. 所有指令必须具体可执行（写什么、怎么切入），禁止「增强文采」「多留白」类建议；\n"
     "3. bridge_directives 只在确实存在位置/境界变化需要交代时给出，没有就留空数组，"
     "不要凭空编造移动；\n"
@@ -147,6 +153,16 @@ def format_prewarn_block(result: dict | None) -> str:
         lines.append("- 五拍执行：" + "；".join(beat_parts))
     for bridge in [str(x) for x in (result.get("bridge_directives") or []) if x][:3]:
         lines.append(f"- 衔接交代：{bridge}")
+    for spec in [s for s in (result.get("asset_specs") or []) if isinstance(s, dict)][:6]:
+        name = str(spec.get("name") or "").strip()
+        segs = [
+            f"{lbl}：{str(spec.get(key)).strip()}"
+            for key, lbl in (("usage", "用法"), ("cost", "代价"),
+                             ("progression", "进阶"), ("restriction", "限制"))
+            if str(spec.get(key) or "").strip()
+        ]
+        if name and segs:
+            lines.append(f"- 技能/道具规格〔{name}〕（须照此写，不得另编）：{'｜'.join(segs)}")
     for rem in [str(x) for x in (result.get("reminders") or []) if x][:3]:
         lines.append(f"- 提醒：{rem}")
     return "\n".join(lines) if len(lines) > 1 else ""

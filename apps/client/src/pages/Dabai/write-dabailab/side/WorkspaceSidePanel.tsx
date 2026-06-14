@@ -47,14 +47,23 @@ export default function WorkspaceSidePanel({
   const [tab, setTab] = useState<SideTab>('prewarn')
   const hasContent = (chapter.content?.trim().length ?? 0) > 0
 
+  const activeLabel = TABS.find(t => t.id === tab)?.label ?? ''
+
+  const tabButtonClass = (active: boolean) => clsx(
+    'relative flex w-full items-center justify-center rounded-md p-2 transition-colors',
+    active
+      ? 'bg-white text-gray-900 shadow-sm ring-1 ring-gray-200/80'
+      : 'text-gray-400 hover:bg-gray-100/80 hover:text-gray-600',
+  )
+
   if (!open) {
     return (
-      <aside className="flex w-9 shrink-0 flex-col items-center gap-1 border-l border-gray-100 bg-gray-50/60 py-2">
+      <aside className="flex w-10 shrink-0 flex-col items-stretch gap-0.5 border-l border-gray-100 bg-gray-50/60 px-1 py-2">
         <button
           type="button"
           title="展开侧栏"
           onClick={() => setOpen(true)}
-          className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+          className="mb-1 flex items-center justify-center rounded-md p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
         >
           <ChevronsLeft size={15} />
         </button>
@@ -63,10 +72,12 @@ export default function WorkspaceSidePanel({
             key={id}
             type="button"
             title={label}
+            aria-label={label}
+            aria-current={tab === id ? 'page' : undefined}
             onClick={() => { setTab(id); setOpen(true) }}
-            className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+            className={tabButtonClass(tab === id)}
           >
-            <Icon size={15} />
+            <Icon size={16} strokeWidth={tab === id ? 2.25 : 1.75} />
           </button>
         ))}
       </aside>
@@ -74,73 +85,80 @@ export default function WorkspaceSidePanel({
   }
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-l border-gray-100 bg-white">
-      <div className="flex items-center border-b border-gray-100 px-1.5 py-1.5">
+    <aside className="flex w-80 shrink-0 border-l border-gray-100 bg-white">
+      <nav
+        aria-label="章级工具"
+        className="flex w-11 shrink-0 flex-col items-stretch gap-0.5 border-r border-gray-100 bg-gray-50/70 px-1 py-2"
+      >
         {TABS.map(({ id, icon: Icon, label }) => (
           <button
             key={id}
             type="button"
+            title={label}
+            aria-label={label}
+            aria-current={tab === id ? 'page' : undefined}
             onClick={() => setTab(id)}
-            className={clsx(
-              'inline-flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1 text-xs',
-              tab === id ? 'bg-gray-900 font-semibold text-white' : 'text-gray-500 hover:bg-gray-100',
-            )}
+            className={tabButtonClass(tab === id)}
           >
-            <Icon size={13} />
-            {label}
+            <Icon size={16} strokeWidth={tab === id ? 2.25 : 1.75} />
           </button>
         ))}
-        <button
-          type="button"
-          title="收起侧栏"
-          onClick={() => setOpen(false)}
-          className="ml-1 rounded p-1 text-gray-300 hover:bg-gray-100 hover:text-gray-500"
-        >
-          <ChevronsRight size={14} />
-        </button>
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto p-3">
-        {tab === 'prewarn' && chapter.id && (
-          <PreWarnCard
-            projectId={projectId}
-            chapterId={chapter.id}
-            chapterNumber={chapter.chapter_number}
-            live={preWarnLive}
-            refreshKey={preWarnRefreshKey}
-          />
-        )}
-        {tab === 'sceneplan' && chapter.id && (
-          <ScenePlanCard
-            projectId={projectId}
-            chapterId={chapter.id}
-            live={scenePlanLive}
-            refreshKey={scenePlanRefreshKey}
-          />
-        )}
-        {tab === 'quality' && chapter.id && (
-          <QualityCard
-            projectId={projectId}
-            chapterId={chapter.id}
-            hasContent={hasContent}
-            refreshKey={qualityRefreshKey}
-            onApplyRewrite={onApplyRewriteFromQuality}
-          />
-        )}
-        {tab === 'memory' && chapter.id && (
-          <MemoryCard
-            projectId={projectId}
-            chapterId={chapter.id}
-            hasContent={hasContent}
-            refreshKey={memoryRefreshKey}
-          />
-        )}
-        {tab === 'archive' && chapter.id && (
-          <ArchiveCard
-            projectId={projectId}
-            chapterId={chapter.id}
-            refreshKey={qualityRefreshKey + memoryRefreshKey}
-          />
-        )}
+      </nav>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex items-center justify-between border-b border-gray-100 px-3 py-2.5">
+          <h3 className="text-sm font-semibold text-gray-900">{activeLabel}</h3>
+          <button
+            type="button"
+            title="收起侧栏"
+            onClick={() => setOpen(false)}
+            className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+          >
+            <ChevronsRight size={15} />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto p-3">
+          {tab === 'prewarn' && chapter.id && (
+            <PreWarnCard
+              projectId={projectId}
+              chapterId={chapter.id}
+              chapterNumber={chapter.chapter_number}
+              live={preWarnLive}
+              refreshKey={preWarnRefreshKey}
+            />
+          )}
+          {tab === 'sceneplan' && chapter.id && (
+            <ScenePlanCard
+              projectId={projectId}
+              chapterId={chapter.id}
+              live={scenePlanLive}
+              refreshKey={scenePlanRefreshKey}
+            />
+          )}
+          {tab === 'quality' && chapter.id && (
+            <QualityCard
+              projectId={projectId}
+              chapterId={chapter.id}
+              hasContent={hasContent}
+              refreshKey={qualityRefreshKey}
+              onApplyRewrite={onApplyRewriteFromQuality}
+            />
+          )}
+          {tab === 'memory' && chapter.id && (
+            <MemoryCard
+              projectId={projectId}
+              chapterId={chapter.id}
+              hasContent={hasContent}
+              refreshKey={memoryRefreshKey}
+            />
+          )}
+          {tab === 'archive' && chapter.id && (
+            <ArchiveCard
+              projectId={projectId}
+              chapterId={chapter.id}
+              refreshKey={qualityRefreshKey + memoryRefreshKey}
+            />
+          )}
+        </div>
       </div>
     </aside>
   )

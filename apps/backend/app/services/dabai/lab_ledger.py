@@ -223,13 +223,22 @@ def build_ledger_block(
     if rel_lines:
         lines.append(f"- 在场人物对{protag}的关系：{'；'.join(rel_lines[:10])}")
 
-    if not lines:
+    # 已锁定的技能/道具详细规格（用法/代价/进阶/限制）——后续章节沿用，
+    # 经此块透传给分场/正文/导演单，保证全书用法一致（delegation 防循环导入）。
+    from app.services.dabai.lab_asset_spec import build_locked_spec_block
+    spec_block = build_locked_spec_block(db, project, ch)
+
+    if not lines and not spec_block:
         return ""
-    lines.append(
-        "- ★硬约束：禁止使用台账之外未获得的功法/法宝；已消耗/遗失的不得再用；"
-        "人物态度须与台账一致，态度变化必须在正文交代原因。"
-    )
-    return "【当前台账（既定事实，不可违背）】\n" + "\n".join(lines)
+    if lines:
+        lines.append(
+            "- ★硬约束：禁止使用台账之外未获得的功法/法宝；已消耗/遗失的不得再用；"
+            "人物态度须与台账一致，态度变化必须在正文交代原因。"
+        )
+    block = "【当前台账（既定事实，不可违背）】\n" + "\n".join(lines) if lines else ""
+    if spec_block:
+        block = f"{block}\n\n{spec_block}" if block else spec_block
+    return block
 
 
 # ── 复盘落账 ─────────────────────────────────────────────────────────────────

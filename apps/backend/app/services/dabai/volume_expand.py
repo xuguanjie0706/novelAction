@@ -17,7 +17,11 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 from sqlalchemy.orm import Session
 
 from app.models.dabai import DabaiChapterOutline, DabaiProject, DabaiVolume
-from app.models.dabai_lab import DabaiAsset, DabaiClue, DabaiMemory, DabaiRelation
+from app.services.dabai.lab_narrative_state import (
+    build_bridge_block,
+    build_narrative_state_block,
+    build_semantic_outline_block,
+)
 from app.services.dabai_persist import make_chapter_outline_row
 
 logger = logging.getLogger("dabai.volume_expand")
@@ -90,89 +94,58 @@ def _chapter_tail(ch: DabaiChapterOutline | None) -> str:
     return (ch.end_hook or ch.shuang_payoff or "").strip()
 
 
-def build_story_so_far(
-    db: Session, p: DabaiProject, volume: DabaiVolume, chapter_offset: int,
-) -> str:
-    """组装「前情与既定事实」注入块（防凭空生成的核心）。
+async def _enrich_expand_ctx(
+    db: Session,
+    p: DabaiProject,
+    volume: DabaiVolume,
+    ctx: dict,
+    window: dict,
+) -> None:
+    """注入 Layer 2 情节状态 + 硬承接 + 质检回灌（卷展开专用）。"""
+    offset = window["chapter_offset"]
+    start = window["start_chapter"]
+    before = offset + start
+    gbs = before
+    gbe = offset + window["planned"]
 
-    四个来源，任一为空则该段省略；全空返回空串（新书第1卷展开时自然为空）：
-      ① 上文章纲轨迹：offset 前最后 5 章（标题/爽点/钩子/境界档）+ 上一卷收束；
-      ② 复盘记忆（dabai_memories）：已写正文经复盘提取的事实，重要度优先 Top-8；
-      ③ 未回收线索（dabai_clues open）：埋设越早越优先，要求本卷择机回收；
-      ④ 台账：主角 active 资产 + 人物关系最新态度（与 lab_ledger 同口径的紧凑版）。
-    """
-    parts: list[str] = []
-
-    prev_chs = (
-        db.query(DabaiChapterOutline)
-        .filter(DabaiChapterOutline.project_id == p.id,
-                DabaiChapterOutline.chapter_number <= chapter_offset)
-        .order_by(DabaiChapterOutline.chapter_number.desc())
-        .limit(5).all()
+    vols = sorted(p.volumes, key=lambda v: v.volume_number)
+    prev_vol = next(
+        (v for v in vols if v.volume_number == volume.volume_number - 1), None,
     )
-    if prev_chs:
-        lines = [
-            f"  第{c.chapter_number}章《{(c.title or '').strip()}》："
-            f"{(c.shuang_payoff or c.yinbao or '')[:40]}"
-            + (f"；末钩：{(c.end_hook or '')[:40]}" if c.end_hook else "")
-            + (f"；境界档{c.realm_rank}" if c.realm_rank else "")
-            for c in reversed(prev_chs)
-        ]
-        parts.append("① 上文章纲轨迹（最近5章，新卷开篇必须顺着这条线走）：\n"
-                     + "\n".join(lines))
-        prev_vol = next((v for v in sorted(p.volumes, key=lambda x: x.volume_number)
-                         if v.volume_number == volume.volume_number - 1), None)
-        if prev_vol and (prev_vol.volume_climax or prev_vol.end_hook):
-            parts.append(f"  上一卷收束：高潮「{(prev_vol.volume_climax or '')[:60]}」"
-                         f"／卷末钩子「{(prev_vol.end_hook or '')[:60]}」")
 
-    mems = (
-        db.query(DabaiMemory)
-        .filter(DabaiMemory.project_id == p.id)
-        .order_by(DabaiMemory.importance.desc(), DabaiMemory.chapter_number.desc())
-        .limit(8).all()
+    from app.services.dabai.lab_qc_feedback import (
+        build_chapter_range_qc_block,
+        build_project_qc_issue_block,
     )
-    if mems:
-        parts.append("② 已写正文既定事实（复盘记忆，不可矛盾、不可重置）：\n"
-                     + "\n".join(f"  - [第{m.chapter_number}章]{m.content[:60]}"
-                                 for m in mems))
 
-    clues = (
-        db.query(DabaiClue)
-        .filter(DabaiClue.project_id == p.id, DabaiClue.status == "open")
-        .order_by(DabaiClue.chapter_planted)
-        .limit(8).all()
+    extra: list[str] = []
+    qc_book = build_project_qc_issue_block(db, p.id)
+    if qc_book:
+        extra.append(qc_book)
+        ctx["qc_feedback"] = qc_book
+    qc_range = build_chapter_range_qc_block(
+        db, p.id, chapter_from=gbs, chapter_to=gbe,
     )
-    if clues:
-        parts.append("③ 未回收线索（埋设越早越优先，本卷至少择机回收 1-2 条，"
-                     "在对应章 yinbao/end_hook 里兑现）：\n"
-                     + "\n".join(f"  - [第{c.chapter_planted}章埋]{c.title}"
-                                 f"：{(c.description or '')[:40]}" for c in clues))
+    if qc_range:
+        extra.append(qc_range)
 
-    protag = next((c.name for c in p.characters if (c.role or "").startswith("主角")),
-                  p.characters[0].name if p.characters else "")
-    assets = (
-        db.query(DabaiAsset)
-        .filter(DabaiAsset.project_id == p.id, DabaiAsset.status == "active")
-        .order_by(DabaiAsset.kind, DabaiAsset.acquired_chapter)
-        .limit(12).all()
+    semantic = await build_semantic_outline_block(db, p, before_chapter=before)
+    if semantic:
+        extra.append(semantic)
+
+    narrative = build_narrative_state_block(
+        db, p, before_chapter=before, prev_volume=prev_vol, extra_blocks=extra,
     )
-    rels = (
-        db.query(DabaiRelation)
-        .filter(DabaiRelation.project_id == p.id, DabaiRelation.from_name == protag)
-        .limit(10).all()
-    ) if protag else []
-    ledger_lines = []
-    if assets:
-        ledger_lines.append("  资产（禁用台账外能力；已消耗/遗失不得再用）："
-                            + "、".join(a.name for a in assets))
-    if rels:
-        ledger_lines.append("  关系（最新态度，变化须有剧情交代）："
-                            + "；".join(f"{r.to_name}={r.attitude or '中立'}" for r in rels))
-    if ledger_lines:
-        parts.append("④ 主角台账：\n" + "\n".join(ledger_lines))
+    if narrative:
+        ctx["narrative_state"] = narrative
+        ctx["story_so_far"] = narrative
 
-    return "\n".join(parts)
+    ctx["bridge_block"] = build_bridge_block(
+        db, p,
+        before_chapter=before,
+        prev_tail_fallback=window.get("prev_tail") or "",
+    )
+    ctx.setdefault("generated_chapter_outlines", [])
 
 
 def resolve_expand_window(
@@ -269,16 +242,7 @@ async def aiter_volume_expand(
     }
 
     ctx = build_expand_ctx(p)
-    # 前情回灌：上文章纲轨迹/复盘记忆/未回收线索/台账 → prompt「既定事实」块
-    story = build_story_so_far(db, p, volume, offset)
-    if story:
-        ctx["story_so_far"] = story
-    # 质检高频问题回灌：已写章节反复踩坑的 rule_id → 本卷章纲从源头规避
-    from app.services.dabai.lab_qc_feedback import build_project_qc_issue_block
-
-    qc_issues = build_project_qc_issue_block(db, p.id)
-    if qc_issues:
-        ctx["qc_feedback"] = qc_issues
+    await _enrich_expand_ctx(db, p, volume, ctx, window)
     created = 0
     async for batch, gbs, gbe in aiter_chapter_batches(
         ctx, call, cfg, _volume_dict(volume),

@@ -84,6 +84,9 @@ export default function MemoryCard({ projectId, chapterId, hasContent, refreshKe
           {(lastResult.relation_changes?.length ?? 0) > 0 && (
             <p className="mt-0.5 text-[11px]">关系：{lastResult.relation_changes!.join('、')}</p>
           )}
+          {(lastResult.new_characters?.length ?? 0) > 0 && (
+            <p className="mt-0.5 text-[11px]">新角色建档：{lastResult.new_characters!.join('、')}</p>
+          )}
         </div>
       ) : null}
 

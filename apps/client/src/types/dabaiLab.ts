@@ -115,6 +115,20 @@ export interface DabaiLabMemory {
   content: string
   importance: number
   tags: string[]
+  /** 语义检索返回时附带的余弦距离（越小越相关）；列表/精确模式无此字段。 */
+  score?: number
+}
+
+/** 记忆库检索结果（GET /memory/search）。 */
+export interface DabaiLabMemorySearchResult {
+  items: DabaiLabMemory[]
+  total: number
+  /** 请求的模式。 */
+  mode: 'semantic' | 'exact'
+  /** 实际生效模式：语义不可用/无向量数据时降级为 exact。 */
+  effective_mode: 'semantic' | 'exact'
+  /** 是否发生降级（语义→精确）。 */
+  degraded: boolean
 }
 
 /** 线索台账条目。 */
@@ -140,9 +154,19 @@ export interface DabaiLabDebriefResult {
   asset_changes?: string[]
   /** 关系变更摘要（如「张三：敌对→臣服」）。 */
   relation_changes?: string[]
+  /** 本章新建档的长期角色名（工具人不建档）。 */
+  new_characters?: string[]
 }
 
 /** 资产台账条目（功法/道具/金手指）。 */
+/** 技能/道具详细规格（导演单锁定，防分场/正文乱写）。 */
+export interface DabaiAssetSpec {
+  usage?: string         // 用法
+  cost?: string          // 代价
+  progression?: string   // 进阶
+  restriction?: string   // 限制
+}
+
 export interface DabaiLabAsset {
   id: string
   kind: 'skill' | 'item' | 'golden_finger' | string
@@ -153,6 +177,7 @@ export interface DabaiLabAsset {
   status: 'active' | 'consumed' | 'lost' | string
   status_chapter: number | null
   source: string
+  spec?: DabaiAssetSpec | null
 }
 
 /** 关系变化轨迹条目（chapter 为 null 表示手动修改）。 */

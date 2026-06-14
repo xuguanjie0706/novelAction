@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
-import { Loader2, PenLine, Save, Sparkles } from 'lucide-react'
+import { Loader2, PenLine, Save, Sparkles, Trash2 } from 'lucide-react'
 import DabaiChapterBeatCard from '../../../components/Dabai/DabaiChapterBeatCard'
 import DraftLaunchModal, { type DraftLaunchOptions } from './DraftLaunchModal'
 import WorkspaceSidePanel from './side/WorkspaceSidePanel'
@@ -23,10 +23,12 @@ interface Props {
   /** 首写被顺序门控阻断时的提示（重写不受限）。 */
   generateBlockReason?: string | null
   onSaved: () => void
+  /** 清空本章写作产物后刷新详情。 */
+  onCleared: () => void
 }
 
 export default function WriteDabailabWorkspace({
-  projectId, chapter, beat, generateBlockReason, onSaved,
+  projectId, chapter, beat, generateBlockReason, onSaved, onCleared,
 }: Props) {
   const aiBackendRoute = useAppStore(s => s.aiBackendRoute)
   const [text, setText] = useState(chapter.content ?? '')
@@ -41,6 +43,7 @@ export default function WriteDabailabWorkspace({
   const [memoryRefreshKey, setMemoryRefreshKey] = useState(0)
   const [draftModalOpen, setDraftModalOpen] = useState(false)
   const [rewritePrefill, setRewritePrefill] = useState('')
+  const [clearing, setClearing] = useState(false)
   const regenSnapshot = useRef('')
 
   useEffect(() => {
@@ -159,6 +162,40 @@ export default function WriteDabailabWorkspace({
     setDraftModalOpen(true)
   }
 
+  const clearChapterWriting = async () => {
+    if (!chapter.id || busy || clearing) return
+    const hasWritten = Boolean(chapter.content?.trim()) || chapter.status === 'written'
+    if (!hasWritten) {
+      toast.error('本章尚无生成内容')
+      return
+    }
+    const ok = window.confirm(
+      `确定清空第 ${chapter.chapter_number} 章的全部写作产物？\n\n`
+      + '将删除：正文、写前预警、分场、质检报告、复盘记忆，并撤销本章台账/线索变更。\n'
+      + '章纲五拍保留，可重新生成。\n\n'
+      + '若后续章节已有正文，须先从高章号开始清空。',
+    )
+    if (!ok) return
+    setClearing(true)
+    try {
+      await dabaiApi.clearChapterWriting(projectId, chapter.id)
+      toast.success(`第 ${chapter.chapter_number} 章写作产物已清空`)
+      setText('')
+      setDirty(false)
+      setPreWarnLive(null)
+      setScenePlanLive(null)
+      setPreWarnRefreshKey(k => k + 1)
+      setScenePlanRefreshKey(k => k + 1)
+      setQualityRefreshKey(k => k + 1)
+      setMemoryRefreshKey(k => k + 1)
+      onCleared()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '清空失败')
+    } finally {
+      setClearing(false)
+    }
+  }
+
   return (
     <div className="flex h-full min-w-0 flex-1 bg-white">
       <DraftLaunchModal
@@ -198,6 +235,21 @@ export default function WriteDabailabWorkspace({
         >
           {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
           保存
+        </button>
+        <button
+          type="button"
+          disabled={busy || clearing || !(wordCount > 0 || chapter.status === 'written')}
+          onClick={() => void clearChapterWriting()}
+          title="清空正文及预警/分场/质检/记忆等写作产物"
+          className={clsx(
+            'inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium',
+            busy || clearing || !(wordCount > 0 || chapter.status === 'written')
+              ? 'cursor-not-allowed border-gray-100 text-gray-300'
+              : 'border-red-200 text-red-600 hover:bg-red-50',
+          )}
+        >
+          {clearing ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+          清空本章
         </button>
         <button
           type="button"

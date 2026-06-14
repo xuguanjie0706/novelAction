@@ -94,6 +94,8 @@ def build_sceneplan_prompt(
     witness_block = build_witness_lock_block(ch)
     if witness_block:
         parts.append(witness_block)
+    if ctx.narrative_state_block.strip():
+        parts.append(ctx.narrative_state_block.strip())
     if ctx.recent_plot_block.strip():
         parts.append(ctx.recent_plot_block.strip())
     if ctx.panel_block.strip():

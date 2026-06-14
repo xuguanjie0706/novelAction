@@ -185,6 +185,79 @@ def lab_memory_list(
     } for m in rows], "total": len(rows)}
 
 
+def _serialize_memory(m: DabaiMemory, *, score: float | None = None) -> dict:
+    """记忆条目序列化（与 lab_memory_list 字段对齐，可附语义相似度）。"""
+    item = {
+        "id": str(m.id), "chapter_id": str(m.chapter_id),
+        "chapter_number": m.chapter_number, "mem_type": m.mem_type,
+        "content": m.content, "importance": m.importance, "tags": m.tags or [],
+    }
+    if score is not None:
+        item["score"] = round(score, 4)
+    return item
+
+
+@router.get("/projects/{project_id}/memory/search")
+async def lab_memory_search(
+    project_id: UUID,
+    q: str,
+    mode: Literal["semantic", "exact"] = "semantic",
+    top_k: int = 20,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """记忆库检索：semantic=pgvector 余弦召回（按相似度排序）；exact=子串匹配。
+
+    语义模式在 pgvector 不可用 / 无向量化数据时自动降级为 exact，并以
+    ``degraded=true`` + ``effective_mode`` 告知前端，便于提示用户补跑向量化。
+    """
+    project = _owned_or_404(db, project_id, user)
+    query = (q or "").strip()
+    if not query:
+        return {"items": [], "total": 0, "mode": mode, "effective_mode": mode,
+                "degraded": False}
+
+    top_k = max(1, min(top_k, 50))
+
+    if mode == "semantic":
+        from app.services.dabai.lab_embedding import semantic_search_dabai
+
+        hits = await semantic_search_dabai(db, project.id, query, top_k=top_k)
+        if hits:
+            return {
+                "items": [_serialize_memory(m) for m in hits],
+                "total": len(hits), "mode": "semantic",
+                "effective_mode": "semantic", "degraded": False,
+            }
+        # 语义召回空（pgvector 不可用 / 存量未向量化）→ 降级子串匹配
+        rows = _exact_memory_match(db, project.id, query, top_k)
+        return {
+            "items": [_serialize_memory(m) for m in rows],
+            "total": len(rows), "mode": "semantic",
+            "effective_mode": "exact", "degraded": True,
+        }
+
+    rows = _exact_memory_match(db, project.id, query, top_k)
+    return {"items": [_serialize_memory(m) for m in rows], "total": len(rows),
+            "mode": "exact", "effective_mode": "exact", "degraded": False}
+
+
+def _exact_memory_match(
+    db: Session, project_id: UUID, query: str, top_k: int,
+) -> list[DabaiMemory]:
+    """子串匹配（content 包含 query），按章号倒序 + 重要度。"""
+    return (
+        db.query(DabaiMemory)
+        .filter(
+            DabaiMemory.project_id == project_id,
+            DabaiMemory.content.ilike(f"%{query}%"),
+        )
+        .order_by(DabaiMemory.chapter_number.desc(), DabaiMemory.importance.desc())
+        .limit(top_k)
+        .all()
+    )
+
+
 # ── 线索台账 ─────────────────────────────────────────────────────────────────
 @router.get("/projects/{project_id}/clues")
 def lab_clue_list(
@@ -264,6 +337,8 @@ def lab_asset_list(
         "cooldown_chapters": a.cooldown_chapters,
         "last_used_chapter": a.last_used_chapter,
         "enhancement_level": a.enhancement_level or 0,
+        # v3：导演单锁定的详细规格（用法/代价/进阶/限制）
+        "spec": a.spec,
     } for a in rows], "total": len(rows)}
 
 
@@ -276,6 +351,7 @@ class AssetPatch(BaseModel):
     last_used_chapter: Optional[int] = Field(default=None, ge=0)
     base_stat: Optional[dict] = None
     enhancement_level: Optional[int] = Field(default=None, ge=0)
+    spec: Optional[dict] = None   # 手动编辑详细规格（用法/代价/进阶/限制）
 
 
 @router.patch("/projects/{project_id}/assets/{asset_id}")
@@ -304,6 +380,9 @@ def lab_asset_patch(
         row.base_stat = req.base_stat
     if req.enhancement_level is not None:
         row.enhancement_level = req.enhancement_level
+    if req.spec is not None:
+        from app.services.dabai.lab_asset_spec import coerce_spec
+        row.spec = coerce_spec(req.spec)
     db.commit()
     return {"ok": True, "id": str(row.id), "status": row.status, "grade": row.grade}
 

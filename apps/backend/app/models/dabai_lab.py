@@ -171,6 +171,10 @@ class DabaiAsset(Base):
     grade = Column(Integer, nullable=True)
     # base_stat: 基础属性加成，如 {"atk": 200, "def": 50, "desc": "攻击+200"}
     base_stat = Column(JSON, nullable=True)
+    # spec: 写前导演单锁定的详细规格，防分场/正文对功法道具乱写（v3，2026-06-14）。
+    # 结构 {"usage": 用法, "cost": 代价, "progression": 进阶, "restriction": 限制}；
+    # None=尚未锁定规格。规格一经锁定即为既定设定，后续章节沿用勿改。
+    spec = Column(JSON, nullable=True)
     # cooldown_chapters: 技能冷却章数（0=无冷却；None=被动技能不适用）
     cooldown_chapters = Column(Integer, nullable=True)
     # last_used_chapter: 最近一次使用章号（用于判断冷却是否结束）

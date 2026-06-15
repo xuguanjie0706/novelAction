@@ -224,12 +224,19 @@ class DabaiPersister:
                 source="seed",
             ))
 
+    # 卷骨架深挖版的富字段（章段施工图/情绪收支/新登场人物/追读锚点）一并落 extra，
+    # 供卷展开期 build_expand_ctx 回读、给章纲生成更稠密的卷级上下文。
+    _VOL_EXTRA_KEYS = (
+        "boss", "storyline_moves", "mystery_moves",
+        "opening_setup", "chapter_beat_map", "emotion_ledger",
+        "new_characters", "new_settings", "reader_hook",
+    )
+
     def _save_volumes(self, vols: list[dict]) -> None:
         p = self.project
         rows: list[DabaiVolume] = []
         for v in vols:
-            extra = {k: v[k] for k in ("boss", "storyline_moves", "mystery_moves")
-                     if v.get(k)}
+            extra = {k: v[k] for k in self._VOL_EXTRA_KEYS if v.get(k)}
             row = DabaiVolume(
                 project_id=p.id,
                 volume_number=int(v.get("volume_number", len(rows) + 1)),

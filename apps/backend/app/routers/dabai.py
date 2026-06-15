@@ -101,13 +101,13 @@ def _build_call(cfg, req: GenerateRequest, db: Session, user: User):
     from app.services.ai.service import AIService
     ai = AIService(profile=req.model_profile, db=db,
                    llm_provider_id=req.llm_provider_id, user_id=user.id)
-    # 长输出步骤（单次整卷 beat+五拍 / 分批展开 / 修复）需要放开输出上限；
-    # 其余设定步走网关默认，避免对小上限模型传超额 max_tokens。
-    heavy_steps = {"volume_chapters", "chapter_outlines", "beat_sequence", "chapter_repair"}
+    # 按次计费 + 质量优先：设定步与章纲步一律按 cfg.max_tokens_for(step) 放开输出上限，
+    # 让富设定 schema 一次性全量吐出而不被网关默认上限截断（gemini-3-flash 等大窗口模型）。
+    # max_tokens_for 内部已对全局 cfg.max_tokens 取 min，仍是硬顶，防超模型上限。
 
     async def call(step: str, system: str, user_prompt: str, meta: dict | None):
-        max_tokens = cfg.max_tokens if step in heavy_steps else None
-        text = await ai._call_ai(system, user_prompt, max_tokens=max_tokens,
+        text = await ai._call_ai(system, user_prompt,
+                                 max_tokens=cfg.max_tokens_for(step),
                                  task=f"dabai.{step}")
         return parse_json(text)
 

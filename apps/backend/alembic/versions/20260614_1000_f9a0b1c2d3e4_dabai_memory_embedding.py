@@ -22,14 +22,13 @@ from __future__ import annotations
 
 from alembic import op
 
-from app.config import settings
-
 revision = "f9a0b1c2d3e4"
 down_revision = "e8f9a0b1c2d3"
 branch_labels = None
 depends_on = None
 
-_DIM = int(getattr(settings, "EMBEDDING_DIM", 1024) or 1024)
+# 与 settings.EMBEDDING_DIM / b3c4d5e6f7a8 保持一致（BAAI/bge-m3 → 1024）
+_DIM = 1024
 _IDX = "idx_dabai_memories_embedding_cosine"
 
 

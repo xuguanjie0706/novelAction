@@ -38,10 +38,6 @@ _ROLE_ATTITUDE = {
 _ASSET_NOISE_NAMES = frozenset({"修为点", "修为", "经验点", "熟练度", "属性点"})
 _ASSET_NOISE_RE = re.compile(r"^修为点\d*$")
 
-_REALM_RE = re.compile(
-    r"(淬体|气海|灵纹|神宫|王座|涅槃|至尊|神吞)(?:境)?([一二三四五六七八九十]+|\d+)重",
-)
-
 # 品阶数字 → 汉字标签（grade 字段）
 _GRADE_LABELS = {0: "凡品", 1: "灵品", 2: "仙品", 3: "神品", 4: "传说"}
 _GRADE_KEYWORDS = {
@@ -67,27 +63,6 @@ def _is_noise_asset(name: str) -> bool:
     if n in _ASSET_NOISE_NAMES or _ASSET_NOISE_RE.match(n):
         return True
     return False
-
-
-def _parse_sub_realm_label(text: str) -> str | None:
-    """从文本取最后一次「大境+重数」表述，如 淬体境六重。"""
-    matches = _REALM_RE.findall(text or "")
-    if not matches:
-        return None
-    major, sub = matches[-1]
-    return f"{major}境{sub}重"
-
-
-def _major_to_rank(project: DabaiProject, major: str) -> int | None:
-    """大境名 → power_ladder.rank（档位数）。"""
-    for lvl in (project.power_ladder or {}).get("levels") or []:
-        name = str(lvl.get("name") or "")
-        if major in name or name.startswith(major):
-            try:
-                return int(lvl.get("rank") or 0) or None
-            except (TypeError, ValueError):
-                return None
-    return None
 
 
 def _roster_names(project: DabaiProject) -> set[str]:
@@ -518,38 +493,11 @@ def sync_protagonist_realm(
     ch: DabaiChapterOutline,
     *,
     memories: list | None = None,
+    realm_info: dict | None = None,
 ) -> str | None:
-    """复盘后同步主角境界：meta.protagonist_realm + 章纲 realm_rank（档位数单调不减）。
+    """复盘后同步主角境界（委托 lab_realm_baseline，情节回写 meta + 章纲）。"""
+    from app.services.dabai.lab_realm_baseline import apply_realm_from_debrief
 
-    Args:
-        memories: 刚落库的本章记忆行，优先读 state 类型。
-    Returns:
-        解析到的境界标签（如 淬体境六重），未解析则 None。
-    """
-    content = re.sub(r"<[^>]+>", "", ch.content or "").strip()
-    label = _parse_sub_realm_label(content[-2500:] if content else "")
-    if memories:
-        for mem in reversed(memories):
-            if getattr(mem, "mem_type", None) != "state":
-                continue
-            text = getattr(mem, "content", "") or ""
-            if "境" not in text and "重" not in text:
-                continue
-            parsed = _parse_sub_realm_label(text)
-            if parsed:
-                label = parsed
-                break
-    if not label:
-        return None
-
-    meta = dict(project.meta or {})
-    meta["protagonist_realm"] = label
-    meta["protagonist_realm_chapter"] = ch.chapter_number
-    project.meta = meta
-
-    m = _REALM_RE.search(label)
-    if m:
-        new_rank = _major_to_rank(project, m.group(1))
-        if new_rank and (ch.realm_rank is None or new_rank >= int(ch.realm_rank)):
-            ch.realm_rank = new_rank
-    return label
+    return apply_realm_from_debrief(
+        db, project, ch, realm_info=realm_info, memories=memories,
+    )

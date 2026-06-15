@@ -33,6 +33,7 @@ from app.services.dabai.lab_pre_warn import (
     resolve_lab_pre_warn,
 )
 from app.services.dabai.lab_prompt_shared import build_location_bridge_block
+from app.services.dabai.lab_chapter_boundary import build_forward_chapter_boundary_block
 from app.services.dabai.lab_qc_feedback import (
     build_chapter_qc_feedback_block,
     build_forward_qc_block,
@@ -128,6 +129,9 @@ def register_draft_routes(router: APIRouter) -> None:
         # 前序章节质检的「后续章节建议」→ 注入本章正文（首写也注入，非只重写/章纲）
         forward_qc_block = build_forward_qc_block(
             db, project.id, target_chapter=int(ch.chapter_number or 0),
+        )
+        chapter_boundary_block = build_forward_chapter_boundary_block(
+            db, project.id, ch,
         )
         prev_ch = None
         location_bridge_block = ""
@@ -243,6 +247,8 @@ def register_draft_routes(router: APIRouter) -> None:
                         location_bridge_block=location_bridge_block,
                         qc_feedback_block=qc_feedback_block,
                         forward_qc_block=forward_qc_block,
+                        chapter_boundary_block=chapter_boundary_block,
+                        realm_writing_block=draft_ctx.realm_writing_block,
                         replace_existing=replace_existing,
                         prior_content=prior_content,
                         user_instruction=(req.user_instruction or "").strip(),

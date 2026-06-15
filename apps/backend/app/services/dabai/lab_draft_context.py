@@ -23,6 +23,10 @@ from sqlalchemy.orm import Session
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 from app.models.dabai_lab import DabaiClue, DabaiMemory, DabaiPanelSnapshot
 from app.services.dabai.lab_char_voice import build_char_voice_block
+from app.services.dabai.lab_realm_baseline import (
+    build_writing_realm_block,
+    load_opening_realm_baseline,
+)
 
 _MEM_LABELS = {
     "summary": "摘要", "fact": "事实", "event": "事件",
@@ -54,6 +58,7 @@ class LabDraftContext:
     prev_content_hash: str = ""   # 上章正文指纹（导演单/分场陈旧失效检测）
     narrative_state_block: str = ""  # Layer 2 情节时间轴+世界快照（与章纲 prompt 同源）
     char_voice_block: str = ""    # 本章出场人物声音档案（性格/说话风格/欲望/憋屈/与主角关系）
+    realm_writing_block: str = ""   # 开笔/章末境界衔接（情节基准，非章纲硬锁）
 
 
 def content_fingerprint(text: str) -> str:
@@ -466,6 +471,8 @@ def build_lab_draft_context(
     narrative_state_block = build_narrative_state_block(
         db, project, before_chapter=cur,
     )
+    opening_baseline = load_opening_realm_baseline(db, project, ch)
+    realm_writing_block = build_writing_realm_block(project, ch, opening_baseline)
 
     return LabDraftContext(
         prev_tail=prev_tail,
@@ -478,6 +485,7 @@ def build_lab_draft_context(
         prev_content_hash=prev_content_hash,
         narrative_state_block=narrative_state_block,
         char_voice_block=build_char_voice_block(project, _chapter_stage_names(ch)),
+        realm_writing_block=realm_writing_block,
     )
 
 

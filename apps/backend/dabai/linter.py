@@ -217,6 +217,7 @@ def lint_chapters(
                   f"每 {cfg.big_beat_every} 章安排一个大爆点"))
 
     _lint_sameness(chapters, add)
+    _lint_future_cast_protection(chapters, add)
     for ch in chapters:
         if int(ch.get("chapter_number") or 0) != 1:
             continue
@@ -265,6 +266,32 @@ def _title_body(title: str) -> str:
     if "章" in t[:6]:
         t = t.split("章", 1)[1]
     return t.strip(" ：:·-—")
+
+
+def _lint_future_cast_protection(chapters: list[dict], add) -> None:
+    """DB-14：本章节拍不得暗示写死后序章 involved 人物。"""
+    death_hints = ("死", "殁", "毙", "诛", "杀", "身亡", "殒命", "灭口")
+    for i, ch in enumerate(chapters):
+        num = ch.get("chapter_number")
+        future: set[str] = set()
+        for j in range(i + 1, min(i + 3, len(chapters))):
+            for name in chapters[j].get("involved_characters") or []:
+                nm = str(name or "").strip()
+                if nm:
+                    future.add(nm)
+        if not future:
+            continue
+        blob = " ".join(
+            str(ch.get(k) or "") for k in ("yinbao", "shuang_payoff", "end_hook", "yaqu_setup")
+        )
+        for name in future:
+            if name in blob and any(k in blob for k in death_hints):
+                add(Issue(
+                    "DB-14", "high", num,
+                    f"第{num}章节拍涉及后续章主线人物「{name}」且含死亡/消灭暗示，"
+                    f"与后序章纲冲突",
+                    "改为击退/羞辱/暂退，或调整后续章纲出场安排",
+                ))
 
 
 def format_report(report: LinterReport) -> str:

@@ -209,7 +209,7 @@ def golden_finger_block(
         lines.append(f"  限制：{_s(gf.get('restriction'), 60)}")
     shuang = gf.get("first_10_shuang") or []
     if shuang:
-        lines.append("  前10章爽点弹药（全书第N章须兑现对应条，可改场景不可丢核心爽点）：")
+        lines.append("  前10章爽点弹药（规划参考；写作期以已写正文与本章五拍为准，勿机械绑章号）：")
         for i, item in enumerate(shuang[:10]):
             chn = i + 1
             if gbs is not None and gbe is not None and not (gbs <= chn <= gbe):

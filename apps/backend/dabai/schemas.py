@@ -156,11 +156,43 @@ def _validate_golden_finger_payload(step: str, data: Any) -> list[str]:
         errors.append("golden_finger.first_10_shuang 须为非空数组")
         return errors
     items = [str(x).strip() for x in shuang if str(x).strip()]
-    if len(items) < 8:
+    if len(items) < 10:
         errors.append(
-            f"golden_finger.first_10_shuang 至少 8 条具体爽点，实际 {len(items)} 条"
+            f"golden_finger.first_10_shuang 至少 10 条具体爽点（深挖版目标 14-20），"
+            f"实际 {len(items)} 条"
         )
+    errors.extend(_validate_power_ladder(data.get("power_ladder")))
     return errors
+
+
+# 深挖版境界阶梯：每档不能只是「rank+名+一句话」，必须带战力标尺与格局，
+# 否则越级打脸的强度差无从感知。门槛适中（避免反复重试），但拦截扁平化产出。
+_LADDER_LEVEL_DEPTH_KEYS = ("power_benchmark", "world_scope")
+
+
+def _validate_power_ladder(pl: Any) -> list[str]:
+    """境界体系深度门：≥6 大境界 + 多数档位带战力标尺/格局字段。"""
+    if not isinstance(pl, dict):
+        return ["golden_finger.power_ladder 缺失或非对象"]
+    levels = pl.get("levels")
+    if not isinstance(levels, list) or len(levels) < 6:
+        return [
+            f"power_ladder.levels 至少 6 个大境界（实际 "
+            f"{len(levels) if isinstance(levels, list) else 0} 个）"
+        ]
+    deep = 0
+    for lv in levels:
+        if not isinstance(lv, dict):
+            continue
+        if all(str(lv.get(k) or "").strip() for k in _LADDER_LEVEL_DEPTH_KEYS):
+            deep += 1
+    # 允许最高 1-2 个高境界留白，但绝大多数档位须有战力标尺 + 格局
+    if deep < len(levels) - 2:
+        return [
+            "power_ladder.levels 过于扁平：多数档位缺 power_benchmark（战力标尺）"
+            "或 world_scope（活动格局）——这是越级打脸强度差与格局打开的根，须补全"
+        ]
+    return []
 
 
 def validate_chapter_coverage(step: str, data: Any, meta: dict | None) -> list[str]:

@@ -94,9 +94,9 @@ def _build_debrief_prompt(
         '     "start_realm": "登场时境界，无则null", "persona": "≤30字性格/说话风格",\n'
         '     "function": "≤30字在故事里的作用"}\n'
         "  ],\n"
-        '  "realm_snapshot": {   // 章末主角境界精确快照（系统文核心；必填）\n'
-        '    "realm": "大境界名称，如筑基期",\n'
-        '    "sub_level": 当前小境界层数（整数，如3），无则null,\n'
+        '  "realm_snapshot": {   // 章末主角境界精确快照（系统文核心；必填；下章开笔绝对基准）\n'
+        '    "realm": "大境界名称，如炼气境",\n'
+        '    "sub_level": 当前小境界层数（整数，须与正文末句一致），无则null,\n'
         '    "max_sub": 该大境界最大层数（整数，如9），无则null,\n'
         '    "combat_power": 战力估算数值（整数，参考境界档位合理估算），无则null,\n'
         '    "location": "章末主角所在的具体地点，≤15字（下一章开笔位置基准）"，无法判断则null\n'
@@ -260,10 +260,11 @@ async def run_lab_debrief(
     new_characters = _persist_new_characters(db, project, ch, result)
     asset_logs, relation_logs = apply_ledger_changes(db, project, ch, result)
     prune_noise_assets(db, project)
-    realm_label = sync_protagonist_realm(db, project, ch, memories=memories)
-
-    # 系统面板快照：复盘结束后立即存档，作为下章写作的数值绝对基准
     realm_info = result.get("realm_snapshot") if isinstance(result.get("realm_snapshot"), dict) else None
+    realm_label = sync_protagonist_realm(
+        db, project, ch, memories=memories, realm_info=realm_info,
+    )
+    # 系统面板快照：复盘结束后立即存档，作为下章写作的数值绝对基准
     try:
         build_panel_snapshot(db, project, ch, realm_info=realm_info)
     except Exception as _snap_err:  # noqa: BLE001

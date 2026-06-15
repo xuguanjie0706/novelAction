@@ -19,11 +19,17 @@ from app.services.dabai.lab_prompt_shared import (
     build_witness_lock_block,
     sanitize_prewarn_result,
 )
+from app.services.dabai.lab_realm_baseline import (
+    build_prewarn_realm_rules_block,
+    format_baseline_block,
+    load_opening_realm_baseline,
+    sanitize_prewarn_realm,
+)
 from app.services.dabai.pre_warn import _PREWARN_SYSTEM, format_prewarn_block
 
 logger = logging.getLogger(__name__)
 
-PREWARN_VERSION = "dabai-lab-prewarn-v2"
+PREWARN_VERSION = "dabai-lab-prewarn-v3"
 
 _OPENING_CHAPTER_RULE = (
     "【开篇章规则（尚无已写正文）】事实基准=【开局剧情资产】+【当前台账】+金手指设定，"
@@ -148,6 +154,8 @@ def build_lab_prewarn_prompt(
     bridge_evidence: str = "",
     opening_no_prior: bool = False,
     locked_spec_block: str = "",
+    opening_baseline_block: str = "",
+    chapter_boundary_block: str = "",
 ) -> tuple[str, str]:
     """构造实验书架导演单 (system, user)。
 
@@ -189,6 +197,9 @@ def build_lab_prewarn_prompt(
         parts.append(ledger_block.strip())
     if locked_spec_block.strip():
         parts.append(locked_spec_block.strip())
+    if opening_baseline_block.strip():
+        parts.append(opening_baseline_block.strip())
+    parts.append(build_prewarn_realm_rules_block())
     if ctx.prev_full_block.strip():
         parts.append(ctx.prev_full_block.strip())
     elif ctx.prev_tail.strip():
@@ -204,6 +215,8 @@ def build_lab_prewarn_prompt(
             "「下一瞬间续写」边界，则 bridge_directives 留空并在 opening_directive "
             "中写明紧接续写的切入方式。"
         )
+    if chapter_boundary_block.strip():
+        parts.append(chapter_boundary_block.strip())
     parts.append("【本章章纲五拍（卷展开期生成，可能与上述事实漂移）】")
     parts.append(_build_lab_beat_block(ch))
     if opening_no_prior:
@@ -239,10 +252,13 @@ def build_lab_prewarn_prompt(
         '  "cast": [{"name": "本章出场人物（用人物表/称谓锁定中的名字）", '
         '"reason": "出场原因：推动哪一拍/承担什么功能/与主角关系，≤30字"}],\n'
         '  "fact_lock": {\n'
-        '    "realm": "本章开笔时主角境界（须用【本书境界体系】名称，禁止练气等外来体系）",\n'
+        '    "realm": "本章开笔境界（大境·第N层，如 炼气境·第1层）",\n'
+        '    "realm_sub_rank": 1,\n'
+        '    "realm_end": "本章章末目标境界（大境·第N层；无突破则同 realm）",\n'
+        '    "realm_end_sub_rank": 1,\n'
         '    "location": "开笔位置",\n'
         '    "on_stage": ["确认可出场的人物（须与 cast 的名字一致）"],\n'
-        '    "forbidden": ["禁止出现的能力/情节（如金手指再绑定、写回废人）"]\n'
+        '    "forbidden": ["禁止出现的能力/情节（如金手指再绑定、写回废人、写死后序章出场人物）"]\n'
         "  },\n"
         '  "conflict_notes": ["只填「真矛盾」（按章纲写就会与已写事实硬碰、读者一眼穿帮：'
         '已死/已离场者出场、境界倒退或无依据跳级、立场状态明显相反如已吓破胆却逞凶、'
@@ -350,21 +366,32 @@ async def resolve_lab_pre_warn(
         from app.services.bootstrap.retry import call_with_retry
 
         opening_no_prior = False
+        opening_baseline_block = ""
         if db is not None:
             opening_no_prior = count_prior_written_chapters(
                 db, project.id, ch.chapter_number or 1,
             ) == 0 and int(ch.chapter_number or 1) == 1
+            baseline = load_opening_realm_baseline(db, project, ch)
+            opening_baseline_block = format_baseline_block(baseline)
         elif not (ctx.prev_full_block or ctx.prev_tail or "").strip():
             opening_no_prior = int(ch.chapter_number or 1) == 1
 
         locked_spec_block = ""
+        chapter_boundary_block = ""
         if db is not None:
             from app.services.dabai.lab_asset_spec import build_locked_spec_block
+            from app.services.dabai.lab_chapter_boundary import (
+                build_forward_chapter_boundary_block,
+                collect_future_cast_names,
+            )
             locked_spec_block = build_locked_spec_block(db, project, ch)
+            chapter_boundary_block = build_forward_chapter_boundary_block(db, project.id, ch)
         system, user = build_lab_prewarn_prompt(
             project, ch, ctx, ledger_block,
             replace_existing=replace_existing, bridge_evidence=bridge_evidence,
             opening_no_prior=opening_no_prior, locked_spec_block=locked_spec_block,
+            opening_baseline_block=opening_baseline_block,
+            chapter_boundary_block=chapter_boundary_block,
         )
         prewarn_sampling = (
             {"temperature": 0.45, "presence_penalty": 0.15}
@@ -378,6 +405,19 @@ async def resolve_lab_pre_warn(
         if not isinstance(result, dict):
             raise ValueError("导演单 JSON 解析失败")
         result = sanitize_prewarn_result(result, project)
+        if db is not None:
+            baseline = load_opening_realm_baseline(db, project, ch)
+            result = sanitize_prewarn_realm(result, project, ch, baseline)
+            from app.services.dabai.lab_chapter_boundary import collect_future_cast_names
+            protected = collect_future_cast_names(db, project.id, int(ch.chapter_number or 0))
+            if protected:
+                fact = dict(result.get("fact_lock") or {})
+                forbidden = [str(x) for x in (fact.get("forbidden") or []) if str(x).strip()]
+                guard = f"禁止写死或永久移除后续章出场人物：{'、'.join(protected[:8])}"
+                if guard not in forbidden:
+                    forbidden.append(guard)
+                fact["forbidden"] = forbidden[:6]
+                result["fact_lock"] = fact
         result = normalize_opening_prewarn(result, opening_no_prior=opening_no_prior)
         result["version"] = PREWARN_VERSION
         # 上章正文指纹：上一章重写后据此判定本导演单已过期，强制重生成

@@ -269,9 +269,10 @@ def build_power_ladder_block(project: DabaiProject) -> str:
     forbid_str = "、".join(forbidden[:6]) if forbidden else "外来体系用语"
     return (
         f"【本书境界体系（fact_lock.realm 必须只用下列名称，禁止 {forbid_str}）】\n"
-        f"  最低档（开书默认）：{first}\n"
+        f"  最低档（无面板时的开书默认）：{first}\n"
         f"  全书档位：{chain}\n"
-        f"  ★有【系统面板】时开笔境界须与面板完全一致；无面板时用「{first}」起步。"
+        f"  ★有【系统面板】或【开笔境界基准】时，开笔/章末须与已写情节一致；"
+        f"无面板时再参考「{first}」起步。★"
     )
 
 

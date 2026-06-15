@@ -42,7 +42,8 @@ _SYSTEM_BASE = (
     "5. ★可信度（立得住）：凡对主角有利的转机/巧合/碾压，要么兑现前文已埋的事实或线索，"
     "要么当场补一句站得住的依据（来历、动机、代价、对方的破绽或轻敌）；"
     "禁止无铺垫的天降好运、对手莫名认怂、配角恰好全懂、敌人无故自曝底牌；\n"
-    "6. 分自然段，结尾必须落在给定的『章末钩子』上；\n"
+    "6. 分自然段，结尾必须落在给定的『章末钩子』上，写完钩子对应画面后立刻停笔，"
+    "禁止在钩子之后再写新冲突/新收获；\n"
     "7. 只输出正文，不要标题、不要小标题、不要旁白说明。"
 )
 
@@ -60,7 +61,8 @@ _SYSTEM_BASE_ARTIFACT = (
     "5. ★可信度（立得住）：凡对主角有利的转机/巧合/碾压，要么兑现前文已埋的事实或线索，"
     "要么当场补一句站得住的依据（来历、动机、代价、对方的破绽或轻敌）；"
     "禁止无铺垫的天降好运、对手莫名认怂、配角恰好全懂、敌人无故自曝底牌；\n"
-    "6. 分自然段，结尾必须落在给定的『章末钩子』上；\n"
+    "6. 分自然段，结尾必须落在给定的『章末钩子』上，写完钩子对应画面后立刻停笔，"
+    "禁止在钩子之后再写新冲突/新收获；\n"
     "7. 只输出正文，不要标题、不要小标题、不要旁白说明。"
 )
 
@@ -136,6 +138,8 @@ def build_prose_prompt(
     location_bridge_block: str = "",
     qc_feedback_block: str = "",
     forward_qc_block: str = "",
+    chapter_boundary_block: str = "",
+    realm_writing_block: str = "",
     scene_plan: dict | None = None,
     pre_warn_result: dict | None = None,
     replace_existing: bool = False,
@@ -189,15 +193,7 @@ def build_prose_prompt(
         hi = target + 200
     has_scene_plan = bool(scene_block.strip() and scene_bounds)
 
-    realm_name = next(
-        (l.get("name") for l in level_list if int(l.get("rank", -1)) == (ch.realm_rank or -1)),
-        None,
-    )
-    realm_block = (
-        f"\n本章主角境界：第{ch.realm_rank}档「{realm_name}」"
-        "——正文须与此一致，★禁止写回更低境界、禁止本章内乱跳档★。\n"
-        if ch.realm_rank and realm_name else ""
-    )
+    realm_block = (realm_writing_block.strip() + "\n") if realm_writing_block.strip() else ""
 
     sp = (project.benchmark or {}).get("style_profile") or {}
     style_line = "｜".join(
@@ -349,6 +345,8 @@ def build_prose_prompt(
         user_parts.append(qc_feedback_block.strip())
     if forward_qc_block.strip():
         user_parts.append(forward_qc_block.strip())
+    if chapter_boundary_block.strip():
+        user_parts.append(chapter_boundary_block.strip())
 
     user_parts.append("【本章爽点节拍（章节要素，必须逐项落实）】")
     user_parts.append(_build_lab_beat_block(ch))
@@ -363,6 +361,7 @@ def build_prose_prompt(
             "每场按其 word_budget 写足但不得超标：动作拆成连续画面、对话有来回、"
             "台词弹药必须用上（可微调措辞）、感官锚点落进正文；"
             "场与场之间用场末转折自然过渡，禁止『与此同时』式硬切。"
+            "★最后一镜须落本章「章末钩子」，写完钩子立刻停笔，禁止追加情节。★"
         )
         if per_scene:
             task += f"\n【逐场篇幅上限（硬约束）】\n{per_scene}"
@@ -375,6 +374,7 @@ def build_prose_prompt(
             f"按上面五拍写出第{ch.chapter_number}章正文。"
             f"目标 {target} 字（允许 {lo}～{hi}），严禁超过 {hi} 字。"
             "推进：①憋屈（别拖）→ ②转折扳机 → ③引爆 → ④爽点+见证者分级反应 → ⑤章末钩子。"
+            "★写完第⑤步「章末钩子」对应画面后立刻停笔——禁止在钩子之后再追加抢宝/抓人/杀人/新冲突。★"
             "同一章纲允许多种写法：开笔切入点、对话顺序、扳机细节须有变化，"
             "禁止套用「疼！钻心的疼！」等烂大街起手式。"
             "直接开写正文。"

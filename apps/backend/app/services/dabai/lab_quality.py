@@ -16,6 +16,10 @@ from app.models.dabai_lab import DabaiQualityReport
 from app.services.dabai.lab_draft_context import LabDraftContext, build_lab_draft_context
 from dabai.first_chapter_opening import witness_stems
 from app.services.dabai.lab_qc_prompt import build_lab_qc_prompt
+from app.services.dabai.lab_chapter_boundary import (
+    check_future_cast_violations,
+    collect_future_cast_names,
+)
 from app.services.dabai.lab_prompt_shared import (
     has_location_gap,
     needs_location_bridge,
@@ -187,6 +191,13 @@ def _rule_report(
             warn["llm_overridable"] = True
             warn["message"] = msg + "（黄金第2章：若 payoff 为系统/认主私密反馈可忽略）"
         warnings.append(warn)
+
+    if db is not None and project is not None:
+        protected = collect_future_cast_names(
+            db, project.id, int(ch.chapter_number or 0),
+        )
+        if protected and content:
+            blockers.extend(check_future_cast_violations(content, protected))
 
     if db is not None and project is not None and (ch.chapter_number or 0) > 1:
         prev = (

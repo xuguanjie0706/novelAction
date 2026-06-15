@@ -49,6 +49,24 @@ STEP_TEMPERATURE: dict[str, float] = {
 }
 DEFAULT_TEMPERATURE = 0.6
 
+# ── 任务级输出上限（按次计费 + 质量优先：设定步也放开 max_tokens）───────────────
+# 设计动机：按次计费下「单次多产」是主收益，富设定 schema 一次性把人物心理、
+# 爽点弹药、世界规则全量吐出，才不会被网关默认上限截断。每步单独给值，避免对
+# 小窗口模型一刀切传超大上限报错；DabaiConfig.max_tokens 仍是全局硬顶（min 取小）。
+SETTING_MAX_TOKENS = 16000  # 设定步缺省（富 schema 全量产出）
+STEP_MAX_TOKENS: dict[str, int] = {
+    "benchmark": 12000,       # 对标 + 立项定位
+    "golden_finger": 24000,   # 金手指 + 深挖境界阶梯(6-8境×多字段) + 反派阶梯（三块同次，量大）
+    "factions": 24000,        # 势力 + 全量人物卡司（含配角池），量最大
+    "storylines": 18000,      # 故事线 + 资产 + 谜题三块
+    "volumes": 18000,         # 卷骨架（每卷章段节拍表 + 情绪收支）
+    "title_blurb": 8000,      # 书名海选 + 简介
+    "volume_chapters": 30000,  # 单次整卷 beat+五拍
+    "beat_sequence": 16000,
+    "chapter_outlines": 30000,
+    "chapter_repair": 16000,
+}
+
 
 @dataclass
 class DabaiConfig:
@@ -80,6 +98,11 @@ class DabaiConfig:
 
     def temperature_for(self, step: str) -> float:
         return STEP_TEMPERATURE.get(step, DEFAULT_TEMPERATURE)
+
+    def max_tokens_for(self, step: str) -> int:
+        """每步输出上限：设定步也放开，全局 max_tokens 为硬顶（取小防超模型上限）。"""
+        base = STEP_MAX_TOKENS.get(step, SETTING_MAX_TOKENS)
+        return min(int(base), int(self.max_tokens))
 
     def outline_window_end(self, vol_planned: int, start_chapter: int = 1) -> int:
         """本趟章纲展开在卷内的结束章号（含）。例：30 章卷、窗口 15、从 16 起 → 30。"""

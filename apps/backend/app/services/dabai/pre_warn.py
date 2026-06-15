@@ -146,10 +146,31 @@ def format_prewarn_block(result: dict | None) -> str:
     if not isinstance(fact, dict) or not isinstance(beats, dict):
         return ""
 
-    lines = ["【写前导演单（以下指令优先级高于章纲字面，冲突时以此为准）】"]
+    lines = [
+        "【写前导演单（五拍落法与 fact_lock.realm_end 须一致；"
+        "开笔境界以【系统面板】/开笔基准为准，高于章纲节拍字面）】",
+    ]
     fact_parts = []
     if fact.get("realm"):
-        fact_parts.append(f"境界：{fact['realm']}")
+        realm_seg = str(fact["realm"])
+        sub = fact.get("realm_sub_rank")
+        if sub not in (None, "") and "·第" not in realm_seg:
+            try:
+                realm_seg = f"{realm_seg}·第{int(sub)}层"
+            except (TypeError, ValueError):
+                pass
+        fact_parts.append(f"开笔境界：{realm_seg}")
+    if fact.get("realm_end") and fact.get("realm_end") != fact.get("realm"):
+        end_seg = str(fact["realm_end"])
+        end_sub = fact.get("realm_end_sub_rank")
+        if end_sub not in (None, "") and "·第" not in end_seg:
+            try:
+                end_seg = f"{end_seg}·第{int(end_sub)}层"
+            except (TypeError, ValueError):
+                pass
+        fact_parts.append(f"章末目标：{end_seg}")
+    elif fact.get("realm_end"):
+        fact_parts.append(f"章末境界：{fact['realm_end']}")
     if fact.get("location"):
         fact_parts.append(f"位置：{fact['location']}")
     on_stage = [str(x) for x in (fact.get("on_stage") or []) if x]

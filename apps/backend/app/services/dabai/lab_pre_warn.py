@@ -118,6 +118,26 @@ def _build_lab_beat_block(ch: DabaiChapterOutline) -> str:
     ])
 
 
+def _character_roster_block(project: DabaiProject) -> str:
+    """可选出场人物表：导演单据此识别本章需出场的人物（cast 只能从中挑）。"""
+    chars = [c for c in (project.characters or []) if c.name]
+    if not chars:
+        return ""
+    lines = []
+    for c in chars[:24]:
+        seg = f"  - {c.name}（{c.role or '配角'}"
+        if c.tier:
+            seg += f"/{c.tier}"
+        if c.function:
+            seg += f"，职能:{str(c.function)[:24]}"
+        seg += "）"
+        lines.append(seg)
+    return (
+        "【可选出场人物表（cast 只能从中挑选，按本章实际需要取人，"
+        "非必要人物不要硬塞）】\n" + "\n".join(lines)
+    )
+
+
 def build_lab_prewarn_prompt(
     project: DabaiProject,
     ch: DabaiChapterOutline,
@@ -148,6 +168,9 @@ def build_lab_prewarn_prompt(
     witness_block = build_witness_lock_block(ch)
     if witness_block:
         parts.append(witness_block)
+    roster_block = _character_roster_block(project)
+    if roster_block:
+        parts.append(roster_block)
     if ctx.narrative_state_block.strip():
         parts.append(ctx.narrative_state_block.strip())
     if ctx.recent_plot_block.strip():
@@ -205,12 +228,20 @@ def build_lab_prewarn_prompt(
         "本章没有关键功法道具出场则 asset_specs 留空 []。分场与正文将照此规格写，不得另编。"
     )
     parts.append(
+        "【第一步·先识别本章出场人物（重要）】在裁决与五拍落法之前，先据五拍、前情、"
+        "台账与【可选出场人物表】确定本章必须出场的人物，并为每人写明出场原因"
+        "（推动哪一拍/承担什么功能/与主角什么关系）；只取本章真正需要的人，"
+        "非必要人物不要硬塞；fact_lock.on_stage 必须与 cast 的名字完全一致。"
+    )
+    parts.append(
         "对照以上资料完成裁决与指导，只返回 JSON：\n"
         "{\n"
+        '  "cast": [{"name": "本章出场人物（用人物表/称谓锁定中的名字）", '
+        '"reason": "出场原因：推动哪一拍/承担什么功能/与主角关系，≤30字"}],\n'
         '  "fact_lock": {\n'
         '    "realm": "本章开笔时主角境界（须用【本书境界体系】名称，禁止练气等外来体系）",\n'
         '    "location": "开笔位置",\n'
-        '    "on_stage": ["确认可出场的人物（须用【人物称谓锁定】中的名字）"],\n'
+        '    "on_stage": ["确认可出场的人物（须与 cast 的名字一致）"],\n'
         '    "forbidden": ["禁止出现的能力/情节（如金手指再绑定、写回废人）"]\n'
         "  },\n"
         '  "conflict_notes": ["只填「真矛盾」（按章纲写就会与已写事实硬碰、读者一眼穿帮：'
@@ -239,6 +270,10 @@ def _done_payload(result: dict, *, brief: str) -> dict:
         "ok": True,
         "version": PREWARN_VERSION,
         "fact_lock": result.get("fact_lock") or {},
+        "cast": [
+            c for c in (result.get("cast") or [])
+            if isinstance(c, dict) and c.get("name")
+        ][:8],
         "conflict_notes": (result.get("conflict_notes") or [])[:4],
         "setup_alignment": (result.get("setup_alignment") or [])[:4],
         "opening_directive": str(result.get("opening_directive") or "")[:200],

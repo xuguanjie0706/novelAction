@@ -194,6 +194,7 @@ class DabaiChapterOutline(Base):
     is_big_beat = Column(Boolean, default=False)         # 大爆点
     expected_words = Column(Integer, default=2000)
     realm_rank = Column(Integer)                         # 主角本章境界档（指向 power_ladder.levels.rank；全书单调不减）
+    realm_sub_rank = Column(Integer)                     # 同境内小层 1～9（升大境时重置为 1）
 
     # ── 正文（写作期填充）──────────────────────────────────────────────────────
     content = Column(Text)                               # 生成的章节正文

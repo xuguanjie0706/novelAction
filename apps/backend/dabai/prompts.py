@@ -15,6 +15,7 @@ import json
 from dabai import ctx_rich, prompts_chapter, prompts_extra
 from dabai.config import DabaiConfig
 from dabai.first_chapter_opening import first_chapter_opening_block
+from dabai.realm_spine import volume_realm_pace_prompt_addendum
 from dabai.non_system import (
     benchmark_non_system_note,
     golden_finger_extra_block,
@@ -331,7 +332,8 @@ def volumes(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         f"全书从第1卷起单调上升，最高不超过 {max_rank}；"
         "每卷 realm_end_rank ≥ realm_start_rank；下一卷 realm_start_rank = 上一卷 realm_end_rank（首尾相接，禁止回退）；"
         "开局卷升幅要小（1-2 档），别一卷暴涨；"
-        "本卷 Boss 的境界档（见反派阶梯）须略高于本卷主角区间上限，压迫感由此而来。\n"
+        "本卷 Boss 的境界档（见反派阶梯）须略高于本卷主角区间上限，压迫感由此而来。"
+        + volume_realm_pace_prompt_addendum(ctx, cfg.volume_chapters) + "\n"
         "第1卷开局须贴合本书主题定制（见下方第1章开局块），"
         "禁止默认套用退婚+踹 cliff/演武场羞辱等烂模板；"
         "结构仍是：蓄憋屈→金手指露头→留当众打脸钩子。"

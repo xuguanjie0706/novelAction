@@ -24,7 +24,6 @@ def cfg_from_project(project: DabaiProject) -> DabaiConfig:
     meta = project.meta or {}
     return DabaiConfig(
         logline=project.logline or "",
-        mock=False,
         volume_count=int(meta.get("volume_count", 6)),
         volume_chapters=int(meta.get("volume_chapters", 30)),
         outline_expand_size=int(meta.get("outline_expand_size", 15)),

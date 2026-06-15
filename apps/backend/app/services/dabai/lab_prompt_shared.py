@@ -36,9 +36,15 @@ _CONTINUITY_STOP = frozenset({
     "不是", "可以", "没有", "就是", "这一", "那一", "只见", "突然",
 })
 
+# 勿含「看向/目光」等日常描写词——会误判内省镜头为「下一瞬间续写」而吞掉位移场。
 _IMMEDIATE_CONTINUATION_MARKERS = (
-    "踏出", "走出", "刚踏", "刚走", "迎向", "封住", "对峙", "看向", "目光",
-    "尚未", "还没", "正待", "这时", "刹那", "瞬间", "下一刻", "紧接着",
+    "踏出", "走出", "刚踏", "刚走", "迎向", "封住", "对峙",
+    "尚未", "还没", "正待", "刹那", "瞬间", "下一刻", "紧接着",
+)
+
+_EN_ROUTE_VERBS = (
+    "走去", "赶往", "奔赴", "疾驰", "飞奔", "踏上", "步入", "闯入",
+    "朝", "向", "赶往", "直奔",
 )
 
 
@@ -126,8 +132,71 @@ def opening_continues_prev_tail(
 
 def prev_tail_implies_immediate_continuation(prev_tail: str) -> bool:
     """上章末是否停在「下一瞬间续写」边界（写前勿注入章纲级位移块）。"""
-    tail = (prev_tail or "").strip()[-220:]
+    tail = (prev_tail or "").strip()[-120:]
     return any(m in tail for m in _IMMEDIATE_CONTINUATION_MARKERS)
+
+
+def _destination_name_tokens(curr_loc: str) -> list[str]:
+    """从章纲 location 提取可用于末段比对的地点词（主场景 + · 后事件锚点）。"""
+    loc = (curr_loc or "").strip()
+    if not loc:
+        return []
+    root, _, suffix = loc.partition("·")
+    tokens: list[str] = []
+    for part in (root, suffix):
+        part = part.strip()
+        if len(part) >= 2 and part not in tokens:
+            tokens.append(part)
+        for i in range(max(0, len(part) - 2)):
+            frag = part[i:i + 3]
+            if len(frag) >= 3 and frag not in tokens:
+                tokens.append(frag)
+    key = location_key(loc)
+    if key and key not in tokens:
+        tokens.append(key)
+    return tokens
+
+
+def _places_overlap(a: str, b: str, *, min_len: int = 2) -> bool:
+    """粗比对两处地名是否指同一方向（容忍「青云宗演武场」vs「青云演武大场」）。"""
+    left = (a or "").strip()
+    right = (b or "").strip()
+    if not left or not right:
+        return False
+    if left in right or right in left:
+        return True
+    for size in range(min(len(left), len(right), 4), min_len - 1, -1):
+        for i in range(len(left) - size + 1):
+            if left[i:i + size] in right:
+                return True
+    return False
+
+
+def prev_tail_en_route_to_destination(prev_tail: str, curr_loc: str) -> bool:
+    """上章末是否已在向本章主场景移动（勿再插位移分场）。"""
+    tail = (prev_tail or "").strip()[-280:]
+    if not tail:
+        return False
+    curr_root = (curr_loc or "").split("·")[0].strip()
+    if not curr_root:
+        return False
+    move_match = re.search(
+        r"[朝向往到]([^，。！？\s]{2,14}?)(?:走去|赶往|飞奔|疾驰|而去|奔去)",
+        tail,
+    )
+    if move_match:
+        dest_phrase = move_match.group(1).strip()
+        if _places_overlap(dest_phrase, curr_root):
+            return True
+    tokens = _destination_name_tokens(curr_loc)
+    for token in tokens:
+        if len(token) < 3 or token not in tail:
+            continue
+        idx = tail.rfind(token)
+        window = tail[max(0, idx - 24): min(len(tail), idx + len(token) + 20)]
+        if any(v in window for v in _EN_ROUTE_VERBS):
+            return True
+    return False
 
 
 def needs_location_bridge(
@@ -154,6 +223,8 @@ def needs_location_bridge(
         return False
     curr_root = curr_loc.split("·")[0].strip()
     if curr_root and curr_root in tail:
+        return False
+    if prev_tail_en_route_to_destination(tail, curr_loc):
         return False
     if prev_tail_implies_immediate_continuation(tail):
         return False
@@ -276,9 +347,13 @@ def merge_opening_directive(opening_line: str, opening_directive: str) -> str:
     directive = (opening_directive or "").strip()
     if not directive:
         return cur
-    if directive[:12] in cur:
-        return cur
-    return f"{directive}｜{cur}" if cur else directive
+    if not cur:
+        return directive
+    if directive in cur or cur in directive:
+        return cur if len(cur) >= len(directive) else directive
+    if directive[:12] in cur or cur[:12] in directive:
+        return cur if len(cur) >= len(directive) else directive
+    return f"{directive}；{cur}"
 
 
 def _prepend_bridge_scene(

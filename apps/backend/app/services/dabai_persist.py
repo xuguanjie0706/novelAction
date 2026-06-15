@@ -50,6 +50,7 @@ def make_chapter_outline_row(
         is_big_beat=bool(ch.get("is_big_beat", False)),
         expected_words=int(ch.get("expected_words", 2000)),
         realm_rank=ch.get("realm_rank"),
+        realm_sub_rank=ch.get("realm_sub_rank"),
     )
 
 
@@ -72,7 +73,6 @@ class DabaiPersister:
             logline=self.cfg.logline,
             title=(self.cfg.logline or "")[:40] or None,
             status="generating",
-            mock=bool(self.cfg.mock),
             benchmark={}, positioning={}, golden_finger={}, power_ladder={},
             linter_report={}, meta={}, failed_steps=[],
         )

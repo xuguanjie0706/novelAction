@@ -253,3 +253,50 @@ def test_ch6_opening_continues_cave_exit_confrontation():
 def test_merge_opening_directive():
     merged = merge_opening_directive("腐尸砸脚", "收起黑旗潜回宿舍")
     assert merged.startswith("收起黑旗潜回宿舍")
+
+
+def test_needs_bridge_not_suppressed_by_look_at_in_tail():
+    """末句「看向掌心」不应吞掉跨场景位移需求。"""
+    prev = _chapter(chapter_number=1, location="药庐烧火房·克扣")
+    ch = _chapter(chapter_number=2, location="地窖黄泉当铺·认主")
+    prev_tail = (
+        "沈砚低下头，看向自己掌心那块发烫的印信。"
+        "沈家祖宅地窖的方向，突然传来一阵血脉呼唤。"
+    )
+    assert needs_location_bridge(prev, ch, prev_tail) is True
+
+
+def test_bridge_directives_kept_when_tail_mentions_destination():
+    """导演单显式 bridge_directives 时，勿因末段提及目的地而剔除承接场。"""
+    prev = _chapter(chapter_number=1, location="药庐烧火房·克扣")
+    ch = _chapter(chapter_number=2, location="地窖黄泉当铺·认主")
+    plan = {
+        "opening_line": "沈砚朝地窖走去",
+        "scenes": [{"order": 1, "name": "柜台认主", "goal": "扳机", "word_budget": 800}],
+    }
+    pre_warn = {
+        "bridge_directives": ["从丹房经甬道进入祖宅地窖"],
+        "fact_lock": {"location": "地窖"},
+    }
+    prev_tail = "沈砚看向掌心，地窖深处传来呼唤。"
+    out = inject_prewarn_into_scene_plan(plan, pre_warn, ch, prev, prev_tail=prev_tail)
+    assert len(out["scenes"]) >= 2
+    assert is_bridge_scene(out["scenes"][0])
+
+
+def test_en_route_skips_redundant_bridge():
+    """上章末已「朝演武场走去」时，本章勿再插位移分场。"""
+    prev = _chapter(chapter_number=2, location="地窖黄泉当铺·认主")
+    ch = _chapter(chapter_number=3, location="青云演武大场·退婚")
+    prev_tail = "沈砚脚步一顿，随即大步朝青云宗演武场走去。"
+    assert needs_location_bridge(prev, ch, prev_tail) is False
+    plan = {
+        "opening_line": "石阶嘲笑",
+        "scenes": [
+            {"order": 1, "name": "残影破空", "goal": "位移承接", "word_budget": 400},
+            {"order": 2, "name": "休书落地", "goal": "憋屈", "word_budget": 800},
+        ],
+    }
+    out = inject_prewarn_into_scene_plan(plan, None, ch, prev, prev_tail=prev_tail)
+    assert len(out["scenes"]) == 1
+    assert out["scenes"][0]["name"] == "休书落地"

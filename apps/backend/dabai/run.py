@@ -1,9 +1,8 @@
-"""CLI 入口：python -m dabai.run --logline "..." [--mock]
+"""CLI 入口：python -m dabai.run --logline "..."
 
 示例：
-  python -m dabai.run --logline "废柴少年觉醒吞噬系统，一路逆袭打脸天才" --mock
   python -m dabai.run --logline "..." --volume-chapters 30 --stop-after chapter_outlines
-真实 LLM：先 export DABAI_BASE_URL / DABAI_API_KEY / DABAI_MODEL。
+运行前先 export DABAI_BASE_URL / DABAI_API_KEY / DABAI_MODEL。
 """
 
 from __future__ import annotations
@@ -22,7 +21,6 @@ from dabai.pipeline import run_bootstrap
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="dabai.run", description="大白文 bootstrap（爽点节拍器）")
     p.add_argument("--logline", required=True, help="一句话创意")
-    p.add_argument("--mock", action="store_true", help="离线 mock，不调真实 LLM")
     p.add_argument("--volume-count", type=int, default=6, help="卷数")
     p.add_argument("--volume-chapters", type=int, default=30, help="每卷章数")
     p.add_argument("--big-beat-every", type=int, default=5, help="每N章一个大爆点")
@@ -63,7 +61,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     cfg = DabaiConfig(
         logline=args.logline,
-        mock=args.mock,
         volume_count=args.volume_count,
         volume_chapters=args.volume_chapters,
         big_beat_every=args.big_beat_every,

@@ -30,6 +30,7 @@ from app.services.dabai.lab_word_budget import (
     finalize_scene_plan_result,
     scene_plan_from_row,
 )
+from app.services.dabai.pre_warn import prewarn_cast_names
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +48,10 @@ _SCENEPLAN_SYSTEM = (
     "2. 五拍映射参考：场1=憋屈现场（压迫者带具体羞辱动作与台词）→ "
     "场2=扳机+引爆（金手指/反击的具体过程）→ 场3=爽点兑现（见证者分级反应）"
     "→ 可选场4=钩子收尾；可按本章实际合并或调整；\n"
-    "2.5 黄金第一章特别要求：opening_line 必须让前3行就站在冲突现场"
-    "（开打/开骂/开抢/濒死），禁止从天气、环境、回忆、世界观介绍开篇；\n"
+    "2.5 黄金第一章特别要求：opening_line 必须让前3行就把张力顶上来——"
+    "据本书主题/主角身份选一种贴合的入场（动作冲突、当面对峙、交易被坑、审讯逼问、"
+    "比试挑衅、撞破密谋、险境逃命、家族贬损……不限于开打/开骂），"
+    "★不同书须用不同入场形态，禁止千篇一律一种开法★；只禁从天气、环境、回忆、世界观介绍开篇；\n"
     "2.6 非第1章：opening_line 必须落实【导演单】opening_directive；"
     "若 bridge_directives 非空，scenes[0] 必须是位移/承接场（写回途/进门/转场），"
     "冲突场从 scenes[1] 开始；禁止跳过位移直接写冲突。\n"
@@ -57,7 +60,9 @@ _SCENEPLAN_SYSTEM = (
     "口语化、带人物身份感，禁止文绉绉；\n"
     "4. sensory_anchor 给一个具体可感的细节锚点（断剑上的缺口/掌心的汗/"
     "丹炉的焦味），正文用它落地，一场一个就够；\n"
-    "5. 尊重给定的事实基准（前情/面板/台账/导演单），禁止编造未持有的能力；\n"
+    "5. 尊重给定的事实基准（前情/面板/台账/导演单），禁止编造未持有的能力；"
+    "★在场人物以【导演单确认的本章出场人物】为准：characters_on_stage 只能取自该名单，"
+    "按各人出场原因安排到对应场，禁止另塞名单外的人；主角 POV 默认全程在场★；\n"
     "6. word_budget：各场预算之和必须 **严格等于** 章纲目标字数（见 user 首行），"
     "爽点/引爆场占大头，位移承接场可偏短；禁止自行放大总预算。\n"
     "只返回 JSON，不要任何解释。"
@@ -120,6 +125,22 @@ def build_sceneplan_prompt(
     if pre_warn_result:
         opening_dir = str(pre_warn_result.get("opening_directive") or "").strip()
         bridges = pre_warn_result.get("bridge_directives") or []
+        cast_names = prewarn_cast_names(pre_warn_result)
+        if cast_names:
+            reasons = {
+                str(c.get("name")).strip(): str(c.get("reason") or "").strip()
+                for c in (pre_warn_result.get("cast") or [])
+                if isinstance(c, dict) and c.get("name")
+            }
+            cast_lines = "\n".join(
+                f"  - {n}" + (f"（{reasons[n]}）" if reasons.get(n) else "")
+                for n in cast_names[:8]
+            )
+            parts.append(
+                "【导演单确认的本章出场人物（characters_on_stage 只能从这些人里取，"
+                "按各人出场原因分配到对应场；禁止另塞导演单未点名的人物，"
+                "主角 POV 默认全程在场）】\n" + cast_lines
+            )
         if opening_dir:
             parts.append(f"【导演单开篇指令（opening_line 必须体现）】\n{opening_dir}")
         if bridges:
@@ -141,7 +162,7 @@ def build_sceneplan_prompt(
         '  "scenes": [\n'
         "    {\n"
         '      "order": 1, "name": "场名(≤8字)", "location": "具体地点",\n'
-        '      "characters_on_stage": ["在场人物"],\n'
+        '      "characters_on_stage": ["在场人物（只能取自导演单确认的出场人物名单）"],\n'
         '      "goal": "本场承担的节拍（憋屈/扳机/引爆/爽点/钩子）",\n'
         '      "event": "发生什么：具体动作链（谁做了什么→对方怎么接→局面怎么变）",\n'
         '      "dialogue_ammo": ["关键台词原话2-3句"],\n'

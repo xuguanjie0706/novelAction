@@ -16,6 +16,10 @@ from dabai.golden_finger_bind import chapter_outline_bind_block
 from dabai.non_system import chapter_outline_non_system_note, prefers_non_system
 from dabai.naming import character_naming_prompt_block
 from dabai.prompt_base import SYS_BASE, benchmark_block, ctx_brief, ladder_block
+from dabai.realm_spine import (
+    power_ceiling_prompt_block,
+    realm_pace_schedule_note,
+)
 
 # ── 共用小块 ─────────────────────────────────────────────────────────────────
 
@@ -63,18 +67,20 @@ def _narrative_state_head(ctx: dict) -> str:
     )
 
 
-def _realm_spine_block(vol: dict, realm_floor: int | None) -> str:
+def _realm_spine_block(vol: dict, realm_floor: int | None, ctx: dict) -> str:
     vr_lo = vol.get("realm_start_rank")
     vr_hi = vol.get("realm_end_rank")
     if not (vr_lo or vr_hi or realm_floor):
         return ""
     floor = realm_floor or vr_lo or 1
+    vol_planned = int(vol.get("planned_chapters") or 30)
     return (
         "\n【境界脊柱（硬约束，违反即判 REALM 回退）】\n"
         f"  本卷主角境界区间：第 {vr_lo or '?'} 档 → 第 {vr_hi or '?'} 档。\n"
         f"  起步：主角已在第 {floor} 档，每章 realm_rank ★只能 ≥ {floor}★、"
         "全程单调不减、不得超过本卷 realm_end_rank。\n"
-        "  境界提升要循序渐进（通常几章升一档），禁止忽高忽低、禁止写回低境界。\n"
+        + realm_pace_schedule_note(vol, vol_planned, ctx)
+        + "  同境内细层用 realm_sub_rank(1～9) 表达，升大境时重置为 1。\n"
     )
 
 
@@ -147,12 +153,12 @@ def beat_sequence(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
     user = (
         f"{ctx_brief(ctx)}\n"
         + benchmark_block(ctx)
-        + chapter_design_context(ctx, vol.get("volume_number"))
+        + chapter_design_context(ctx, vol.get("volume_number"), global_start=gbs, global_end=gbe)
         + _volume_head(ctx, vol)
         + ladder_block(ctx)
         + _generated_outlines_block(ctx)
         + _bridge_block(ctx, w, gbs)
-        + _realm_spine_block(vol, w.get("realm_floor"))
+        + _realm_spine_block(vol, w.get("realm_floor"), ctx)
         + f"\n为《{vol.get('title', '')}》排出全书第 {gbs}～{gbe} 章（共 {n} 章）的"
         "【爽点节拍序列】，每章一行。返回 JSON 数组：\n"
         "[\n" + _beat_skeleton(cfg, gbs) + "\n]\n"
@@ -222,7 +228,8 @@ def _golden_rule(cfg: DabaiConfig, gbs: int) -> str:
         return (
             f"1. 黄金前 {cfg.golden_chapters} 章（含全书第1章）："
             "第1章按【第1章开局定制】从本书主题写具体憋屈+留金手指钩子（禁止退婚踹 cliff）；"
-            "第2章金手指见效，第3章第一次当众大打脸。\n"
+            "金手指在前 2～3 章内见效、首次当众大打脸落在前 3～5 章其中一章——"
+            "★具体哪一章见效/打脸按本书节奏自行编排，禁止每本书都卡死在『第2章见效、第3章打脸』同一拍★。\n"
         )
     return "1. 非全书开局：开篇承接上文钩子直接进入本卷冲突，禁止重新介绍金手指/世界观。\n"
 
@@ -240,7 +247,9 @@ def _expand_rules(cfg: DabaiConfig, gbs: int, ctx: dict) -> str:
         "6. 禁止给主角爽点强加 choice_cost / 后遗症 / 道德负担。\n"
         "7. witnesses / involved_characters 只能用【人物档案】里的具体正名，"
         "禁止「执法堂甲/乙」「XX弟子A」「XX众」类占位。\n"
+        "8. yinbao/shuang_payoff 战力须服从【战力天花板】与本章 realm_rank / realm_sub_rank。\n"
         + character_naming_prompt_block(ctx, for_chapter=True)
+        + power_ceiling_prompt_block(ctx)
         + "\n"
     )
 
@@ -261,14 +270,15 @@ def _chapter_skeleton(gbs: int) -> str:
         '  "involved_characters": ["出场人物(用已知人物名)"],\n'
         '  "is_big_beat": false,\n'
         '  "expected_words": 2000,\n'
-        '  "realm_rank": 1\n'
+        '  "realm_rank": 1,\n'
+        '  "realm_sub_rank": 1\n'
         "}"
     )
 
 
 _REALM_NOTE = (
-    "\n★realm_rank★ = 本章结束时主角的境界档（用上面体系数字）；单调不减、"
-    "落在本卷区间内、不得低于起步档。"
+    "\n★realm_rank★ = 本章结束时主角大境界档；★realm_sub_rank★ = 同境内小层(1～9)。"
+    "单调不减；落在本卷区间内；战力描写不得超越【战力天花板】。"
 )
 
 
@@ -296,7 +306,7 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
     user = (
         f"{ctx_brief(ctx)}\n"
         + benchmark_block(ctx)
-        + chapter_design_context(ctx, vol.get("volume_number"))
+        + chapter_design_context(ctx, vol.get("volume_number"), global_start=gbs, global_end=gbe)
         + _volume_head(ctx, vol) + "\n"
         f"为《{vol.get('title', '第1卷')}》（phase={vol.get('phase')}，全卷共 {n} 章）"
         f"生成全书第 {gbs}～{gbe} 章章纲（本卷第 {bs}～{be} 章，本批 {batch_count} 章）。\n"
@@ -305,7 +315,7 @@ def chapter_outlines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         + _beat_rows_block(batch.get("beat_rows") or [])
         + _generated_outlines_block(ctx)
         + _bridge_block(ctx, batch, gbs)
-        + _realm_spine_block(vol, batch.get("realm_floor"))
+        + _realm_spine_block(vol, batch.get("realm_floor"), ctx)
         + _special_blocks(ctx, cfg, gbs, gbe)
         + _expand_rules(cfg, gbs, ctx) + "\n"
         f"返回 JSON 数组，必须恰好 {batch_count} 个元素（全书第{gbs}～{gbe}章，一章不少），每个：\n"
@@ -336,7 +346,7 @@ def volume_chapters(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
     user = (
         f"{ctx_brief(ctx)}\n"
         + benchmark_block(ctx)
-        + chapter_design_context(ctx, vol.get("volume_number"))
+        + chapter_design_context(ctx, vol.get("volume_number"), global_start=gbs, global_end=gbe)
         + _volume_head(ctx, vol) + "\n"
         f"为《{vol.get('title', '第1卷')}》（phase={vol.get('phase')}，全卷共 {n} 章）"
         f"一次完成全书第 {gbs}～{gbe} 章（共 {count} 章）的节拍序列与五拍章纲。\n"
@@ -344,7 +354,7 @@ def volume_chapters(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         + ladder_block(ctx)
         + _generated_outlines_block(ctx)
         + _bridge_block(ctx, batch, gbs)
-        + _realm_spine_block(vol, batch.get("realm_floor"))
+        + _realm_spine_block(vol, batch.get("realm_floor"), ctx)
         + _special_blocks(ctx, cfg, gbs, gbe)
         + _beat_rules(cfg)
         + _expand_rules(cfg, gbs, ctx) + "\n"

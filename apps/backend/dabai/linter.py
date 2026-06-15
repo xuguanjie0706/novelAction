@@ -16,6 +16,7 @@ from dabai.config import DabaiConfig
 from dabai.first_chapter_opening import lint_banned_ch1_tropes
 from dabai.golden_finger_bind import is_awakening_chapter, lint_bind_ladder
 from dabai.naming import known_character_names, lint_names_in_chapter
+from dabai.realm_spine import lint_power_vs_rank, lint_sub_rank
 
 # 套话黑名单（end_hook 命中即判废话）
 _HOOK_CLICHES = ("悬念丛生", "让人期待", "敬请期待", "精彩继续", "欲知后事", "扣人心弦")
@@ -133,6 +134,9 @@ def lint_chapters(
     report = LinterReport()
     add = report.issues.append
     _lint_realm(chapters, add, realm_max, realm_range, volumes)
+    if ctx:
+        lint_power_vs_rank(chapters, ctx, add)
+    lint_sub_rank(chapters, add)
     known = set(known_character_names(ctx or {}))
 
     # ── 逐章规则 ──────────────────────────────────────────────────────────────

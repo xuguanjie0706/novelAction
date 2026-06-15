@@ -191,6 +191,44 @@ def mystery_block(ctx: dict, volume_number: int | None = None) -> str:
     )
 
 
+def golden_finger_block(
+    ctx: dict,
+    gbs: int | None = None,
+    gbe: int | None = None,
+) -> str:
+    """金手指蓝图：first_10_shuang 按章落位 + realm_milestones 对齐升档。"""
+    gf = ctx.get("golden_finger") or {}
+    if not gf.get("name"):
+        return ""
+    lines = [
+        "【金手指蓝图（章纲须对齐；前10章爽点按章号落位，禁止整卷拖延）】",
+        f"  名称：{gf['name']}；核心：{_s(gf.get('core_ability'), 80)}",
+        f"  升级机制：{_s(gf.get('upgrade_mechanism'), 100)}",
+    ]
+    if gf.get("restriction"):
+        lines.append(f"  限制：{_s(gf.get('restriction'), 60)}")
+    shuang = gf.get("first_10_shuang") or []
+    if shuang:
+        lines.append("  前10章爽点弹药（全书第N章须兑现对应条，可改场景不可丢核心爽点）：")
+        for i, item in enumerate(shuang[:10]):
+            chn = i + 1
+            if gbs is not None and gbe is not None and not (gbs <= chn <= gbe):
+                continue
+            lines.append(f"    第{chn}章：{_s(item, 110)}")
+    milestones = gf.get("realm_milestones") or []
+    if milestones:
+        lines.append(
+            "  境界×金手指里程碑（realm_rank 升档须对齐下列解锁；yinbao 只用已解锁能力）："
+        )
+        for m in milestones[:12]:
+            if isinstance(m, dict):
+                lines.append(
+                    f"    档{m.get('rank')}·{_s(m.get('gf_form'), 16)}："
+                    f"{_s(m.get('new_ability'), 70)}"
+                )
+    return "\n".join(lines) + "\n"
+
+
 def storylines_block(ctx: dict) -> str:
     """故事线 + 关键节点与计划卷次（卷骨架须写明各线本卷推进到哪）。"""
     sls = ctx.get("storylines") or []
@@ -230,9 +268,16 @@ def volume_design_context(ctx: dict) -> str:
     ]))
 
 
-def chapter_design_context(ctx: dict, volume_number: int | None = None) -> str:
+def chapter_design_context(
+    ctx: dict,
+    volume_number: int | None = None,
+    *,
+    global_start: int | None = None,
+    global_end: int | None = None,
+) -> str:
     """章纲（节拍序列 + 五拍展开）的全量设计上下文，按卷过滤反派/谜题/资产。"""
     return "".join(filter(None, [
+        golden_finger_block(ctx, global_start, global_end),
         characters_block(ctx),
         relations_block(ctx),
         assets_block(ctx, volume_number),

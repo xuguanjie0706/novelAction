@@ -238,6 +238,8 @@ def register_draft_routes(router: APIRouter) -> None:
                         prev_full_block=draft_ctx.prev_full_block,
                         prev_hook_block=draft_ctx.prev_hook_block,
                         narrative_state_block=draft_ctx.narrative_state_block,
+                        char_voice_block=draft_ctx.char_voice_block,
+                        pre_warn_result=pre_warn_result,
                         location_bridge_block=location_bridge_block,
                         qc_feedback_block=qc_feedback_block,
                         forward_qc_block=forward_qc_block,

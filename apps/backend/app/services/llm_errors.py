@@ -5,6 +5,37 @@ from __future__ import annotations
 import re
 
 
+def is_response_format_rejected_error(err: BaseException) -> bool:
+    """网关/模型明确拒绝 response_format 时，调用方可降级为纯 prompt JSON。"""
+    status_code = getattr(err, "status_code", None)
+    msg = str(err).lower()
+    if isinstance(status_code, int) and status_code in (400, 422):
+        if any(
+            key in msg
+            for key in (
+                "response_format",
+                "json_object",
+                "json_schema",
+                "structured output",
+                "not supported",
+                "unknown parameter",
+                "invalid parameter",
+                "unrecognized",
+                "unsupported",
+            )
+        ):
+            return True
+    return any(
+        key in msg
+        for key in (
+            "response_format",
+            "json_object is not supported",
+            "does not support response_format",
+            "unsupported response_format",
+        )
+    )
+
+
 def is_retryable_llm_error(err: BaseException) -> bool:
     """判定是否为可重试的瞬时网关/网络错误（与 AIService 内层退避一致）。"""
     status_code = getattr(err, "status_code", None)

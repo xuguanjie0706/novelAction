@@ -29,6 +29,7 @@ CHAPTER_FIELDS = {
     "is_big_beat": bool,       # 是否大爆点
     "expected_words": int,
     "realm_rank": int,         # 主角本章境界档（全书单调不减）
+    "realm_sub_rank": int,     # 同境内小层 1～9（升大境时重置）
 }
 
 STEP_CONTRACT: dict[str, dict[str, Any]] = {
@@ -142,6 +143,26 @@ def _payoff_has_witness(payoff: str) -> bool:
     return any(k in payoff for k in ("当着", "当众", "众人", "全场", "围观", "面前"))
 
 
+def _validate_golden_finger_payload(step: str, data: Any) -> list[str]:
+    """金手指合并步内层校验（json_object 不保证条数/语义，应用层硬拦）。"""
+    if step != "golden_finger" or not isinstance(data, dict):
+        return []
+    gf = data.get("golden_finger")
+    if not isinstance(gf, dict):
+        return []
+    errors: list[str] = []
+    shuang = gf.get("first_10_shuang")
+    if not isinstance(shuang, list):
+        errors.append("golden_finger.first_10_shuang 须为非空数组")
+        return errors
+    items = [str(x).strip() for x in shuang if str(x).strip()]
+    if len(items) < 8:
+        errors.append(
+            f"golden_finger.first_10_shuang 至少 8 条具体爽点，实际 {len(items)} 条"
+        )
+    return errors
+
+
 def validate_chapter_coverage(step: str, data: Any, meta: dict | None) -> list[str]:
     """章纲/节拍数量必须与窗口一致；禁止模型只回大爆点摘要。"""
     expected = expected_count_from_meta(meta)
@@ -206,6 +227,7 @@ def validate_step(step: str, data: Any, meta: dict | None = None) -> list[str]:
                 if key not in item or item[key] in (None, "", []):
                     errors.append(f"{step}[{i}] 缺字段：{key}")
     errors.extend(validate_chapter_coverage(step, data, meta))
+    errors.extend(_validate_golden_finger_payload(step, data))
     return errors
 
 
@@ -235,6 +257,8 @@ def normalize_chapter(item: dict, idx: int, default_words: int = 2000) -> dict:
     out["expected_words"] = _coerce_int(item.get("expected_words"), default_words)
     rr = item.get("realm_rank")
     out["realm_rank"] = _coerce_int(rr, 0) if rr not in (None, "") else None
+    sr = item.get("realm_sub_rank")
+    out["realm_sub_rank"] = _coerce_int(sr, 0) if sr not in (None, "") else None
     return out
 
 

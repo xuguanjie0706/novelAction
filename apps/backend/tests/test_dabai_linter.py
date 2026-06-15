@@ -45,20 +45,25 @@ def test_db_09_missing_emotion_turn():
     assert any(i.rule_id == "DB-09" and i.severity == "high" for i in report.issues)
 
 
-def test_clean_mock_shape_passes():
-    """mock 样本形态应无 critical。"""
+def test_clean_outline_shape_passes():
+    """合规章纲形态（境界单调不退、转折拍齐全）应无 critical 阻断。"""
     cfg = DabaiConfig(volume_chapters=6)
-    from dabai.mock_responses import get
-
-    vols = get("volumes", cfg)
-    chapters = get("chapter_outlines", cfg)
-    levels = get("golden_finger", cfg)["power_ladder"]["levels"]  # 合并步 carrier
-    ranks = [int(l["rank"]) for l in levels]
-    v1 = vols[0]
+    # 自包含合规样本：6 章境界 1→1→2→2→3→3 单调爬升，第5章大爆点。
+    realm_by_ch = {1: 1, 2: 1, 3: 2, 4: 2, 5: 3, 6: 3}
+    chapters = [
+        _ch(
+            n,
+            realm_rank=realm_by_ch[n],
+            is_big_beat=(n == 5),
+            shuang_type=["打脸", "升级", "获宝", "扮猪吃虎", "群嘲反转", "扬名"][n - 1],
+        )
+        for n in range(1, 7)
+    ]
+    volumes = [{"volume_number": 1, "realm_start_rank": 1, "realm_end_rank": 3}]
     report = lint_chapters(
         chapters, cfg,
-        realm_max=max(ranks),
-        realm_range=(v1["realm_start_rank"], v1["realm_end_rank"]),
-        volumes=vols,
+        realm_max=3,
+        realm_range=(1, 3),
+        volumes=volumes,
     )
     assert not report.blocked

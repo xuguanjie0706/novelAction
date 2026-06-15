@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 # 章纲字段命中即报 DB-13（仅第1章）
 _BANNED_CH1_MARKERS = (
@@ -35,6 +36,39 @@ _THEME_OPENING_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
     )),
 )
 
+# 开场形态菜单：与「底层差事被克扣」并列的入场原型，按书轮换打破千篇一律。
+# 每本书据 logline 取不同起点，避免同题材所有书都用同一种开场。
+_OPENING_MODES: tuple[str, ...] = (
+    "任务/差事现场：主角正干一桩具体活计，半途被克扣/刁难/抢功",
+    "交易纠纷：坊市/借贷/赌约/契约现场被压价、被坑、被赖账",
+    "遇袭逃命：开篇就在被追杀/围堵/绝境里挣命，险中露出金手指端倪",
+    "审讯质问：被执法/长辈/债主当场盘问、扣帽子、逼供，主角硬顶",
+    "比试挑衅：被点名上场/被当众挑战，对方笃定主角必输",
+    "偷听密谋：主角无意撞见针对自己或家族的算计，攥着秘密进退两难",
+    "市井冲突：街头/酒肆/集市的小摩擦升级，牵出更大的压迫者",
+    "血亲家族压迫：被本家/族亲/同宗当众贬损、夺产、逐出，金手指在屈辱里觉动",
+)
+
+
+def _book_seed(ctx: dict) -> int:
+    """按 logline + 金手指名生成稳定种子：同书结果稳定，不同书拿到不同轮换起点。"""
+    blob = str(ctx.get("logline") or "") + str(
+        (ctx.get("golden_finger") or {}).get("name") or ""
+    )
+    if not blob:
+        return 0
+    return int(hashlib.md5(blob.encode("utf-8")).hexdigest(), 16)
+
+
+def _rotated_modes(ctx: dict, n: int = 3) -> list[str]:
+    """按书种子确定性轮换取 n 个不同开场形态（去重、稳定）。"""
+    total = len(_OPENING_MODES)
+    if total == 0:
+        return []
+    n = min(n, total)
+    start = _book_seed(ctx) % total
+    return [_OPENING_MODES[(start + i) % total] for i in range(n)]
+
 
 def _protagonist_role(ctx: dict) -> str:
     chars = ctx.get("characters") or []
@@ -60,14 +94,22 @@ def _theme_hint_blob(ctx: dict) -> str:
 
 
 def theme_opening_examples(ctx: dict) -> str:
-    """从 logline/主角职能/金手指推导 1～2 条开局方向（写入 prompt）。"""
+    """从 logline/主角职能/金手指推导开局方向，并叠加按书轮换的差异化入场形态。"""
     blob = _theme_hint_blob(ctx)
     hits: list[str] = []
     for keys, hint in _THEME_OPENING_HINTS:
         if any(k in blob for k in keys):
             hits.append(hint)
+    modes = "；".join(_rotated_modes(ctx, 3))
     if hits:
-        return "；".join(hits[:2])
+        tail = f"。可选入场形态（按本书任选其一并具体化，勿与同题材其它书撞）：{modes}" if modes else ""
+        return "；".join(hits[:2]) + tail
+    if modes:
+        return (
+            "本书无固定模板可套——从下列入场形态按主题任选其一并写具体："
+            f"{modes}。再据主角此刻身份与 logline 落地：他在做什么、谁当面压他、"
+            "不公如何落到动作与对话；禁止套用退婚/踹 cliff。"
+        )
     return (
         "从主角日常身份与本书 logline 推导：他此刻在做什么、谁当面压他、"
         "不公如何具体落到动作与对话；禁止套用退婚/踹 cliff。"
@@ -77,17 +119,27 @@ def theme_opening_examples(ctx: dict) -> str:
 def first_chapter_opening_block(ctx: dict) -> str:
     """注入 volumes / chapter_outlines：第1章须主题定制开局。"""
     examples = theme_opening_examples(ctx)
+    modes = _rotated_modes(ctx, 3)
     protag_fn = _protagonist_role(ctx) or "（见人物表主角 function）"
     gf = ctx.get("golden_finger") or {}
+    mode_lines = "\n".join(f"     · {m}" for m in modes)
+    mode_block = (
+        f"  - 本书优先尝试的入场形态（任选其一并写具体，勿全书都用同一种）：\n{mode_lines}\n"
+        if mode_lines else ""
+    )
     return (
         "\n【第1章开局定制（硬约束，违反即废稿）】\n"
         "★禁止默认套用以下烂模板★：未婚妻/未婚夫退婚、演武场当众羞辱、"
         "一脚踹下悬崖/坠入乱葬岗、撕毁婚书、天才反派单纯嘲讽废物。\n"
+        "★多样性铁律★：第1章不是统一的「宗门杂役被克扣」模板——必须先据本书"
+        "主题/金手指/主角身份给出 2～3 个不同形态的开局候选，再择最贴合本书的一个落地；"
+        "禁止与同题材其它书撞同一种开场、同一种压迫手法、同一处场景。\n"
         "第1章必须根据本书主题单独设计 opening：\n"
         f"  - 主角身份/职能：{protag_fn}\n"
         f"  - 金手指：{gf.get('name', '')}（{gf.get('core_ability', '')[:50]}）\n"
         f"  - 推荐方向（择其贴合者，禁止照抄）：{examples}\n"
-        "  - yaqu_setup 须写清：主角正在做什么具体差事/处在什么具体困境、"
+        + mode_block
+        + "  - yaqu_setup 须写清：主角正在做什么具体差事/处在什么具体困境、"
         "谁用什么方式压他（动作+台词），location 必须是该身份的日常场景而非泛化「演武场」；\n"
         "  - 第1章 new_info_count 优先 ≤1，勿同时塞退婚+身世+第二宝物等多线；\n"
         "  - end_hook 指向金手指即将/刚刚露头，而非「悬念丛生」。\n"

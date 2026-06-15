@@ -111,6 +111,32 @@ def build_prewarn_prompt(
     return _PREWARN_SYSTEM, "\n\n".join(parts)
 
 
+def prewarn_cast_names(result: dict | None) -> list[str]:
+    """导演单确认的本章出场人物名：优先 cast[].name，回退 fact_lock.on_stage。
+
+    供写正文时按「本章实际出场人物」精确取人物档案——只取导演单点名的人，
+    不再用章纲（可能漂移的）involved_characters/witnesses 全量。
+    """
+    if not isinstance(result, dict):
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for c in (result.get("cast") or []):
+        nm = str((c.get("name") if isinstance(c, dict) else c) or "").strip()
+        if nm and nm not in seen:
+            names.append(nm)
+            seen.add(nm)
+    if names:
+        return names
+    fact = result.get("fact_lock") or {}
+    for raw in (fact.get("on_stage") or []):
+        s = str(raw or "").strip()
+        if s and s not in seen:
+            names.append(s)
+            seen.add(s)
+    return names
+
+
 def format_prewarn_block(result: dict | None) -> str:
     """导演单 JSON → 正文 prompt 注入块；结构不完整时返回空串（降级无简报）。"""
     if not isinstance(result, dict):
@@ -131,6 +157,14 @@ def format_prewarn_block(result: dict | None) -> str:
         fact_parts.append(f"在场：{'、'.join(on_stage[:8])}")
     if fact_parts:
         lines.append(f"- 开笔事实锁定：{'；'.join(fact_parts)}")
+    cast = [c for c in (result.get("cast") or []) if isinstance(c, dict) and c.get("name")]
+    if cast:
+        segs = []
+        for c in cast[:8]:
+            nm = str(c.get("name")).strip()
+            rs = str(c.get("reason") or "").strip()
+            segs.append(f"{nm}（{rs}）" if rs else nm)
+        lines.append("- 本章出场人物及出场原因（只写这些人，按原因落到对应拍）：" + "；".join(segs))
     forbidden = [str(x) for x in (fact.get("forbidden") or []) if x]
     if forbidden:
         lines.append(f"- 禁止出现：{'；'.join(forbidden[:5])}")

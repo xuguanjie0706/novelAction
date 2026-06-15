@@ -15,7 +15,9 @@ from dabai.golden_finger_bind import (
 from dabai.non_system import prefers_non_system, prose_system_taboo_block
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 from app.services.dabai.intensity import intensity_prose_block
+from app.services.dabai.lab_char_voice import build_char_voice_block
 from app.services.dabai.lab_ledger import protagonist_name
+from app.services.dabai.pre_warn import prewarn_cast_names
 from app.services.dabai.lab_prompt_shared import (
     POV_LIMITED_RULES,
     build_witness_lock_block,
@@ -32,7 +34,10 @@ _SYSTEM_BASE = (
     "2. 节奏快但【不跳】：爽点可以当众爆发，但任何情绪/态度的反转都必须先有铺垫——\n"
     "   反转前给一个『扳机』（一个眼神、一句话、一个动作、一段回忆闪念），\n"
     "   扳机要写在反转之前、且能解释这个反转，哪怕只有一两句；严禁从一种情绪直接硬切到另一种；\n"
-    "3. 见证者反应要【分级递进】：先愣住/不信 → 再将信将疑 → 然后震惊 → 最后心服或恐惧；\n"
+    "3. 见证者反应要【分级递进】，但每章换一套写法、勿用同一串套话——"
+    "从下列递进模式按本场选一种贴合的：①愣住→不信→震惊→心服；②嗤笑→脸僵→冷汗→噤声；"
+    "③围观起哄→骚动→倒抽冷气→鸦雀无声；④笃定取胜→破绽被戳→强撑→认怂；"
+    "落到具体的脸色/动作/话语，禁止每章都写成同一句『众人先是一愣，随即震惊』；\n"
     "4. 金手指当章见效，主角不窝囊；\n"
     "5. ★可信度（立得住）：凡对主角有利的转机/巧合/碾压，要么兑现前文已埋的事实或线索，"
     "要么当场补一句站得住的依据（来历、动机、代价、对方的破绽或轻敌）；"
@@ -47,7 +52,10 @@ _SYSTEM_BASE_ARTIFACT = (
     "2. 节奏快但【不跳】：爽点可以当众爆发，但任何情绪/态度的反转都必须先有铺垫——\n"
     "   反转前给一个『扳机』（一个眼神、一句话、器物异鸣、精血倒流、一段回忆闪念），\n"
     "   扳机要写在反转之前、且能解释这个反转，哪怕只有一两句；严禁从一种情绪直接硬切到另一种；\n"
-    "3. 见证者反应要【分级递进】：先愣住/不信 → 再将信将疑 → 然后震惊 → 最后心服或恐惧；\n"
+    "3. 见证者反应要【分级递进】，但每章换一套写法、勿用同一串套话——"
+    "从下列递进模式按本场选一种贴合的：①愣住→不信→震惊→心服；②嗤笑→脸僵→冷汗→噤声；"
+    "③围观起哄→骚动→倒抽冷气→鸦雀无声；④笃定取胜→破绽被戳→强撑→认怂；"
+    "落到具体的脸色/动作/话语，禁止每章都写成同一句『众人先是一愣，随即震惊』；\n"
     "4. 金手指当章见效，主角不窝囊；\n"
     "5. ★可信度（立得住）：凡对主角有利的转机/巧合/碾压，要么兑现前文已埋的事实或线索，"
     "要么当场补一句站得住的依据（来历、动机、代价、对方的破绽或轻敌）；"
@@ -124,10 +132,12 @@ def build_prose_prompt(
     prev_full_block: str = "",
     prev_hook_block: str = "",
     narrative_state_block: str = "",
+    char_voice_block: str = "",
     location_bridge_block: str = "",
     qc_feedback_block: str = "",
     forward_qc_block: str = "",
     scene_plan: dict | None = None,
+    pre_warn_result: dict | None = None,
     replace_existing: bool = False,
     prior_content: str = "",
     user_instruction: str = "",
@@ -140,6 +150,13 @@ def build_prose_prompt(
 
     panel_block: 系统面板快照块（上章末存档的数值绝对基准），注入在 ledger 之前，
                  让模型在写任何战斗/修炼场景前先知道精确的境界/技能/冷却状态。
+    char_voice_block: 本章出场人物声音档案（性格/说话风格/欲望/憋屈），注入在书级
+                 定位锚之后、事实块之前；配合 system 的「人物声音区分」硬约束，
+                 让每个人按自己的腔调发声，消除对话千人一面。调用方传入的是按章纲
+                 出场人物预算的兜底档案；若 pre_warn_result 含导演单确认的 cast，
+                 本函数会改按 cast 名单重取档案（仅取本章实际出场人物）。
+    pre_warn_result: 写前导演单结构化结果。其 cast/fact_lock.on_stage 是本章「实际
+                 出场人物」的权威来源——据此精确重建人物声音档案，不再用章纲全量。
     scene_block: 分场调度块（lab_scene_plan 产物）。有分场时正文按场推进、
                  落实台词弹药与感官锚点；空串=降级为五拍直写。
     scene_plan: 归一化后的分场 JSON（含 scenes/word_budget）；有则正文篇幅只认分场合计。
@@ -194,6 +211,30 @@ def build_prose_prompt(
         if style_line else ""
     )
 
+    # 书级定位锚：把题材取向（目标读者/爽点模式/情感基调/卖点/节奏）注入正文，
+    # 统一全书声音，避免每章各写各的腔调。
+    pos_top = project.positioning or {}
+
+    def _pos_bit(label: str, key: str) -> str:
+        v = pos_top.get(key)
+        if isinstance(v, list):
+            v = "、".join(str(x) for x in v[:4])
+        v = str(v or "").strip()
+        return f"{label}:{v[:60]}" if v else ""
+
+    pos_bits = [b for b in (
+        _pos_bit("目标读者", "target_audience"),
+        _pos_bit("爽点模式", "face_slap_pattern"),
+        _pos_bit("情感基调", "emotional_arc"),
+        _pos_bit("卖点", "selling_point"),
+        _pos_bit("节奏", "pace_type"),
+    ) if b]
+    positioning_block = (
+        "\n【全书定位锚（正文须服务此读者与爽感取向，统一全书声音）】\n  "
+        + "｜".join(pos_bits) + "\n"
+        if pos_bits else ""
+    )
+
     # 关键节点可信度脚手架（②③）：不再限制在第1章——金手指首次觉醒、后续进阶/解锁、
     # 反败为胜/逆袭章都需要「铺垫 + 立得住的依据」，否则读者觉得开挂硬翻。可叠加。
     gf_name = gf.get("name", "")
@@ -220,6 +261,15 @@ def build_prose_prompt(
         )
     bind_block = "".join(milestone_parts)
 
+    # 出场人物以「写前导演单」确认的 cast 为准：写正文时只取这批人的声音档案，
+    # 不再用章纲（可能漂移的）involved_characters/witnesses 全量。导演单缺席时
+    # 退回调用方按章纲预算的 char_voice_block 兜底。
+    cast_names = prewarn_cast_names(pre_warn_result)
+    if cast_names:
+        rebuilt_voice = build_char_voice_block(project, cast_names)
+        if rebuilt_voice:
+            char_voice_block = rebuilt_voice
+
     has_continuity = bool(
         prev_tail.strip() or recent_plot_block.strip() or prev_full_block.strip()
     )
@@ -238,6 +288,12 @@ def build_prose_prompt(
             )
     if artifact:
         system += prose_system_taboo_block()
+    if char_voice_block.strip():
+        system += (
+            "\n★人物声音区分（硬约束）★：对话按【出场人物声音档案】各自的性格与说话风格写，"
+            "不同人物的用词、句长、语气要有可分辨差异；主角保持其一贯腔调，"
+            "禁止所有人一个腔调，禁止用旁白替代人物开口。"
+        )
 
     user_parts = [
         f"《{project.title or project.logline}》第{ch.chapter_number}章",
@@ -245,9 +301,13 @@ def build_prose_prompt(
         f"金手指：{gf.get('name', '')}（{gf.get('core_ability', '')}）",
         f"境界阶梯：{levels}",
         f"可用人物：{chars}",
-        f"{style_block}{realm_block}{bind_block}".strip(),
+        f"{positioning_block}{style_block}{realm_block}{bind_block}".strip(),
     ]
     user_parts = [p for p in user_parts if p]
+
+    # 人物声音档案紧跟书级定位锚之后、事实块之前：先立「谁怎么说话」，再给事实。
+    if char_voice_block.strip():
+        user_parts.append(char_voice_block.strip())
 
     if narrative_state_block.strip():
         user_parts.append(narrative_state_block.strip())
@@ -266,8 +326,10 @@ def build_prose_prompt(
         user_parts.append(prev_full_block.strip())
     if prev_hook_block.strip():
         user_parts.append(prev_hook_block.strip())
-    if prev_tail.strip():
-        user_parts.append(f"【上章结尾（须紧接下一瞬间续写）】\n{prev_tail.strip()[-800:]}")
+    # 去冗余：有上一章完整正文时，结尾片段已含其中，不再重复注入；
+    # 仅在缺完整正文（异常/降级）时用结尾片段兜底承接（不再二次截断）。
+    if prev_tail.strip() and not prev_full_block.strip():
+        user_parts.append(f"【上章结尾（须紧接下一瞬间续写）】\n{prev_tail.strip()}")
     # 开篇指令单源化：导演单在场时位移裁决归导演单，规则块只在其缺席时兜底
     if location_bridge_block.strip() and not pre_warn_block.strip():
         user_parts.append(location_bridge_block.strip())

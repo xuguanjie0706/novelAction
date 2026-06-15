@@ -150,7 +150,7 @@ class BootstrapResult:
                 "volume_chapters": self.cfg.volume_chapters,
                 "outline_expand_size": self.cfg.outline_expand_size,
                 "chapter_batch_size": self.cfg.chapter_batch_size,
-                "mock": self.cfg.mock, "model": self.cfg.model,
+                "model": self.cfg.model,
                 "failed_steps": self.failed_steps,
             },
             "benchmark": self.ctx.get("benchmark"),

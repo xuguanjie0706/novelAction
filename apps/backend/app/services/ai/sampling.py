@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.services.llm_config import normalize_openai_base_url, resolve_gemini_connection
-from app.services.llm_task_profiles import resolve_task_profile
+from app.services.llm_task_profiles import resolve_response_format, resolve_task_profile
 from app.services.llm_token_budgets import (
     ensure_min_completion_tokens,
     max_tokens_auto_debrief,
@@ -32,7 +32,7 @@ from app.services.llm_token_budgets import (
     min_completion_tokens,
 )
 from app.services.llm_billing_context import resolve_llm_billing_user_id
-from app.services.llm_errors import is_retryable_llm_error
+from app.services.llm_errors import is_response_format_rejected_error, is_retryable_llm_error
 from app.services.llm_call_log import log_llm_call, merge_truncation_into_context
 from app.services.ai.llm_response_text import message_completion_text
 from app.services.genre_kit import get_genre_guardrail, normalize_genre
@@ -116,6 +116,10 @@ class SamplingMixin:
         client = self._get_client()
         start = time.perf_counter()
         sampling_kwargs = self._build_sampling_kwargs(task, sampling)
+        response_format = resolve_response_format(task)
+        if sampling and sampling.get("response_format") is not None:
+            response_format = sampling["response_format"]
+        use_response_format = response_format is not None
         try:
             # SDK 本身会重试；这里再补一层短退避，兜住网关偶发 5xx，减少工作流整体失败。
             resp = None
@@ -123,19 +127,28 @@ class SamplingMixin:
             retry_delays = (0.8, 1.6)
             for attempt in range(len(retry_delays) + 1):
                 try:
-                    resp = await client.chat.completions.create(
-                        model=self.model,
-                        messages=[
+                    create_kwargs = {
+                        "model": self.model,
+                        "messages": [
                             {"role": "system", "content": system},
                             {"role": "user", "content": prompt},
                         ],
-                        max_tokens=max_tokens,
+                        "max_tokens": max_tokens,
                         **sampling_kwargs,
-                    )
+                    }
+                    if use_response_format and response_format:
+                        create_kwargs["response_format"] = response_format
+                    resp = await client.chat.completions.create(**create_kwargs)
                     last_error = None
                     break
                 except Exception as e:
                     last_error = e
+                    if use_response_format and is_response_format_rejected_error(e):
+                        logger.warning(
+                            "网关不支持 response_format，降级为纯 prompt JSON：%s", e,
+                        )
+                        use_response_format = False
+                        continue
                     if attempt >= len(retry_delays) or not self._is_retryable_llm_error(e):
                         raise
                     await asyncio.sleep(retry_delays[attempt])
@@ -181,6 +194,7 @@ class SamplingMixin:
                     ],
                     "max_tokens": max_tokens,
                     **sampling_kwargs,
+                    **({"response_format": response_format} if use_response_format and response_format else {}),
                 },
                 output_payload={"text": content},
                 user_id=resolve_llm_billing_user_id(getattr(self, "_user_id", None)),
@@ -206,6 +220,7 @@ class SamplingMixin:
                     ],
                     "max_tokens": max_tokens,
                     **sampling_kwargs,
+                    **({"response_format": response_format} if use_response_format and response_format else {}),
                 },
                 user_id=resolve_llm_billing_user_id(getattr(self, "_user_id", None)),
                 task=task,

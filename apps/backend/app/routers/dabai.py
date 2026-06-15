@@ -118,7 +118,7 @@ def _meta_from_cfg(cfg, failed_steps: list[str]) -> dict:
     return {
         "volume_count": cfg.volume_count, "volume_chapters": cfg.volume_chapters,
         "outline_expand_size": cfg.outline_expand_size,
-        "chapter_batch_size": cfg.chapter_batch_size, "mock": cfg.mock,
+        "chapter_batch_size": cfg.chapter_batch_size,
         "model": cfg.model, "failed_steps": failed_steps,
     }
 
@@ -161,7 +161,7 @@ def _detail(p: DabaiProject) -> dict:
             "end_hook": c.end_hook, "new_info_count": c.new_info_count,
             "involved_characters": c.involved_characters or [],
             "is_big_beat": c.is_big_beat, "expected_words": c.expected_words,
-            "realm_rank": c.realm_rank,
+            "realm_rank": c.realm_rank, "realm_sub_rank": c.realm_sub_rank,
             "content": c.content, "status": c.status or "planned",
         } for c in p.chapter_outlines],
     }

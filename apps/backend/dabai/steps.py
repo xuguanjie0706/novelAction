@@ -14,7 +14,30 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 from dabai import prompts, schemas
 from dabai.config import DabaiConfig
 
+from dabai.realm_spine import enforce_realm_batch
+
 logger = logging.getLogger("dabai.steps")
+
+
+def _apply_realm_batch(
+    batch: list[dict],
+    running: int,
+    *,
+    ctx: dict,
+    vr_lo: int | None,
+    vr_hi: int | None,
+    rmax: int | None,
+    vol_planned: int,
+    vol_ch_start: int,
+) -> int:
+    """写库前境界脊柱：单调 + 卷内升档节奏下限。"""
+    return enforce_realm_batch(
+        batch, running,
+        vr_lo=vr_lo, vr_hi=vr_hi, rmax=rmax,
+        vol_planned=vol_planned,
+        vol_ch_start=vol_ch_start,
+        ctx=ctx,
+    )
 
 # 注入式异步调用器类型
 CallFn = Callable[[str, str, str, dict | None], Awaitable[Any]]
@@ -83,20 +106,6 @@ def _realm_max(ctx: dict) -> int | None:
     return max(ranks) if ranks else None
 
 
-def _enforce_realm(batch: list[dict], running: int, vr_hi: int | None, rmax: int | None) -> int:
-    """境界脊柱硬保证：本批每章 realm_rank 单调不减、不超卷末/体系上限。
-
-    模型若回退或漏填，直接拉到当前档（写库数据永不回退）。返回更新后的 running。
-    """
-    cap = min([x for x in (vr_hi, rmax) if x] or [10 ** 9])
-    for ch in batch:
-        rr = ch.get("realm_rank")
-        rr = rr if isinstance(rr, int) and rr >= running else running
-        rr = min(rr, cap)
-        ch["realm_rank"] = rr
-        running = rr
-    return running
-
 
 async def _gen_volume_single(
     ctx: dict, call: CallFn, cfg: DabaiConfig, *,
@@ -145,7 +154,7 @@ async def _gen_volume_single(
 async def _gen_beat_rows(
     ctx: dict, call: CallFn, cfg: DabaiConfig, *,
     planned: int, start_chapter: int, chapter_offset: int,
-    prev_tail: str, realm_floor: int, vr_hi: int | None, rmax: int | None,
+    prev_tail: str, realm_floor: int, vr_lo: int | None, vr_hi: int | None, rmax: int | None,
 ) -> list[dict]:
     """阶段一：整卷（窗口）爽点节拍序列，超大卷按 beat_chunk_size 分段排。"""
     rows: list[dict] = []
@@ -165,7 +174,10 @@ async def _gen_beat_rows(
                 chunk = []
             for i, r in enumerate(chunk):
                 r["chapter_number"] = chapter_offset + s + i
-            running = _enforce_realm(chunk, running, vr_hi, rmax)
+            running = _apply_realm_batch(
+                chunk, running, ctx=ctx, vr_lo=vr_lo, vr_hi=vr_hi, rmax=rmax,
+                vol_planned=planned, vol_ch_start=s,
+            )
             if chunk:
                 tail = (chunk[-1].get("one_line") or tail).strip() or tail
             rows.extend(chunk)
@@ -230,9 +242,15 @@ async def aiter_chapter_batches(
         if single is not None:
             beats, chapters = single
             running_start = running
-            _enforce_realm(beats, running_start, vr_hi, rmax)
+            _apply_realm_batch(
+                beats, running_start, ctx=ctx, vr_lo=vr_lo, vr_hi=vr_hi, rmax=rmax,
+                vol_planned=planned, vol_ch_start=start_chapter,
+            )
             ctx["beat_sequence"] = beats
-            running = _enforce_realm(chapters, running_start, vr_hi, rmax)
+            running = _apply_realm_batch(
+                chapters, running_start, ctx=ctx, vr_lo=vr_lo, vr_hi=vr_hi, rmax=rmax,
+                vol_planned=planned, vol_ch_start=start_chapter,
+            )
             repaired = await repair_batch(
                 ctx, call, cfg, chapters,
                 realm_range=(vr_lo, vr_hi), realm_max=rmax,
@@ -240,7 +258,10 @@ async def aiter_chapter_batches(
             )
             if repaired is not chapters:
                 chapters = repaired
-                _enforce_realm(chapters, running_start, vr_hi, rmax)
+                _apply_realm_batch(
+                    chapters, running_start, ctx=ctx, vr_lo=vr_lo, vr_hi=vr_hi, rmax=rmax,
+                    vol_planned=planned, vol_ch_start=start_chapter,
+                )
             yield chapters, chapter_offset + start_chapter, chapter_offset + planned
             ctx.pop("_target_volume", None)
             return
@@ -252,7 +273,7 @@ async def aiter_chapter_batches(
         beats = await _gen_beat_rows(
             ctx, call, cfg, planned=planned, start_chapter=start_chapter,
             chapter_offset=chapter_offset, prev_tail=prev_tail,
-            realm_floor=running, vr_hi=vr_hi, rmax=rmax,
+            realm_floor=running, vr_lo=vr_lo, vr_hi=vr_hi, rmax=rmax,
         )
     except DabaiStepError as exc:
         logger.warning("节拍序列生成失败，降级为直接分批展开：%s", exc)
@@ -278,14 +299,20 @@ async def aiter_chapter_batches(
         for i, ch in enumerate(batch):
             ch["chapter_number"] = gbs + i
         running_start = running
-        running = _enforce_realm(batch, running_start, vr_hi, rmax)  # 写库前强制单调
+        running = _apply_realm_batch(
+            batch, running_start, ctx=ctx, vr_lo=vr_lo, vr_hi=vr_hi, rmax=rmax,
+            vol_planned=vol_planned, vol_ch_start=bs,
+        )
         repaired = await repair_batch(
             ctx, call, cfg, batch,
             realm_range=(vr_lo, vr_hi), realm_max=rmax, golden_finger_name=gf_name,
         )
         if repaired is not batch:
             batch = repaired
-            running = _enforce_realm(batch, running_start, vr_hi, rmax)
+            running = _apply_realm_batch(
+                batch, running_start, ctx=ctx, vr_lo=vr_lo, vr_hi=vr_hi, rmax=rmax,
+                vol_planned=vol_planned, vol_ch_start=bs,
+            )
         _after_outline_batch(ctx, batch)
         prev_tail = ctx.get("prev_tail") or _tail_of(batch)
         yield batch, gbs, gbe

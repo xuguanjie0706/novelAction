@@ -269,6 +269,19 @@ TASK_PROFILES: dict[str, dict] = {
 }
 
 
+# dabai 结构化步骤自动挂 json_object；正文流式 dabai.write 除外。
+_DABAI_JSON_TASK_EXCLUDE = frozenset({"dabai.write"})
+
+
+def resolve_response_format(task: Optional[str]) -> Optional[dict]:
+    """按任务名解析 OpenAI 兼容 response_format（网关不支持时由 _call_ai 自动降级）。"""
+    if not task or not str(task).startswith("dabai."):
+        return None
+    if task in _DABAI_JSON_TASK_EXCLUDE:
+        return None
+    return {"type": "json_object"}
+
+
 def resolve_task_profile(task: Optional[str]) -> dict:
     """根据任务名返回采样参数；未识别返回空 dict。
 

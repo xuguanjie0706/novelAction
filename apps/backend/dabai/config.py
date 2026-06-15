@@ -75,7 +75,6 @@ class DabaiConfig:
     base_url: str = field(default_factory=lambda: os.getenv("DABAI_BASE_URL", ""))
     api_key: str = field(default_factory=lambda: os.getenv("DABAI_API_KEY", ""))
     model: str = field(default_factory=lambda: os.getenv("DABAI_MODEL", "gpt-4o-mini"))
-    mock: bool = False              # True=离线 mock，不调真实 LLM
     stop_after: str | None = None   # 跑到某步即停（含该步）
     max_tokens: int = 30000         # 单次输出上限（volume_chapters 整卷 beat+五拍约 9-15k token）
 

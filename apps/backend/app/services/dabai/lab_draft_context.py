@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 from app.models.dabai_lab import DabaiClue, DabaiMemory, DabaiPanelSnapshot
+from app.services.dabai.lab_char_voice import build_char_voice_block
 
 _MEM_LABELS = {
     "summary": "摘要", "fact": "事实", "event": "事件",
@@ -34,8 +35,9 @@ _RECENT_WINDOW = 6
 _RECENT_PLOT_CHAPTERS = 5
 # 全书章级摘要链最多注入的章数（取最近的）
 _SUMMARY_CHAIN_MAX = 40
-# 上一章完整正文注入上限（防极端长章爆 context；正常 2000-3000 字章全量进入）
-_PREV_FULL_MAX = 9000
+# 上一章完整正文注入上限：正文质量优先、token 不设限——正常章（含大爆点章 3000 字）
+# 全量进入，仅极端超长章（>2 万字，通常是异常合并）才做中段省略兜底。
+_PREV_FULL_MAX = 20000
 
 
 @dataclass
@@ -51,6 +53,7 @@ class LabDraftContext:
     prev_hook_block: str = ""     # 上章末钩硬约束（复盘实际钩子优先，章纲计划兜底）
     prev_content_hash: str = ""   # 上章正文指纹（导演单/分场陈旧失效检测）
     narrative_state_block: str = ""  # Layer 2 情节时间轴+世界快照（与章纲 prompt 同源）
+    char_voice_block: str = ""    # 本章出场人物声音档案（性格/说话风格/欲望/憋屈/与主角关系）
 
 
 def content_fingerprint(text: str) -> str:
@@ -474,6 +477,7 @@ def build_lab_draft_context(
         prev_hook_block=_build_prev_hook_block(prev, hooks),
         prev_content_hash=prev_content_hash,
         narrative_state_block=narrative_state_block,
+        char_voice_block=build_char_voice_block(project, _chapter_stage_names(ch)),
     )
 
 

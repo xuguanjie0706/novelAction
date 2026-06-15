@@ -82,17 +82,14 @@ logline（一句话创意）
 ## 运行
 
 ```bash
-# 离线 mock 跑通（不需要 API key），产出完整 JSON
-python -m dabai.run --logline "废柴少年觉醒吞噬系统，一路逆袭打脸天才" --mock
-
-# 接真实 LLM（OpenAI 兼容）
+# 接真实 LLM（OpenAI 兼容）—— mock 已下线，运行前必须配置环境变量
 export DABAI_BASE_URL="https://api.xxx.com/v1"
 export DABAI_API_KEY="sk-..."
 export DABAI_MODEL="gpt-4o-mini"
 python -m dabai.run --logline "..." --volume-chapters 30
 
 # 只看某一步
-python -m dabai.run --logline "..." --mock --stop-after chapter_outlines
+python -m dabai.run --logline "..." --stop-after chapter_outlines
 ```
 
 产物写到 `dabai/outputs/bootstrap_<slug>.json`，并打印 linter 报告。

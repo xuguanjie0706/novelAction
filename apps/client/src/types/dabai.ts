@@ -21,6 +21,7 @@ export interface DabaiChapter {
   is_big_beat: boolean         // 大爆点
   expected_words: number
   realm_rank?: number | null   // 主角本章境界档（全书单调不减）
+  realm_sub_rank?: number | null // 同境内小层 1～9
   content?: string | null      // 正文（写作期填充）
   status?: string              // planned / written
 }

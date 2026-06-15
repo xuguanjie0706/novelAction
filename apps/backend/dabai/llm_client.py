@@ -1,10 +1,9 @@
-"""OpenAI 兼容 LLM 客户端 + 离线 mock 分发。
+"""OpenAI 兼容 LLM 客户端。
 
 设计目标：
-  - 真实模式：标准 OpenAI /chat/completions（任何兼容服务，base_url 可换）。
-  - mock 模式：不发网络请求，从 mock_responses 取该步预置 JSON，链路照常跑通。
+  - 标准 OpenAI /chat/completions（任何兼容服务，base_url 可换）。
   - JSON 解析容错：剥离 ```json 围栏、截取首个 {...} 或 [...]。
-依赖：真实模式需要 `openai` 包；mock 模式零依赖。
+依赖：`openai` 包。
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ import re
 from typing import Any
 
 from dabai.config import DabaiConfig
-from dabai import mock_responses
 
 
 class LLMError(RuntimeError):
@@ -31,15 +29,13 @@ class DabaiLLM:
 
     def __init__(self, config: DabaiConfig):
         self.config = config
-        self._client = None
-        if not config.mock:
-            self._client = self._build_client()
+        self._client = self._build_client()
 
     def _build_client(self):
         if not self.config.base_url:
             raise LLMError(
-                "真实模式缺少 base_url：经 API 调用时由所选模型/线路解析；"
-                "命令行直跑请设 DABAI_BASE_URL，或用 --mock 离线跑通。"
+                "缺少 base_url：经 API 调用时由所选模型/线路解析；"
+                "命令行直跑请设 DABAI_BASE_URL。"
             )
         try:
             from openai import OpenAI
@@ -54,27 +50,34 @@ class DabaiLLM:
     def generate_json(
         self, step: str, system: str, user: str, meta: dict | None = None,
     ) -> Any:
-        """调用 LLM（或 mock）并返回解析后的 JSON（dict 或 list）。
+        """调用 LLM 并返回解析后的 JSON（dict 或 list）。
 
-        meta: 步骤级附加信息（如章纲分批的 batch_start/batch_end），mock 据此切片。
+        meta: 步骤级附加信息（如章纲分批的 batch_start/batch_end）。
         """
-        if self.config.mock:
-            raw = mock_responses.get(step, self.config, meta or {})
-        else:
-            raw = self._call_real(step, system, user)
+        raw = self._call_real(step, system, user)
         return self._parse_json(raw)
 
     def _call_real(self, step: str, system: str, user: str) -> str:
+        payload = {
+            "model": self.config.model,
+            "temperature": self.config.temperature_for(step),
+            "max_tokens": self.config.max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
         try:
-            resp = self._client.chat.completions.create(
-                model=self.config.model,
-                temperature=self.config.temperature_for(step),
-                max_tokens=self.config.max_tokens,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-            )
+            try:
+                resp = self._client.chat.completions.create(
+                    **payload,
+                    response_format={"type": "json_object"},
+                )
+            except Exception as exc:
+                from app.services.llm_errors import is_response_format_rejected_error
+                if not is_response_format_rejected_error(exc):
+                    raise
+                resp = self._client.chat.completions.create(**payload)
             return resp.choices[0].message.content or ""
         except Exception as exc:  # noqa: BLE001
             raise LLMError(f"{step} LLM 调用失败：{exc}") from exc

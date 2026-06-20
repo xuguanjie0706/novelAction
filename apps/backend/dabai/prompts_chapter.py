@@ -11,11 +11,13 @@ import json
 
 from dabai.config import DabaiConfig
 from dabai.ctx_rich import chapter_design_context
+from dabai.hooks import hook_library_block
 from dabai.first_chapter_opening import first_chapter_opening_block
 from dabai.golden_finger_bind import chapter_outline_bind_block
 from dabai.non_system import chapter_outline_non_system_note, prefers_non_system
 from dabai.naming import character_naming_prompt_block
 from dabai.prompt_base import SYS_BASE, benchmark_block, ctx_brief, ladder_block
+from dabai.plot_blueprint import plot_blueprint_enabled
 from dabai.realm_spine import (
     power_ceiling_prompt_block,
     realm_pace_schedule_note,
@@ -86,9 +88,14 @@ def _realm_spine_block(vol: dict, realm_floor: int | None, ctx: dict) -> str:
 
 def _volume_head(ctx: dict, vol: dict) -> str:
     extra = vol.get("extra") or {}
+    opening = vol.get("opening_setup") or extra.get("opening_setup") or ""
     head = (
         f"本卷大爆点：{vol.get('big_beats')}\n本卷卷末高潮：{vol.get('volume_climax')}\n"
     )
+    if opening and int(vol.get("volume_number") or 1) == 1:
+        head += (
+            f"★第1卷开篇施工图（第1章 yaqu/location 须对齐，禁止另起冲突线）★：{opening}\n"
+        )
     if extra.get("boss"):
         head += f"本卷 Boss（压迫与卷末高潮的靶子）：{extra['boss']}\n"
     if extra.get("storyline_moves"):
@@ -120,6 +127,7 @@ def _beat_skeleton(cfg: DabaiConfig, gbs: int) -> str:
         f'    "chapter_number": {gbs},\n'
         '    "title": "第X章 标题(≤10字，句式轮换)",\n'
         f'    "shuang_type": "爽点类型（从 {pool} 选）",\n'
+        '    "target_emotion": "本章目标情绪（一词；整卷要张弛起伏，非一条直线）",\n'
         '    "location": "场景载体（场景池取具体地点+事件）",\n'
         '    "slap_target": "本章打脸/压迫对象（人物档案或反派阶梯中的名字）",\n'
         '    "realm_rank": 1,\n'
@@ -129,7 +137,7 @@ def _beat_skeleton(cfg: DabaiConfig, gbs: int) -> str:
     )
 
 
-def _beat_rules(cfg: DabaiConfig) -> str:
+def _beat_rules(cfg: DabaiConfig, ctx: dict | None = None) -> str:
     return (
         "节拍硬规则：\n"
         "1. 相邻两章 shuang_type 不同；连续 3 章不得同类 location；"
@@ -140,7 +148,14 @@ def _beat_rules(cfg: DabaiConfig) -> str:
         "4. 标题句式轮换（悬念式/台词式/反差式/动作式/数字式），"
         "禁止相邻标题以相同 2 字开头；\n"
         "5. 本卷规划登场的剧情资产、谜题透出、故事线节点必须各有落位章"
-        "（在 one_line 里点明）。\n"
+        "（在 one_line 里点明）；\n"
+        "6. ★情绪先于故事★：每章填 target_emotion，整卷情绪要张弛起伏"
+        "（憋屈蓄势↔爽感释放↔甜/虐交替），禁止全程同一情绪一条直线。\n"
+        + (
+            "7. ★情节蓝图★：节拍 one_line 须对齐 benchmark.adaptation_plan.chapter_beat_hints，"
+            "可扩写场面细节，骨架不得偏离映射。\n"
+            if plot_blueprint_enabled(cfg=cfg, ctx=ctx) else ""
+        )
     )
 
 
@@ -162,7 +177,7 @@ def beat_sequence(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         + f"\n为《{vol.get('title', '')}》排出全书第 {gbs}～{gbe} 章（共 {n} 章）的"
         "【爽点节拍序列】，每章一行。返回 JSON 数组：\n"
         "[\n" + _beat_skeleton(cfg, gbs) + "\n]\n"
-        + _beat_rules(cfg)
+        + _beat_rules(cfg, ctx)
     )
     return _BEAT_SYS, user
 
@@ -248,6 +263,9 @@ def _expand_rules(cfg: DabaiConfig, gbs: int, ctx: dict) -> str:
         "7. witnesses / involved_characters 只能用【人物档案】里的具体正名，"
         "禁止「执法堂甲/乙」「XX弟子A」「XX众」类占位。\n"
         "8. yinbao/shuang_payoff 战力须服从【战力天花板】与本章 realm_rank / realm_sub_rank。\n"
+        "9. 每章必填 target_emotion（交付的目标情绪）与 hook_type（章尾钩子 13 式之一）；"
+        "相邻两章 hook_type 不得相同，整卷情绪要张弛起伏。\n"
+        + hook_library_block()
         + character_naming_prompt_block(ctx, for_chapter=True)
         + power_ceiling_prompt_block(ctx)
         + "\n"
@@ -259,6 +277,8 @@ def _chapter_skeleton(gbs: int) -> str:
         "{\n"
         f'  "chapter_number": {gbs}, "title": "第X章 标题(≤10字)",\n'
         '  "shuang_type": "本章爽点类型(从可用类型选)",\n'
+        '  "target_emotion": "本章交付的目标情绪(一词，如 爽感释放/扬眉吐气/憋屈蓄势/甜)",\n'
+        '  "hook_type": "章尾钩子类型(13式之一，须与相邻章不同)",\n'
         '  "location": "本章主场景载体(具体地点+事件，如 万宝拍卖行·斗宝；相邻3章不得同类)",\n'
         '  "yaqu_setup": "憋屈势能：谁在压主角/什么不公",\n'
         '  "emotion_turn": "转折拍：从【情绪】→【触发】→【情绪】；金手指觉醒章须含疑→证→择",\n'
@@ -356,7 +376,7 @@ def volume_chapters(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         + _bridge_block(ctx, batch, gbs)
         + _realm_spine_block(vol, batch.get("realm_floor"), ctx)
         + _special_blocks(ctx, cfg, gbs, gbe)
-        + _beat_rules(cfg)
+        + _beat_rules(cfg, ctx)
         + _expand_rules(cfg, gbs, ctx) + "\n"
         "返回 JSON（两块，元素数都是 "
         f"{count}，章号都是全书第{gbs}～{gbe}章）：\n"
@@ -398,9 +418,24 @@ def chapter_repair(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         f"场景:{nb.get('location', '')} 爽点:{nb.get('shuang_type', '')}"
         for nb in neighbors
     )
+    opening_hint = ""
+    if any(i.get("rule_id") == "DB-17" for i in issues):
+        from dabai.plot_blueprint import ch1_opening_guidance_block
+
+        guidance = ch1_opening_guidance_block(ctx).strip()
+        if guidance:
+            opening_hint = f"\n{guidance}\n"
+        else:
+            vols = ctx.get("volumes") or []
+            v1 = vols[0] if vols else {}
+            extra = v1.get("extra") or {}
+            setup = (extra.get("opening_setup") or v1.get("opening_setup") or "").strip()
+            if setup:
+                opening_hint = f"\n【卷1 opening_setup（第1章 yaqu 须对齐）】\n{setup}\n"
     user = (
         f"{ctx_brief(ctx)}\n"
         + chapter_design_context(ctx, vol.get("volume_number"))
+        + opening_hint
         + "\n【质检问题清单（逐条修复）】\n" + issue_lines + "\n"
         + ("\n【相邻章（用于满足轮换规则，本身不要返回）】\n" + neighbor_lines + "\n"
            if neighbor_lines else "")

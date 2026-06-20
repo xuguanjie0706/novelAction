@@ -27,7 +27,6 @@ import type {
 } from './types'
 import PlanCard from './PlanCard'
 import WarnPanel from './WarnPanel'
-import DabaiConsistencyBanner from './DabaiConsistencyBanner'
 import DebriefPanel from './DebriefPanel'
 import ScenePipelinePanel from '../ScenePipelinePanel'
 import ChapterIndexEditPanel from '../ChapterIndexEditPanel'
@@ -267,19 +266,6 @@ export default function ContextSidePanel({
         {/* ── 写前预警 Tab ── */}
         {contextTab === 'warn' && (
           <>
-            <div className="px-4 pt-3">
-              <DabaiConsistencyBanner
-                report={
-                  (chapter.last_quality_report as { consistency_pass?: boolean })?.consistency_pass !== undefined
-                    ? (chapter.last_quality_report as {
-                        consistency_pass?: boolean
-                        blockers?: { rule_id: string; message: string }[]
-                        warnings?: { rule_id: string; message: string }[]
-                      })
-                    : null
-                }
-              />
-            </div>
             <WarnPanel
             runPreWriteWarning={runPreWriteWarning}
             warnLoading={warnLoading}

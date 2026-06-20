@@ -38,6 +38,8 @@ def is_response_format_rejected_error(err: BaseException) -> bool:
 
 def is_retryable_llm_error(err: BaseException) -> bool:
     """判定是否为可重试的瞬时网关/网络错误（与 AIService 内层退避一致）。"""
+    if is_llm_provider_failover_error(err):
+        return True
     status_code = getattr(err, "status_code", None)
     if isinstance(status_code, int) and status_code in (408, 429, 500, 502, 503, 504):
         return True
@@ -65,6 +67,24 @@ def is_retryable_llm_error(err: BaseException) -> bool:
             "incomplete chunked",
             "server disconnected",
             "without sending a response",
+        )
+    )
+
+
+def is_llm_provider_failover_error(err: BaseException) -> bool:
+    """当前线路不可用（上游失败/空响应），可切换备用 provider 重试。"""
+    msg = str(err).lower()
+    return any(
+        key in msg
+        for key in (
+            "upstream error",
+            "do_request_failed",
+            "空 choices",
+            "empty choices",
+            "网关上游错误",
+            "invalid token",
+            "error code: 401",
+            "error code: 500",
         )
     )
 
@@ -106,6 +126,18 @@ def format_llm_error_message(exc: BaseException) -> str:
         return (
             "大模型网关中途断开连接（Server disconnected）。"
             "多为网关不稳定或瞬时过载，请稍后重试该步骤，或在管理后台换一条线路。"
+            f" 原始信息：{msg}"
+        )
+    if "upstream error" in low or "do_request_failed" in low or "网关上游错误" in msg:
+        return (
+            "当前大模型线路上游请求失败（网关返回空响应）。"
+            "请在顶部「模型」菜单换一条线路（如默认 gemini-3.1-pro），或稍后重试。"
+            f" 原始信息：{msg}"
+        )
+    if "空 choices" in msg or "empty choices" in low:
+        return (
+            "大模型网关返回了空响应（无正文）。多为所选线路不稳定或不兼容 JSON 模式。"
+            "请换一条模型线路后重试。"
             f" 原始信息：{msg}"
         )
     if "bad gateway" in low or re.search(r"\b(502|503|504)\b", low):

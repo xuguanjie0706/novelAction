@@ -45,8 +45,11 @@ def ctx_brief(ctx: dict) -> str:
     return "\n".join(parts)
 
 
+from dabai.plot_blueprint import plot_blueprint_block, plot_blueprint_enabled
+
+
 def benchmark_block(ctx: dict) -> str:
-    """对标分析注入块：下游各步对齐对标特征（但禁止照抄任何作品情节/原句）。"""
+    """对标分析注入块：特征对齐；情节蓝图模式时追加改编映射。"""
     bm = ctx.get("benchmark") or {}
     if not bm:
         return ""
@@ -60,14 +63,20 @@ def benchmark_block(ctx: dict) -> str:
     conv = "、".join(bm.get("setting_conventions") or [])
     tropes = "、".join(bm.get("tropes_to_use") or [])
     pit = "、".join(bm.get("pitfalls_to_avoid") or [])
-    return (
-        "\n【对标分析（生成须对齐这些特征；★只借鉴特征，禁止照抄任何作品的情节/人物/原句★）】\n"
+    feature_rule = (
+        "只借鉴特征，禁止照抄任何作品的情节/人物/原句"
+        if not plot_blueprint_enabled(ctx=ctx)
+        else "风格/套路对齐对标；情节按下方「情节蓝图」骨架换皮改编+扩写，禁止照搬人名地名原句"
+    )
+    head = (
+        f"\n【对标分析（生成须对齐这些特征；★{feature_rule}★）】\n"
         f"  对标书：{books}\n"
         + (f"  风格画像：{style}\n" if style else "")
         + (f"  设定套路：{conv}\n" if conv else "")
         + (f"  可用套路：{tropes}\n" if tropes else "")
         + (f"  避坑：{pit}\n" if pit else "")
     )
+    return head + plot_blueprint_block(ctx)
 
 
 def ladder_block(ctx: dict) -> str:

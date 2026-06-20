@@ -1,12 +1,14 @@
-"""第1章开局策略：按本书主题定制，禁止退婚+踹 cliff 等烂模板。
+"""第1章开局策略：优先按 benchmark/情节蓝图对标改编，禁止退婚+踹 cliff 等烂模板。
 
 供 volumes / chapter_outlines prompt 与 linter 共用。
 """
 
 from __future__ import annotations
 
-import hashlib
 import re
+
+from dabai.plot_blueprint import ch1_opening_guidance_block
+
 # 章纲字段命中即报 DB-13（仅第1章）
 _BANNED_CH1_MARKERS = (
     "退婚", "悔婚", "退亲", "休书", "婚书已毁", "撕毁婚书", "当众毁约",
@@ -14,60 +16,43 @@ _BANNED_CH1_MARKERS = (
     "未婚妻当众", "未婚妻退", "退婚书",
 )
 
-# 主题关键词 → 开局灵感（非强制，仅供模型对齐本书）
-_THEME_OPENING_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+# 第1章高频烂模板词组（DB-17 / DLB-06 共用；有 benchmark 开篇映射时跳过）
+CH1_CLICHE_MARKERS: tuple[str, ...] = (
+    "克扣", "养魂珠", "灵石", "管事", "踩", "手背", "冻疮",
+    "拖着残躯", "雨中", "大雨", "暴雨", "克扣了三", "克扣了二",
+)
+
+# 无 benchmark 时的题材兜底（只给方向，不写死桥段）
+_THEME_FALLBACK_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("收尸", "埋尸", "阴尸", "乱葬", "炼尸", "尸堆"), (
-        "收尸/埋尸日常劳作中被克扣灵石、甩脏活、同门抢功；"
-        "或在乱葬岗作业时遭陷害/克扣防护，憋屈来自『低贱差事+弱肉强食』而非退婚。"
+        "阴秽差事/禁地劳作类开局；压迫来自门规、同门或执法，须贴合 logline 具体化。"
     )),
     (("魔门", "魔道", "邪修", "魂幡", "万魂幡", "血祭"), (
-        "魔门底层差事/刑堂盘查/同门夺功；金手指在尸堆/禁地/血池边以血炼认主出现，"
-        "禁止演武场退婚式开局。"
+        "魔门底层差事/刑堂/禁地；金手指在尸堆/血池边换皮出现，禁止演武场退婚式开局。"
     )),
     (("宗门", "外门", "内门", "弟子"), (
-        "任务分配不公、考核刁难、资源被克扣、被栽赃背锅；"
-        "憋屈来自门规与权力，而非默认退婚。"
-    )),
-    (("坊市", "拍卖", "商会", "交易"), (
-        "被压价、被抢货、被当肥羊；开局在交易/借贷/契约纠纷现场。"
-    )),
-    (("边境", "哨所", "矿脉", "灵田"), (
-        "苦差/守夜/采掘中被克扣、遇险被推出去顶包。"
+        "任务分配、考核、栽赃等门规权力压迫；禁止默认退婚模板。"
     )),
 )
 
-# 开场形态菜单：与「底层差事被克扣」并列的入场原型，按书轮换打破千篇一律。
-# 每本书据 logline 取不同起点，避免同题材所有书都用同一种开场。
-_OPENING_MODES: tuple[str, ...] = (
-    "任务/差事现场：主角正干一桩具体活计，半途被克扣/刁难/抢功",
-    "交易纠纷：坊市/借贷/赌约/契约现场被压价、被坑、被赖账",
-    "遇袭逃命：开篇就在被追杀/围堵/绝境里挣命，险中露出金手指端倪",
-    "审讯质问：被执法/长辈/债主当场盘问、扣帽子、逼供，主角硬顶",
-    "比试挑衅：被点名上场/被当众挑战，对方笃定主角必输",
-    "偷听密谋：主角无意撞见针对自己或家族的算计，攥着秘密进退两难",
-    "市井冲突：街头/酒肆/集市的小摩擦升级，牵出更大的压迫者",
-    "血亲家族压迫：被本家/族亲/同宗当众贬损、夺产、逐出，金手指在屈辱里觉动",
-)
 
-
-def _book_seed(ctx: dict) -> int:
-    """按 logline + 金手指名生成稳定种子：同书结果稳定，不同书拿到不同轮换起点。"""
-    blob = str(ctx.get("logline") or "") + str(
-        (ctx.get("golden_finger") or {}).get("name") or ""
+def _has_benchmark_opening(ctx: dict) -> bool:
+    bm = ctx.get("benchmark") or {}
+    if not isinstance(bm, dict):
+        return False
+    return bool(
+        bm.get("reference_books")
+        or bm.get("plot_blueprints")
+        or (bm.get("adaptation_plan") or {}).get("chapter_beat_hints")
     )
-    if not blob:
-        return 0
-    return int(hashlib.md5(blob.encode("utf-8")).hexdigest(), 16)
 
 
-def _rotated_modes(ctx: dict, n: int = 3) -> list[str]:
-    """按书种子确定性轮换取 n 个不同开场形态（去重、稳定）。"""
-    total = len(_OPENING_MODES)
-    if total == 0:
-        return []
-    n = min(n, total)
-    start = _book_seed(ctx) % total
-    return [_OPENING_MODES[(start + i) % total] for i in range(n)]
+OPENING_CLICHE_RULE_ID = "DLB-06"
+
+
+def skip_ch1_cliche_lint(ctx: dict | None) -> bool:
+    """有 benchmark 开篇映射时，cliché 词表让位于对标改编。"""
+    return _has_benchmark_opening(ctx or {})
 
 
 def _protagonist_role(ctx: dict) -> str:
@@ -93,54 +78,51 @@ def _theme_hint_blob(ctx: dict) -> str:
     return " ".join(parts)
 
 
-def theme_opening_examples(ctx: dict) -> str:
-    """从 logline/主角职能/金手指推导开局方向，并叠加按书轮换的差异化入场形态。"""
+def _theme_fallback_hint(ctx: dict) -> str:
+    """无 benchmark 时按题材给兜底方向（不预设固定开场菜单）。"""
     blob = _theme_hint_blob(ctx)
-    hits: list[str] = []
-    for keys, hint in _THEME_OPENING_HINTS:
+    for keys, hint in _THEME_FALLBACK_HINTS:
         if any(k in blob for k in keys):
-            hits.append(hint)
-    modes = "；".join(_rotated_modes(ctx, 3))
-    if hits:
-        tail = f"。可选入场形态（按本书任选其一并具体化，勿与同题材其它书撞）：{modes}" if modes else ""
-        return "；".join(hits[:2]) + tail
-    if modes:
-        return (
-            "本书无固定模板可套——从下列入场形态按主题任选其一并写具体："
-            f"{modes}。再据主角此刻身份与 logline 落地：他在做什么、谁当面压他、"
-            "不公如何落到动作与对话；禁止套用退婚/踹 cliff。"
-        )
+            return hint
     return (
-        "从主角日常身份与本书 logline 推导：他此刻在做什么、谁当面压他、"
-        "不公如何具体落到动作与对话；禁止套用退婚/踹 cliff。"
+        "从主角此刻身份与 logline 推导：他在做什么、谁当面压他、"
+        "不公如何落到动作与对话；禁止套用退婚/踹 cliff。"
     )
+
+
+def theme_opening_examples(ctx: dict) -> str:
+    """第1章开局方向：有 benchmark 时只引用对标改编，否则题材兜底。"""
+    if _has_benchmark_opening(ctx):
+        block = ch1_opening_guidance_block(ctx)
+        if block.strip():
+            return block.strip()
+    return _theme_fallback_hint(ctx)
 
 
 def first_chapter_opening_block(ctx: dict) -> str:
-    """注入 volumes / chapter_outlines：第1章须主题定制开局。"""
-    examples = theme_opening_examples(ctx)
-    modes = _rotated_modes(ctx, 3)
+    """注入 volumes / chapter_outlines：第1章须按对标书改编开局。"""
+    benchmark_block = ch1_opening_guidance_block(ctx)
     protag_fn = _protagonist_role(ctx) or "（见人物表主角 function）"
     gf = ctx.get("golden_finger") or {}
-    mode_lines = "\n".join(f"     · {m}" for m in modes)
-    mode_block = (
-        f"  - 本书优先尝试的入场形态（任选其一并写具体，勿全书都用同一种）：\n{mode_lines}\n"
-        if mode_lines else ""
-    )
+    fallback = ""
+    if not benchmark_block.strip():
+        fallback = (
+            f"  - 题材兜底（无 benchmark 时）：{_theme_fallback_hint(ctx)}\n"
+            "  - 建书后须补全 benchmark/plot_blueprint，第1章开篇以对标改编为准。\n"
+        )
     return (
         "\n【第1章开局定制（硬约束，违反即废稿）】\n"
         "★禁止默认套用以下烂模板★：未婚妻/未婚夫退婚、演武场当众羞辱、"
         "一脚踹下悬崖/坠入乱葬岗、撕毁婚书、天才反派单纯嘲讽废物。\n"
-        "★多样性铁律★：第1章不是统一的「宗门杂役被克扣」模板——必须先据本书"
-        "主题/金手指/主角身份给出 2～3 个不同形态的开局候选，再择最贴合本书的一个落地；"
-        "禁止与同题材其它书撞同一种开场、同一种压迫手法、同一处场景。\n"
-        "第1章必须根据本书主题单独设计 opening：\n"
+        "★开篇来源优先级★：① benchmark + 情节蓝图改编映射 → ② 卷 opening_setup → "
+        "③ 本书 logline/主角身份；禁止用系统固定开场菜单替代对标书。\n"
+        + (benchmark_block if benchmark_block.strip() else "")
+        + fallback
+        + "第1章 opening 须单独设计：\n"
         f"  - 主角身份/职能：{protag_fn}\n"
         f"  - 金手指：{gf.get('name', '')}（{gf.get('core_ability', '')[:50]}）\n"
-        f"  - 推荐方向（择其贴合者，禁止照抄）：{examples}\n"
-        + mode_block
-        + "  - yaqu_setup 须写清：主角正在做什么具体差事/处在什么具体困境、"
-        "谁用什么方式压他（动作+台词），location 必须是该身份的日常场景而非泛化「演武场」；\n"
+        "  - yaqu_setup 须写清：主角正在做什么具体差事/处在什么具体困境、"
+        "谁用什么方式压他（动作+台词），location 须贴合对标改编后的场景；\n"
         "  - 第1章 new_info_count 优先 ≤1，勿同时塞退婚+身世+第二宝物等多线；\n"
         "  - end_hook 指向金手指即将/刚刚露头，而非「悬念丛生」。\n"
     )
@@ -164,9 +146,55 @@ def lint_banned_ch1_tropes(ch: dict) -> tuple[str, str] | None:
         return None
     return (
         f"第1章套用烂模板：含「{'、'.join(hits[:3])}」——开局应贴合本书主题定制",
-        "改 yaqu_setup/location：从主角日常差事与同门/执法压迫写起，"
-        "参考 first_chapter_opening 模块，勿退婚+踹 cliff",
+        "改 yaqu_setup/location：按 benchmark 改编映射换皮，勿退婚+踹 cliff",
     )
+
+
+def lint_ch1_cliche_template(
+    ch: dict, ctx: dict | None = None,
+) -> tuple[str, str] | None:
+    """DB-17：第1章命中系统内高频坍缩模板（无 benchmark 映射时）。"""
+    if skip_ch1_cliche_lint(ctx):
+        return None
+    if int(ch.get("chapter_number") or 0) != 1:
+        return None
+    blob = ch1_outline_blob(ch)
+    hits = [m for m in CH1_CLICHE_MARKERS if m in blob]
+    if len(hits) < 2:
+        return None
+    strong = {"克扣", "管事", "雨中", "大雨", "踩", "手背", "拖着残躯", "养魂珠"}
+    if len(hits) >= 3 or len(strong.intersection(hits)) >= 2:
+        return (
+            f"第1章疑似套用系统默认收尸模板（非对标改编）：命中「{'、'.join(hits[:4])}」",
+            "按 benchmark.adaptation_plan 第1章节拍 + 卷 opening_setup 换皮重写 yaqu；"
+            "若对标书确有类似压迫，须写出改编差异（人物/场景/动作），禁止与同题材它书雷同",
+        )
+    return None
+
+
+def prose_opening_cliche_hit(
+    opening_text: str, *, ctx: dict | None = None,
+) -> tuple[str, str] | None:
+    """DLB-06：正文开篇 450 字命中系统默认 ch1 模板组合。"""
+    if skip_ch1_cliche_lint(ctx):
+        return None
+    head = (opening_text or "")[:450]
+    if not head.strip():
+        return None
+    hits = [m for m in CH1_CLICHE_MARKERS if m in head]
+    strong = {"克扣", "管事", "雨中", "大雨", "暴雨", "踩", "手背", "拖着残躯"}
+    rain = any(x in head for x in ("雨中", "大雨", "暴雨", "雨水", "雨幕"))
+    if rain and len(hits) >= 2 and len(strong.intersection(hits)) >= 2:
+        return (
+            f"开篇疑似套用系统默认模板（雨中+{'、'.join(h for h in hits[:3] if h in strong)}）",
+            "按导演单与对标改编换皮开笔；若对标书确有类似开场，须写出本书专属人物/场景/动作",
+        )
+    if len(hits) >= 3 and len(strong.intersection(hits)) >= 2:
+        return (
+            f"开篇命中系统默认模板词：{'、'.join(hits[:4])}",
+            "按 benchmark 改编映射与 beat_execution 换写法，勿照抄章纲或它书套话",
+        )
+    return None
 
 
 def witness_stems(witness: str) -> tuple[str, ...]:

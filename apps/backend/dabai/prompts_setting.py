@@ -22,37 +22,38 @@ from dabai.non_system import (
     prefers_non_system,
 )
 from dabai.prompt_base import SYS_BASE, benchmark_block, ctx_brief, ladder_block
+from dabai.plot_blueprint import auto_reference_books_prompt, storylines_plot_addendum
 from dabai.realm_spine import volume_realm_pace_prompt_addendum
 
 
 # ── ① 对标 + 立项定位（合并步）────────────────────────────────────────────────
 def benchmark(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
-    """一次产出『对标分析』+『立项定位』，定位须从对标推导，全量铺开。"""
+    """自动选定同题材高分对标书 + 立项定位（轻量；情节骨架在 plot_blueprint 步）。"""
     system = (
         "你是有20年经验的番茄/起点/七猫选题主编 + 数据运营，操盘过多部百万追读爽文。\n"
-        "请先做深度对标分析，再据此为本书做立项定位（定位必须对齐对标特征，不要自说自话）。\n"
-        "★合规要求：只描述作品可借鉴的『特征』（卖点、套路、设定母题、文笔风格、数据表现），"
-        "严禁抄录任何作品的原文段落、具体情节或人物原名作为输出内容。\n"
-        "★防幻觉要求：对标价值在『特征画像』而非书名——拿不准书名时 title 写题材型代称"
-        "（如「系统签到流头部作品」），confidence 标 low，禁止编造书名或张冠李戴。\n"
-        "不省 token：每个字段都要给具体可执行的判断，不要泛泛而谈。只返回 JSON。"
+        "本步任务：①据 logline 自动选定同题材 3-5 部高分对标书 ②据此做立项定位。\n"
+        "★情节骨架不在本步拆解★（下一步 plot_blueprint 专责）。\n"
+        "★合规★：禁止抄录原文；拿不准书名时用题材型代称，confidence 标 low。\n"
+        "只返回 JSON。"
     )
     logline = ctx.get("logline") or ""
     user = (
         f"题材 / 一句话创意：{logline}\n"
         + benchmark_non_system_note(logline) + "\n"
-        "返回 JSON（顶层两块 benchmark / positioning，positioning 须从 benchmark 推导）：\n"
+        + auto_reference_books_prompt(cfg)
+        + "返回 JSON（顶层 benchmark + positioning，定位须从 benchmark 高分对标推导）：\n"
         "{\n"
         '  "benchmark": {\n'
         '    "topic": "题材标签（如 系统流/吞噬流/赘婿打脸）",\n'
-        '    "reader_pain_points": ["该题材读者最想被满足的爽 3-5 条（被轻视后翻身/越级碾压/扮猪吃虎…）"],\n'
+        '    "reader_pain_points": ["该题材读者最想被满足的爽 3-5 条"],\n'
         '    "reference_books": [\n'
         '      {"title": "书名或题材型代称", "confidence": "high|medium|low",\n'
-        '       "why_comparable": "为何对标", "core_appeal": "核心卖点/爽点",\n'
-        '       "setting_motif": "设定母题(金手指/世界观套路)",\n'
-        '       "structure_note": "开篇怎么抓人/爽点节奏",\n'
-        '       "style_note": "文笔特征(句式/节奏/腔调)",\n'
-        '       "why_it_worked": "成功底层原因（情绪杠杆，不是表面套路）"}\n'
+        '       "market_tier": "头部万订/追读标杆/品类天花板",\n'
+        '       "data_proof": "为何判定高分（完读/追读/榜单/品类共识，一句）",\n'
+        '       "plot_role_in_adaptation": "本书借它什么（开篇母版/升级节奏/副线/高潮）",\n'
+        '       "why_comparable": "与本书 logline 的可比性", "core_appeal": "核心卖点/爽点",\n'
+        '       "setting_motif": "设定母题", "structure_note": "开篇抓人/爽点节奏",\n'
+        '       "style_note": "文笔特征", "why_it_worked": "成功底层原因（情绪杠杆）"}\n'
         "    ],\n"
         '    "style_profile": {"sentence_style": "句式", "pacing": "节奏",\n'
         '      "dialogue_density": "对话密度", "shuang_cadence": "爽点节奏(几章一爆)",\n'
@@ -67,7 +68,8 @@ def benchmark(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         '    "target_audience": "目标读者画像（平台/性别/年龄/口味，对齐对标读者）",\n'
         '    "shuang_pool": ["主打爽点类型 5-7 个，从 打脸/升级/获宝/扮猪吃虎/装逼/群嘲反转/收小弟/救场/扬名 选"],\n'
         '    "face_slap_frequency": "打脸/爽点频率（呼应对标 shuang_cadence，如每章一小爽、每5章一大爆）",\n'
-        '    "golden_three_strategy": "黄金三章策略：第1章蓄憋屈、第2章金手指登场、第3章第一次大打脸（逐章写清抓手）",\n'
+        '    "golden_three_strategy": "黄金三章情绪节拍（只写情绪/功能，禁止具体桥段如雨中/克扣/踩手）：'
+        '第1章憋屈蓄势+金手指端倪；第2章疑→证；第3章首次当众爽点",\n'
         '    "retention_anchors": ["前10章每2-3章一个具体追读锚点（钩子事件），至少4条"],\n'
         '    "paywall_chapter": "建议付费卡点章号 + 卡点前必须给到的最大爽点",\n'
         '    "chapter_word_target": "建议章均字数（普通章/大爆点章）",\n'
@@ -80,8 +82,8 @@ def benchmark(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         '    "writing_style": "plain"\n'
         "  }\n"
         "}\n"
-        "硬规则：reference_books 给 3-5 本；retention_anchors / core_selling_hooks "
-        "必须是具体事件而非抽象形容词；定位的 shuang_cadence / 字数 / 卡点要彼此自洽。"
+        "硬规则：reference_books 必须 3-5 本同题材高分标杆（自动选定）；"
+        "本步禁止输出 plot_blueprints / adaptation_plan；retention_anchors 须是具体事件。"
     )
     return system, user
 
@@ -237,9 +239,11 @@ def storylines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
     gf = ctx.get("golden_finger") or {}
     user = (
         f"{ctx_brief(ctx)}\n"
+        + benchmark_block(ctx)
         + ctx_rich.characters_block(ctx)
         + ctx_rich.antagonist_block(ctx) + "\n"
-        f"一次做好本书的【叙事规划】三块（全书 {cfg.volume_count} 卷），不省 token，返回 JSON：\n"
+        + storylines_plot_addendum(cfg, ctx)
+        + f"一次做好本书的【叙事规划】三块（全书 {cfg.volume_count} 卷），不省 token，返回 JSON：\n"
         "{\n"
         '  "storylines": [\n'
         "    {\n"
@@ -247,7 +251,8 @@ def storylines(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         '      "summary": "一句话走向", "stakes": "这条线的赌注/为什么读者在意",\n'
         '      "bound_characters": ["这条线绑定的人物名（用人物档案里的名字）"],\n'
         '      "nodes": [{"planned_volume": 1, "node": "该卷关键节点（具体事件，≤26字）",\n'
-        '        "beat_type": "推进/转折/回收", "emotional_payoff": "读者情绪收益一句话"}]\n'
+        '        "beat_type": "推进/转折/回收", "emotional_payoff": "读者情绪收益一句话",\n'
+        '        "adapted_from": "《对标书名》·节拍名·换皮说明（≤40字，情节蓝图模式必填）"}]\n'
         "    }\n"
         "  ],\n"
         '  "story_assets": {\n'
@@ -303,6 +308,7 @@ def volumes(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
     user = (
         f"{ctx_brief(ctx)}\n"
         + ctx_rich.volume_design_context(ctx)
+        + benchmark_block(ctx)
         + ladder_block(ctx) + "\n"
         f"把全书拆成 {cfg.volume_count} 卷，每卷 {cfg.volume_chapters} 章。"
         "每卷给出爽点大节拍、卷内章段施工图、卷末高潮、【主角境界区间】，并接住上方设计资产："

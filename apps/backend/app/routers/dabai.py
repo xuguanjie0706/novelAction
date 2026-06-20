@@ -36,6 +36,14 @@ router = APIRouter(prefix="/dabai", tags=["dabai"])
 
 class GenerateRequest(BaseModel):
     logline: str = Field(..., min_length=2, max_length=200, description="一句话创意")
+    reference_novels: list[str] = Field(
+        default_factory=list,
+        description="对标小说书名（1-5 本；情节蓝图模式下优先拆解其情节骨架）",
+    )
+    plot_blueprint_mode: bool = Field(
+        default=True,
+        description="情节蓝图：bootstrap 自动选同题材高分对标书并驱动故事线/章纲",
+    )
     # 模型/线路选择：沿用通用分支约定（local 走 .env，gemini 走 llm_providers/env）
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
@@ -85,6 +93,8 @@ def _cfg_from_req(req: GenerateRequest, db: Session):
     from dabai.config import DabaiConfig
     cfg = DabaiConfig(
         logline=req.logline.strip(),
+        reference_novels=[x.strip() for x in req.reference_novels if x and x.strip()][:5],
+        plot_blueprint_mode=req.plot_blueprint_mode,
         volume_count=req.volume_count, volume_chapters=req.volume_chapters,
         outline_expand_size=req.outline_expand_size,
         big_beat_every=req.big_beat_every, chapter_batch_size=req.chapter_batch_size,
@@ -99,17 +109,43 @@ def _build_call(cfg, req: GenerateRequest, db: Session, user: User):
     """构造注入式异步调用器（复用 AIService._call_ai：计费 / 调用日志 / 任务级采样）。"""
     from dabai.llm_client import parse_json
     from app.services.ai.service import AIService
-    ai = AIService(profile=req.model_profile, db=db,
-                   llm_provider_id=req.llm_provider_id, user_id=user.id)
-    # 按次计费 + 质量优先：设定步与章纲步一律按 cfg.max_tokens_for(step) 放开输出上限，
-    # 让富设定 schema 一次性全量吐出而不被网关默认上限截断（gemini-3-flash 等大窗口模型）。
-    # max_tokens_for 内部已对全局 cfg.max_tokens 取 min，仍是硬顶，防超模型上限。
+    from app.services.llm_config import pick_active_provider
+    from app.services.llm_errors import format_llm_error_message, is_llm_provider_failover_error
+
+    primary = AIService(
+        profile=req.model_profile, db=db,
+        llm_provider_id=req.llm_provider_id, user_id=user.id,
+    )
+    fallback: AIService | None = None
+    if req.model_profile == "gemini" and req.llm_provider_id:
+        default_row = pick_active_provider(db)
+        if default_row and default_row.id != req.llm_provider_id:
+            fallback = AIService(
+                profile=req.model_profile, db=db,
+                llm_provider_id=default_row.id, user_id=user.id,
+            )
+
+    async def _invoke(ai: AIService, step: str, system: str, user_prompt: str) -> str:
+        return await ai._call_ai(
+            system, user_prompt,
+            max_tokens=cfg.max_tokens_for(step),
+            task=f"dabai.{step}",
+        )
 
     async def call(step: str, system: str, user_prompt: str, meta: dict | None):
-        text = await ai._call_ai(system, user_prompt,
-                                 max_tokens=cfg.max_tokens_for(step),
-                                 task=f"dabai.{step}")
-        return parse_json(text)
+        try:
+            return parse_json(await _invoke(primary, step, system, user_prompt))
+        except Exception as exc:
+            if fallback is None or not is_llm_provider_failover_error(exc):
+                raise RuntimeError(format_llm_error_message(exc)) from exc
+            logger.warning(
+                "dabai.%s 线路 %s 失败，切换默认线路 %s：%s",
+                step, primary.model, fallback.model, exc,
+            )
+            try:
+                return parse_json(await _invoke(fallback, step, system, user_prompt))
+            except Exception as fb_exc:
+                raise RuntimeError(format_llm_error_message(fb_exc)) from fb_exc
 
     return call
 
@@ -120,6 +156,8 @@ def _meta_from_cfg(cfg, failed_steps: list[str]) -> dict:
         "outline_expand_size": cfg.outline_expand_size,
         "chapter_batch_size": cfg.chapter_batch_size,
         "model": cfg.model, "failed_steps": failed_steps,
+        "reference_novels": list(cfg.reference_novels or []),
+        "plot_blueprint_mode": cfg.plot_blueprint_mode,
     }
 
 
@@ -154,7 +192,8 @@ def _detail(p: DabaiProject) -> dict:
                     for v in p.volumes],
         "chapter_outlines": [{
             "id": str(c.id), "chapter_number": c.chapter_number, "title": c.title,
-            "shuang_type": c.shuang_type, "location": c.location,
+            "shuang_type": c.shuang_type, "target_emotion": c.target_emotion,
+            "hook_type": c.hook_type, "location": c.location,
             "yaqu_setup": c.yaqu_setup,
             "emotion_turn": c.emotion_turn, "yinbao": c.yinbao,
             "shuang_payoff": c.shuang_payoff, "witnesses": c.witnesses or [],

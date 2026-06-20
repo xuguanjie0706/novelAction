@@ -57,8 +57,9 @@ async def run_step(
         try:
             raw = await call(step, system, user, meta)
         except Exception as exc:  # noqa: BLE001
-            last_err = str(exc)
-            logger.warning("%s 调用失败(attempt=%d)：%s", step, attempt + 1, exc)
+            from app.services.llm_errors import format_llm_error_message
+            last_err = format_llm_error_message(exc)
+            logger.warning("%s 调用失败(attempt=%d)：%s", step, attempt + 1, last_err)
             continue
         data = schemas.normalize_step(step, raw)
         errors = schemas.validate_step(step, data, meta=meta)

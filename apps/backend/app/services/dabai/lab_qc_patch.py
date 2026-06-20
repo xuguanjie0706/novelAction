@@ -199,7 +199,7 @@ async def stream_qc_patch_prose(
         user_prompt += f"\n\n【作者补充指令】\n{instr[:2000]}"
 
     hi = chapter_word_target(ch) + 200
-    from app.services.dabai.draft_stream import dabai_draft_max_tokens
+    from app.services.dabai.lab_word_budget import dabai_draft_max_tokens
 
     async for delta in ai._stream_ai(
         system,

@@ -67,6 +67,38 @@ export interface DabaiBenchmarkBook {
   core_appeal?: string
   setting_motif?: string
   style_note?: string
+  market_tier?: string
+  data_proof?: string
+  plot_role_in_adaptation?: string
+}
+
+export interface DabaiPlotBlueprint {
+  title?: string
+  confidence?: string
+  plot_skeleton?: {
+    opening_arc?: Array<{ span?: string; beats?: string }>
+    mid_game?: Array<{ span?: string; beats?: string }>
+    climax_pattern?: string
+  }
+  borrowable_beats?: Array<{
+    label?: string
+    ref_span?: string
+    emotion_arc?: string
+    adapt_hint?: string
+  }>
+}
+
+export interface DabaiAdaptationPlan {
+  strategy?: string
+  volume_mapping?: Array<{
+    volume?: number
+    primary_ref?: string
+    ref_span?: string
+    local_span?: string
+    adapted_arc?: string
+  }>
+  chapter_beat_hints?: Array<{ span?: string; ref_beat?: string; must_hit?: string }>
+  expansion_notes?: string[]
 }
 
 export interface DabaiBenchmark {
@@ -76,6 +108,8 @@ export interface DabaiBenchmark {
   setting_conventions?: string[]
   tropes_to_use?: string[]
   pitfalls_to_avoid?: string[]
+  plot_blueprints?: DabaiPlotBlueprint[]
+  adaptation_plan?: DabaiAdaptationPlan
 }
 
 export interface DabaiProjectDetail {
@@ -164,7 +198,8 @@ export type DabaiStreamEvent =
 
 /** Bootstrap 步骤中文标签（进度展示，与后端 PIPELINE_STEPS 对齐）。 */
 export const DABAI_STEP_LABELS: Record<string, string> = {
-  benchmark: '对标分析',
+  benchmark: '对标·高分选材',
+  plot_blueprint: '情节蓝图',
   positioning: '立项定位',
   golden_finger: '金手指',
   power_ladder: '境界阶梯',

@@ -16,7 +16,6 @@ from app.routers.ai import (  # noqa: E402
     chapter_ingredients_routes,
     chat_routes,
     coherence_routes,
-    dabai_project_routes,
     debrief_routes,
     draft_routes,
     gated_draft_routes,
@@ -44,7 +43,6 @@ router.include_router(quality_root_cause_routes.router)
 router.include_router(reader_simulation_routes.router)
 router.include_router(scene_routes.router)
 router.include_router(world_settings_generate_routes.router)
-router.include_router(dabai_project_routes.router)
 
 # --- 兼容旧单文件 `ai.py` 的导入（测试等） ---
 from app.routers.ai.context import (  # noqa: E402

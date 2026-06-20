@@ -25,7 +25,13 @@ from app.services.dabai.lab_realm_baseline import (
     load_opening_realm_baseline,
     sanitize_prewarn_realm,
 )
-from app.services.dabai.pre_warn import _PREWARN_SYSTEM, format_prewarn_block
+from app.services.dabai.prewarn_format import _PREWARN_SYSTEM, format_prewarn_block
+from app.services.dabai.prose.beat_contract import beat_similarity, resolve_beats
+from app.services.dabai.prose.opening_policy import (
+    ch1_benchmark_block,
+    opening_policy_block,
+    should_skip_beat_copy_guard,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -110,17 +116,50 @@ def pre_warn_stale(result: dict | None, prev_content_hash: str) -> bool:
     return str(result.get("prev_content_hash") or "") != prev_content_hash
 
 
-def _build_lab_beat_block(ch: DabaiChapterOutline) -> str:
-    witnesses = "、".join(ch.witnesses or []) if isinstance(ch.witnesses, list) else "围观众人"
-    if not witnesses:
-        witnesses = "围观众人"
+def _volume_for_chapter(db: Session, project: DabaiProject, ch: DabaiChapterOutline):
+    from app.models.dabai import DabaiVolume
+    if ch.volume_id:
+        return db.query(DabaiVolume).filter(DabaiVolume.id == ch.volume_id).first()
+    return (
+        db.query(DabaiVolume)
+        .filter(DabaiVolume.project_id == project.id, DabaiVolume.volume_number == 1)
+        .first()
+    )
+
+
+def _ensure_beat_not_copy(
+    result: dict,
+    ch: DabaiChapterOutline,
+    project: DabaiProject | None = None,
+) -> dict:
+    """开篇章 beat_execution.yaqu 不得与章纲 yaqu 高度雷同（无 benchmark 映射时）。"""
+    if project and should_skip_beat_copy_guard(project):
+        return result
+    if int(ch.chapter_number or 0) != 1:
+        return result
+    beats = dict(result.get("beat_execution") or {})
+    yaqu = (ch.yaqu_setup or "").strip()
+    exec_yaqu = str(beats.get("yaqu") or "").strip()
+    if yaqu and exec_yaqu and beat_similarity(yaqu, exec_yaqu) >= 0.55:
+        beats["yaqu"] = (
+            f"（须按对标改编换皮，禁止照抄章纲）在{ch.location or '差事现场'}重写憋屈："
+            f"保留「{ch.shuang_type or '憋屈'}」功能，对齐 benchmark 第1章节拍"
+        )
+        result = dict(result)
+        result["beat_execution"] = beats
+    return result
+
+
+def _build_lab_beat_block(ch: DabaiChapterOutline, pre_warn_result: dict | None = None) -> str:
+    contract = resolve_beats(ch, pre_warn_result)
+    witnesses = contract.witnesses
     return "\n".join([
-        f"  爽点类型：{ch.shuang_type or ''}",
-        f"  ①憋屈：{ch.yaqu_setup or ''}",
-        f"  ②转折扳机：{ch.emotion_turn or '（按章纲自行设计）'}",
-        f"  ③引爆：{ch.yinbao or ''}",
-        f"  ④爽点：{ch.shuang_payoff or ''}（见证者：{witnesses}）",
-        f"  ⑤章末钩子：{ch.end_hook or ''}",
+        f"  爽点类型：{contract.shuang_type}",
+        f"  ①憋屈（情节参考，正文须由 beat_execution 换写法）：{contract.yaqu}",
+        f"  ②转折扳机：{contract.trigger}",
+        f"  ③引爆：{contract.yinbao}",
+        f"  ④爽点：{contract.payoff}（见证者：{witnesses}）",
+        f"  ⑤章末钩子：{contract.hook}",
     ])
 
 
@@ -156,6 +195,7 @@ def build_lab_prewarn_prompt(
     locked_spec_block: str = "",
     opening_baseline_block: str = "",
     chapter_boundary_block: str = "",
+    opening_policy: str = "",
 ) -> tuple[str, str]:
     """构造实验书架导演单 (system, user)。
 
@@ -217,7 +257,9 @@ def build_lab_prewarn_prompt(
         )
     if chapter_boundary_block.strip():
         parts.append(chapter_boundary_block.strip())
-    parts.append("【本章章纲五拍（卷展开期生成，可能与上述事实漂移）】")
+    if opening_policy.strip():
+        parts.append(opening_policy.strip())
+    parts.append("【本章章纲五拍（卷展开参考；beat_execution 须换写法，禁止照抄 yaqu 原句）】")
     parts.append(_build_lab_beat_block(ch))
     if opening_no_prior:
         parts.append(_OPENING_CHAPTER_RULE)
@@ -378,6 +420,7 @@ async def resolve_lab_pre_warn(
 
         locked_spec_block = ""
         chapter_boundary_block = ""
+        volume = None
         if db is not None:
             from app.services.dabai.lab_asset_spec import build_locked_spec_block
             from app.services.dabai.lab_chapter_boundary import (
@@ -386,12 +429,15 @@ async def resolve_lab_pre_warn(
             )
             locked_spec_block = build_locked_spec_block(db, project, ch)
             chapter_boundary_block = build_forward_chapter_boundary_block(db, project.id, ch)
+            volume = _volume_for_chapter(db, project, ch)
+        policy = opening_policy_block(project, ch, volume)
         system, user = build_lab_prewarn_prompt(
             project, ch, ctx, ledger_block,
             replace_existing=replace_existing, bridge_evidence=bridge_evidence,
             opening_no_prior=opening_no_prior, locked_spec_block=locked_spec_block,
             opening_baseline_block=opening_baseline_block,
             chapter_boundary_block=chapter_boundary_block,
+            opening_policy=policy,
         )
         prewarn_sampling = (
             {"temperature": 0.45, "presence_penalty": 0.15}
@@ -419,6 +465,7 @@ async def resolve_lab_pre_warn(
                 fact["forbidden"] = forbidden[:6]
                 result["fact_lock"] = fact
         result = normalize_opening_prewarn(result, opening_no_prior=opening_no_prior)
+        result = _ensure_beat_not_copy(result, ch, project)
         result["version"] = PREWARN_VERSION
         # 上章正文指纹：上一章重写后据此判定本导演单已过期，强制重生成
         result["prev_content_hash"] = ctx.prev_content_hash

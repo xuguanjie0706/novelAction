@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useState, useCallback, useMemo } from 'react'
-import { useParams, useNavigate, useSearchParams, Navigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Plus, Loader2, RefreshCw, ChevronRight, ChevronDown, PenLine, FileText, BookOpen, Package,
 } from 'lucide-react'
@@ -14,7 +14,6 @@ import toast from 'react-hot-toast'
 import type { Chapter, OutlineNode } from '../types'
 import { ChapterTreeLeadingIndicator } from '../components/Writing/FanqieSyncSlot'
 import { buildChapterByNodeId, resolveActiveChapterId } from './writeChapterUtils'
-import { isDabaiProject } from '../utils/dabaiOutlineDisplay'
 
 function findNode(tree: OutlineNode[], id: string): OutlineNode | undefined {
   for (const n of tree) {
@@ -303,11 +302,6 @@ export default function WritePage() {
         <Loader2 className="animate-spin" size={18} />载入中…
       </div>
     )
-  }
-
-  if (loadState === 'ready' && isDabaiProject(currentProject?.extra as Record<string, unknown> | undefined)) {
-    const qs = searchParams.toString()
-    return <Navigate to={`/project/${projectId}/dabai-write${qs ? `?${qs}` : ''}`} replace />
   }
 
   if (loadState === 'error') {

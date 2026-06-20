@@ -437,3 +437,25 @@ def inject_prewarn_into_scene_plan(
             sc["order"] = i + 1
         out["scenes"] = scenes
     return out
+
+
+def prewarn_cast_names(result: dict | None) -> list[str]:
+    """导演单确认的本章出场人物名：优先 cast[].name，回退 fact_lock.on_stage。"""
+    if not isinstance(result, dict):
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for c in result.get("cast") or []:
+        nm = str((c.get("name") if isinstance(c, dict) else c) or "").strip()
+        if nm and nm not in seen:
+            names.append(nm)
+            seen.add(nm)
+    if names:
+        return names
+    fact = result.get("fact_lock") or {}
+    for raw in fact.get("on_stage") or []:
+        s = str(raw or "").strip()
+        if s and s not in seen:
+            names.append(s)
+            seen.add(s)
+    return names

@@ -72,6 +72,9 @@ export default function DabaiCreateDialog({
           className="mt-4 w-full resize-none rounded-xl border border-gray-200 px-3 py-2 text-sm"
           placeholder="一句话创意：憋屈起点 + 金手指载体 + 爽点方向（法器流请加「不要系统/无叮」；系统流可写「觉醒XX系统」）"
         />
+        <p className="mt-2 text-[11px] leading-relaxed text-gray-400">
+          建书时 AI 将根据题材自动选定 3–5 部同品类高分对标小说，拆解情节骨架并映射到故事线、卷纲与章纲（换皮改编，无需手动填书名）。
+        </p>
         <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-gray-600">
           <div className="flex items-center gap-2">
             <span className="text-gray-400">模型</span>

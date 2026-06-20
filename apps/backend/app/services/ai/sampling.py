@@ -34,7 +34,7 @@ from app.services.llm_token_budgets import (
 from app.services.llm_billing_context import resolve_llm_billing_user_id
 from app.services.llm_errors import is_response_format_rejected_error, is_retryable_llm_error
 from app.services.llm_call_log import log_llm_call, merge_truncation_into_context
-from app.services.ai.llm_response_text import message_completion_text
+from app.services.ai.llm_response_text import extract_upstream_error, message_completion_text
 from app.services.genre_kit import get_genre_guardrail, normalize_genre
 from app.services.xuanhuan_lexicon import (
     format_modern_blacklist_for_prompt,
@@ -123,6 +123,7 @@ class SamplingMixin:
         try:
             # SDK 本身会重试；这里再补一层短退避，兜住网关偶发 5xx，减少工作流整体失败。
             resp = None
+            content = ""
             last_error: Exception | None = None
             retry_delays = (0.8, 1.6)
             for attempt in range(len(retry_delays) + 1):
@@ -139,8 +140,6 @@ class SamplingMixin:
                     if use_response_format and response_format:
                         create_kwargs["response_format"] = response_format
                     resp = await client.chat.completions.create(**create_kwargs)
-                    last_error = None
-                    break
                 except Exception as e:
                     last_error = e
                     if use_response_format and is_response_format_rejected_error(e):
@@ -152,25 +151,50 @@ class SamplingMixin:
                     if attempt >= len(retry_delays) or not self._is_retryable_llm_error(e):
                         raise
                     await asyncio.sleep(retry_delays[attempt])
+                    continue
 
-            if resp is None:
+                upstream_err = extract_upstream_error(resp)
+                if upstream_err:
+                    raise RuntimeError(f"大模型网关上游错误：{upstream_err}")
+
+                choices = getattr(resp, "choices", None) or []
+                if not choices:
+                    last_error = RuntimeError(
+                        f"LLM 返回空 choices，无法读取正文（model={self.model}）"
+                    )
+                    if attempt == 0 and use_response_format:
+                        logger.warning(
+                            "空 choices，降级去掉 response_format 后重试：model=%s",
+                            self.model,
+                        )
+                        use_response_format = False
+                        continue
+                    raise last_error
+
+                msg = getattr(choices[0], "message", None)
+                content = message_completion_text(msg)
+                if not content.strip():
+                    usage_obj = getattr(resp, "usage", None)
+                    comp_tok = getattr(usage_obj, "completion_tokens", None) if usage_obj else None
+                    last_error = RuntimeError(
+                        "LLM 返回空正文"
+                        + (f"（completion_tokens={comp_tok}，thinking 模型可能未输出可见 JSON）"
+                           if comp_tok else "")
+                    )
+                    if attempt < len(retry_delays) and self._is_retryable_llm_error(last_error):
+                        await asyncio.sleep(retry_delays[attempt])
+                        continue
+                    raise last_error
+                break
+            else:
                 if last_error is not None:
                     raise last_error
                 raise RuntimeError("LLM 调用失败：未获得响应")
 
-            choices = getattr(resp, "choices", None) or []
-            if not choices:
-                raise RuntimeError("LLM 返回空 choices，无法读取正文")
-            msg = getattr(choices[0], "message", None)
-            content = message_completion_text(msg)
-            if not content.strip():
-                usage_obj = getattr(resp, "usage", None)
-                comp_tok = getattr(usage_obj, "completion_tokens", None) if usage_obj else None
-                raise RuntimeError(
-                    "LLM 返回空正文"
-                    + (f"（completion_tokens={comp_tok}，thinking 模型可能未输出可见 JSON）"
-                       if comp_tok else "")
-                )
+            if resp is None or not content.strip():
+                if last_error is not None:
+                    raise last_error
+                raise RuntimeError("LLM 调用失败：未获得响应")
             usage_obj = getattr(resp, "usage", None)
             usage = {
                 "prompt_tokens": getattr(usage_obj, "prompt_tokens", None),

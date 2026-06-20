@@ -53,10 +53,6 @@ from app.routers.ai.gated_draft_quality import (
     _run_quality_check_inline,
 )
 from app.routers.ai.schemas import GatedDraftRequest
-from app.routers.ai.dabai_draft_handlers import (
-    dabai_gated_draft_event_stream,
-    should_route_dabai_draft,
-)
 from app.services.ai_service import AIService
 from app.utils.chapter_manuscript import split_plain_manuscript_and_index_block
 
@@ -110,28 +106,6 @@ async def gated_draft_stream(
         llm_provider_id=req.llm_provider_id,
     )
     user_prompt_str = (req.user_prompt or "").strip()
-
-    if should_route_dabai_draft(project):
-        async def dabai_gated_stream():
-            async for line in dabai_gated_draft_event_stream(
-                db,
-                svc,
-                project,
-                chapter,
-                str(project_id),
-                user_prompt=user_prompt_str,
-                stream_log_ctx={
-                    "project_id": str(project_id),
-                    "chapter_id": str(req.chapter_id),
-                },
-            ):
-                yield line
-
-        return StreamingResponse(
-            dabai_gated_stream(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
 
     cfg = merge_writing_config(project, req.override_config)
 

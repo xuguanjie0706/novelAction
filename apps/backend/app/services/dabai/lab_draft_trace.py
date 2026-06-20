@@ -37,6 +37,9 @@ def build_lab_draft_trace(
     rerun_pre_warn: bool,
     rerun_scene_plan: bool,
     user_instruction: str = "",
+    beat_source: str | None = None,
+    yaqu_similarity: float | None = None,
+    opening_policy_mode: str | None = None,
 ) -> dict[str, Any]:
     """组装写章 trace 字典（不写库，供日志与 llm_call_logs.context）。"""
     prev_loc = (prev_ch.location or "").strip() if prev_ch else ""
@@ -49,7 +52,7 @@ def build_lab_draft_trace(
     if pre_warn_result:
         opening_directive = str(pre_warn_result.get("opening_directive") or "")
 
-    return {
+    trace: dict[str, Any] = {
         "trace_version": _TRACE_VERSION,
         "dabai_project_id": str(project.id),
         "dabai_chapter_id": str(ch.id),
@@ -82,6 +85,13 @@ def build_lab_draft_trace(
             "opening_directive_preview": _preview(opening_directive, 160),
         },
     }
+    if beat_source is not None:
+        trace["beat_source"] = beat_source
+    if yaqu_similarity is not None:
+        trace["yaqu_similarity"] = yaqu_similarity
+    if opening_policy_mode is not None:
+        trace["opening_policy_mode"] = opening_policy_mode
+    return trace
 
 
 def log_lab_draft_trace(trace: dict[str, Any], *, phase: str) -> None:

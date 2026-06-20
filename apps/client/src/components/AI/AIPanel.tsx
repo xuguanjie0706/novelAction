@@ -100,7 +100,7 @@ export default function AIPanel({ projectId }: Props) {
 
   const chatContextType = useMemo<ChatContextType>(() => {
     if (location.pathname.includes('/outline')) return 'outline'
-    if (location.pathname.includes('/write') || location.pathname.includes('/dabai-write')) return 'writing'
+    if (location.pathname.includes('/write')) return 'writing'
     return 'general'
   }, [location.pathname])
 

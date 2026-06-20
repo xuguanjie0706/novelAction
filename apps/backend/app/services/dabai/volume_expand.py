@@ -49,9 +49,12 @@ def build_expand_ctx(p: DabaiProject) -> dict:
     使卷 2+ 章纲与 bootstrap 期拿到同一份富上下文（ctx_rich 注入块）。
     """
     extra = p.extra or {}
+    meta = p.meta or {}
     return {
         "logline": p.logline,
         "benchmark": p.benchmark or {},
+        "plot_blueprint_mode": meta.get("plot_blueprint_mode", True),
+        "reference_novels": meta.get("reference_novels") or [],
         "positioning": p.positioning or {},
         "golden_finger": p.golden_finger or {},
         "power_ladder": p.power_ladder or {},

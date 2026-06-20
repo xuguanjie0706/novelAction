@@ -91,10 +91,17 @@ export function BenchmarkSection({ d }: { d: DabaiProjectDetail }) {
           <div className="grid gap-3 sm:grid-cols-2">
             {books.map((b, i) => (
               <div key={i} className="rounded-xl border border-gray-100 bg-gray-50/60 p-3">
-                <div className="text-sm font-bold text-gray-900">{b.title}</div>
-                {b.core_appeal ? <p className="mt-1 text-xs text-gray-600">核心爽感 · {b.core_appeal}</p> : null}
-                {b.setting_motif ? <p className="mt-0.5 text-xs text-gray-500">设定母题 · {b.setting_motif}</p> : null}
-                {b.style_note ? <p className="mt-0.5 text-xs text-gray-400">{b.style_note}</p> : null}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-bold text-gray-900">{b.title}</span>
+                  {b.market_tier ? (
+                    <Pill tone="rose">{b.market_tier}</Pill>
+                  ) : null}
+                </div>
+                {b.data_proof ? <p className="mt-1 text-xs text-emerald-700">数据 · {b.data_proof}</p> : null}
+                {b.plot_role_in_adaptation ? (
+                  <p className="mt-0.5 text-xs text-gray-600">借鉴 · {b.plot_role_in_adaptation}</p>
+                ) : null}
+                {b.core_appeal ? <p className="mt-0.5 text-xs text-gray-500">爽感 · {b.core_appeal}</p> : null}
               </div>
             ))}
           </div>
@@ -116,6 +123,46 @@ export function BenchmarkSection({ d }: { d: DabaiProjectDetail }) {
             </div>
           </Card>
         </div>
+      ) : null}
+
+      {bm.adaptation_plan?.strategy ? (
+        <Card title="情节蓝图 · 改编策略">
+          <p className="text-sm leading-relaxed text-gray-700">{bm.adaptation_plan.strategy}</p>
+          {(bm.adaptation_plan.volume_mapping ?? []).length ? (
+            <ul className="mt-3 space-y-2 text-xs text-gray-600">
+              {(bm.adaptation_plan.volume_mapping ?? []).map((vm, i) => (
+                <li key={i} className="rounded-lg bg-rose-50/50 px-3 py-2">
+                  卷{vm.volume}：借《{vm.primary_ref}》{vm.ref_span} → {vm.local_span}
+                  {vm.adapted_arc ? <span className="mt-1 block text-gray-500">{vm.adapted_arc}</span> : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {(bm.adaptation_plan.expansion_notes ?? []).length ? (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {(bm.adaptation_plan.expansion_notes ?? []).map((n, i) => (
+                <Pill key={i} tone="gray">{n}</Pill>
+              ))}
+            </div>
+          ) : null}
+        </Card>
+      ) : null}
+
+      {(bm.plot_blueprints ?? []).length ? (
+        <Card title="情节骨架拆解" count={(bm.plot_blueprints ?? []).length}>
+          <div className="space-y-3">
+            {(bm.plot_blueprints ?? []).map((bp, i) => (
+              <div key={i} className="rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+                <div className="text-sm font-bold text-gray-900">《{bp.title}》</div>
+                {(bp.borrowable_beats ?? []).slice(0, 4).map((beat, j) => (
+                  <p key={j} className="mt-1 text-xs text-gray-600">
+                    · {beat.label}（{beat.ref_span}）{beat.emotion_arc}
+                  </p>
+                ))}
+              </div>
+            ))}
+          </div>
+        </Card>
       ) : null}
     </div>
   )

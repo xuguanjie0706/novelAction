@@ -5,7 +5,6 @@ import { chaptersApi, outlineApi, projectsApi } from '../../api/client'
 import { useAppStore, toOutlineApiModelProfile, routeLlmProviderPayload } from '../../store'
 import type { OutlineNode, OutlinePlanQualityReport } from '../../types'
 import { collectAncestorIds, findChapterPlanByNumber } from '../../utils/outlineNavigate'
-import { isDabaiProject } from '../../utils/dabaiOutlineDisplay'
 import clsx from 'clsx'
 import toast from 'react-hot-toast'
 import RepairConfirmModal, { clampMaxRounds, clampMinScore } from '../../components/Outline/RepairConfirmModal'
@@ -158,8 +157,7 @@ export default function OutlinePage() {
         chapter = createRes.data
       }
       setActiveChapterId(chapter.id)
-      const isDabai = isDabaiProject(useAppStore.getState().currentProject?.extra as Record<string, unknown>)
-      navigate(`/project/${projectId}/${isDabai ? 'dabai-write' : 'write'}`)
+      navigate(`/project/${projectId}/write`)
     } catch {
       toast.error('切换章节失败')
     }

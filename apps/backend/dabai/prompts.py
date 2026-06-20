@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 
-from dabai import prompts_chapter, prompts_extra, prompts_setting
+from dabai import prompts_chapter, prompts_extra, prompts_plot_blueprint, prompts_setting
 from dabai.config import DabaiConfig
 from dabai.prompt_base import SYS_BASE, benchmark_block, ctx_brief
 
@@ -37,7 +37,8 @@ def positioning(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
         '  "target_audience": "目标读者画像（平台/年龄/口味）",\n'
         '  "shuang_pool": ["本书主打的爽点类型，从 打脸/升级/获宝/扮猪吃虎/装逼/群嘲反转/收小弟/救场/扬名 中选5-7个"],\n'
         '  "face_slap_frequency": "打脸/爽点频率（如每章一次小爽点，每5章一大爆点）",\n'
-        '  "golden_three_strategy": "黄金三章策略：第1章怎么蓄憋屈，第2章金手指怎么登场，第3章怎么第一次大打脸",\n'
+        '  "golden_three_strategy": "黄金三章情绪节拍（只写情绪/功能，禁止写具体场景）：'
+        '第1章=憋屈蓄势+金手指端倪；第2章=疑→证（金手指见效）；第3章=首次当众爽点释放",\n'
         '  "pace_type": "fast",\n'
         '  "emotional_arc": "情绪闭环节律（憋屈→反击→扬名 的周期）",\n'
         '  "taboo_lines": ["3条硬禁忌，如 不许窝囊超过一章"],\n'
@@ -84,8 +85,9 @@ def story_assets(ctx: dict, cfg: DabaiConfig) -> tuple[str, str]:
 
 # ── 分发 ─────────────────────────────────────────────────────────────────────
 _BUILDERS = {
-    "benchmark": prompts_setting.benchmark,          # ★合并：对标 + 定位
+    "benchmark": prompts_setting.benchmark,          # ★合并：自动选材 + 定位
     "positioning": positioning,                      # derived 兼容存根
+    "plot_blueprint": prompts_plot_blueprint.plot_blueprint,
     "golden_finger": prompts_setting.golden_finger,  # ★合并：金手指 + 境界 + 反派
     "antagonist_ladder": prompts_extra.antagonist_ladder,
     "factions": prompts_setting.factions,            # ★合并：势力 + 人物

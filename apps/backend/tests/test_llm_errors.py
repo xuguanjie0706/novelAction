@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from app.services.ai_service import AIService
-from app.services.llm_errors import format_llm_error_message, is_retryable_llm_error
+from app.services.ai.llm_response_text import extract_upstream_error
+from app.services.llm_errors import (
+    format_llm_error_message,
+    is_llm_provider_failover_error,
+    is_retryable_llm_error,
+)
 
 
 def test_format_connection_error():
@@ -39,6 +44,21 @@ def test_format_peer_closed_stream_error():
     assert "流式输出" in msg
     assert "参考章节" in msg
     assert raw in msg
+
+
+def test_upstream_error_in_response_body():
+    class FakeResp:
+        error = {"message": "upstream error: do request failed", "code": "do_request_failed"}
+
+    assert "upstream error" in extract_upstream_error(FakeResp())
+    msg = format_llm_error_message(RuntimeError("大模型网关上游错误：upstream error: do request failed"))
+    assert "换一条线路" in msg
+
+
+def test_provider_failover_error_detection():
+    assert is_llm_provider_failover_error(RuntimeError("LLM 返回空 choices，无法读取正文")) is True
+    assert is_retryable_llm_error(RuntimeError("upstream error: do request failed")) is True
+    assert is_llm_provider_failover_error(ValueError("json parse error")) is False
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from dabai.config import DabaiConfig
-from dabai.first_chapter_opening import lint_banned_ch1_tropes
+from dabai.first_chapter_opening import lint_banned_ch1_tropes, lint_ch1_cliche_template
+from dabai.hooks import is_known_hook_type
 from dabai.golden_finger_bind import is_awakening_chapter, lint_bind_ladder
 from dabai.naming import known_character_names, lint_names_in_chapter
 from dabai.realm_spine import lint_power_vs_rank, lint_sub_rank
@@ -217,6 +218,7 @@ def lint_chapters(
                   f"每 {cfg.big_beat_every} 章安排一个大爆点"))
 
     _lint_sameness(chapters, add)
+    _lint_hooks_emotion(chapters, add)
     _lint_future_cast_protection(chapters, add)
     for ch in chapters:
         if int(ch.get("chapter_number") or 0) != 1:
@@ -225,6 +227,10 @@ def lint_chapters(
         if banned:
             msg, sug = banned
             add(Issue("DB-13", "medium", 1, msg, sug))
+        cliche = lint_ch1_cliche_template(ch, ctx)
+        if cliche:
+            msg, sug = cliche
+            add(Issue("DB-17", "medium", 1, msg, sug))
     return report
 
 
@@ -258,6 +264,47 @@ def _lint_sameness(chapters: list[dict], add) -> None:
                 add(Issue("DB-12", "medium", num,
                           f"相邻章标题开头雷同：『{t_prev}』→『{t_now}』——标题句式坍缩",
                           "轮换标题策略：悬念式/台词式/反差式/动作式/数字式"))
+
+
+def _lint_hooks_emotion(chapters: list[dict], add) -> None:
+    """DB-15/16：目标情绪 + 章尾钩子类型（情绪先于故事 + 追读钩子轮换）。
+
+    存量书章纲无这两个字段：全批皆空时跳过，避免 relint 误报刷屏。
+    """
+    has_emotion = any((ch.get("target_emotion") or "").strip() for ch in chapters)
+    has_hook = any((ch.get("hook_type") or "").strip() for ch in chapters)
+    prev_hook = ""
+    for i, ch in enumerate(chapters):
+        num = ch.get("chapter_number")
+        # DB-15：缺目标情绪——说不清交付什么情绪的章不该存在
+        if has_emotion and not (ch.get("target_emotion") or "").strip():
+            add(Issue("DB-15", "medium", num,
+                      "target_emotion 为空——本章说不清交付什么情绪",
+                      "补一词目标情绪（爽感释放/扬眉吐气/憋屈蓄势/甜…）"))
+        # DB-16：章尾钩子类型缺失/非库内/相邻雷同（追读引擎轮换）
+        hook = (ch.get("hook_type") or "").strip()
+        if has_hook:
+            if not hook:
+                add(Issue("DB-16", "medium", num,
+                          "hook_type 为空——章尾钩子未归类，易坍缩成同一招",
+                          "标章尾钩子类型（13式之一：强敌登场/打脸预告/反转钩…）"))
+            else:
+                if not is_known_hook_type(hook):
+                    add(Issue("DB-16", "medium", num,
+                              f"hook_type『{hook}』不在 13 式钩子库内",
+                              "归一到库内类型：强敌登场/身份揭露/危机降临/反转钩…"))
+                if prev_hook and hook == prev_hook:
+                    add(Issue("DB-16", "medium", num,
+                              f"相邻两章章尾钩子同为『{hook}』——追读钩子坍缩",
+                              "轮换钩子类型，相邻章不得同式"))
+                prev_hook = hook
+        # 情绪同质：连续 4 章同一目标情绪（弱信号，medium）
+        if has_emotion and i >= 3:
+            window = [(chapters[i - k].get("target_emotion") or "").strip() for k in range(4)]
+            if window[0] and len(set(window)) == 1:
+                add(Issue("DB-15", "medium", num,
+                          f"连续 4 章目标情绪同为『{window[0]}』——情绪一条直线、缺张弛",
+                          "插入憋屈蓄势/甜/虐等不同情绪，制造起伏"))
 
 
 def _title_body(title: str) -> str:

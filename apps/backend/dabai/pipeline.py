@@ -70,7 +70,11 @@ def dabai_llm_call(cfg: DabaiConfig) -> CallFn:
 # ── 异步事件生成器（流式核心）────────────────────────────────────────────────
 async def aiter_bootstrap(cfg: DabaiConfig, call: CallFn) -> AsyncIterator[dict]:
     """逐步执行并 yield 事件（schema 见 README / 路由）。"""
-    ctx: dict[str, Any] = {"logline": cfg.logline}
+    ctx: dict[str, Any] = {
+        "logline": cfg.logline,
+        "reference_novels": list(cfg.reference_novels or []),
+        "plot_blueprint_mode": cfg.plot_blueprint_mode,
+    }
     failed: list[str] = []
     yield {"event": "bootstrap_start", "steps": cfg.active_steps()}
 
@@ -88,6 +92,13 @@ async def aiter_bootstrap(cfg: DabaiConfig, call: CallFn) -> AsyncIterator[dict]
                 # 已随 carrier 一次产出，不再单独调 LLM（共用同一次推理）
                 data = ctx.get(step)
                 yield {"event": "step_done", "step": step, "data": data, "count": _count(data)}
+            elif step == "plot_blueprint":
+                from dabai.plot_blueprint import merge_plot_into_benchmark
+                data = await steps.run_step(step, ctx, call, cfg)
+                ctx["plot_blueprint"] = data
+                ctx["benchmark"] = merge_plot_into_benchmark(ctx.get("benchmark"), data)
+                yield {"event": "step_done", "step": step, "data": data,
+                       "count": len((data or {}).get("plot_blueprints") or [])}
             elif step in _SETTING_STEPS:
                 data = await steps.run_step(step, ctx, call, cfg)
                 ctx[step] = data
@@ -109,6 +120,9 @@ async def aiter_bootstrap(cfg: DabaiConfig, call: CallFn) -> AsyncIterator[dict]
         except DabaiStepError as exc:
             failed.append(step)
             yield {"event": "step_error", "step": step, "message": str(exc)}
+            if step == "title_blurb":
+                logger.warning("步骤 title_blurb 失败，继续章纲：%s", exc)
+                continue
             logger.error("步骤 %s 失败，链路中断：%s", step, exc)
             break
 
@@ -138,7 +152,11 @@ async def aiter_bootstrap(cfg: DabaiConfig, call: CallFn) -> AsyncIterator[dict]
 class BootstrapResult:
     def __init__(self, cfg: DabaiConfig):
         self.cfg = cfg
-        self.ctx: dict[str, Any] = {"logline": cfg.logline}
+        self.ctx: dict[str, Any] = {
+            "logline": cfg.logline,
+            "reference_novels": list(cfg.reference_novels or []),
+            "plot_blueprint_mode": cfg.plot_blueprint_mode,
+        }
         self.linter_report: dict | None = None
         self.failed_steps: list[str] = []
 

@@ -41,7 +41,7 @@ from app.services.dabai.lab_scene_plan import (  # noqa: E402
     persist_scene_plan,
 )
 from app.services.dabai.lab_word_budget import chapter_word_target  # noqa: E402
-from app.services.dabai.pre_warn import format_prewarn_block  # noqa: E402
+from app.services.dabai.prewarn_format import format_prewarn_block  # noqa: E402
 from app.services.dabai_write import build_prose_prompt  # noqa: E402
 
 

@@ -41,6 +41,7 @@ def make_chapter_outline_row(
         project_id=project_id, volume_id=volume_id,
         chapter_number=int(ch.get("chapter_number", fallback_number)),
         title=ch.get("title"), shuang_type=ch.get("shuang_type"),
+        target_emotion=ch.get("target_emotion"), hook_type=ch.get("hook_type"),
         location=ch.get("location"),
         yaqu_setup=ch.get("yaqu_setup"), emotion_turn=ch.get("emotion_turn"),
         yinbao=ch.get("yinbao"),
@@ -93,6 +94,9 @@ class DabaiPersister:
         assert p is not None
         if step in ("benchmark", "positioning", "golden_finger", "power_ladder"):
             setattr(p, step, data or {})
+        elif step == "plot_blueprint":
+            from dabai.plot_blueprint import merge_plot_into_benchmark
+            p.benchmark = merge_plot_into_benchmark(p.benchmark or {}, data or {})
         elif step == "antagonist_ladder":
             self.merge_extra({"antagonist_ladder": data or []})
         elif step == "mystery_schedule":
@@ -292,9 +296,13 @@ def persist_bootstrap_result(db: Session, result: Any, user_id: UUID | None) -> 
     ctx = result.ctx
     persister = DabaiPersister(db, result.cfg, user_id)
     persister.create()
-    for step in ("benchmark", "positioning", "golden_finger", "power_ladder",
+    for step in ("benchmark", "positioning", "plot_blueprint", "golden_finger", "power_ladder",
                  "antagonist_ladder", "factions", "characters", "storylines",
                  "story_assets", "mystery_schedule", "volumes", "title_blurb"):
+        if step == "plot_blueprint":
+            if ctx.get("plot_blueprint") is not None:
+                persister.save_step(step, ctx["plot_blueprint"])
+            continue
         if ctx.get(step) is not None:
             persister.save_step(step, ctx[step])
     if ctx.get("chapter_outlines"):

@@ -14,7 +14,12 @@ from sqlalchemy.orm import Session
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 from app.models.dabai_lab import DabaiQualityReport
 from app.services.dabai.lab_draft_context import LabDraftContext, build_lab_draft_context
-from dabai.first_chapter_opening import witness_stems
+from dabai.first_chapter_opening import (
+    OPENING_CLICHE_RULE_ID,
+    prose_opening_cliche_hit,
+    skip_ch1_cliche_lint,
+    witness_stems,
+)
 from app.services.dabai.lab_qc_prompt import build_lab_qc_prompt
 from app.services.dabai.lab_chapter_boundary import (
     check_future_cast_violations,
@@ -181,6 +186,18 @@ def _rule_report(
                 "message": f"字数偏离：实际 {len(content)} 字 / 目标 {expected} 字（允许 ±12%）",
             })
 
+    if (ch.chapter_number or 0) == 1 and content and project is not None:
+        qc_ctx = {"benchmark": project.benchmark or {}}
+        if not skip_ch1_cliche_lint(qc_ctx):
+            cliche = prose_opening_cliche_hit(content[:450], ctx=qc_ctx)
+            if cliche:
+                msg, _ = cliche
+                warnings.append({
+                    "rule_id": OPENING_CLICHE_RULE_ID,
+                    "message": msg,
+                    "llm_overridable": False,
+                })
+
     witnesses = [str(w) for w in (ch.witnesses or []) if str(w).strip()]
     missing = [w for w in witnesses if not _witness_in_content(w, content)]
     if witnesses and missing:
@@ -282,7 +299,7 @@ async def run_lab_quality(
     Returns:
         合并后的报告 dict（已落库）。
     """
-    from app.services.dabai.quality_check import _merge_report
+    from app.services.dabai.qc_merge import _merge_report
     from app.services.dabai.lab_qc_feedback import attach_rewrite_prompt
 
     ctx = build_lab_draft_context(db, project, ch)

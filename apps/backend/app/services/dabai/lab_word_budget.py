@@ -17,6 +17,15 @@ def chapter_word_target(ch: DabaiChapterOutline) -> int:
     return max(800, int(ch.expected_words or 2000))
 
 
+def dabai_draft_max_tokens(word_hi: int) -> int:
+    """dabai 正文 completion 预算：对齐正文 prompt 硬上限（分场合计或章纲 hi），防失控超长。"""
+    from app.services.llm_token_budgets import ensure_min_completion_tokens
+
+    hi = max(1200, int(word_hi or 2200))
+    cap = max(1200, int(hi * 1.06))
+    return min(ensure_min_completion_tokens(cap), 4096)
+
+
 def _coerce_budget(scene: dict) -> int:
     try:
         return max(0, int(scene.get("word_budget") or 0))

@@ -131,7 +131,8 @@ TASK_PROFILES: dict[str, dict] = {
         "presence_penalty": 0.1,
     },
     # ── dabai Bootstrap 建书链（与 dabai/config.STEP_TEMPERATURE 对齐；按次计费合并步）──
-    "dabai.benchmark": {"temperature": 0.4, "top_p": 0.9},     # 对标分析要稳，少幻觉
+    "dabai.benchmark": {"temperature": 0.4, "top_p": 0.9},
+    "dabai.plot_blueprint": {"temperature": 0.45, "top_p": 0.9},
     "dabai.golden_finger": {"temperature": 0.65, "top_p": 0.92},  # 金手指+境界+反派阶梯（合并步折中）
     "dabai.factions": {"temperature": 0.6, "top_p": 0.92},     # 势力+人物（含配角池）
     "dabai.storylines": {"temperature": 0.6, "top_p": 0.92},   # 叙事规划三块（线+资产+谜题）

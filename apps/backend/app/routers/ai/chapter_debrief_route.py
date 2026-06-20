@@ -377,25 +377,6 @@ def chapter_debrief(
         result_message=result_message[:8000] if result_message else None,
     ))
 
-    dabai_debrief_extra: dict = {}
-    _dabai_project = db.query(Project).filter(Project.id == project_id).first()
-    if _dabai_project is not None:
-        from app.utils.dabai_mode import is_dabai_project
-        if is_dabai_project(_dabai_project):
-            from app.services.ai_service import AIService
-            from app.services.dabai.debrief_apply import apply_dabai_debrief_sync
-            _dabai_svc = AIService(
-                profile=conflict_model_profile,
-                db=db,
-                llm_provider_id=conflict_llm_provider_id,
-            )
-            try:
-                dabai_debrief_extra = apply_dabai_debrief_sync(
-                    db, _dabai_project, chapter, _dabai_svc,
-                )
-            except Exception:
-                logger.exception("dabai debrief 落库失败 chapter=%s", req.chapter_id)
-
     try:
         db.commit()
     except SQLAlchemyError as exc:

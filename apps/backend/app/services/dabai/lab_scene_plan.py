@@ -30,7 +30,8 @@ from app.services.dabai.lab_word_budget import (
     finalize_scene_plan_result,
     scene_plan_from_row,
 )
-from app.services.dabai.pre_warn import prewarn_cast_names
+from app.services.dabai.lab_prompt_shared import prewarn_cast_names
+from app.services.dabai.prose.opening_policy import ch1_benchmark_block
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +49,9 @@ _SCENEPLAN_SYSTEM = (
     "2. 五拍映射参考：场1=憋屈现场（压迫者带具体羞辱动作与台词）→ "
     "场2=扳机+引爆（金手指/反击的具体过程）→ 场3=爽点兑现（见证者分级反应）"
     "→ 可选场4=钩子收尾；可按本章实际合并或调整；\n"
-    "2.5 黄金第一章特别要求：opening_line 必须让前3行就把张力顶上来——"
-    "据本书主题/主角身份选一种贴合的入场（动作冲突、当面对峙、交易被坑、审讯逼问、"
-    "比试挑衅、撞破密谋、险境逃命、家族贬损……不限于开打/开骂），"
-    "★不同书须用不同入场形态，禁止千篇一律一种开法★；只禁从天气、环境、回忆、世界观介绍开篇；\n"
+    "2.5 黄金第一章特别要求：opening_line 须对齐【对标改编指引】/卷 opening_setup——"
+    "从对标书开篇弧换皮落地（动作/对白/冲突入场），禁止照搬对标书原句；"
+    "只禁无冲突的环境铺陈/纯回忆/世界观介绍开篇；\n"
     "2.6 非第1章：opening_line 必须落实【导演单】opening_directive；"
     "若 bridge_directives 非空，scenes[0] 必须是位移/承接场（写回途/进门/转场），"
     "冲突场从 scenes[1] 开始；禁止跳过位移直接写冲突。\n"
@@ -69,17 +69,36 @@ _SCENEPLAN_SYSTEM = (
 )
 
 
-def _beat_lines(ch: DabaiChapterOutline) -> str:
-    witnesses = "、".join(ch.witnesses or []) if isinstance(ch.witnesses, list) else ""
+def _beat_lines(ch: DabaiChapterOutline, pre_warn_result: dict | None = None) -> str:
+    from app.services.dabai.prose.beat_contract import format_execution_block, resolve_beats
+
+    contract = resolve_beats(ch, pre_warn_result)
+    if contract.has_execution:
+        return format_execution_block(contract)
+    witnesses = contract.witnesses
     return "\n".join([
-        f"  爽点类型：{ch.shuang_type or ''}",
-        f"  场景载体：{ch.location or '（未给，自行选一个具体地点+事件）'}",
-        f"  ①憋屈：{ch.yaqu_setup or ''}",
-        f"  ②转折扳机：{ch.emotion_turn or ''}",
-        f"  ③引爆：{ch.yinbao or ''}",
-        f"  ④爽点：{ch.shuang_payoff or ''}（见证者：{witnesses or '围观众人'}）",
-        f"  ⑤章末钩子：{ch.end_hook or ''}",
+        f"  爽点类型：{contract.shuang_type}",
+        f"  场景载体：{contract.location or '（未给，自行选一个具体地点+事件）'}",
+        f"  ①憋屈：{contract.yaqu}",
+        f"  ②转折扳机：{contract.trigger}",
+        f"  ③引爆：{contract.yinbao}",
+        f"  ④爽点：{contract.payoff}（见证者：{witnesses}）",
+        f"  ⑤章末钩子：{contract.hook}",
     ])
+
+
+def _volume_for_chapter(project: DabaiProject, ch: DabaiChapterOutline):
+    vols = getattr(project, "volumes", None) or []
+    volume_id = getattr(ch, "volume_id", None)
+    if volume_id:
+        for v in vols:
+            if str(v.id) == str(volume_id):
+                return v
+    if int(ch.chapter_number or 0) == 1:
+        for v in vols:
+            if int(v.volume_number or 0) == 1:
+                return v
+    return None
 
 
 def build_sceneplan_prompt(
@@ -116,6 +135,10 @@ def build_sceneplan_prompt(
         parts.append(ctx.memory_block.strip())
     if ledger_block.strip():
         parts.append(ledger_block.strip())
+    if int(ch.chapter_number or 0) == 1:
+        ch1_block = ch1_benchmark_block(project, _volume_for_chapter(project, ch))
+        if ch1_block.strip():
+            parts.append(ch1_block.strip())
     if ctx.prev_tail.strip():
         parts.append(f"【上章结尾（场1须紧接续写）】\n{ctx.prev_tail.strip()[-800:]}")
     if ctx.prev_hook_block.strip():
@@ -153,7 +176,7 @@ def build_sceneplan_prompt(
         if bridge_block:
             parts.append(bridge_block)
     parts.append("【本章章纲五拍】")
-    parts.append(_beat_lines(ch))
+    parts.append(_beat_lines(ch, pre_warn_result))
     parts.append(
         "按上面资料分场，只返回 JSON：\n"
         "{\n"

@@ -41,6 +41,25 @@ def extract_llm_response_text(raw: str | None) -> str:
     return _salvage_json_from_think_blocks(text)
 
 
+def extract_upstream_error(response: Any) -> str | None:
+    """OpenAI 兼容网关偶发 HTTP 200 但 body 内嵌 error、choices 为空。"""
+    if response is None:
+        return None
+    err = getattr(response, "error", None)
+    if err is None and hasattr(response, "model_dump"):
+        try:
+            err = response.model_dump().get("error")
+        except Exception:
+            err = None
+    if not err:
+        return None
+    if isinstance(err, dict):
+        parts = [err.get("message"), err.get("code"), err.get("type")]
+        text = " — ".join(str(p).strip() for p in parts if p)
+        return text or str(err)
+    return str(err).strip() or None
+
+
 def message_completion_text(message: Any) -> str:
     """从 OpenAI 兼容 message 对象读取正文（content / reasoning_content 等）。"""
     if message is None:

@@ -181,6 +181,8 @@ class DabaiChapterOutline(Base):
 
     # ── 爽点节拍器四拍（本表核心）──────────────────────────────────────────────
     shuang_type = Column(String(40))                     # 一等公民：本章爽点类型
+    target_emotion = Column(String(40))                  # 一等公民：本章交付的目标情绪（情绪先于故事）
+    hook_type = Column(String(40))                       # 章尾钩子类型（13式之一，追读引擎+相邻轮换闸门）
     location = Column(String(120))                       # 场景载体（地点+事件，相邻章轮换防同质化）
     yaqu_setup = Column(Text)                            # 憋屈势能（前置弹簧）
     emotion_turn = Column(Text)                          # 转折拍：情绪扳机（从X情绪→靠什么触发→转到Y情绪）

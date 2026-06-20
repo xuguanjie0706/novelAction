@@ -13,9 +13,10 @@ from dataclasses import dataclass, field
 # 按次计费合并（2026-06-12 五批）：合并步一次 LLM 调用产出本组所有键（_MERGE_CARRIERS），
 # derived 步不再单独调用。设定链 9 次 → 6 次；章纲默认单次出 beat+五拍（见 chapter_outlines）。
 PIPELINE_STEPS: list[str] = [
-    "benchmark",          # ★合并调用①★ 对标分析 + 立项定位
-    "positioning",        #   ↑derived（随 benchmark 一次产出）
-    "golden_finger",      # ★合并调用②★ 金手指 + 境界阶梯 + 卷级反派阶梯（力量与对立面同域）
+    "benchmark",          # ★合并调用①★ 自动选材 + 立项定位（轻量，不拆情节骨架）
+    "positioning",        #   ↑derived
+    "plot_blueprint",     # ★调用②★ 高分对标书情节骨架 + 卷章映射（独立步，防 benchmark 过载）
+    "golden_finger",      # ★合并调用③★ 金手指 + 境界阶梯 + 卷级反派阶梯
     "power_ladder",       #   ↑derived
     "antagonist_ladder",  #   ↑derived（Boss 档与境界档同次推理，对齐性更好）
     "factions",           # ★合并调用③★ 势力（含场景池）+ 人物（Boss 建档 + 配角池 + speech_kit）
@@ -30,7 +31,8 @@ PIPELINE_STEPS: list[str] = [
 
 # ── 任务级采样温度（爽文要稳定结构 + 一点跳脱，整体低于精品文）────────────────
 STEP_TEMPERATURE: dict[str, float] = {
-    "benchmark": 0.4,    # 对标分析要稳，少幻觉
+    "benchmark": 0.4,    # 自动选材 + 定位，要稳
+    "plot_blueprint": 0.45,  # 情节解构：稳中带一点结构创意
     "positioning": 0.5,
     "golden_finger": 0.65,  # 合并步：金手指要跳脱、境界/反派要稳，折中
     "power_ladder": 0.4,
@@ -55,7 +57,8 @@ DEFAULT_TEMPERATURE = 0.6
 # 小窗口模型一刀切传超大上限报错；DabaiConfig.max_tokens 仍是全局硬顶（min 取小）。
 SETTING_MAX_TOKENS = 16000  # 设定步缺省（富 schema 全量产出）
 STEP_MAX_TOKENS: dict[str, int] = {
-    "benchmark": 12000,       # 对标 + 立项定位
+    "benchmark": 12000,       # 自动选材 + 立项（轻量）
+    "plot_blueprint": 18000,  # 情节骨架 + 卷章映射
     "golden_finger": 24000,   # 金手指 + 深挖境界阶梯(6-8境×多字段) + 反派阶梯（三块同次，量大）
     "factions": 24000,        # 势力 + 全量人物卡司（含配角池），量最大
     "storylines": 18000,      # 故事线 + 资产 + 谜题三块
@@ -73,6 +76,9 @@ class DabaiConfig:
     """一次 bootstrap 运行的全部可调参数。"""
 
     logline: str = ""
+    # 情节蓝图：bootstrap 自动选同题材高分对标书，驱动故事线/卷纲/章纲（无需用户填书名）
+    reference_novels: list[str] = field(default_factory=list)  # 可选运营覆写，默认空=全自动
+    plot_blueprint_mode: bool = True
     # 规模
     volume_count: int = 6           # 第一版卷数（卷骨架步会生成这么多卷）
     volume_chapters: int = 30       # 每卷规划章数（卷骨架 planned_chapters）
@@ -111,8 +117,11 @@ class DabaiConfig:
         return min(start + size - 1, max(start, int(vol_planned)))
 
     def active_steps(self) -> list[str]:
-        """根据 stop_after 截断链路。"""
-        if not self.stop_after or self.stop_after not in PIPELINE_STEPS:
-            return list(PIPELINE_STEPS)
-        idx = PIPELINE_STEPS.index(self.stop_after)
-        return PIPELINE_STEPS[: idx + 1]
+        """根据 stop_after / plot_blueprint_mode 截断链路。"""
+        steps = list(PIPELINE_STEPS)
+        if not self.plot_blueprint_mode:
+            steps = [s for s in steps if s != "plot_blueprint"]
+        if not self.stop_after or self.stop_after not in steps:
+            return steps
+        idx = steps.index(self.stop_after)
+        return steps[: idx + 1]

@@ -12,11 +12,15 @@ from __future__ import annotations
 
 from typing import Any
 
+from dabai.hooks import normalize_hook_type as _normalize_hook_type
+
 # ── 章纲（爽点节拍器）字段契约 —— 本分支的核心 ──────────────────────────────────
 CHAPTER_FIELDS = {
     "chapter_number": int,
     "title": str,
     "shuang_type": str,        # 一等公民：本章爽点类型
+    "target_emotion": str,     # 一等公民：本章交付的目标情绪（情绪先于故事）
+    "hook_type": str,          # 章尾钩子类型（HOOK_END_TYPES 13 式之一，追读引擎+轮换闸门）
     "location": str,           # 场景载体：本章主场景（具体地点+事件，防全书一个擂台打到底）
     "yaqu_setup": str,         # 憋屈势能（爽点前置弹簧）
     "emotion_turn": str,       # 转折拍：情绪扳机（从X情绪→靠什么触发→转到Y情绪）
@@ -42,6 +46,10 @@ STEP_CONTRACT: dict[str, dict[str, Any]] = {
         "shape": "object",
         "required": ["target_audience", "shuang_pool", "face_slap_frequency",
                      "golden_three_strategy", "pace_type", "taboo_lines"],
+    },
+    "plot_blueprint": {
+        "shape": "object",
+        "required": ["plot_blueprints", "adaptation_plan"],
     },
     "golden_finger": {
         # 合并步：一次调用产出 golden_finger + power_ladder + antagonist_ladder（力量与对立面）
@@ -276,6 +284,8 @@ def normalize_chapter(item: dict, idx: int, default_words: int = 2000) -> dict:
     out["chapter_number"] = _coerce_int(item.get("chapter_number"), idx + 1)
     out["title"] = (item.get("title") or f"第{idx + 1}章").strip()
     out["shuang_type"] = (item.get("shuang_type") or "").strip()
+    out["target_emotion"] = (item.get("target_emotion") or "").strip()
+    out["hook_type"] = _normalize_hook_type(item.get("hook_type"))
     out["location"] = (item.get("location") or "").strip()
     out["yaqu_setup"] = (item.get("yaqu_setup") or "").strip()
     out["emotion_turn"] = (item.get("emotion_turn") or "").strip()
@@ -308,6 +318,7 @@ def normalize_beat_row(item: dict, idx: int) -> dict:
         "chapter_number": _coerce_int(item.get("chapter_number"), idx + 1),
         "title": (item.get("title") or f"第{idx + 1}章").strip(),
         "shuang_type": (item.get("shuang_type") or "").strip(),
+        "target_emotion": (item.get("target_emotion") or "").strip(),
         "location": (item.get("location") or "").strip(),
         "slap_target": (item.get("slap_target") or "").strip(),
         "realm_rank": _coerce_int(item.get("realm_rank"), 0) or None,

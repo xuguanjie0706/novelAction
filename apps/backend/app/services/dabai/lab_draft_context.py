@@ -95,8 +95,8 @@ def _chapter_summaries(
 
 def _actual_hooks(
     db: Session, project: DabaiProject, before_chapter: int,
-) -> dict[int, str]:
-    """复盘实际提取的章末钩子（clue_type=hook），chapter_planted → 钩子文本。"""
+) -> dict[int, tuple[str, str]]:
+    """复盘实际提取的章末钩子（clue_type=hook），chapter_planted → (钩子文本, hook_category)。"""
     rows = (
         db.query(DabaiClue)
         .filter(
@@ -107,11 +107,12 @@ def _actual_hooks(
         .order_by(DabaiClue.chapter_planted, DabaiClue.created_at)
         .all()
     )
-    hooks: dict[int, str] = {}
+    hooks: dict[int, tuple[str, str]] = {}
     for c in rows:
         num = int(c.chapter_planted or 0)
         desc = (c.description or "").strip()
-        hooks[num] = f"{(c.title or '').strip()}{('：' + desc) if desc else ''}"
+        text = f"{(c.title or '').strip()}{('：' + desc) if desc else ''}"
+        hooks[num] = (text, (c.hook_category or "").strip())
     return hooks
 
 
@@ -120,7 +121,7 @@ def _build_recent_plot_block(
     project: DabaiProject,
     ch: DabaiChapterOutline,
     summaries: dict[int, str],
-    hooks: dict[int, str],
+    hooks: dict[int, tuple[str, str]],
 ) -> str:
     """前情提要：实际事实摘要 + 正文实际收束 + 实际末钩（计划钩子仅兜底并标注）。"""
     written = (
@@ -141,9 +142,10 @@ def _build_recent_plot_block(
         summary = summaries.get(num, "")
         if summary:
             line += f"；事实摘要：{summary}"
-        hook = hooks.get(num, "")
-        if hook:
-            line += f"；实际末钩：{hook}"
+        hook_info = hooks.get(num)
+        if hook_info:
+            hook_text, _ = hook_info
+            line += f"；实际末钩：{hook_text}"
         elif (row.end_hook or "").strip():
             line += f"；计划末钩（章纲值，以正文实际结尾为准）：{row.end_hook.strip()}"
         snippet = _tail_of_content(row.content or "", 200)
@@ -334,18 +336,28 @@ def _build_prev_full_block(prev_content: str) -> str:
 
 
 def _build_prev_hook_block(
-    prev: DabaiChapterOutline | None, hooks: dict[int, str],
+    prev: DabaiChapterOutline | None, hooks: dict[int, tuple[str, str]],
 ) -> str:
-    """上章末钩单列硬约束：复盘实际提取的钩子优先，章纲计划值兜底并标注。"""
+    """上章末钩单列硬约束：复盘实际提取的钩子优先，章纲计划值兜底并标注。
+
+    若上章钩子已提取 hook_category，则注入「本章须换招」提示，强化钩子轮换。
+    """
     if not prev:
         return ""
     num = int(prev.chapter_number or 0)
-    actual = hooks.get(num, "")
-    if actual:
-        return (
+    hook_info = hooks.get(num)
+    if hook_info:
+        actual_text, hook_cat = hook_info
+        lines = [
             "【上章末钩（已写入正文的对读者承诺，本章开篇必须正面回应，"
-            "禁止无视或悄悄推翻）】\n  " + actual
-        )
+            "禁止无视或悄悄推翻）】",
+            f"  {actual_text}",
+        ]
+        if hook_cat:
+            lines.append(
+                f"  ★上章钩子类型=「{hook_cat}」→ 本章 end_hook 须换 13 式中另一招★"
+            )
+        return "\n".join(lines)
     planned = (prev.end_hook or "").strip()
     if planned:
         return (

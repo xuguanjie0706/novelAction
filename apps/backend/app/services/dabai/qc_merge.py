@@ -47,6 +47,27 @@ def _beat_summary(beats: dict) -> tuple[int, list[str]]:
     return (round(sum(scores) / len(scores)) if scores else 100), missing
 
 
+def _parse_future_cast_violations(llm: dict) -> list[dict]:
+    """LLM 裁决的跨章角色写死/永久移除 → blocker 列表（DBQ-05）。"""
+    raw = llm.get("future_cast_violations")
+    if not isinstance(raw, list):
+        return []
+    blockers: list[dict] = []
+    for item in raw:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            reason = str(item.get("reason") or item.get("message") or "").strip()
+            if not name and not reason:
+                continue
+            msg = f"后续章出场人物「{name}」被写死或永久移除" if name else reason
+            if name and reason:
+                msg = f"{msg}：{reason[:80]}"
+            blockers.append({"rule_id": "DBQ-05", "message": msg[:160]})
+        elif isinstance(item, str) and item.strip():
+            blockers.append({"rule_id": "DBQ-05", "message": item.strip()[:160]})
+    return blockers
+
+
 def _merge_report(rule: dict, llm: dict | None, llm_status: str) -> dict:
     """规则 + LLM 合并：规则 blockers 仍是唯一阻断；LLM 只追加 warning 与建议。
 
@@ -70,6 +91,19 @@ def _merge_report(rule: dict, llm: dict | None, llm_status: str) -> dict:
     hook = _coerce_score(llm.get("hook_score"))
     beat_score, missing_beats = _beat_summary(llm.get("beats") or {})
 
+    rep = str(llm.get("repetition_issue") or "").strip()
+    hook_endhook_paste = rep and any(
+        k in rep for k in ("end_hook", "章纲", "复读", "重复")
+    )
+    if hook_endhook_paste and str((llm.get("beats") or {}).get("hook") or "").lower() == "partial":
+        beats_out = dict(llm.get("beats") or {})
+        beats_out["hook"] = "pass"
+        llm = {**llm, "beats": beats_out}
+        missing_beats = [m for m in missing_beats if "章末钩子" not in m]
+        if hook < 80:
+            hook = 80
+        beat_score, _ = _beat_summary(beats_out)
+
     if continuity < 70:
         warnings.append({
             "rule_id": "DBQ-01",
@@ -82,9 +116,8 @@ def _merge_report(rule: dict, llm: dict | None, llm_status: str) -> dict:
             "rule_id": "DBQ-03",
             "message": f"章末钩子弱（{hook}分）：{str(llm.get('hook_issue') or '')[:80]}",
         })
-    rep = str(llm.get("repetition_issue") or "").strip()
     if rep:
-        warnings.append({"rule_id": "DBQ-04", "message": f"重复铺陈：{rep[:80]}"})
+        warnings.append({"rule_id": "DBQ-04", "message": f"本章内重复铺陈：{rep[:80]}"})
 
     report["warnings"] = warnings
     report["llm"] = {
@@ -112,9 +145,15 @@ def _merge_report(rule: dict, llm: dict | None, llm_status: str) -> dict:
     if llm_rewrite:
         report["llm"]["rewrite_prompt"] = llm_rewrite[:800]
 
-    # 综合分：规则阻断 → 保持规则给的 40；
+    cast_blockers = _parse_future_cast_violations(llm)
+    if cast_blockers:
+        report["blockers"] = list(report.get("blockers") or []) + cast_blockers
+
+    # 综合分：任一 blocker（规则或 LLM 跨章边界）→ 40；
     # 否则 衔接40% + 五拍40% + 钩子20%，再扣规则层 warning 计权（每条 -5 封顶 -15）
     if report.get("blockers"):
+        report["status"] = "blocked"
+        report["overall_score"] = 40
         return report
     overall = round(continuity * 0.4 + beat_score * 0.4 + hook * 0.2)
     penalty = 5 * len([w for w in rule_warnings if not w.get("score_exempt")])

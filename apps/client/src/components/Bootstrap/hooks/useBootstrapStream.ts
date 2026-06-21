@@ -78,22 +78,14 @@ export interface StepState {
   linterBlockingRules?: string[]
 }
 
-export interface FanficStartMeta {
-  source_work_title: string
-  canon_synopsis: string
-  fanfic_trope: 'transmigration' | 'rebirth' | 'au'
-  focal_characters?: string
-}
-
 export interface StartParams {
   logline: string
-  mode: 'sequential' | 'doupo' | 'fanfic' | 'xianxia' | 'dabai'
+  mode: 'sequential' | 'doupo' | 'xianxia' | 'dabai'
   targetWords: number
   modelProfile: string
   llmProviderId?: string | null
   autoMode?: boolean
   writingStyle?: 'plain' | 'standard' | 'dense'
-  fanficMeta?: FanficStartMeta
 }
 
 export const STEP_META: Record<StepKey, {
@@ -157,13 +149,6 @@ const DOUPO_STEP_KEYS: StepKey[] = [
   'opening_contract', 'consistency',
 ]
 
-const FANFIC_STEP_KEYS: StepKey[] = [
-  'positioning', 'project',
-  'canon_pack', 'deviation_contract', 'entry_hook',
-  'golden_finger', 'face_slap_map', 'canon_power',
-  'canon_characters', 'volumes', 'rhythm_map', 'canon_audit',
-]
-
 // 玄幻修仙直白（原生）：通用串行序列，power_systems→power_ladder，并插入 golden_finger
 const XIANXIA_STEP_KEYS: StepKey[] = [
   'positioning', 'project',
@@ -188,7 +173,6 @@ function getStepKeys(mode: StartParams['mode']): StepKey[] {
   if (mode === 'dabai') return DABAI_STEP_KEYS
   if (mode === 'xianxia') return XIANXIA_STEP_KEYS
   if (mode === 'doupo') return DOUPO_STEP_KEYS
-  if (mode === 'fanfic') return FANFIC_STEP_KEYS
   return SEQ_STEP_KEYS
 }
 
@@ -576,9 +560,6 @@ export function useBootstrapStream() {
         auto_mode: Boolean(params.autoMode),
         writing_style: params.writingStyle ?? 'standard',
       }
-      if (params.mode === 'fanfic' && params.fanficMeta) {
-        payload.fanfic_meta = params.fanficMeta
-      }
       const runRes = await authFetch('/api/v1/bootstrap/runs', {
         method: 'POST', signal: abort.signal,
         headers: { 'Content-Type': 'application/json' },
@@ -649,7 +630,7 @@ export function useBootstrapStream() {
 
       // 根据快照中的 mode 还原步骤列表与 ref
       const runMode: StartParams['mode'] =
-        (run.mode === 'doupo' || run.mode === 'fanfic' || run.mode === 'xianxia' || run.mode === 'dabai')
+        (run.mode === 'doupo' || run.mode === 'xianxia' || run.mode === 'dabai')
           ? run.mode : 'sequential'
       currentModeRef.current = runMode
       setSteps(getStepKeys(runMode).map(k => makeStep(k)))

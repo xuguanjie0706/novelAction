@@ -80,6 +80,39 @@ export function charName(c: DabaiChar): string {
   return field(c, 'name') || '未命名'
 }
 
+/** 是否主角（作家视角 lead 组）。 */
+export function isProtagonist(c: DabaiChar): boolean {
+  return classifyRole(field(c, 'role')) === 'lead'
+}
+
+/** 写作期当前境界章号（复盘回写 project.meta）。 */
+export function resolveRealmChapter(meta?: Record<string, unknown> | null): number | null {
+  if (!meta) return null
+  const ch = meta.protagonist_realm_chapter
+  if (typeof ch === 'number' && Number.isFinite(ch)) return ch
+  if (typeof ch === 'string' && ch.trim()) {
+    const n = Number(ch)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+/**
+ * 人物档案展示用境界：主角优先读复盘回写的 meta/extra.current_realm，
+ * 非主角仍用 bootstrap 的 start_realm。
+ */
+export function resolveDisplayRealm(
+  c: DabaiChar,
+  meta?: Record<string, unknown> | null,
+): string {
+  const start = field(c, 'start_realm')
+  if (!isProtagonist(c)) return start
+  const fromMeta = meta ? field(meta as DabaiChar, 'protagonist_realm') : ''
+  const extra = (c.extra && typeof c.extra === 'object' ? c.extra : null) as Record<string, unknown> | null
+  const fromExtra = extra ? fmtVal(extra.current_realm) : ''
+  return fromMeta || fromExtra || start
+}
+
 // ── 成长路线（按章聚合的变化轨迹）─────────────────────────────
 
 export interface GrowthEvent {
@@ -97,9 +130,18 @@ export function buildGrowth(
   startRealm: string,
   assets: DabaiLabAsset[],
   relation: DabaiLabRelation | null,
+  currentRealm?: string | null,
+  currentRealmChapter?: number | null,
 ): GrowthEvent[] {
   const ev: GrowthEvent[] = []
   if (startRealm) ev.push({ chapter: 0, kind: 'realm', text: `起始境界 · ${startRealm}` })
+  if (currentRealm && currentRealm !== startRealm) {
+    ev.push({
+      chapter: currentRealmChapter ?? null,
+      kind: 'realm',
+      text: `当前境界 · ${currentRealm}`,
+    })
+  }
   for (const a of assets) {
     const k = KIND_LABELS[a.kind] ?? a.kind
     ev.push({ chapter: a.acquired_chapter, kind: 'asset', text: `获得${k} · ${a.name}` })

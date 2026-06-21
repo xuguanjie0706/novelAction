@@ -182,10 +182,6 @@ def build_draft_continuity_bridge_block(
     if exc_block:
         sections.append(exc_block)
 
-    canon_block = _fanfic_canon_bridge_block(db, project_id)
-    if canon_block:
-        sections.append(canon_block)
-
     return "\n\n".join(sections)
 
 
@@ -228,37 +224,3 @@ def _power_exception_bridge_block(db: Session, project_id: str) -> str:
         return ""
     block = build_power_exception_block(project)
     return f"▍{block}" if block else ""
-
-
-def _fanfic_canon_bridge_block(db: Session, project_id: str) -> str:
-    """同人书：注入原著不可改事实与 OOC 雷区（纯读库，零 LLM）。"""
-    project = db.query(Project).filter(Project.id == project_id).first()
-    if not project:
-        return ""
-    extra = project.extra if isinstance(project.extra, dict) else {}
-    if not extra.get("fanfic_positioning"):
-        return ""
-    fp = extra.get("fanfic_positioning") or {}
-    canon = extra.get("fanfic_canon") or {}
-    dev = extra.get("fanfic_deviation") or {}
-    entry = extra.get("fanfic_entry") or {}
-    lines = [
-        "▍同人·原著约束（正文硬遵守）",
-        f"· 原著《{fp.get('source_work_title', '')}》· {fp.get('fanfic_trope_label', '')} · 贴合{fp.get('canon_fidelity', 'medium')}",
-    ]
-    if dev.get("divergence_point"):
-        lines.append(f"· 分歧点：{dev['divergence_point']}（此前须贴原著走向，此后走同人主线）")
-    if entry.get("entry_chapter_hint"):
-        lines.append(f"· 原著时间锚点：当前进度对应{entry['entry_chapter_hint']}，时间线不得前后矛盾")
-    for anc in (canon.get("timeline_anchors") or [])[:3]:
-        lines.append(f"· 原著节点：{anc}")
-    for fact in (canon.get("immutable_facts") or [])[:5]:
-        lines.append(f"· 不可改：{fact}")
-    for forb in (dev.get("forbidden_changes") or [])[:4]:
-        lines.append(f"· 禁止魔改：{forb}")
-    for taboo in (fp.get("ooc_taboos") or [])[:4]:
-        lines.append(f"· 雷区：{taboo}")
-    lines.append(
-        "· 对话须贴合各角色 speech_style；禁止把原著角色写成完全不同的性格而无剧情交代。"
-    )
-    return "\n".join(lines)

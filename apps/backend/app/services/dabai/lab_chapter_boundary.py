@@ -13,7 +13,8 @@ from app.models.dabai import DabaiChapterOutline
 
 _LOOKAHEAD = 2
 
-# 姓名附近窗口内命中即视为「写死/移除」
+# 姓名附近窗口内命中即视为「写死/移除」——已弃用于正文质检（误报率过高），
+# 跨章边界改由 LLM 质检 future_cast_violations 裁决；写章 prompt 仍注入 protected 名单。
 _DEATH_KEYWORDS = (
     "死", "殁", "毙", "诛杀", "身亡", "殒命", "气绝", "断气",
     "没了声息", "当场死亡", "一击毙命", "贯穿胸口", "刺穿胸口",
@@ -113,18 +114,25 @@ def build_forward_chapter_boundary_block(
             f"{'、'.join(protected[:12])}★"
         )
     end_hook = (ch.end_hook or "").strip()
-    hook_note = f"\n★本章须在下列章末钩子写完后立刻停笔（禁止追加新冲突/新收获）：\n  {end_hook[:200]}" if end_hook else ""
+    hook_note = (
+        f"\n★收笔方向（用场面定格兑现，勿把下列原句贴到段末）：\n  {end_hook[:200]}"
+        if end_hook else ""
+    )
     return (
         f"【后续{len(rows)}章章纲预览（禁止提前兑现；禁止破坏后续章主线）】\n"
         f"{outlines}{protect_line}{hook_note}\n"
         "执行要求：① 不得在本章结尾之后继续写「抢宝/抓人/杀人」等下一章才该发生的事；"
         "② 上述后续章「主线出场」人物本章若出现，只能重伤/击退/羞辱，不得死亡或永久离场；"
-        "③ 五拍写完后落在本章 end_hook 上即收笔。"
+        "③ 五拍写完后以钩子方向定格收笔，钩子事件只演一次，禁止复述章纲 end_hook 原句。"
     )
 
 
 def death_hit_for_name(content: str, name: str, *, window: int = 48) -> str | None:
-    """正文是否在 name 附近出现死亡/永久移除语义；命中返回片段。"""
+    """正文是否在 name 附近出现死亡/永久移除语义；命中返回片段。
+
+    .. deprecated::
+        不再用于正文质检（「死死」「没死」等误报不可接受）；保留仅供回归对照。
+    """
     text = (content or "").strip()
     nm = (name or "").strip()
     if not text or not nm or nm not in text:
@@ -144,7 +152,11 @@ def check_future_cast_violations(
     content: str,
     protected_names: list[str],
 ) -> list[dict]:
-    """正文是否写死/永久移除后续章出场人物 → blocker 列表。"""
+    """正文是否写死/永久移除后续章出场人物 → blocker 列表。
+
+    .. deprecated::
+        已移出规则层质检；跨章边界改由 LLM ``future_cast_violations`` 裁决。
+    """
     violations: list[dict] = []
     plain = re.sub(r"<[^>]+>", "", content or "")
     for name in protected_names:

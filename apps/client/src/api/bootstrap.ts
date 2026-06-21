@@ -1,30 +1,10 @@
 import { api } from './base'
 
-export interface CanonSynopsisOption {
-  id: string
-  label: string
-  synopsis: string
-}
-
-export interface CanonSynopsisOptionsRequest {
-  source_work_title: string
-  logline?: string
-  fanfic_trope?: 'transmigration' | 'rebirth' | 'au'
-  focal_characters?: string
-  model_profile?: 'local' | 'gemini'
-  llm_provider_id?: string
-}
-
 // ── Bootstrap（一句话生成）─────────────────────────────
 // 注意：bootstrap 使用原生 fetch + SSE，不走 axios
 // 用法见 GenerateWizard.tsx
 export const bootstrapApi = {
   streamUrl: '/api/v1/bootstrap/stream',
-}
-
-export const bootstrapFanficApi = {
-  generateCanonSynopsisOptions: (body: CanonSynopsisOptionsRequest) =>
-    api.post<{ options: CanonSynopsisOption[] }>('/bootstrap/fanfic/canon-synopsis-options', body),
 }
 
 export interface BootstrapRunHistoryItem {

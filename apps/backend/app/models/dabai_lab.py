@@ -225,6 +225,7 @@ class DabaiClue(Base):
     )
     title = Column(String(200), nullable=False)
     clue_type = Column(String(20), default="hook")   # hook / foreshadow / promise
+    hook_category = Column(String(30))               # 13式钩子类型（仅 clue_type=hook 时有效）
     description = Column(Text)
     chapter_planted = Column(Integer)                # 埋设章号
     chapter_resolved = Column(Integer)               # 回收章号（open 时为空）

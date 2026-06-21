@@ -73,7 +73,10 @@ def _build_debrief_prompt(
         '     "importance": 1-5, "tags": ["涉及人名"]}\n'
         "  ],\n"
         '  "new_clues": [  // 本章新埋设的钩子/伏笔/对读者的承诺（章末钩子必收录为 hook）\n'
-        '    {"title": "≤20字", "type": "hook|foreshadow|promise", "description": "≤60字"}\n'
+        '    {"title": "≤20字", "type": "hook|foreshadow|promise", "description": "≤60字",\n'
+        '     "hook_category": "13式钩子之一（仅type=hook时填，见下）或null"}\n'
+        '    // hook_category 取值：强敌登场|打脸预告|身份揭露|危机降临|反转钩|悬念问题|\n'
+        '    //   蓄势待发|机缘出现|误会升级|倒计时|关系突变|选择困境|信息炸弹\n'
         "  ],\n"
         '  "resolved_clue_ids": ["上方未回收线索中，本章已明确回收的 id；无则[]"],\n'
         '  "asset_changes": [  // 本章功法/道具/金手指的实际变化；无则[]\n'
@@ -205,9 +208,11 @@ def _persist_clues(
         if not title or title in existing_titles:
             continue
         clue_type = str(item.get("type") or "hook").lower()
+        hook_cat = str(item.get("hook_category") or "").strip()[:30] or None
         created.append(DabaiClue(
             project_id=project.id, title=title,
             clue_type=clue_type if clue_type in _CLUE_TYPES else "hook",
+            hook_category=hook_cat if clue_type == "hook" else None,
             description=str(item.get("description") or "")[:300],
             chapter_planted=ch.chapter_number, status="open", source="debrief",
         ))

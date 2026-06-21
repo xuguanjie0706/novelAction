@@ -20,7 +20,6 @@ STYLE_REGISTRY: dict[str, StyleConfig] = {
     ),
 
     # 番茄（fanqie）线已下线：从 STYLE_REGISTRY / mode 枚举 / 前端选项移除，
-    # graph_fanqie.py 等文件保留为废弃存根（同人/修仙线仍复用其中的纯工具函数）。
     # 取而代之的是「斗破·大白文玄幻」线，见下方 "doupo"。
 
     "doupo": StyleConfig(
@@ -94,29 +93,6 @@ STYLE_REGISTRY: dict[str, StyleConfig] = {
         }),
     ),
 
-    "fanfic": StyleConfig(
-        style_id="fanfic",
-        display_name="同人",
-        nodes=[
-            "positioning_fanfic",
-            "gate_positioning_fanfic",
-            "project_fanfic",
-            "canon_pack",
-            "deviation_contract",
-            "entry_hook",
-            "golden_finger_fanfic",
-            "face_slap_map_fanfic",
-            "canon_power",
-            "canon_characters",
-            "gate_characters",
-            "gate_volumes",
-            "volumes_fanfic",
-            "rhythm_map_fanfic",
-            # consistency_scan 已移除，由 CORE_NODE "consistency" 自动注入
-            "canon_audit",
-        ],
-        default_writing_style="plain",
-    ),
 }
 
 

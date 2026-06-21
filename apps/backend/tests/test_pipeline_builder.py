@@ -29,25 +29,6 @@ def test_fanqie_skips_power_systems_and_uses_power_ladder():
     assert "volumes" not in keys
 
 
-def test_fanfic_replaces_characters_and_power():
-    keys = _resolve_active_keys(STYLE_REGISTRY["fanfic"])
-    assert "canon_power" in keys
-    assert "canon_characters" in keys
-    assert "power_systems" not in keys
-    assert "characters" not in keys
-    assert "factions" in keys
-    assert "canon_audit" in keys
-
-
-def test_fanfic_node_order_canon_before_golden_finger():
-    keys = _resolve_active_keys(STYLE_REGISTRY["fanfic"])
-    from app.services.bootstrap.pipeline.catalog import get_node
-
-    ordered = sorted(keys, key=lambda k: get_node(k).seq)
-    assert ordered.index("canon_pack") < ordered.index("golden_finger_fanfic")
-    assert ordered.index("golden_finger_fanfic") < ordered.index("canon_power")
-
-
 def test_core_nodes_frozenset():
     assert "project" in CORE_NODES
     assert "positioning_general" not in CORE_NODES

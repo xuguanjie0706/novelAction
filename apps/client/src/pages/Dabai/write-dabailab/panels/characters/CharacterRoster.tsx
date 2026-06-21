@@ -7,7 +7,7 @@ import { Package } from 'lucide-react'
 import type { DabaiLabAsset, DabaiLabRelation } from '../../../../../types/dabaiLab'
 import {
   ROLE_GROUPS, GROUP_ACCENT, classifyRole, attitudeClass,
-  charName, field, type DabaiChar,
+  charName, field, resolveDisplayRealm, type DabaiChar,
 } from './charMeta'
 
 interface Props {
@@ -16,9 +16,10 @@ interface Props {
   relations: DabaiLabRelation[]
   selected: string
   onSelect: (name: string) => void
+  meta?: Record<string, unknown>
 }
 
-export default function CharacterRoster({ characters, assets, relations, selected, onSelect }: Props) {
+export default function CharacterRoster({ characters, assets, relations, selected, onSelect, meta }: Props) {
   // 预聚合：每人持有资产数 / 对主角态度。
   const assetCount = (name: string) => assets.filter(a => a.owner === name && a.status === 'active').length
   const attitudeOf = (name: string) => relations.find(r => r.to_name === name)?.attitude ?? null
@@ -49,7 +50,7 @@ export default function CharacterRoster({ characters, assets, relations, selecte
                 {g.members.map((c, i) => {
                   const name = charName(c)
                   const active = name === selected
-                  const realm = field(c, 'start_realm')
+                  const realm = resolveDisplayRealm(c, meta)
                   const attitude = attitudeOf(name)
                   const owned = assetCount(name)
                   return (

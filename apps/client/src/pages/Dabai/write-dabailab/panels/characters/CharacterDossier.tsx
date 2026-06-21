@@ -15,18 +15,19 @@ interface Props {
   relation: DabaiLabRelation | null
   relations: DabaiLabRelation[]
   onSelect: (name: string) => void
+  meta?: Record<string, unknown>
 }
 
-export default function CharacterDossier({ character, characters, assets, relation, relations, onSelect }: Props) {
+export default function CharacterDossier({ character, characters, assets, relation, relations, onSelect, meta }: Props) {
   const sections = [
     ...profileSections(character),
-    ...recordSections({ character, characters, assets, relation, relations, onSelect }),
+    ...recordSections({ character, characters, assets, relation, relations, onSelect, meta }),
   ]
 
   return (
     <div className="mx-auto max-w-6xl p-5 lg:p-6">
       <div className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
-        <DossierHero character={character} relation={relation} assetCount={assets.length} />
+        <DossierHero character={character} relation={relation} assetCount={assets.length} meta={meta} />
       </div>
 
       <div className="mt-4 gap-4 [column-fill:_balance] columns-1 md:columns-2 xl:columns-3">

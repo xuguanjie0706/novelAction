@@ -15,7 +15,6 @@ from uuid import UUID
 from app.database import SessionLocal
 from app.models.bootstrap_run import BootstrapRun
 from app.schemas.bootstrap_dabai_positioning import try_validate_dabai_positioning
-from app.schemas.bootstrap_fanfic_positioning import try_validate_fanfic_positioning
 from app.schemas.bootstrap_fanqie_positioning import try_validate_fanqie_positioning
 from app.schemas.bootstrap_positioning import try_validate_positioning
 
@@ -90,9 +89,7 @@ def build_auto_resume_payload(run: BootstrapRun) -> dict | None:
         if not isinstance(raw, dict) or not raw:
             logger.warning("auto_mode: run %s 缺少 positioning，无法自动 resume", run.id)
             return None
-        if run.mode == "fanfic":
-            normalized, err = try_validate_fanfic_positioning(raw)
-        elif run.mode == "fanqie":
+        if run.mode == "fanqie":
             normalized, err = try_validate_fanqie_positioning(raw)
         elif run.mode == "dabai":
             benchmark = gd.get("benchmark") if isinstance(gd.get("benchmark"), dict) else None

@@ -3,9 +3,6 @@ from __future__ import annotations
 
 from app.services.bootstrap.pipeline.catalog import register_node
 from app.services.bootstrap.pipeline.node_spec import NodeSpec, PromptHook
-from app.services.bootstrap.prompts.volumes import build_fanfic_volumes_block
-
-_FANFIC_VOL_HOOK = PromptHook("volumes", build_fanfic_volumes_block)
 
 
 def _register_all() -> None:
@@ -197,64 +194,6 @@ def _register_all() -> None:
         graph_id="consistency", replaces="consistency",
         label="大白文 Bootstrap 规则质检...",
     ))
-
-    # ── 同人线 ───────────────────────────────────────────────
-    from app.services.bootstrap.graph_fanfic import (
-        node_audit as fanfic_audit,
-        node_canon_characters,
-        node_canon_pack,
-        node_canon_power,
-        node_deviation,
-        node_entry_hook,
-        node_face_slap as fanfic_face_slap,
-        node_fanfic_gate,
-        node_fanfic_positioning,
-        node_golden_finger as fanfic_golden_finger,
-        node_project as fanfic_project,
-        node_rhythm as fanfic_rhythm,
-        node_volumes as fanfic_volumes,
-    )
-
-    register_node(NodeSpec(
-        key="positioning_fanfic", fn=node_fanfic_positioning, seq=100,
-        graph_id="positioning", is_positioning=True,
-    ))
-    register_node(NodeSpec(
-        key="gate_positioning_fanfic", fn=node_fanfic_gate, seq=150,
-        graph_id="gate", interrupt_before=True,
-    ))
-    register_node(NodeSpec(key="project_fanfic", fn=fanfic_project, seq=200, graph_id="project", replaces="project"))
-    register_node(NodeSpec(
-        key="canon_pack", fn=node_canon_pack, seq=311,
-        label="结构化原著设定...", prompt_hooks=[_FANFIC_VOL_HOOK],
-    ))
-    register_node(NodeSpec(key="deviation_contract", fn=node_deviation, seq=312, label="订立魔改边界..."))
-    register_node(NodeSpec(key="entry_hook", fn=node_entry_hook, seq=313, label="设计穿书/重生/AU 切入点..."))
-    register_node(NodeSpec(
-        key="golden_finger_fanfic", fn=fanfic_golden_finger, seq=314,
-        graph_id="golden_finger", label="设计同人金手指/信息差...",
-    ))
-    register_node(NodeSpec(
-        key="face_slap_map_fanfic", fn=fanfic_face_slap, seq=315,
-        graph_id="face_slap_map", label="规划打脸地图...",
-    ))
-    register_node(NodeSpec(
-        key="canon_power", fn=node_canon_power, seq=316,
-        label="提炼原著权力阶梯...", replaces="power_systems",
-    ))
-    register_node(NodeSpec(
-        key="canon_characters", fn=node_canon_characters, seq=530,
-        label="原著人物建档...", replaces="characters",
-    ))
-    register_node(NodeSpec(
-        key="volumes_fanfic", fn=fanfic_volumes, seq=800,
-        graph_id="volumes", replaces="volumes",
-    ))
-    register_node(NodeSpec(
-        key="rhythm_map_fanfic", fn=fanfic_rhythm, seq=870,
-        graph_id="rhythm_map", label="生成爽点节奏图...",
-    ))
-    register_node(NodeSpec(key="canon_audit", fn=fanfic_audit, seq=960, label="原著贴合 + 爽感双校验..."))
 
 
 _register_all()

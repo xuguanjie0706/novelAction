@@ -8,13 +8,14 @@ import { Sparkles } from 'lucide-react'
 import type { DabaiLabRelation } from '../../../../../types/dabaiLab'
 import {
   GROUP_ACCENT, ROLE_GROUPS, classifyRole, attitudeClass,
-  charName, field, tagline, type DabaiChar,
+  charName, field, resolveDisplayRealm, tagline, type DabaiChar,
 } from './charMeta'
 
 interface Props {
   character: DabaiChar
   relation: DabaiLabRelation | null
   assetCount: number
+  meta?: Record<string, unknown>
 }
 
 function Stat({ label, value, valueClass }: { label: string; value: string; valueClass?: string }) {
@@ -26,7 +27,7 @@ function Stat({ label, value, valueClass }: { label: string; value: string; valu
   )
 }
 
-export default function DossierHero({ character: c, relation, assetCount }: Props) {
+export default function DossierHero({ character: c, relation, assetCount, meta }: Props) {
   const name = charName(c)
   const group = classifyRole(field(c, 'role'))
   const accent = GROUP_ACCENT[group]
@@ -34,6 +35,8 @@ export default function DossierHero({ character: c, relation, assetCount }: Prop
   const tag = tagline(c)
   const golden = field(c, 'golden_finger')
   const attitude = relation?.attitude ?? null
+  const realm = resolveDisplayRealm(c, meta)
+  const startRealm = field(c, 'start_realm')
 
   return (
     <div>
@@ -55,7 +58,7 @@ export default function DossierHero({ character: c, relation, assetCount }: Prop
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Stat label="境界" value={field(c, 'start_realm') || '未定'} />
+        <Stat label="境界" value={realm || '未定'} />
         <Stat label="阵营" value={groupLabel} />
         <Stat
           label="对主角"
@@ -64,6 +67,10 @@ export default function DossierHero({ character: c, relation, assetCount }: Prop
         />
         <Stat label="持有资产" value={`${assetCount} 件`} />
       </div>
+
+      {startRealm && realm && startRealm !== realm ? (
+        <p className="mt-2 text-[11px] text-gray-400">开局 {startRealm} · 写作期已更新</p>
+      ) : null}
 
       {golden ? (
         <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2.5">

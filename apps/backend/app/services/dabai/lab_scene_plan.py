@@ -48,7 +48,7 @@ _SCENEPLAN_SYSTEM = (
     "1. 每场一个地点一个核心事件，场与场之间有明确的递进/转折，不许两场写同一件事；\n"
     "2. 五拍映射参考：场1=憋屈现场（压迫者带具体羞辱动作与台词）→ "
     "场2=扳机+引爆（金手指/反击的具体过程）→ 场3=爽点兑现（见证者分级反应）"
-    "→ 可选场4=钩子收尾；可按本章实际合并或调整；\n"
+    "→ 可选场4=钩子收尾（定格/悬念一句，勿与场3重复同一动作）；可按本章实际合并或调整；\n"
     "2.5 黄金第一章特别要求：opening_line 须对齐【对标改编指引】/卷 opening_setup——"
     "从对标书开篇弧换皮落地（动作/对白/冲突入场），禁止照搬对标书原句；"
     "只禁无冲突的环境铺陈/纯回忆/世界观介绍开篇；\n"
@@ -83,7 +83,7 @@ def _beat_lines(ch: DabaiChapterOutline, pre_warn_result: dict | None = None) ->
         f"  ②转折扳机：{contract.trigger}",
         f"  ③引爆：{contract.yinbao}",
         f"  ④爽点：{contract.payoff}（见证者：{witnesses}）",
-        f"  ⑤章末钩子：{contract.hook}",
+        f"  ⑤章末钩子（收笔方向，勿复读）：{contract.hook}",
     ])
 
 

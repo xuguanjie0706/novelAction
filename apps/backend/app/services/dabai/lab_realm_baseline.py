@@ -423,4 +423,33 @@ def apply_realm_from_debrief(
     if sub_level is not None:
         ch.realm_sub_rank = int(sub_level)
 
+    _sync_protagonist_character_realm(db, project, label, ch.chapter_number)
+
     return label
+
+
+def _sync_protagonist_character_realm(
+    db: Session,
+    project: DabaiProject,
+    label: str,
+    chapter_number: int,
+) -> None:
+    """复盘后把主角 current_realm 写入人物 extra（start_realm 保留开局快照）。"""
+    from app.models.dabai import DabaiCharacter
+    from app.services.dabai.lab_ledger import protagonist_name
+
+    protag = protagonist_name(project)
+    row = (
+        db.query(DabaiCharacter)
+        .filter(
+            DabaiCharacter.project_id == project.id,
+            DabaiCharacter.name == protag,
+        )
+        .first()
+    )
+    if not row:
+        return
+    extra = dict(row.extra or {})
+    extra["current_realm"] = label
+    extra["current_realm_chapter"] = chapter_number
+    row.extra = extra

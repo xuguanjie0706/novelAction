@@ -62,7 +62,6 @@ from app.routers import dashboard as dashboard_router
 from app.routers import stats as stats_router
 from app.routers import bootstrap_graph as bootstrap_graph_router
 from app.routers import bootstrap_step_regen as bootstrap_step_regen_router
-from app.routers import bootstrap_fanfic_routes as bootstrap_fanfic_router
 from app.routers import credits as credits_router
 from app.routers import admin_credits as admin_credits_router
 from app.routers import admin_redeem_codes as admin_redeem_codes_router
@@ -259,7 +258,6 @@ app.include_router(projects.router, prefix="/api/v1")
 # bootstrap：LangGraph 队列（串行步进 / 番茄专属）。
 app.include_router(bootstrap_graph_router.router, prefix="/api/v1")
 app.include_router(bootstrap_step_regen_router.router, prefix="/api/v1")
-app.include_router(bootstrap_fanfic_router.router, prefix="/api/v1")
 
 # 生成任务队列。
 app.include_router(jobs_router.router, prefix="/api/v1")

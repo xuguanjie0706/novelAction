@@ -63,6 +63,7 @@ export default function CharactersPanel({ detail, projectId }: Props) {
         relations={relations}
         selected={activeName}
         onSelect={setSelected}
+        meta={detail.meta}
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         {active ? (
@@ -74,6 +75,7 @@ export default function CharactersPanel({ detail, projectId }: Props) {
             relation={activeRelation}
             relations={relations}
             onSelect={setSelected}
+            meta={detail.meta}
           />
         ) : null}
       </div>

@@ -7,6 +7,7 @@ import { ChevronRight, TrendingUp, Package, Users } from 'lucide-react'
 import type { DabaiLabAsset, DabaiLabRelation } from '../../../../../types/dabaiLab'
 import {
   GROUP_ACCENT, classifyRole, attitudeClass, buildGrowth, charName, field,
+  isProtagonist, resolveDisplayRealm, resolveRealmChapter,
   KIND_LABELS, KIND_BADGE, STATUS_LABELS, Chip,
   type DabaiChar, type DossierSection,
 } from './charMeta'
@@ -20,10 +21,19 @@ interface Args {
   relation: DabaiLabRelation | null
   relations: DabaiLabRelation[]
   onSelect: (name: string) => void
+  meta?: Record<string, unknown>
 }
 
-function growthBody(character: DabaiChar, assets: DabaiLabAsset[], relation: DabaiLabRelation | null) {
-  const events = buildGrowth(field(character, 'start_realm'), assets, relation)
+function growthBody(character: DabaiChar, assets: DabaiLabAsset[], relation: DabaiLabRelation | null, meta?: Record<string, unknown>) {
+  const startRealm = field(character, 'start_realm')
+  const currentRealm = isProtagonist(character) ? resolveDisplayRealm(character, meta) : null
+  const events = buildGrowth(
+    startRealm,
+    assets,
+    relation,
+    currentRealm,
+    isProtagonist(character) ? resolveRealmChapter(meta) : null,
+  )
   if (events.length === 0) return <p className="py-1 text-sm text-gray-400">暂无 —— 随写章复盘记录境界突破、获得物与关系变化。</p>
   return (
     <ol className="relative ml-1 space-y-3 border-l-2 border-gray-100 pl-4">
@@ -101,7 +111,7 @@ function relationsBody({ character, characters, relations, onSelect }: Args) {
 
 export function recordSections(args: Args): DossierSection[] {
   return [
-    { key: 'growth', title: '成长路线', icon: <TrendingUp size={13} />, body: growthBody(args.character, args.assets, args.relation) },
+    { key: 'growth', title: '成长路线', icon: <TrendingUp size={13} />, body: growthBody(args.character, args.assets, args.relation, args.meta) },
     { key: 'items', title: '道具 · 功法', icon: <Package size={13} />, body: itemsBody(args.assets) },
     { key: 'rels', title: '关系网', icon: <Users size={13} />, body: relationsBody(args) },
   ]

@@ -21,10 +21,7 @@ from dabai.first_chapter_opening import (
     witness_stems,
 )
 from app.services.dabai.lab_qc_prompt import build_lab_qc_prompt
-from app.services.dabai.lab_chapter_boundary import (
-    check_future_cast_violations,
-    collect_future_cast_names,
-)
+from app.services.dabai.lab_chapter_boundary import collect_future_cast_names
 from app.services.dabai.lab_prompt_shared import (
     has_location_gap,
     needs_location_bridge,
@@ -209,13 +206,6 @@ def _rule_report(
             warn["message"] = msg + "（黄金第2章：若 payoff 为系统/认主私密反馈可忽略）"
         warnings.append(warn)
 
-    if db is not None and project is not None:
-        protected = collect_future_cast_names(
-            db, project.id, int(ch.chapter_number or 0),
-        )
-        if protected and content:
-            blockers.extend(check_future_cast_violations(content, protected))
-
     if db is not None and project is not None and (ch.chapter_number or 0) > 1:
         prev = (
             db.query(DabaiChapterOutline)
@@ -329,12 +319,16 @@ async def run_lab_quality(
                     .first()
                 )
             plain = _plain_content(ch)
+            protected_cast = collect_future_cast_names(
+                db, project.id, int(ch.chapter_number or 0),
+            )
             system, user = build_lab_qc_prompt(
                 project, ch, ctx,
                 prev_ch=prev_ch,
                 bridge_evidence=bridge_evidence,
                 next_chapters_block=_next_chapters_block(db, project, ch),
                 plain_content=plain,
+                protected_cast=protected_cast,
             )
             raw = await call_with_retry(
                 svc, system, user, max_tokens=1800, task="dabai.quality",

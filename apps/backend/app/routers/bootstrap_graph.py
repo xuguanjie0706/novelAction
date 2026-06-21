@@ -51,7 +51,6 @@ from app.services.bootstrap.graph import (
 from app.services.bootstrap.pipeline.runner import resume_pipeline, run_pipeline
 from app.services.bootstrap.pipeline.styles import get_style
 from app.schemas.bootstrap_dabai_positioning import try_validate_dabai_positioning
-from app.schemas.bootstrap_fanfic_positioning import try_validate_fanfic_positioning
 from app.schemas.bootstrap_positioning import try_validate_positioning
 
 logger = logging.getLogger(__name__)
@@ -74,26 +73,12 @@ def _track_task(run_id: str, task: asyncio.Task) -> None:
 # Pydantic schemas
 # ──────────────────────────────────────────────────────
 
-class FanficStartMeta(BaseModel):
-    """同人·番茄建书必填：作者自填原著梗概（系统不爬取版权原文）。"""
-    source_work_title: str = Field(..., min_length=1)
-    canon_synopsis: str = Field(..., min_length=80)
-    fanfic_trope: Literal["transmigration", "rebirth", "au"]
-    focal_characters: str = ""
-
-    @field_validator("source_work_title", "canon_synopsis", "focal_characters", mode="before")
-    @classmethod
-    def _strip(cls, v: object) -> str:
-        return str(v or "").strip()
-
-
 class StartRequest(BaseModel):
     """POST /bootstrap/runs 请求体。
 
     mode 说明：
     - ``sequential``：通用串行流程（默认），适合起点/晋江向或自定义题材
     - ``doupo``：斗破·大白文玄幻，基于通用线，单斗气主轴 + 势力/功法/法宝三合一 + 精简设定，禁修仙/禁上帝视角
-    - ``fanfic``：同人·番茄，必填原著名与梗概，支持穿书/重生/AU
     - ``xianxia``：番茄·玄幻修仙直白，境界进度由「境界预算契约」硬执行（杜绝第一卷修满）
     - ``dabai``：大白文·修仙，约4次LLM Bootstrap；卷纲定地图+境界区间，章纲懒展开定具体境界
 
@@ -104,8 +89,7 @@ class StartRequest(BaseModel):
     target_words: int = 1_200_000
     model_profile: Literal["local", "gemini"] = "gemini"
     llm_provider_id: Optional[UUID] = None
-    mode: Literal["sequential", "doupo", "fanfic", "xianxia", "dabai"] = "sequential"
-    fanfic_meta: Optional[FanficStartMeta] = None
+    mode: Literal["sequential", "doupo", "xianxia", "dabai"] = "sequential"
     auto_mode: bool = False
     # 写作风格档位（作者建书时一次性选择，全书贯彻）：
     # - ``plain``    白话直白：句子短、新名词就近解释、放松密度约束，降低阅读门槛（小白友好）
@@ -178,15 +162,6 @@ async def create_run(
     """
     from app.services.bootstrap.gate_auto import merge_gate_data_with_auto_mode
 
-    if req.mode == "fanfic":
-        if req.fanfic_meta is None:
-            raise HTTPException(
-                status_code=422,
-                detail="同人模式须提供 fanfic_meta（原著名、梗概、同人类型）",
-            )
-        if len(req.fanfic_meta.canon_synopsis) < 80:
-            raise HTTPException(status_code=422, detail="原著梗概至少 80 字")
-
     run = BootstrapRun(
         user_id=current_user.id,
         logline=req.logline,
@@ -205,11 +180,8 @@ async def create_run(
 
     style = get_style(req.mode)
     _effective_ws = req.writing_style
-    if req.mode in ("doupo", "fanfic", "xianxia", "dabai") and _effective_ws == "standard":
+    if req.mode in ("doupo", "xianxia", "dabai") and _effective_ws == "standard":
         _effective_ws = "plain"
-    extra_ctx = None
-    if req.mode == "fanfic" and req.fanfic_meta:
-        extra_ctx = {"fanfic_meta": req.fanfic_meta.model_dump()}
     graph = get_graph_for_mode(req.mode)
 
     async def _run() -> None:
@@ -224,7 +196,6 @@ async def create_run(
             llm_provider_id=req.llm_provider_id,
             user_id=current_user.id,
             writing_style=_effective_ws,
-            extra_ctx=extra_ctx,
         )
 
     task = asyncio.create_task(_run(), name=f"bootstrap-{req.mode}-{run_id[:8]}")
@@ -508,9 +479,7 @@ def _build_resume_payload(run: BootstrapRun, req: ResumeRequest) -> dict:
         raw = req.positioning if req.positioning is not None else gd.get("positioning")
         if not isinstance(raw, dict) or not raw:
             raise HTTPException(status_code=422, detail="缺少有效的 positioning，无法通过立项闸门")
-        if run.mode == "fanfic":
-            normalized, err = try_validate_fanfic_positioning(raw)
-        elif run.mode == "dabai":
+        if run.mode == "dabai":
             benchmark = gd.get("benchmark") if isinstance(gd.get("benchmark"), dict) else None
             normalized, err = try_validate_dabai_positioning(raw, benchmark=benchmark)
         elif run.mode in ("xianxia", "doupo"):

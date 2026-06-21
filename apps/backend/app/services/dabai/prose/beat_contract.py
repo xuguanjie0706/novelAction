@@ -154,7 +154,7 @@ def format_execution_block(contract: BeatContract) -> str:
         f"  ②{_BEAT_LABELS['trigger']}：{contract.trigger}",
         f"  ③{_BEAT_LABELS['yinbao']}：{contract.yinbao}",
         f"  ④{_BEAT_LABELS['payoff']}：{contract.payoff}（见证者：{contract.witnesses}）",
-        f"  ⑤{_BEAT_LABELS['hook']}：{contract.hook}",
+        f"  ⑤{_BEAT_LABELS['hook']}（收笔方向，勿复读本句）：{contract.hook}",
     ]
     return "\n".join(lines)
 
@@ -187,7 +187,7 @@ def format_outline_full_block(ch: DabaiChapterOutline, realm_name=None) -> str:
         f"  转折扳机：{ch.emotion_turn or '（未给）'}",
         f"  引爆方式：{ch.yinbao or ''}",
         f"  爽感落点：{ch.shuang_payoff or ''}（见证者：{_witnesses_str(ch)}）",
-        f"  章末钩子：{ch.end_hook or ''}",
+        f"  章末钩子（收笔方向，勿复读本句）：{ch.end_hook or ''}",
     ]
     if realm:
         lines.append(f"  境界：{realm}")

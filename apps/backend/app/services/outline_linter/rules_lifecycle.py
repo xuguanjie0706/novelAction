@@ -289,8 +289,8 @@ def _is_fast_pace(project: Any) -> bool:
     pace = (pos.get("pace_type") or "").lower()
     if pace:
         return pace == "fast"
-    # 番茄/同人快线兜底
-    return bool(extra.get("fanqie_positioning") or extra.get("fanfic_positioning"))
+    # 番茄快线兜底
+    return bool(extra.get("fanqie_positioning"))
 
 
 def _load_kill_promises(db: Any, project_id: Any) -> list[dict]:

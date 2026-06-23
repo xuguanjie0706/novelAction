@@ -105,20 +105,24 @@ def _infer_from_events(
     baseline_location: str,
 ) -> dict[str, Any]:
     """从含该角色姓名的 event 句推断最新境界/位置（取最后一条命中）。"""
-    realm, location = "", ""
+    realm, realm_reason, location, location_reason = "", "", "", ""
     for line in events:
         for sent in _sentences_with_name(line, name):
             r = _extract_realm(sent)
             if r:
                 realm = r
+                realm_reason = sent.strip()
             loc = _extract_location(sent)
             if loc:
                 location = loc
+                location_reason = sent.strip()
     out: dict[str, Any] = {}
     if realm and realm != baseline_realm:
         out["current_realm"] = realm[:100]
+        out["realm_change_reason"] = realm_reason[:500]
     if location and location != baseline_location:
         out["current_location"] = location[:200]
+        out["location_change_reason"] = location_reason[:500]
     return out
 
 
@@ -201,7 +205,10 @@ def merge_character_updates_for_debrief(
             by_id[cid] = row
             continue
         prev = by_id[cid]
-        for key in ("current_realm", "current_location", "current_status", "realm_rank"):
+        for key in (
+            "current_realm", "realm_change_reason", "current_location",
+            "location_change_reason", "current_status", "realm_rank",
+        ):
             if row.get(key) is not None and not prev.get(key):
                 prev[key] = row[key]
 

@@ -43,6 +43,7 @@ export default function WriteDabailabWorkspace({
   const [memoryRefreshKey, setMemoryRefreshKey] = useState(0)
   const [draftModalOpen, setDraftModalOpen] = useState(false)
   const [rewritePrefill, setRewritePrefill] = useState('')
+  const [draftMode, setDraftMode] = useState<'full' | 'qc_patch' | null>(null)
   const [clearing, setClearing] = useState(false)
   const regenSnapshot = useRef('')
 
@@ -77,6 +78,8 @@ export default function WriteDabailabWorkspace({
     setDraftModalOpen(false)
     regenSnapshot.current = text
     setBusy(true)
+    setDraftMode(payload.rewrite_mode === 'qc_patch' ? 'qc_patch' : 'full')
+    const isQcPatch = payload.rewrite_mode === 'qc_patch'
     let acc = ''
     let gotChunk = false
     try {
@@ -98,6 +101,10 @@ export default function WriteDabailabWorkspace({
             }
             acc += ev.delta
             setText(acc)
+          } else if (ev.event === 'qc_patch_running') {
+            toast('按质检建议修订正文…', { icon: '✏️' })
+          } else if (ev.event === 'quality_running') {
+            toast('修订完成，正在重新质检…', { icon: '🔍' })
           } else if (ev.event === 'pre_warn_running') {
             setPreWarnLive({ running: true })
           } else if (ev.event === 'pre_warn_done') {
@@ -113,7 +120,9 @@ export default function WriteDabailabWorkspace({
               toast.success(`分场就绪：${ev.scene_count} 场（${(ev.scene_names ?? []).join('→')}）`)
           } else if (ev.event === 'done') {
             setDirty(false)
-            toast.success(`已生成 ${ev.word_count} 字`)
+            toast.success(
+              isQcPatch ? `修订完成 ${ev.word_count} 字` : `已生成 ${ev.word_count} 字`,
+            )
             onSaved()
           } else if (ev.event === 'quality_done') {
             setQualityRefreshKey(k => k + 1)
@@ -139,6 +148,7 @@ export default function WriteDabailabWorkspace({
       toast.error(e instanceof Error ? e.message : '失败')
     } finally {
       setBusy(false)
+      setDraftMode(null)
     }
   }
 
@@ -160,7 +170,9 @@ export default function WriteDabailabWorkspace({
       return
     }
     const ok = window.confirm(
-      '将仅根据本章正文与质检建议做定点修订，不重新跑预警/分场。\n\n继续？',
+      '将根据本章正文与最新质检报告调用一次 LLM 做定点修订，'
+      + '完成后自动重新跑质检。\n\n'
+      + '不重新跑预警/分场/复盘。继续？',
     )
     if (!ok) return
     await runStreamDraft({
@@ -168,7 +180,7 @@ export default function WriteDabailabWorkspace({
       rerun_pre_warn: false,
       rerun_scene_plan: false,
       rerun_quality: true,
-      rerun_debrief: true,
+      rerun_debrief: false,
     }, { skipBlockCheck: true })
   }
 
@@ -307,7 +319,11 @@ export default function WriteDabailabWorkspace({
             />
             {busy && !text ? (
               <p className="text-sm text-gray-400">
-                {isRewriteChapter ? '正文重写中…' : '生成中（预警→分场→正文）…'}
+                {draftMode === 'qc_patch'
+                  ? '按质检建议修订中（修订 → 自动质检）…'
+                  : isRewriteChapter
+                    ? '正文重写中…'
+                    : '生成中（预警→分场→正文）…'}
               </p>
             ) : (
               <textarea
@@ -341,7 +357,7 @@ export default function WriteDabailabWorkspace({
         memoryRefreshKey={memoryRefreshKey}
         onApplyRewriteFromQuality={openRewriteFromQuality}
         onQcPatchRewrite={() => void runQcPatchRewrite()}
-        qcPatchRunning={busy}
+        qcPatchRunning={busy && draftMode === 'qc_patch'}
       />
     </div>
   )

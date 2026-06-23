@@ -73,6 +73,7 @@ def merge_narrative_knowledge_from_debrief(
     project: Project,
     *,
     chapter_number: int,
+    chapter_id: str | None = None,
     in_world_named_terms: list | None = None,
     protagonist_known_terms: list | None = None,
     core_events: list | None = None,
@@ -84,14 +85,36 @@ def merge_narrative_knowledge_from_debrief(
         是否修改了 ``project.extra``。
     """
     nk = get_narrative_knowledge(project)
-    public = set(_norm_terms(nk.get("public_terms")))
-    prot = set(_norm_terms(nk.get("protagonist_terms")))
+    term_events = [e for e in (nk.get("term_events") or []) if isinstance(e, dict)]
+    if not term_events and (nk.get("public_terms") or nk.get("protagonist_terms")):
+        term_events.append({
+            "chapter": 0,
+            "public_terms": _norm_terms(nk.get("public_terms")),
+            "protagonist_terms": _norm_terms(nk.get("protagonist_terms")),
+            "source": "legacy_baseline",
+        })
+    term_events = [
+        e for e in term_events
+        if not (
+            (chapter_id and str(e.get("chapter_id") or "") == str(chapter_id))
+            or (not chapter_id and int(e.get("chapter") or -1) == chapter_number)
+        )
+    ]
+    term_events.append({
+        "chapter": chapter_number,
+        "chapter_id": chapter_id,
+        "public_terms": _norm_terms(in_world_named_terms),
+        "protagonist_terms": _norm_terms(protagonist_known_terms),
+    })
+    term_events = term_events[-_MAX_LOCKED_BEATS:]
 
-    for t in _norm_terms(in_world_named_terms):
-        public.add(t)
-    for t in _norm_terms(protagonist_known_terms):
-        prot.add(t)
-        public.add(t)
+    public: set[str] = set()
+    prot: set[str] = set()
+    for event in term_events:
+        public.update(_norm_terms(event.get("public_terms")))
+        event_prot = _norm_terms(event.get("protagonist_terms"))
+        prot.update(event_prot)
+        public.update(event_prot)
 
     beats: list[dict] = list(nk.get("locked_plot_beats") or [])
     existing_text = {b.get("beat") for b in beats if isinstance(b, dict)}
@@ -99,19 +122,56 @@ def merge_narrative_knowledge_from_debrief(
         text = _fmt_event(ev)
         if not text or text in existing_text:
             continue
-        beats.append({"chapter": chapter_number, "beat": text[:240]})
+        beats.append({"chapter": chapter_number, "chapter_id": chapter_id, "beat": text[:240]})
         existing_text.add(text)
 
     beats = beats[-_MAX_LOCKED_BEATS:]
     new_nk = {
         "public_terms": sorted(public)[:_MAX_TERMS],
         "protagonist_terms": sorted(prot)[:_MAX_TERMS],
+        "term_events": term_events,
         "locked_plot_beats": beats,
     }
     extra = dict(project.extra) if isinstance(project.extra, dict) else {}
     if extra.get(NK_KEY) == new_nk:
         return False
     extra[NK_KEY] = new_nk
+    project.extra = extra
+    return True
+
+
+def remove_chapter_narrative_knowledge(
+    project: Project, *, chapter_number: int, chapter_id: str | None = None,
+) -> bool:
+    """撤销指定章节写入的认知专名与锁定情节，并由剩余事件重建集合。"""
+    nk = get_narrative_knowledge(project)
+    old_events = [e for e in (nk.get("term_events") or []) if isinstance(e, dict)]
+    def _belongs_to_chapter(row: dict) -> bool:
+        if chapter_id and row.get("chapter_id"):
+            return str(row.get("chapter_id")) == str(chapter_id)
+        return int(row.get("chapter") or -1) == chapter_number
+
+    events = [e for e in old_events if not _belongs_to_chapter(e)]
+    old_beats = [b for b in (nk.get("locked_plot_beats") or []) if isinstance(b, dict)]
+    beats = [b for b in old_beats if not _belongs_to_chapter(b)]
+    if len(events) == len(old_events) and len(beats) == len(old_beats):
+        return False
+
+    public: set[str] = set()
+    prot: set[str] = set()
+    for event in events:
+        public.update(_norm_terms(event.get("public_terms")))
+        event_prot = _norm_terms(event.get("protagonist_terms"))
+        prot.update(event_prot)
+        public.update(event_prot)
+
+    extra = dict(project.extra) if isinstance(project.extra, dict) else {}
+    extra[NK_KEY] = {
+        "public_terms": sorted(public)[:_MAX_TERMS],
+        "protagonist_terms": sorted(prot)[:_MAX_TERMS],
+        "term_events": events,
+        "locked_plot_beats": beats,
+    }
     project.extra = extra
     return True
 

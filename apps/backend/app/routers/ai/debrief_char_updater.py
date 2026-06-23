@@ -8,6 +8,7 @@ debrief_char_updater.py — 复盘人物状态更新与撤销快照
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, List
 from uuid import UUID
 
@@ -46,33 +47,25 @@ def create_undo_snapshot_if_new(
     if existing_undo:
         return
 
-    char_ids_to_snap: set[str] = set()
-    for cu in character_updates:
-        resolved = resolve_character_for_update(
-            db, project_id, cu.character_id, getattr(cu, "character_name", None),
-            characters=_project_chars,
-        )
-        if resolved:
-            char_ids_to_snap.add(str(resolved.id))
     sl_ids_to_snap = {str(su.storyline_id) for su in storyline_updates if su.storyline_id}
 
+    # 快照全部既有人物，而非只快照 AI 显式报到的人：chapter_index 补全与
+    # realm_plan_floor 都可能在后续阶段更新额外人物（尤其主角），漏快照会让重写后
+    # current_realm/轨迹残留旧稿事实。
     char_states_snap = []
-    for cid in char_ids_to_snap:
-        try:
-            cid_uuid = UUID(cid)
-        except Exception:
-            continue
-        c = db.query(Character).filter(
-            Character.id == cid_uuid, Character.project_id == project_id
-        ).first()
-        if c:
-            char_states_snap.append({
-                "character_id": cid,
-                "current_realm": c.current_realm,
-                "current_location": c.current_location,
-                "current_status": c.current_status,
-                "realm_rank": c.realm_rank,
-            })
+    for c in _project_chars:
+        char_states_snap.append({
+            "character_id": str(c.id),
+            "current_realm": c.current_realm,
+            "current_location": c.current_location,
+            "current_status": c.current_status,
+            "realm_rank": c.realm_rank,
+            "known_skills": deepcopy(c.known_skills),
+            "owned_items": deepcopy(c.owned_items),
+            "arc_stages": deepcopy(c.arc_stages),
+            "speech_kit": deepcopy(c.speech_kit),
+            "extra": deepcopy(c.extra),
+        })
 
     sl_statuses_snap = []
     for sid in sl_ids_to_snap:
@@ -84,7 +77,15 @@ def create_undo_snapshot_if_new(
             StoryLine.id == sid_uuid, StoryLine.project_id == project_id
         ).first()
         if sl:
-            sl_statuses_snap.append({"storyline_id": sid, "status": sl.status})
+            sl_statuses_snap.append({
+                "storyline_id": sid,
+                "status": sl.status,
+                "key_beats": deepcopy(sl.key_beats),
+            })
+
+    from app.routers.ai.debrief_asset_undo import capture_project_asset_snapshot
+
+    sl_statuses_snap.append(capture_project_asset_snapshot(db, project_id))
 
     db.add(ChapterDebriefUndo(
         project_id=project_id,
@@ -178,7 +179,11 @@ def apply_character_updates(
             else:
                 char.realm_rank = cu.realm_rank
 
-        if cu.current_realm is not None or cu.realm_rank is not None:
+        _realm_changed = (
+            str(_before_realm or "").strip() != str(char.current_realm or "").strip()
+            or _before_rank != char.realm_rank
+        )
+        if (cu.current_realm is not None or cu.realm_rank is not None) and _realm_changed:
             realm_label = (
                 (cu.current_realm.strip()[:100] if isinstance(cu.current_realm, str) else "")
                 or (char.current_realm or "").strip()[:100]
@@ -195,8 +200,11 @@ def apply_character_updates(
                     "chapter_number": chapter_num,
                     "chapter_id": str(chapter_id),
                     "chapter_title": (chapter.title or "")[:300],
+                    "from_realm": (_before_realm or "").strip()[:100] or None,
                     "realm_name": realm_label,
                     "realm_rank": rank_snap,
+                    "reason": (cu.realm_change_reason or "").strip()[:500]
+                    or "正文未提取到明确破境依据，需人工回看本章核实",
                     "source": "chapter_debrief",
                 })
                 hist.sort(key=lambda h: int(h.get("chapter_number") or 0))
@@ -214,6 +222,7 @@ def apply_character_updates(
                     project_id=project_id,
                     chapter_uuid=chapter_id,
                     name_to_rank=name_to_rank,
+                    reason=getattr(cu, "realm_change_reason", None),
                 )
                 if _realm_mc is not None:
                     db.add(_realm_mc)

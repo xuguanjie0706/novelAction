@@ -159,7 +159,7 @@ class DebriefMixin:
 6. 哪些新道具/法宝、功法/技能、势力需要收入系统，或已有资产状态发生变化
 7. 生成章节索引（chapter_index）：完全依据上方叙事正文归纳；须与正文事实一致；
    in_world_named_terms 仅填正文中已被角色当面说出或场面公认的名词，禁止把旁白科普式专名当作「已公开」
-8. **硬规则**：若在 chapter_index.core_events 中写了某既有角色的境界或位置变化，必须在 character_updates 中为该角色填写对应字段（character_id 从上方列表原样复制）；禁止只写进 core_events 而不写 character_updates。位置变化时必须同时填写 location_change_reason（移动原因/经过，须依据正文、符合时间线与常理）
+8. **硬规则**：若在 chapter_index.core_events 中写了某既有角色的境界或位置变化，必须在 character_updates 中为该角色填写对应字段（character_id 从上方列表原样复制）；禁止只写进 core_events 而不写 character_updates。境界变化时必须同时填写 realm_change_reason（正文中导致破境/跌境的直接事件、资源、修炼或代价）；位置变化时必须同时填写 location_change_reason（移动原因/经过，须依据正文、符合时间线与常理）
 9. 本章是否出现了不在现有角色库中、且值得长期追踪的新角色（new_characters）
    判断标准：正文中有名有姓、有台词或行动、且 arc_scope 为 mini_arc 或以上；纯工具性一次性路人不需要入库
 
@@ -187,6 +187,7 @@ C级临时资产（一次性丹药、普通符箓、无名小队、普通招式�
       "character_id": "必须从上方「当前人物状态」列表原样复制 id（UUID 格式）；禁止 su_chen_id、protagonist_xxx 等自创 slug",
       "character_name": "必填，与列表中姓名完全一致",
       "current_realm": "新境界名称（如有变化，须与境界体系设定完全一致）",
+      "realm_change_reason": "若境界变化，简述正文明确写出的突破原因/过程/代价（如：炼化赤阳果并冲开第三道玄关）；境界无变化则省略",
       "realm_rank": null,
       "current_location": "新位置（如有变化）",
       "location_change_reason": "若位置发生变化，简述移动原因/经过（如有变化必填，须依据正文事实，符合时间线与常理，如「乘传送阵自青云宗赴北漠」）；位置无变化则省略",

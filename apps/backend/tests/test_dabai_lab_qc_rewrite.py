@@ -24,7 +24,7 @@ def test_build_qc_patch_prompt_chapter_only():
             "continuity_score": 85,
             "beat_score": 70,
             "hook_score": 65,
-            "beats": {"shuang_payoff": "partial", "end_hook": "pass"},
+            "beats": {"yaqu": "pass", "trigger": "partial", "yinbao": "pass", "payoff": "pass", "hook": "pass"},
             "chapter_suggestions": ["加强见证者三级反应"],
             "future_chapter_suggestions": ["下章换场景"],
             "hook_issue": "钩子太虚",

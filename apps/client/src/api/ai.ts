@@ -138,6 +138,7 @@ export const aiApi = {
     character_updates?: Array<{
       character_id: string
       current_realm?: string
+      realm_change_reason?: string
       realm_rank?: number
       current_location?: string
       location_change_reason?: string

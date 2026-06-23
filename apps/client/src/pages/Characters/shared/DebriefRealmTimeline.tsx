@@ -38,6 +38,11 @@ export function DebriefRealmTimeline({
               复盘
             </span>
           </div>
+          {m.reason && (
+            <p className="mt-1.5 text-[11px] leading-5 text-slate-600">
+              正文依据：{m.reason}
+            </p>
+          )}
         </li>
       ))}
     </ul>

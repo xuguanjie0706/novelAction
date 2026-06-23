@@ -1,7 +1,7 @@
 /**
  * 质检卡片 — 章节质检报告（规则 + LLM：衔接/五拍/钩子）。
  * 切章时拉最新落库报告；「跑质检」按当前模型线路调用并落库。
- * score<80 或存在建议时，可一键填入「按要素重写」弹窗。
+ * 「按本章建议重写」：一次 LLM（正文+质检报告）定点修订，完成后自动再跑质检。
  */
 import { useEffect, useState } from 'react'
 import clsx from 'clsx'
@@ -145,7 +145,7 @@ export default function QualityCard({
               type="button"
               disabled={qcPatchRunning || running}
               onClick={() => onQcPatchRewrite?.()}
-              title="仅用本章正文+质检建议修订，不重新跑预警/分场"
+              title="一次 LLM：按本章正文+质检报告修订，完成后自动再跑质检"
               className={clsx(
                 'inline-flex flex-1 items-center justify-center gap-1 rounded-lg border px-2 py-1.5 font-semibold',
                 qcPatchRunning || running

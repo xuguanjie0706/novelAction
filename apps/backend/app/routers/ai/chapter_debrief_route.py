@@ -301,6 +301,7 @@ def chapter_debrief(
             merge_narrative_knowledge_from_debrief(
                 project_row,
                 chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
+                chapter_id=str(chapter.id),
                 in_world_named_terms=nk_in_world,
                 protagonist_known_terms=nk_protagonist,
                 core_events=nk_core_events,

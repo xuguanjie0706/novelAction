@@ -33,6 +33,8 @@ export default defineConfig({
     },
   },
   server: {
+    host: true,
+    allowedHosts: true,
     port: 3174,
     proxy: {
       '/api': {

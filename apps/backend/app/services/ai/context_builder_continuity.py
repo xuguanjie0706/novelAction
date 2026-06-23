@@ -71,6 +71,19 @@ def _format_location_trail(c: Character) -> str:
     )
 
 
+def _format_realm_trail(c: Character) -> str:
+    """格式化角色近期境界变化与正文依据，供后续写章保持战力因果。"""
+    extra = c.extra if isinstance(c.extra, dict) else {}
+    hist = [h for h in (extra.get("debrief_realm_milestones") or []) if isinstance(h, dict)]
+    if not hist:
+        return ""
+    return "；".join(
+        f"第{h.get('chapter_number')}章→{h.get('realm_name')}"
+        + (f"（{truncate(h.get('reason'), 60)}）" if h.get("reason") else "")
+        for h in hist[-2:]
+    )
+
+
 def build_continuity_context(
     db: Session,
     project_id: str,
@@ -103,12 +116,18 @@ def build_continuity_context(
     char_lines = []
     for c in characters[:10]:
         trail = _format_location_trail(c)
+        realm_trail = _format_realm_trail(c)
         # 出场人物：当前境界/序号/位置/状态已由【本章出场人物】卡片
         # （context_assembler 的 character_summary）承载，此处不重复以免双份快照口径漂移；
         # 仅补 continuity 独占的「近期行踪」轨迹（卡片只给单值当前位置）。无轨迹则整行跳过。
         if c.name in onstage:
-            if trail:
-                char_lines.append(f"{c.name}、近期行踪[{trail}]")
+            if trail or realm_trail:
+                detail = []
+                if realm_trail:
+                    detail.append(f"近期境界[{realm_trail}]")
+                if trail:
+                    detail.append(f"近期行踪[{trail}]")
+                char_lines.append(f"{c.name}、" + "、".join(detail))
             continue
         # 非出场人物：卡片未覆盖，输出完整跨章状态行
         parts = [f"{c.name}"]
@@ -118,6 +137,8 @@ def build_continuity_context(
             parts.append(f"当前境界={c.current_realm}")
         if c.realm_rank is not None:
             parts.append(f"境界序号={c.realm_rank}")
+        if realm_trail:
+            parts.append(f"近期境界[{realm_trail}]")
         if c.current_location:
             parts.append(f"当前位置={c.current_location}")
         if trail:

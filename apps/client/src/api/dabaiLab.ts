@@ -13,6 +13,7 @@ import type {
   DabaiLabMemorySearchResult,
   DabaiLabQualityReport,
   DabaiLabRelation,
+  DabaiPanelSnapshotItem,
   DabaiPreWarnRecord,
   DabaiScenePlanRecord,
 } from '../types/dabaiLab'
@@ -155,6 +156,13 @@ export const dabaiLabApi = {
   patchRelation(projectId: string, relationId: string, attitude: string, reason?: string) {
     return api.patch<{ ok: boolean; id: string; attitude: string }>(
       `/dabai/projects/${projectId}/relations/${relationId}`, { attitude, reason },
+    )
+  },
+
+  /** 全书系统面板快照列表（境界台账数据源）。 */
+  listPanelSnapshots(projectId: string) {
+    return api.get<{ items: DabaiPanelSnapshotItem[]; total: number }>(
+      `/dabai/projects/${projectId}/panel-snapshots`,
     )
   },
 

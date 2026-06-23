@@ -7,8 +7,10 @@ export interface DebriefRealmMilestone {
   chapter_number: number
   chapter_id?: string
   chapter_title?: string
+  from_realm?: string | null
   realm_name: string
   realm_rank?: number | null
+  reason?: string | null
   source?: string
 }
 
@@ -23,8 +25,10 @@ export function getDebriefRealmMilestones(char: Character): DebriefRealmMileston
       chapter_number: Number(x.chapter_number) || 0,
       chapter_id: typeof x.chapter_id === 'string' ? x.chapter_id : undefined,
       chapter_title: typeof x.chapter_title === 'string' ? x.chapter_title : undefined,
+      from_realm: typeof x.from_realm === 'string' ? x.from_realm : null,
       realm_name: String(x.realm_name ?? '').trim(),
       realm_rank: x.realm_rank != null && x.realm_rank !== '' ? Number(x.realm_rank) : null,
+      reason: typeof x.reason === 'string' ? x.reason : null,
       source: typeof x.source === 'string' ? x.source : undefined,
     }))
     .filter((m) => m.chapter_number > 0 && m.realm_name)

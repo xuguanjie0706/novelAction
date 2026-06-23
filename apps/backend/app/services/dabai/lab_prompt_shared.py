@@ -324,13 +324,27 @@ def fix_realm_string(realm: str, project: DabaiProject) -> str:
     return base
 
 
-def sanitize_prewarn_result(result: dict, project: DabaiProject) -> dict:
-    """修正导演单 JSON 中 fact_lock.realm 的外来体系用语。"""
+def sanitize_prewarn_result(
+    result: dict,
+    project: DabaiProject,
+    *,
+    prev_location: str = "",
+    outline_location: str = "",
+) -> dict:
+    """修正导演单 JSON 中 fact_lock.realm / location 的外来体系用语与台账坐标。"""
     if not isinstance(result, dict):
         return result
     fact = dict(result.get("fact_lock") or {})
     if fact.get("realm"):
         fact["realm"] = fix_realm_string(str(fact["realm"]), project)
+    if fact.get("location"):
+        from app.services.dabai.lab_location_coords import normalize_ledger_location
+        fact["location"] = normalize_ledger_location(
+            str(fact["location"]),
+            prev_location=prev_location,
+            outline_location=outline_location,
+        )
+    if fact:
         result["fact_lock"] = fact
     return result
 

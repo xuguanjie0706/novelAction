@@ -117,6 +117,7 @@ export type DabaiDraftEvent =
   | { event: 'chunk'; delta: string }
   | { event: 'done'; chapter_id: string; word_count: number }
   | { event: 'error'; message: string }
+  | { event: 'qc_patch_running'; dabai_mode: boolean }
   | { event: 'pre_warn_running'; dabai_mode: boolean }
   | import('../types/dabaiLab').DabaiPreWarnDoneEvent
   | { event: 'scene_plan_running'; dabai_mode: boolean }

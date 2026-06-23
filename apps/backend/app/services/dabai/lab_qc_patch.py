@@ -10,12 +10,13 @@ from typing import AsyncIterator
 from app.models.dabai import DabaiChapterOutline
 from app.services.dabai.lab_word_budget import chapter_word_target
 
+_BEAT_KEYS = ("yaqu", "trigger", "yinbao", "payoff", "hook")
 _BEAT_LABELS = {
-    "yaqu_setup": "憋屈",
-    "emotion_turn": "转折",
+    "yaqu": "憋屈铺垫",
+    "trigger": "转折扳机",
     "yinbao": "引爆",
-    "shuang_payoff": "爽点",
-    "end_hook": "钩子",
+    "payoff": "爽点+见证者",
+    "hook": "章末钩子",
 }
 
 _SYSTEM = (
@@ -58,13 +59,25 @@ def _chapter_only_fixlist(rep: dict) -> str:
     return "\n".join(deduped)[:1800]
 
 
+def _beat_implemented(val: str) -> bool:
+    """五拍是否已落实（兼容 LLM 误填剧情描述而非 pass/partial/miss）。"""
+    st = str(val or "").strip()
+    low = st.lower()
+    if low == "pass":
+        return True
+    if low in {"partial", "miss"}:
+        return False
+    return len(st) > 8
+
+
 def _pass_summary(rep: dict) -> str:
     """已通过项摘要，提示模型勿动。"""
     llm = rep.get("llm") if isinstance(rep.get("llm"), dict) else {}
     parts: list[str] = []
-    for key, label in _BEAT_LABELS.items():
-        st = str((llm.get("beats") or {}).get(key) or "").lower()
-        if st == "pass":
+    for key in _BEAT_KEYS:
+        label = _BEAT_LABELS[key]
+        raw = str((llm.get("beats") or {}).get(key) or "")
+        if _beat_implemented(raw):
             parts.append(label)
     for dim, label in (
         ("continuity_score", "衔接"),
@@ -100,7 +113,7 @@ def build_qc_patch_prompt(
 
     beat_line = " | ".join(
         f"{_BEAT_LABELS[k]}·{(llm.get('beats') or {}).get(k, '?')}"
-        for k in _BEAT_LABELS
+        for k in _BEAT_KEYS
     )
     score_line = (
         f"综合 {score} 分"

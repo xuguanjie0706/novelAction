@@ -105,9 +105,9 @@ run_pnpm_dev() {
   cd "${ROOT}/${dir}"
   export VITE_API_PROXY_TARGET="http://127.0.0.1:${NOVEL_LOCAL_BACKEND_PORT}"
   if command -v pnpm >/dev/null 2>&1; then
-    exec pnpm run dev -- --port "${vite_port}"
+    exec pnpm exec vite --host 0.0.0.0 --port "${vite_port}"
   fi
-  exec npx --yes pnpm@9 run dev -- --port "${vite_port}"
+  exec npx --yes pnpm@9 exec vite --host 0.0.0.0 --port "${vite_port}"
 }
 
 # 使用 venv 内 python 的绝对路径，避免 conda/base 污染 PATH 时 `python` 仍指向系统解释器

@@ -123,6 +123,20 @@ export function CharUpdateSection({
                   />
                 </div>
               </div>
+              {upd.current_realm && (
+                <div>
+                  <label className="text-[9px] text-novel-ink-faint block mb-0.5">
+                    境界变化原因（正文依据：为何从「{c.current_realm || '未记录'}」到此）
+                  </label>
+                  <input
+                    type="text"
+                    value={upd.realm_change_reason || ''}
+                    onChange={e => onUpdateChar(c.id, 'realm_change_reason', e.target.value)}
+                    placeholder="如：炼化赤阳果并冲开第三道玄关，承受经脉灼伤"
+                    className="w-full text-[11px] border border-novel-border rounded px-2 py-1 bg-white text-novel-ink placeholder:text-novel-ink-faint focus:outline-none focus-visible:ring-1 focus-visible:ring-novel-accent"
+                  />
+                </div>
+              )}
               {upd.current_location && (
                 <div>
                   <label className="text-[9px] text-novel-ink-faint block mb-0.5">

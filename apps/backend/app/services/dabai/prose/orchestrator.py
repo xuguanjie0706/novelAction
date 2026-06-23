@@ -89,12 +89,55 @@ async def run_prose_pipeline(
     user: User,
 ) -> AsyncIterator[dict]:
     """gate → context → prewarn → scene → draft → persist → post_write。"""
+    from app.services.ai.service import AIService
+
+    ai = AIService(
+        profile=req.model_profile, db=db,
+        llm_provider_id=req.llm_provider_id, user_id=user.id,
+    )
+    replace_existing = bool((ch.content or "").strip())
+    prior_content = (ch.content or "").strip() if replace_existing else ""
+
+    # 按质检建议修订：一次 LLM 调用（正文+报告）→ 落库 → 可选再跑质检/复盘。
+    if req.rewrite_mode == "qc_patch":
+        if not replace_existing:
+            yield {"event": "error", "message": "按质检建议修订需要本章已有正文"}
+            return
+        yield {"event": "qc_patch_running", "dabai_mode": True}
+        chunks: list[str] = []
+        try:
+            async for delta in iter_qc_patch_chunks(
+                db, ai, project, ch,
+                prior_content=prior_content,
+                user_instruction=(req.user_instruction or "").strip(),
+            ):
+                chunks.append(delta)
+                yield {"event": "chunk", "delta": delta}
+        except QcPatchError as exc:
+            yield {"event": "error", "message": str(exc)}
+            return
+        ch.content = "".join(chunks)
+        ch.status = "written"
+        db.commit()
+        yield {"event": "done", "chapter_id": str(ch.id), "word_count": len(ch.content)}
+        events = spawn_post_write_pipeline(
+            ch.project_id, ch.id,
+            model_profile=req.model_profile,
+            llm_provider_id=req.llm_provider_id, user_id=user.id,
+            run_quality=req.rerun_quality,
+            run_debrief=req.rerun_debrief,
+        )
+        while True:
+            evt = await events.get()
+            if evt is None:
+                break
+            yield evt
+        return
+
     draft_ctx = await build_lab_draft_context_async(db, project, ch)
     seed_ledgers(db, project)
     ledger_block = build_ledger_block(db, project, ch)
-    replace_existing = bool((ch.content or "").strip())
     intensity = resolve_dabai_intensity(project)
-    prior_content = (ch.content or "").strip() if replace_existing else ""
     qc_feedback_block = build_chapter_qc_feedback_block(db, ch) if replace_existing else ""
     forward_qc_block = build_forward_qc_block(
         db, project.id, target_chapter=int(ch.chapter_number or 0),
@@ -144,29 +187,7 @@ async def run_prose_pipeline(
     scene_plan_result = None
     draft_trace = None
 
-    from app.services.ai.service import AIService
-
-    ai = AIService(
-        profile=req.model_profile, db=db,
-        llm_provider_id=req.llm_provider_id, user_id=user.id,
-    )
-
-    if req.rewrite_mode == "qc_patch":
-        if not replace_existing:
-            yield {"event": "error", "message": "按质检建议修订需要本章已有正文"}
-            return
-        try:
-            async for delta in iter_qc_patch_chunks(
-                db, ai, project, ch,
-                prior_content=prior_content,
-                user_instruction=(req.user_instruction or "").strip(),
-            ):
-                chunks.append(delta)
-                yield {"event": "chunk", "delta": delta}
-        except QcPatchError as exc:
-            yield {"event": "error", "message": str(exc)}
-            return
-    elif replace_existing:
+    if replace_existing:
         if rerun_pre:
             yield {"event": "pre_warn_running", "dabai_mode": True, "forced_refresh": forced_refresh}
             pre_warn_block, pre_warn_evt, pre_warn_result = await resolve_lab_pre_warn(
@@ -205,67 +226,66 @@ async def run_prose_pipeline(
         )
         yield scene_evt
 
-    if req.rewrite_mode != "qc_patch":
-        bounds = resolve_prose_word_bounds(scene_plan_result, ch)
-        prose_hi = bounds[2] if bounds else chapter_word_target(ch) + 200
-        system, user_prompt = build_prose_prompt(
-            project, ch,
-            prev_tail=draft_ctx.prev_tail,
-            recent_plot_block=draft_ctx.recent_plot_block,
-            pre_warn_block=pre_warn_block,
-            scene_block=scene_block,
-            scene_plan=scene_plan_result,
-            ledger_block=ledger_block,
-            memory_block=draft_ctx.memory_block,
-            clue_block=draft_ctx.clue_block,
-            panel_block=draft_ctx.panel_block,
-            prev_full_block=draft_ctx.prev_full_block,
-            prev_hook_block=draft_ctx.prev_hook_block,
-            narrative_state_block=draft_ctx.narrative_state_block,
-            char_voice_block=draft_ctx.char_voice_block,
-            pre_warn_result=pre_warn_result,
-            location_bridge_block=location_bridge_block,
-            qc_feedback_block=qc_feedback_block,
-            forward_qc_block=forward_qc_block,
-            phrase_guard_block=phrase_guard_block,
-            chapter_boundary_block=chapter_boundary_block,
-            realm_writing_block=draft_ctx.realm_writing_block,
-            replace_existing=replace_existing,
-            prior_content=prior_content,
-            user_instruction=(req.user_instruction or "").strip(),
-            intensity=intensity,
-        )
-        from app.services.dabai.lab_word_budget import dabai_draft_max_tokens
+    bounds = resolve_prose_word_bounds(scene_plan_result, ch)
+    prose_hi = bounds[2] if bounds else chapter_word_target(ch) + 200
+    system, user_prompt = build_prose_prompt(
+        project, ch,
+        prev_tail=draft_ctx.prev_tail,
+        recent_plot_block=draft_ctx.recent_plot_block,
+        pre_warn_block=pre_warn_block,
+        scene_block=scene_block,
+        scene_plan=scene_plan_result,
+        ledger_block=ledger_block,
+        memory_block=draft_ctx.memory_block,
+        clue_block=draft_ctx.clue_block,
+        panel_block=draft_ctx.panel_block,
+        prev_full_block=draft_ctx.prev_full_block,
+        prev_hook_block=draft_ctx.prev_hook_block,
+        narrative_state_block=draft_ctx.narrative_state_block,
+        char_voice_block=draft_ctx.char_voice_block,
+        pre_warn_result=pre_warn_result,
+        location_bridge_block=location_bridge_block,
+        qc_feedback_block=qc_feedback_block,
+        forward_qc_block=forward_qc_block,
+        phrase_guard_block=phrase_guard_block,
+        chapter_boundary_block=chapter_boundary_block,
+        realm_writing_block=draft_ctx.realm_writing_block,
+        replace_existing=replace_existing,
+        prior_content=prior_content,
+        user_instruction=(req.user_instruction or "").strip(),
+        intensity=intensity,
+    )
+    from app.services.dabai.lab_word_budget import dabai_draft_max_tokens
 
-        from app.services.dabai.prose.beat_contract import beat_similarity, resolve_beats
+    from app.services.dabai.prose.beat_contract import beat_similarity, resolve_beats
 
-        contract = resolve_beats(ch, pre_warn_result)
-        draft_trace = build_lab_draft_trace(
-            project=project, ch=ch, ctx=draft_ctx, prev_ch=prev_ch,
-            location_bridge_block=location_bridge_block,
-            pre_warn_result=pre_warn_result, scene_block=scene_block,
-            replace_existing=replace_existing, rerun_pre_warn=bool(replace_existing and rerun_pre),
-            rerun_scene_plan=bool(replace_existing and rerun_scene),
-            user_instruction=(req.user_instruction or "").strip(),
-            beat_source=contract.source,
-            yaqu_similarity=round(
-                beat_similarity(ch.yaqu_setup or "", contract.yaqu), 3,
-            ),
-            opening_policy_mode=(
-                "ch1" if int(ch.chapter_number or 0) == 1 else "continuity"
-            ),
-        )
-        log_lab_draft_trace(draft_trace, phase="assembly")
-        write_sampling = lab_write_sampling(intensity, replace_existing=replace_existing)
-        async for delta in ai._stream_ai(
-            system, user_prompt, task="dabai.write",
-            max_tokens=dabai_draft_max_tokens(prose_hi),
-            sampling=write_sampling,
-            context=llm_call_context_from_trace(draft_trace),
-        ):
-            if delta:
-                chunks.append(delta)
-                yield {"event": "chunk", "delta": delta}
+    contract = resolve_beats(ch, pre_warn_result)
+    draft_trace = build_lab_draft_trace(
+        project=project, ch=ch, ctx=draft_ctx, prev_ch=prev_ch,
+        location_bridge_block=location_bridge_block,
+        pre_warn_result=pre_warn_result, scene_block=scene_block,
+        replace_existing=replace_existing, rerun_pre_warn=bool(replace_existing and rerun_pre),
+        rerun_scene_plan=bool(replace_existing and rerun_scene),
+        user_instruction=(req.user_instruction or "").strip(),
+        beat_source=contract.source,
+        yaqu_similarity=round(
+            beat_similarity(ch.yaqu_setup or "", contract.yaqu), 3,
+        ),
+        opening_policy_mode=(
+            "ch1" if int(ch.chapter_number or 0) == 1 else "continuity"
+        ),
+    )
+    log_lab_draft_trace(draft_trace, phase="assembly")
+    write_sampling = lab_write_sampling(intensity, replace_existing=replace_existing)
+    async for delta in ai._stream_ai(
+        system, user_prompt, task="dabai.write",
+        max_tokens=dabai_draft_max_tokens(prose_hi),
+        sampling=write_sampling,
+        context=llm_call_context_from_trace(draft_trace),
+    ):
+        if delta:
+            chunks.append(delta)
+            yield {"event": "chunk", "delta": delta}
 
     ch.content = "".join(chunks)
     ch.status = "written"

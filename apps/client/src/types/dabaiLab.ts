@@ -109,6 +109,18 @@ export interface DabaiLabQualityReport {
   llm?: DabaiLabQualityLlm
 }
 
+/** 系统面板快照（复盘后落库，按章记录主角境界/战力）。 */
+export interface DabaiPanelSnapshotItem {
+  id: string
+  chapter_id: string
+  chapter_number: number
+  realm?: string | null
+  sub_level?: number | null
+  combat_power?: number | null
+  snapshot?: Record<string, unknown>
+  created_at?: string | null
+}
+
 /** 复盘记忆条目。 */
 export interface DabaiLabMemory {
   id: string

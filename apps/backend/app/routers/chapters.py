@@ -16,6 +16,7 @@ from app.schemas import ChapterCreate, ChapterOut, ChapterUpdate
 from app.services.embedding_service import embed_entity_async
 from app.routers.chapter_helpers import (
     count_words,
+    delete_chapter_artifacts,
     normalize_chapter_sort_orders,
     clear_chapter_rewrite_derivatives,
     resolve_quality_debts_detaching_chapter,

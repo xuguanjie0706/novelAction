@@ -400,14 +400,50 @@ def build_panel_snapshot(
     protag = protagonist_name(project)
     cur_chapter = ch.chapter_number or 1
 
+    # 同章重跑复盘须幂等：删旧快照，避免多条脏记录污染境界台账。
+    db.query(DabaiPanelSnapshot).filter(
+        DabaiPanelSnapshot.chapter_id == ch.id,
+    ).delete(synchronize_session=False)
+
+    from app.services.dabai.lab_realm_baseline import (
+        _label_from_snapshot,
+        ensure_full_realm_label,
+        parse_realm_label,
+    )
+
+    prev_snap = (
+        db.query(DabaiPanelSnapshot)
+        .filter(
+            DabaiPanelSnapshot.project_id == project.id,
+            DabaiPanelSnapshot.chapter_number < cur_chapter,
+        )
+        .order_by(DabaiPanelSnapshot.chapter_number.desc())
+        .first()
+    )
+    from_realm = ""
+    prev_combat: int | None = None
+    from_location = ""
+    if prev_snap and isinstance(prev_snap.snapshot, dict):
+        from_realm = _label_from_snapshot(prev_snap.snapshot, project)
+        from_location = str(prev_snap.snapshot.get("location") or "").strip()
+        try:
+            raw_cp = prev_snap.snapshot.get("combat_power")
+            prev_combat = int(raw_cp) if raw_cp not in (None, "") else None
+        except (TypeError, ValueError):
+            prev_combat = None
+
     # ── 境界信息 ─────────────────────────────────────────────────────────────
     meta = project.meta or {}
     realm_str = str(meta.get("protagonist_realm") or "")
     sub_level: int | None = None
     max_sub: int | None = None
     combat_power: int | None = None
+    realm_change_reason = ""
+    location_change_reason = ""
     if realm_info:
         realm_str = str(realm_info.get("realm") or realm_str)
+        realm_change_reason = str(realm_info.get("realm_change_reason") or "").strip()[:500]
+        location_change_reason = str(realm_info.get("location_change_reason") or "").strip()[:500]
         try:
             sub_level = int(realm_info["sub_level"]) if realm_info.get("sub_level") else None
             max_sub = int(realm_info["max_sub"]) if realm_info.get("max_sub") else None
@@ -415,11 +451,16 @@ def build_panel_snapshot(
         except (TypeError, ValueError):
             pass
 
-    from app.services.dabai.lab_realm_baseline import ensure_full_realm_label
-
     realm_str = ensure_full_realm_label(
         realm_str, sub_level, project, fallback_sub=getattr(ch, "realm_sub_rank", None),
     )
+    parsed_final = parse_realm_label(realm_str, project) or {}
+    if parsed_final.get("label"):
+        realm_str = str(parsed_final["label"])
+    if parsed_final.get("sub_level") is not None:
+        sub_level = int(parsed_final["sub_level"])
+    if combat_power is not None and prev_combat is not None and combat_power < prev_combat * 0.6:
+        combat_power = prev_combat
 
     # ── 资产分类 ─────────────────────────────────────────────────────────────
     assets = (
@@ -462,7 +503,20 @@ def build_panel_snapshot(
             golden_fingers.append(entry)
 
     # 章末位置：复盘提取的下一章开笔位置基准（空间防漂移；可为空）
-    location = str((realm_info or {}).get("location") or "").strip()[:50]
+    from app.services.dabai.lab_location_coords import (
+        default_location_change_reason,
+        normalize_ledger_location,
+    )
+
+    location = normalize_ledger_location(
+        str((realm_info or {}).get("location") or "").strip(),
+        prev_location=from_location,
+        outline_location=str(ch.location or ""),
+    )
+    if not location_change_reason:
+        location_change_reason = default_location_change_reason(
+            location, from_location,
+        )
 
     snap = DabaiPanelSnapshot(
         project_id=project.id,
@@ -474,6 +528,10 @@ def build_panel_snapshot(
             "max_sub": max_sub,
             "combat_power": combat_power,
             "location": location,
+            "from_realm": from_realm or None,
+            "from_location": from_location or None,
+            "realm_change_reason": realm_change_reason or None,
+            "location_change_reason": location_change_reason or None,
             "skills": skills,
             "items": items,
             "golden_fingers": golden_fingers,

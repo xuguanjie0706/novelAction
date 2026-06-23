@@ -134,7 +134,11 @@ def apply_new_characters(
         if tier is None:
             tier = _ARC_SCOPE_TO_TIER.get(nc.arc_scope or "", "arc")
         new_char_id = uuid4()
-        char_extra: dict = {"first_appearance_chapter": chapter_num, "arc_scope": nc.arc_scope}
+        char_extra: dict = {
+            "first_appearance_chapter": chapter_num,
+            "source_chapter_id": str(chapter_id),
+            "arc_scope": nc.arc_scope,
+        }
         if nc.name_meaning and nc.name_meaning.strip():
             char_extra["name_meaning"] = nc.name_meaning.strip()
         new_char = Character(

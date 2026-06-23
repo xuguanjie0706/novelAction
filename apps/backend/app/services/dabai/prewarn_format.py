@@ -69,7 +69,9 @@ def format_prewarn_block(result: dict | None) -> str:
     elif fact.get("realm_end"):
         fact_parts.append(f"章末境界：{fact['realm_end']}")
     if fact.get("location"):
-        fact_parts.append(f"位置：{fact['location']}")
+        fact_parts.append(
+            f"开笔场景锚点：{fact['location']}（台账坐标，正文用自然地名描写，勿写·拼接）",
+        )
     on_stage = [str(x) for x in (fact.get("on_stage") or []) if x]
     if on_stage:
         fact_parts.append(f"在场：{'、'.join(on_stage[:8])}")

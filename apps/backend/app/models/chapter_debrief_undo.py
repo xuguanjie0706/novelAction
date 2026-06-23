@@ -2,11 +2,11 @@
 chapter_debrief_undo — 复盘提交前的状态快照，用于删章/重写时回滚。
 
 存储内容：
-  - char_states: 提交前每个被改动人物的 realm/location/status/realm_rank
-  - storyline_statuses: 提交前每条被改动故事线的 status
+  - char_states: 提交前全部既有人物的境界、位置、状态与复盘可变 JSON 字段
+  - storyline_statuses: 提交前被改动故事线的 status / key_beats
 
-beats / known_skills / owned_items 的回滚通过 "chapter_id" / "from_chapter_id"
-字段直接过滤，不需要存快照。
+全人物快照用于兜住 chapter_index 补全与 realm_plan_floor 等非显式人物更新；
+带 chapter_id 的增量仍会额外按来源过滤，形成双保险。
 """
 from sqlalchemy import Column, String, DateTime, ForeignKey, JSON
 from sqlalchemy.dialects.postgresql import UUID
@@ -23,8 +23,8 @@ class ChapterDebriefUndo(Base):
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)  # FK → projects.id
     chapter_id = Column(UUID(as_uuid=True), ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False, unique=True)  # FK → chapters.id；每章最多一条回滚快照
 
-    char_states = Column(JSON, nullable=False, default=list)  # 复盘提交前人物关键字段快照 [{character_id, current_realm, current_location, current_status, realm_rank}, ...]
+    char_states = Column(JSON, nullable=False, default=list)  # 复盘提交前全部既有人物的可变字段快照
 
-    storyline_statuses = Column(JSON, nullable=False, default=list)  # 提交前故事线状态 [{storyline_id, status}, ...]
+    storyline_statuses = Column(JSON, nullable=False, default=list)  # 提交前故事线状态与 key_beats
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())  # 快照生成时间（UTC）

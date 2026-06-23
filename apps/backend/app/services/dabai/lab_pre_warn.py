@@ -492,7 +492,26 @@ async def resolve_lab_pre_warn(
         result = parse_json(raw)
         if not isinstance(result, dict):
             raise ValueError("导演单 JSON 解析失败")
-        result = sanitize_prewarn_result(result, project)
+        prev_location = ""
+        if db is not None and (ch.chapter_number or 0) > 1:
+            from app.models.dabai_lab import DabaiPanelSnapshot
+            prev_snap = (
+                db.query(DabaiPanelSnapshot)
+                .filter(
+                    DabaiPanelSnapshot.project_id == project.id,
+                    DabaiPanelSnapshot.chapter_number < int(ch.chapter_number or 0),
+                )
+                .order_by(DabaiPanelSnapshot.chapter_number.desc())
+                .first()
+            )
+            if prev_snap and isinstance(prev_snap.snapshot, dict):
+                prev_location = str(prev_snap.snapshot.get("location") or "").strip()
+        result = sanitize_prewarn_result(
+            result,
+            project,
+            prev_location=prev_location,
+            outline_location=str(getattr(ch, "location", "") or ""),
+        )
         if db is not None:
             baseline = load_opening_realm_baseline(db, project, ch)
             result = sanitize_prewarn_realm(result, project, ch, baseline)

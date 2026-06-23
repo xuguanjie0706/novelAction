@@ -132,6 +132,7 @@ class CharacterUpdate(BaseModel):
     """复盘 AI 返回的显示名；character_id 非 UUID 时用于回退匹配。"""
     character_name: Optional[str] = None
     current_realm: Optional[str] = None
+    realm_change_reason: Optional[str] = None  # 本章正文中破境/跌境的直接原因与过程依据
     realm_rank: Optional[int] = None
     current_location: Optional[str] = None
     location_change_reason: Optional[str] = None  # 本章位置发生变化时的移动原因/经过（防漂移台账用）

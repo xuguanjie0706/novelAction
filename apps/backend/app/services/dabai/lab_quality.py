@@ -245,6 +245,15 @@ def _rule_report(
                 "llm_overridable": True,
             })
 
+    if content:
+        from app.services.dabai.lab_location_coords import prose_has_ledger_location_dot
+        if prose_has_ledger_location_dot(content):
+            warnings.append({
+                "rule_id": "DLB-10",
+                "message": "正文出现「地图·地点」台账坐标拼接，应改为自然口语地名",
+                "llm_overridable": True,
+            })
+
     if blockers:
         status = "blocked"
         score = 40

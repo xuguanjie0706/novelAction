@@ -103,8 +103,11 @@ def persist_planned_realm_floor(db: Any, project: Any, chapter: Any) -> dict | N
             hist.append({
                 "chapter_number": chapter_number,
                 "chapter_id": str(chapter.id),
+                "chapter_title": (getattr(chapter, "title", "") or "")[:300],
+                "from_realm": (before_realm or "").strip()[:100] or None,
                 "realm_name": label,
                 "realm_rank": rank,
+                "reason": "章纲境界轴自动对齐（非正文复盘依据，重写后须由正文复盘覆盖）",
                 "source": "plan_auto",
             })
             extra["debrief_realm_milestones"] = hist
@@ -121,6 +124,7 @@ def persist_planned_realm_floor(db: Any, project: Any, chapter: Any) -> dict | N
             project_id=str(project.id),
             chapter_uuid=chapter.id if isinstance(chapter.id, UUID) else UUID(str(chapter.id)),
             name_to_rank=name_to_rank,
+            reason="章纲境界轴自动对齐（非正文复盘依据）",
         )
         if mc is not None:
             db.add(mc)

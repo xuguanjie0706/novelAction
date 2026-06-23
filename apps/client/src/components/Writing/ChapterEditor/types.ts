@@ -119,6 +119,7 @@ export type AutoDebriefResponse = {
     character_id: string
     character_name?: string
     current_realm?: string
+    realm_change_reason?: string
     current_location?: string
     location_change_reason?: string
     current_status?: string
@@ -193,6 +194,7 @@ export interface DebriefPanelProps {
   storyLines: StoryLine[]
   charUpdates: Record<string, {
     current_realm?: string
+    realm_change_reason?: string
     current_location?: string
     location_change_reason?: string
     current_status?: string

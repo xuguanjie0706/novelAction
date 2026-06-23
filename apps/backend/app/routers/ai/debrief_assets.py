@@ -205,6 +205,7 @@ def apply_asset_updates(
             item = Item(id=uuid4(), project_id=project_id, name=name)
             db.add(item)
             stats["created_items"] += 1
+            item.extra = merge_extra(item.extra, source_chapter_id=str(chapter.id))
         item.item_type = truncate(data.item_type or item.item_type or "artifact", 20)
         item.rarity = truncate(data.rarity or item.rarity or "rare", 20)
         item.description = data.description or item.description
@@ -264,6 +265,7 @@ def apply_asset_updates(
             skill = Skill(id=uuid4(), project_id=project_id, name=name)
             db.add(skill)
             stats["created_skills"] += 1
+            skill.extra = merge_extra(skill.extra, source_chapter_id=str(chapter.id))
         skill.skill_type = truncate(data.skill_type or skill.skill_type or "combat", 20)
         skill.grade = truncate(data.grade or skill.grade or "earth", 20)
         skill.source = truncate(data.source or skill.source, 200) if (data.source or skill.source) else skill.source
@@ -324,6 +326,7 @@ def apply_asset_updates(
             faction = Faction(id=uuid4(), project_id=project_id, name=name)
             db.add(faction)
             stats["created_factions"] += 1
+            faction.extra = merge_extra(faction.extra, source_chapter_id=str(chapter.id))
         faction.faction_type = truncate(data.faction_type or faction.faction_type or "other", 20)
         faction.alignment = truncate(data.alignment or faction.alignment or "neutral", 20)
         faction.description = data.description or faction.description

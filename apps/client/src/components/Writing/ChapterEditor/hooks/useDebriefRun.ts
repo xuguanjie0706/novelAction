@@ -45,6 +45,7 @@ interface UseDebriefRunOptions {
 
 type CharUpdates = Record<string, {
   current_realm?: string
+  realm_change_reason?: string
   realm_rank?: number
   current_location?: string
   location_change_reason?: string
@@ -375,6 +376,7 @@ export function useDebriefRun({
       .map(([character_id, upd]) => {
         const entry: Record<string, any> = { character_id }
         if (upd.current_realm) entry.current_realm = upd.current_realm
+        if (upd.realm_change_reason) entry.realm_change_reason = upd.realm_change_reason
         if (upd.realm_rank != null) entry.realm_rank = upd.realm_rank
         if (upd.current_location) entry.current_location = upd.current_location
         if (upd.location_change_reason) entry.location_change_reason = upd.location_change_reason

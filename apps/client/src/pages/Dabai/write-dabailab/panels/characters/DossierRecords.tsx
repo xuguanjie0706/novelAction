@@ -33,8 +33,8 @@ function growthBody(character: DabaiChar, assets: DabaiLabAsset[], relation: Dab
     relation,
     currentRealm,
     isProtagonist(character) ? resolveRealmChapter(meta) : null,
-  )
-  if (events.length === 0) return <p className="py-1 text-sm text-gray-400">暂无 —— 随写章复盘记录境界突破、获得物与关系变化。</p>
+  ).filter((g) => g.kind !== 'realm')
+  if (events.length === 0) return <p className="py-1 text-sm text-gray-400">暂无 —— 随写章复盘记录获得物与关系变化（境界见中栏「境界台账」）。</p>
   return (
     <ol className="relative ml-1 space-y-3 border-l-2 border-gray-100 pl-4">
       {events.map((g, i) => (

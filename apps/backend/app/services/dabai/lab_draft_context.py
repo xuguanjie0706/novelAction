@@ -405,7 +405,9 @@ def _build_panel_block(
 
     location = str(s.get("location") or "").strip()
     if location:
-        lines.append(f"- 章末位置：{location}（本章开笔位置以此与上一章正文结尾为准）")
+        lines.append(
+            f"- 章末位置锚点：{location}（台账坐标；下章开笔须语义对齐，正文勿照抄·格式）",
+        )
 
     # 品阶数字 → 汉字标签（与 lab_ledger._GRADE_LABELS 保持一致）
     _PANEL_GRADE = {0: "凡品", 1: "灵品", 2: "仙品", 3: "神品", 4: "传说"}

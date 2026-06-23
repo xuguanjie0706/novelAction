@@ -27,6 +27,7 @@ export interface AutoDebriefResult {
   character_updates?: Array<{
     character_id?: string
     current_realm?: string
+    realm_change_reason?: string
     realm_rank?: number
     current_location?: string
     location_change_reason?: string
@@ -151,6 +152,7 @@ export async function autoCommitGeneratedChapterDebrief(
     .map((update) => {
       const entry: Record<string, unknown> = { character_id: update.character_id }
       if (update.current_realm) entry.current_realm = update.current_realm
+      if (update.realm_change_reason) entry.realm_change_reason = update.realm_change_reason
       if (update.realm_rank != null) entry.realm_rank = update.realm_rank
       if (update.current_location) entry.current_location = update.current_location
       if (update.location_change_reason) entry.location_change_reason = update.location_change_reason

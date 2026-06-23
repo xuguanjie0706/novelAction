@@ -124,13 +124,15 @@ Project
 快速引用、`current_status`当前状态（alive/dead...）、`current_location`位置、
 `author_notes`作者备注、`faction_id`/`faction_rank`关联势力表。
 
-### Character.extra.location_milestones（v3，2026-06，防空间漂移）
-地点逐章台账，与 `extra.debrief_realm_milestones`（境界轨迹）同模式：复盘时若角色位置发生变化，
+### Character.extra 逐章状态台账（v3，2026-06）
+地点逐章台账 `location_milestones` 与境界台账 `debrief_realm_milestones` 同模式：复盘时若角色位置发生变化，
 向数组 append 一条 `{chapter_number, chapter_id, chapter_title, location, from_location, reason, source}`
 （`current_location` 仍单值覆盖最新位置，台账保留完整轨迹）。
 - **写入**：`routers/ai/debrief_char_updater.py` 处理 `current_location` 时，仅在位置真正变化时落账，同章重复复盘按 `chapter_number` 去重。
 - **移动原因**：`reason` 来自复盘 AI 新增字段 `location_change_reason`（`debrief_extract.py` prompt + `routers/ai/schemas.py:CharacterUpdate`），手动 Tab/队列自动复盘双路径透传（`utils/generatedChapterDebrief.ts` / `hooks/useDebriefRun.ts`）；复盘面板 `CharUpdateSection.tsx` 提供可编辑「移动原因」框（填了新位置才出现）。
 - **写章注入**：`services/ai/context_builder_continuity.py` 在人物状态行追加「近期行踪[第N章→地点（原因）]」（末2条），并在「禁止事项」加空间连续性硬约束：位置变化必须在正文交代移动过程与原因、合时间线与常理，禁止无交代瞬移。
+- **境界台账**：境界真正变化时写 `{chapter_number, chapter_id, chapter_title, from_realm, realm_name, realm_rank, reason, source}`；`reason` 来自 `realm_change_reason`，必须是正文明确写出的破境/跌境事件、资源、过程或代价。手动复盘可编辑，人物页「复盘突破」展示正文依据，写章上下文注入最近 2 条境界因果。`plan_auto` 条目标注为章纲轴自动对齐，禁止冒充正文依据。
+- **重写撤销**：`clear_chapter_rewrite_derivatives` 在整章重写/删章前恢复全人物与资产（Item/Skill/Faction）复盘前快照，并按 `chapter_id` 清除境界、地点、成长阶段、技能/道具引用、语风演化、故事线节拍、下一章指令、认知专名/锁定事件、记忆、章节索引、伏笔、读者承诺、复盘缓存/审计；本章复盘新建人物/资产带 `source_chapter_id` 并随旧稿撤销。资产快照复用 `ChapterDebriefUndo` JSON（无 migration），认知台账使用 `term_events` 保存章级来源。若重写非最新章，系统从后往前失效该章及所有后续已复盘派生（后续正文保留），避免后章 canon 继续引用旧稿；重写后须顺序重新复盘。
 
 ### OutlineNode 增强字段（v2）
 新增：`storyline_ids`关联故事线、`involved_character_ids`出场人物、`key_item_ids`关键道具、
@@ -358,6 +360,7 @@ logline
 - [x] RagRetrievalLog 落库（每次检索可查 source / status / hits）
 - [x] 卷级结构化战力时间轴（`/outline/power-timeline` + 创作端「战力轴」页）
 - [x] **地点逐章台账 + 空间防漂移**（2026-06）：`Character.extra.location_milestones` 逐章记录位置变化与移动原因（`location_change_reason`）；复盘双路径透传 + 可编辑「移动原因」框；写章注入「近期行踪」与空间连续性硬约束。地点入库仍走复盘期 `location_debrief.enrich_new_locations`（queue_auto 经 `chapter-debrief` 已触发，非 Bootstrap/势力生成期）
+- [x] **境界逐章台账 + 重写防污染**（2026-06-23）：`Character.extra.debrief_realm_milestones` 记录人物/章节/from→to/正文原因；手动与队列复盘双路径透传、人物页展示、写章注入。整章重写前按 `chapter_id` 撤销本章状态台账、记忆、认知事件、成长/语风/指令等派生并恢复复盘前人物快照，修复快照值为 `None` 时无法回滚及 `realm_plan_floor` 漏快照。
 
 ### 大白文实验前端（dabai API，2026-06-10）
 

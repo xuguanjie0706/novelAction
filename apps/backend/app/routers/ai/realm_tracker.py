@@ -70,6 +70,7 @@ def make_realm_memory_chunk(
     char_name: str,
     before_realm: str | None,
     after_realm: str,
+    reason: str | None = None,
 ) -> MemoryChunk:
     """
     为境界突破生成一条高重要度 MemoryChunk。
@@ -92,6 +93,7 @@ def make_realm_memory_chunk(
     )
     content = (
         f"【境界里程碑】{char_name}{transition}。"
+        f"正文依据：{(reason or '未提取到明确破境依据，需回看正文核实').strip()}。"
         f"本条记忆优先级极高（importance=0.95），写章时必须严格遵守此境界状态，"
         f"禁止在后续章节出现该角色境界倒退或低于【{after_realm}】的描写。"
     )
@@ -218,6 +220,7 @@ def apply_realm_progression_side_effects(
     project_id: str,
     chapter_uuid: UUID,
     name_to_rank: dict[str, int] | None = None,
+    reason: str | None = None,
 ) -> MemoryChunk | None:
     """
     境界序号或名称有实质进展时：写 current_realm、arc_stages，必要时生成里程碑记忆。
@@ -258,5 +261,6 @@ def apply_realm_progression_side_effects(
             char_name=char.name,
             before_realm=before_realm,
             after_realm=label,
+            reason=reason,
         )
     return None

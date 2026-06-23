@@ -24,7 +24,10 @@ from app.models import (
     ReaderPromise,
     Scene,
     StoryLine,
+    OutlineNode,
+    Project,
 )
+from app.utils.chapter_numbering import display_chapter_number
 
 
 def chapter_content_word_count(content: str | None) -> int:
@@ -89,16 +92,111 @@ def delete_chapter_artifacts(
         resolve_quality_debts_detaching_chapter(db, project_id, chapter_id)
 
 
-def clear_chapter_rewrite_derivatives(db: Session, project_id: str, chapter_id: str) -> None:
+def restore_character_from_debrief_snapshot(character: Character, snapshot: dict) -> None:
+    """恢复复盘前人物覆盖字段；键存在时即恢复，包含 ``None``。"""
+    for field in (
+        "current_realm", "current_location", "current_status", "realm_rank",
+        "known_skills", "owned_items", "arc_stages", "speech_kit", "extra",
+    ):
+        if field in snapshot:
+            setattr(character, field, snapshot[field])
+
+
+def _remove_rows_for_chapter(rows: list | None, chapter_id: str, *, key: str = "chapter_id") -> tuple[list, bool]:
+    original = list(rows or [])
+    cleaned = [
+        row for row in original
+        if not (isinstance(row, dict) and str(row.get(key) or "") == str(chapter_id))
+    ]
+    return cleaned, len(cleaned) != len(original)
+
+
+def remove_chapter_character_derivatives(character: Character, chapter_id: str) -> bool:
+    """移除人物 JSON 中所有带本章来源的复盘增量，保留其他章节与手工设定。"""
+    changed = False
+
+    extra = dict(character.extra) if isinstance(character.extra, dict) else {}
+    for field in ("debrief_realm_milestones", "location_milestones"):
+        cleaned, field_changed = _remove_rows_for_chapter(extra.get(field), chapter_id)
+        if field_changed:
+            extra[field] = cleaned
+            changed = True
+    if changed:
+        character.extra = extra
+
+    for field, source_key in (("known_skills", "from_chapter_id"), ("owned_items", "from_chapter_id")):
+        cleaned, field_changed = _remove_rows_for_chapter(getattr(character, field, None), chapter_id, key=source_key)
+        if field_changed:
+            setattr(character, field, cleaned)
+            changed = True
+
+    cleaned_stages, stages_changed = _remove_rows_for_chapter(
+        getattr(character, "arc_stages", None), chapter_id,
+    )
+    if stages_changed:
+        character.arc_stages = cleaned_stages
+        changed = True
+
+    kit = dict(character.speech_kit) if isinstance(character.speech_kit, dict) else {}
+    cleaned_notes, notes_changed = _remove_rows_for_chapter(
+        kit.get("recent_evolution_notes"), chapter_id,
+    )
+    if notes_changed:
+        kit["recent_evolution_notes"] = cleaned_notes
+        character.speech_kit = kit
+        changed = True
+
+    return changed
+
+
+def clear_chapter_rewrite_derivatives(
+    db: Session,
+    project_id: str,
+    chapter_id: str,
+    *,
+    _cascade_downstream: bool = True,
+) -> None:
     """整章重写（replace_existing）或删章前调用：清掉本章旧稿派生数据。
 
-    处理顺序：
+    若重写的不是最新章，先从后往前撤销所有后续已复盘章节的派生数据；后续正文保留，
+    但必须在本章重写完成后按章重新复盘。否则 N+1 章台账仍引用第 N 章旧稿，必然污染 canon。
+
+    单章处理顺序：
     1. 从 undo 快照回滚覆盖型字段（character realm/location/status/realm_rank、storyline status）
     2. 按 chapter_id 精确清除追加型数据（storyline beats、character known_skills/owned_items）
     3. 清除 realm_milestones 快照中本章记录
     4. 清除记忆 / ChapterIndex / 复盘缓存 / 伏笔 / 读者承诺 / 复盘变更日志（不删质量债务行）
     5. 删除 undo 快照行
     """
+    if _cascade_downstream:
+        target = db.query(Chapter).filter(
+            Chapter.id == chapter_id,
+            Chapter.project_id == project_id,
+        ).first()
+        if target:
+            later_chapters = (
+                db.query(Chapter)
+                .filter(
+                    Chapter.project_id == project_id,
+                    Chapter.sort_order > target.sort_order,
+                    Chapter.deleted_at.is_(None),
+                )
+                .order_by(Chapter.sort_order.desc())
+                .all()
+            )
+            for later in later_chapters:
+                has_debrief = db.query(ChapterDebriefApplyRecord).filter(
+                    ChapterDebriefApplyRecord.project_id == project_id,
+                    ChapterDebriefApplyRecord.chapter_id == later.id,
+                ).first()
+                if has_debrief:
+                    clear_chapter_rewrite_derivatives(
+                        db,
+                        project_id,
+                        str(later.id),
+                        _cascade_downstream=False,
+                    )
+
     # ── 1. 回滚覆盖型字段 ─────────────────────────────────────────────────────
     undo = db.query(ChapterDebriefUndo).filter(
         ChapterDebriefUndo.chapter_id == chapter_id
@@ -114,16 +212,14 @@ def clear_chapter_rewrite_derivatives(db: Session, project_id: str, chapter_id: 
             ).first()
             if not char:
                 continue
-            if snap.get("current_realm") is not None:
-                char.current_realm = snap["current_realm"]
-            if snap.get("current_location") is not None:
-                char.current_location = snap["current_location"]
-            if snap.get("current_status") is not None:
-                char.current_status = snap["current_status"]
-            if snap.get("realm_rank") is not None:
-                char.realm_rank = snap["realm_rank"]
+            restore_character_from_debrief_snapshot(char, snap)
 
         for snap in (undo.storyline_statuses or []):
+            if snap.get("snapshot_type") == "assets":
+                from app.routers.ai.debrief_asset_undo import restore_project_asset_snapshot
+
+                restore_project_asset_snapshot(db, project_id, snap, chapter_id)
+                continue
             sid = snap.get("storyline_id")
             if not sid:
                 continue
@@ -131,8 +227,11 @@ def clear_chapter_rewrite_derivatives(db: Session, project_id: str, chapter_id: 
                 StoryLine.id == sid,
                 StoryLine.project_id == project_id,
             ).first()
-            if sl and snap.get("status") is not None:
-                sl.status = snap["status"]
+            if sl:
+                if "status" in snap:
+                    sl.status = snap["status"]
+                if "key_beats" in snap:
+                    sl.key_beats = snap["key_beats"]
 
     # ── 2. 清除追加型数据（beats / skills / items）────────────────────────────
     for sl in db.query(StoryLine).filter(StoryLine.project_id == project_id).all():
@@ -145,33 +244,34 @@ def clear_chapter_rewrite_derivatives(db: Session, project_id: str, chapter_id: 
                 sl.key_beats = cleaned
 
     for char in db.query(Character).filter(Character.project_id == project_id).all():
-        changed = False
-        if char.known_skills:
-            cleaned = [
-                s for s in char.known_skills
-                if not (isinstance(s, dict) and s.get("from_chapter_id") == chapter_id)
-            ]
-            if len(cleaned) != len(char.known_skills):
-                char.known_skills = cleaned
-                changed = True
-        if char.owned_items:
-            cleaned = [
-                i for i in char.owned_items
-                if not (isinstance(i, dict) and i.get("from_chapter_id") == chapter_id)
-            ]
-            if len(cleaned) != len(char.owned_items):
-                char.owned_items = cleaned
-                changed = True
-        # ── 3. 清除 realm_milestones 中本章记录 ──────────────────────────────
-        if isinstance(char.extra, dict) and char.extra.get("debrief_realm_milestones"):
-            milestones = char.extra["debrief_realm_milestones"]
-            cleaned_ms = [
-                m for m in milestones
-                if not (isinstance(m, dict) and m.get("chapter_id") == chapter_id)
-            ]
-            if len(cleaned_ms) != len(milestones):
-                char.extra = {**char.extra, "debrief_realm_milestones": cleaned_ms}
-                changed = True
+        extra = char.extra if isinstance(char.extra, dict) else {}
+        if str(extra.get("source_chapter_id") or "") == str(chapter_id):
+            db.delete(char)
+            continue
+        remove_chapter_character_derivatives(char, chapter_id)
+
+    # 下一章指令同样是本章复盘派生，不能让旧稿继续指导后文。
+    for node in db.query(OutlineNode).filter(OutlineNode.project_id == project_id).all():
+        extra = dict(node.extra) if isinstance(node.extra, dict) else {}
+        directives, changed = _remove_rows_for_chapter(
+            extra.get("directives_from_prev"), chapter_id, key="from_chapter_id",
+        )
+        if changed:
+            extra["directives_from_prev"] = directives
+            node.extra = extra
+
+    # 认知边界与锁定情节按章撤销，避免旧稿专名/事件继续进入写章上下文。
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if project:
+        chapter = db.query(Chapter).filter(Chapter.id == chapter_id).first()
+        if chapter:
+            from app.services.ai.narrative_knowledge import remove_chapter_narrative_knowledge
+
+            remove_chapter_narrative_knowledge(
+                project,
+                chapter_number=display_chapter_number(chapter.title, chapter.sort_order),
+                chapter_id=str(chapter_id),
+            )
 
     # ── 4. 清除记忆 / ChapterIndex / 复盘缓存 / 伏笔 ─────────────────────────
     delete_chapter_artifacts(db, project_id, chapter_id, with_quality_debts=False)

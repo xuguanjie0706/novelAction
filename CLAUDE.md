@@ -455,6 +455,17 @@ lab 侧（dabai_* 表）补齐写作期四件套，与精品文链路隔离、�
 - 注意：沙箱无 3.12 venv，仅过纯函数冒烟；合入前跑
   `pytest tests/test_dabai_lab_continuity.py tests/test_lab_ledger_p0.py tests/test_dabai_first_chapter_opening.py`。
 
+### 实验书架限知 POV 前置门禁 + 质量分/门控分分离（2026-06-23）
+
+- **上游止损**：`lab_pov_guard.py` 区分导演单物理在场 `cast/on_stage` 与
+  `offstage_involved`；幕后人物须声明主角可感知的 `information_channel`。分场每场必须包含主角，
+  `pov_character` 必须为主角；检测到「与此同时/另一边」远程切镜时自动低温重做一次，仍违规则中止正文。
+- **存量自愈**：整章重写时若旧导演单/分场存在 POV 结构问题，编排器自动强制刷新二者；重跑导演单必然重跑
+  其派生分场，禁止新导演单搭配旧施工图。
+- **质检可解释**：blocked 报告保留 `raw_score`（正文自身质量），兼容字段 `overall_score` 仍作门控分封顶 40；
+  LLM error/parse_error 改为 `status=unverified, overall_score=0`，禁止规则层假 100 分。创作端显示「质量分 / 门控分」。
+- **复盘防污染**：总结与记忆只提取主角合理已知事实，不把正文误写的幕后切镜、反派内心当成主角已知记忆。
+
 ### 实验书架 Bootstrap 新步骤：剧情资产+初始关系（story_assets，2026-06-11 五批）
 
 > 设计决策：台账种子从「规则启发式」升级为「建书期 LLM 生成」，且**开局既有 vs 剧情规划必须分流**——

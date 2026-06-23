@@ -27,7 +27,10 @@ _PREWARN_SYSTEM = (
     "2. 所有指令必须具体可执行（写什么、怎么切入），禁止「增强文采」「多留白」类建议；\n"
     "3. bridge_directives 只在确实存在位置/境界变化需要交代时给出，没有就留空数组，"
     "不要凭空编造移动；\n"
-    "4. 每个字段一两句话，简短直接。只返回 JSON，不要任何额外文字。"
+    "4. 每个字段一两句话，简短直接。只返回 JSON，不要任何额外文字。\n"
+    "5. ★章纲已锁定配角境界（见【章纲锁定·配角境界】）时，禁止为「越级震撼」擅自拔高对手层数；"
+    "beat_execution 只换写法，不改章纲战力档位与爽点类型（同境打脸 vs 越级碾压由章纲决定）。"
+    "6. reminders 不得写出与章纲锁定境界矛盾的层数要求。"
 )
 
 
@@ -41,8 +44,8 @@ def format_prewarn_block(result: dict | None) -> str:
         return ""
 
     lines = [
-        "【写前导演单（五拍落法与 fact_lock.realm_end 须一致；"
-        "开笔境界以【系统面板】/开笔基准为准，高于章纲节拍字面）】",
+        "【写前导演单（五拍落法须落实章纲情节结果；主角开笔/章末境界以【系统面板】/开笔基准为准；"
+        "配角境界以【章纲锁定】为准，禁止为爽感擅自改层）】",
     ]
     fact_parts = []
     if fact.get("realm"):
@@ -80,6 +83,21 @@ def format_prewarn_block(result: dict | None) -> str:
             rs = str(c.get("reason") or "").strip()
             segs.append(f"{nm}（{rs}）" if rs else nm)
         lines.append("- 本章出场人物及出场原因（只写这些人，按原因落到对应拍）：" + "；".join(segs))
+    offstage = [
+        item for item in (result.get("offstage_involved") or [])
+        if isinstance(item, dict) and item.get("name")
+    ]
+    if offstage:
+        segs = []
+        for item in offstage[:6]:
+            name = str(item.get("name") or "").strip()
+            reason = str(item.get("reason") or "幕后相关").strip()
+            channel = str(item.get("information_channel") or "延后揭示").strip()
+            segs.append(f"{name}（{reason}；信息渠道：{channel}）")
+        lines.append(
+            "- 幕后相关人物（不在场、禁止切镜；只能经主角可感知渠道呈现）："
+            + "；".join(segs)
+        )
     forbidden = [str(x) for x in (fact.get("forbidden") or []) if x]
     if forbidden:
         lines.append(f"- 禁止出现：{'；'.join(forbidden[:5])}")

@@ -161,7 +161,9 @@ def _sync_meta_from_panel(db: Session, project: DabaiProject, chapter_number: in
     )
     meta = dict(project.meta or {})
     if prev and isinstance(prev.snapshot, dict):
-        realm = str(prev.snapshot.get("realm") or "").strip()
+        from app.services.dabai.lab_realm_baseline import _label_from_snapshot
+
+        realm = _label_from_snapshot(prev.snapshot, project).strip()
         if realm:
             meta["protagonist_realm"] = realm
             meta["protagonist_realm_chapter"] = prev.chapter_number
@@ -222,6 +224,8 @@ def clear_dabai_chapter_writing(
 
     _sync_meta_from_panel(db, project, ch_num)
     _reset_outline_realm_rank(db, ch)
+    from app.services.dabai.lab_prewarn_outline_lock import sync_cast_realm_from_outline
+    sync_cast_realm_from_outline(db, project, ch)
 
     ch.content = ""
     ch.status = "planned"

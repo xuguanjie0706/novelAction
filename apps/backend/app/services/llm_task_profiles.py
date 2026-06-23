@@ -89,11 +89,11 @@ TASK_PROFILES: dict[str, dict] = {
         "presence_penalty": 0.0,
     },
     "dabai.write": {
-        # 大白文专线：五拍结构要稳，但正文需留文采变化（过低易逐字复刻章纲）
-        "temperature": 0.84,
+        # 大白文：结构稳 + 压低套话重复（自然度链路 2026-06）
+        "temperature": 0.78,
         "top_p": 0.92,
-        "frequency_penalty": 0.2,
-        "presence_penalty": 0.12,
+        "frequency_penalty": 0.35,
+        "presence_penalty": 0.25,
     },
     "dabai.sceneplan": {
         # dabai 分场调度：结构要稳（JSON 五字段齐），台词弹药需要一点锋芒

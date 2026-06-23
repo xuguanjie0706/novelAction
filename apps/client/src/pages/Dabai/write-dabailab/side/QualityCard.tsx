@@ -109,6 +109,9 @@ export default function QualityCard({
   )
   const canRewrite = canApplyQualityRewrite(report) && Boolean(onApplyRewrite)
   const canQcPatch = canQcPatchRewrite(report) && hasContent && Boolean(onQcPatchRewrite)
+  const qualityScore = report?.status === 'blocked' && report.raw_score != null
+    ? report.raw_score
+    : report?.overall_score
 
   return (
     <div className="space-y-3 text-xs">
@@ -164,11 +167,15 @@ export default function QualityCard({
       {report ? (
         <>
           <div className="flex items-baseline gap-2">
-            <span className={clsx('text-2xl font-bold', scoreColor(report.overall_score ?? 0))}>
-              {report.overall_score ?? '—'}
+            <span className={clsx('text-2xl font-bold', scoreColor(qualityScore ?? 0))}>
+              {qualityScore ?? '—'}
             </span>
             <span className="text-gray-500">
-              分 · {{ ok: '通过', warning: '有警告', blocked: '被阻断' }[report.status ?? ''] ?? report.status}
+              {report.status === 'blocked' && report.raw_score != null
+                ? `质量分 · 未通过（门控 ${report.overall_score ?? 40}）`
+                : report.status === 'unverified'
+                  ? '分 · 质检未完成'
+                  : `分 · ${{ ok: '通过', warning: '有警告', blocked: '被阻断' }[report.status ?? ''] ?? report.status}`}
             </span>
             {report.llm_status && report.llm_status !== 'ok' ? (
               <span className="ml-auto rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500">

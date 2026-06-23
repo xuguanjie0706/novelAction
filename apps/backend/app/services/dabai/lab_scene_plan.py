@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 from app.models.dabai_lab import DabaiScenePlan
 from app.services.dabai.lab_draft_context import LabDraftContext
+from app.services.dabai.lab_pov_guard import scene_plan_pov_issues
 from app.services.dabai.lab_prompt_shared import (
     build_power_ladder_block,
     build_witness_lock_block,
@@ -31,7 +32,10 @@ from app.services.dabai.lab_word_budget import (
     scene_plan_from_row,
 )
 from app.services.dabai.lab_prompt_shared import prewarn_cast_names
-from app.services.dabai.prose.opening_policy import ch1_benchmark_block
+from app.services.dabai.lab_phrase_guard import (
+    format_witness_reaction_instruction,
+    witness_reaction_mode_index,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +53,8 @@ _SCENEPLAN_SYSTEM = (
     "2. 五拍映射参考：场1=憋屈现场（压迫者带具体羞辱动作与台词）→ "
     "场2=扳机+引爆（金手指/反击的具体过程）→ 场3=爽点兑现（见证者分级反应）"
     "→ 可选场4=钩子收尾（定格/悬念一句，勿与场3重复同一动作）；可按本章实际合并或调整；\n"
+    "2.4 见证者反应：为每位见证者指定不同 reaction mode（1～4 轮换），"
+    "写入 witness_reactions；beats 用具体动作/物件，禁止「不敢置信/如坠冰窟」套话；\n"
     "2.5 黄金第一章特别要求：opening_line 须对齐【对标改编指引】/卷 opening_setup——"
     "从对标书开篇弧换皮落地（动作/对白/冲突入场），禁止照搬对标书原句；"
     "只禁无冲突的环境铺陈/纯回忆/世界观介绍开篇；\n"
@@ -62,7 +68,9 @@ _SCENEPLAN_SYSTEM = (
     "丹炉的焦味），正文用它落地，一场一个就够；\n"
     "5. 尊重给定的事实基准（前情/面板/台账/导演单），禁止编造未持有的能力；"
     "★在场人物以【导演单确认的本章出场人物】为准：characters_on_stage 只能取自该名单，"
-    "按各人出场原因安排到对应场，禁止另塞名单外的人；主角 POV 默认全程在场★；\n"
+    "按各人出场原因安排到对应场，禁止另塞名单外的人；★每一场都必须由主角 POV 承载，"
+    "characters_on_stage 必须包含主角，pov_character 必须等于主角。禁止『与此同时/另一边』"
+    "切到幕后地点，幕后反应只能经主角可见/可听的传音、法镜回声、口信或现场动作呈现★；\n"
     "6. word_budget：各场预算之和必须 **严格等于** 章纲目标字数（见 user 首行），"
     "爽点/引爆场占大头，位移承接场可偏短；禁止自行放大总预算。\n"
     "只返回 JSON，不要任何解释。"
@@ -162,7 +170,7 @@ def build_sceneplan_prompt(
             parts.append(
                 "【导演单确认的本章出场人物（characters_on_stage 只能从这些人里取，"
                 "按各人出场原因分配到对应场；禁止另塞导演单未点名的人物，"
-                "主角 POV 默认全程在场）】\n" + cast_lines
+                "主角必须在每一场，且每场 pov_character 都必须是主角）】\n" + cast_lines
             )
         if opening_dir:
             parts.append(f"【导演单开篇指令（opening_line 必须体现）】\n{opening_dir}")
@@ -182,9 +190,12 @@ def build_sceneplan_prompt(
         "{\n"
         '  "opening_line": "开篇写法指令（≤50字，勿写完整首句正文）：从什么动作/对白/感官切入、'
         '前3行进冲突现场，禁止环境/回忆开篇",\n'
+        f'  "witness_reactions": [{{"name": "见证者名", "mode": {witness_reaction_mode_index(int(ch.chapter_number or 1))}, '
+        '"beats": ["具体动作反应1", "动作反应2"]}}],\n'
         '  "scenes": [\n'
         "    {\n"
         '      "order": 1, "name": "场名(≤8字)", "location": "具体地点",\n'
+        '      "pov_character": "主角名（每场必须相同）",\n'
         '      "characters_on_stage": ["在场人物（只能取自导演单确认的出场人物名单）"],\n'
         '      "goal": "本场承担的节拍（憋屈/扳机/引爆/爽点/钩子）",\n'
         '      "event": "发生什么：具体动作链（谁做了什么→对方怎么接→局面怎么变）",\n'
@@ -195,12 +206,17 @@ def build_sceneplan_prompt(
         "    }\n"
         "  ]\n"
         "}\n"
+        f"witness_reactions 须覆盖章纲见证者（每人 mode 可不同，beats 用动作/物件勿用套话）；"
         f"scenes 共 2-4 场，word_budget 合计必须等于 {target}（示例单场约 {per_scene}，按节拍自行分配）。"
     )
     return _SCENEPLAN_SYSTEM, "\n\n".join(parts)
 
 
-def format_scene_block(result: dict) -> str:
+def format_scene_block(
+    result: dict,
+    *,
+    chapter_number: int = 0,
+) -> str:
     """分场 JSON → 注入正文 prompt 的调度块。结构残缺时返回空串（降级）。"""
     scenes = result.get("scenes")
     if not isinstance(scenes, list) or not scenes:
@@ -233,9 +249,11 @@ def format_scene_block(result: dict) -> str:
             lines.append(f"    感官锚点：{sc['sensory_anchor']}")
         if sc.get("end_turn"):
             lines.append(f"    场末转折：{sc['end_turn']}")
+    ch_num = int(chapter_number or result.get("chapter_number") or 0)
+    wr = result.get("witness_reactions")
+    lines.append(format_witness_reaction_instruction(ch_num, wr if isinstance(wr, list) else None))
     lines.append(
-        "  ★每场写细但控字：动作拆成连续画面、对话有来回，"
-        "见证者反应按 愣住→不信→震惊→心服 走台阶；不得超过各场 word_budget 上限。"
+        "  ★每场写细但控字：动作拆成连续画面、对话有来回；不得超过各场 word_budget 上限。"
     )
     return "\n".join(lines)
 
@@ -261,7 +279,7 @@ def load_lab_scene_plan(db: Session, chapter_id: UUID) -> str:
         return format_scene_block({
             "scenes": row.scenes,
             "opening_line": row.opening_line or "",
-        })
+        }, chapter_number=int(row.chapter_number or 0))
     return ""
 
 
@@ -281,12 +299,12 @@ def load_lab_scene_plan_with_result(
     brief = (row.brief or "").strip()
     result = _result_from_row(row, ch)
     if result:
-        brief = format_scene_block(result) or brief
+        brief = format_scene_block(result, chapter_number=int(ch.chapter_number or 0)) or brief
     elif row.scenes:
         brief = format_scene_block({
             "opening_line": row.opening_line or "",
             "scenes": row.scenes,
-        })
+        }, chapter_number=int(ch.chapter_number or 0))
     return brief, result
 
 
@@ -315,7 +333,7 @@ def refresh_lab_scene_block(
         prev_tail=prev_tail,
     )
     refreshed = finalize_scene_plan_result(refreshed, ch)
-    brief = format_scene_block(refreshed)
+    brief = format_scene_block(refreshed, chapter_number=int(ch.chapter_number or 0))
     if brief:
         return brief, refreshed
     return load_lab_scene_plan_with_result(db, ch)
@@ -388,8 +406,33 @@ async def resolve_lab_scene_plan(
         result = inject_prewarn_into_scene_plan(
             result, pre_warn_result, ch, prev_ch, prev_tail=ctx.prev_tail,
         )
+        from app.services.dabai.lab_ledger import protagonist_name
+
+        protag = protagonist_name(project)
+        pov_issues = scene_plan_pov_issues(result, protagonist=protag)
+        if pov_issues:
+            repair_user = (
+                user
+                + "\n\n【上次分场被限知视角门禁驳回】\n- "
+                + "\n- ".join(pov_issues[:4])
+                + "\n请整份重新生成：每场都包含主角且 pov_character=主角；"
+                "删除远程独立场，把幕后影响改成主角可见/可听的信息渠道。"
+            )
+            repaired_raw = await call_with_retry(
+                svc, system, repair_user, max_tokens=2000, task="dabai.sceneplan",
+                sampling={"temperature": 0.35},
+            )
+            result = parse_json(repaired_raw)
+            if not isinstance(result, dict):
+                raise ValueError("分场 POV 修复 JSON 解析失败")
+            result = inject_prewarn_into_scene_plan(
+                result, pre_warn_result, ch, prev_ch, prev_tail=ctx.prev_tail,
+            )
+            pov_issues = scene_plan_pov_issues(result, protagonist=protag)
+            if pov_issues:
+                raise ValueError("分场限知视角不合法：" + "；".join(pov_issues[:3]))
         result = finalize_scene_plan_result(result, ch)
-        brief = format_scene_block(result)
+        brief = format_scene_block(result, chapter_number=int(ch.chapter_number or 0))
         if not brief:
             raise ValueError("分场结构残缺（scenes 为空）")
         result["version"] = SCENEPLAN_VERSION

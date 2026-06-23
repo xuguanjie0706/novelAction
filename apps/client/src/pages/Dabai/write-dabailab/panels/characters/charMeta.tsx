@@ -97,20 +97,44 @@ export function resolveRealmChapter(meta?: Record<string, unknown> | null): numb
   return null
 }
 
+/** 境界标签是否含小层（层/重/·第N层）。 */
+function realmLabelRichness(s: string): number {
+  if (!s) return 0
+  if (/[一二三四五六七八九十\d]+[重层]|·第\s*\d+\s*层/.test(s)) return 2
+  if (/[境期]/.test(s)) return 1
+  return 0
+}
+
 /**
- * 人物档案展示用境界：主角优先读复盘回写的 meta/extra.current_realm，
- * 非主角仍用 bootstrap 的 start_realm。
+ * 人物档案展示用境界：在 extra / meta / start_realm 中选信息最完整的一条。
+ * 避免复盘只写了「练气期」裸大境却盖住带小层的 start_realm。
  */
 export function resolveDisplayRealm(
   c: DabaiChar,
   meta?: Record<string, unknown> | null,
 ): string {
-  const start = field(c, 'start_realm')
-  if (!isProtagonist(c)) return start
-  const fromMeta = meta ? field(meta as DabaiChar, 'protagonist_realm') : ''
   const extra = (c.extra && typeof c.extra === 'object' ? c.extra : null) as Record<string, unknown> | null
   const fromExtra = extra ? fmtVal(extra.current_realm) : ''
-  return fromMeta || fromExtra || start
+  const start = field(c, 'start_realm')
+  const fromMeta = isProtagonist(c) && meta ? field(meta as DabaiChar, 'protagonist_realm') : ''
+  const candidates = [fromExtra, fromMeta, start].filter(Boolean)
+  if (!candidates.length) return ''
+  return candidates.reduce((best, cur) => (
+    realmLabelRichness(cur) > realmLabelRichness(best) ? cur : best
+  ))
+}
+
+/** 首次登场章号（章纲回写 / 复盘 debrief）。 */
+export function resolveDebutChapter(c: DabaiChar): number | null {
+  const extra = (c.extra && typeof c.extra === 'object' ? c.extra : null) as Record<string, unknown> | null
+  if (!extra) return null
+  const ch = extra.debut_chapter
+  if (typeof ch === 'number' && Number.isFinite(ch)) return ch
+  if (typeof ch === 'string' && ch.trim()) {
+    const n = Number(ch)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
 }
 
 // ── 成长路线（按章聚合的变化轨迹）─────────────────────────────

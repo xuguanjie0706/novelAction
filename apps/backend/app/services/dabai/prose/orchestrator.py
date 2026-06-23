@@ -19,7 +19,9 @@ from app.services.dabai.lab_draft_trace import (
     llm_call_context_from_trace,
     log_lab_draft_trace,
 )
-from app.services.dabai.lab_ledger import build_ledger_block, seed_ledgers
+from app.services.dabai.lab_ledger import build_ledger_block, protagonist_name, seed_ledgers
+from app.services.dabai.lab_phrase_guard import build_phrase_guard_block
+from app.services.dabai.lab_pov_guard import prewarn_pov_issues, scene_plan_pov_issues
 from app.services.dabai.lab_post_write import spawn_post_write_pipeline
 from app.services.dabai.lab_pre_warn import (
     LabPreWarnError,
@@ -35,6 +37,7 @@ from app.services.dabai.lab_qc_feedback import (
 from app.services.dabai.lab_qc_patch import QcPatchError, iter_qc_patch_chunks
 from app.services.dabai.lab_scene_plan import (
     LabScenePlanError,
+    load_lab_scene_plan_with_result,
     refresh_lab_scene_block,
     resolve_lab_scene_plan,
 )
@@ -97,6 +100,9 @@ async def run_prose_pipeline(
         db, project.id, target_chapter=int(ch.chapter_number or 0),
     )
     chapter_boundary_block = build_forward_chapter_boundary_block(db, project.id, ch)
+    phrase_guard_block = build_phrase_guard_block(
+        db, project.id, int(ch.chapter_number or 1),
+    )
 
     prev_ch = None
     location_bridge_block = ""
@@ -119,10 +125,17 @@ async def run_prose_pipeline(
         _, stored_pre_warn = load_lab_pre_warn(db, ch.id)
         if pre_warn_stale(stored_pre_warn, draft_ctx.prev_content_hash):
             forced_refresh = True
+        protag = protagonist_name(project)
+        if prewarn_pov_issues(stored_pre_warn, protagonist=protag):
+            forced_refresh = True
+        _, stored_scene_plan = load_lab_scene_plan_with_result(db, ch)
+        if scene_plan_pov_issues(stored_scene_plan, protagonist=protag):
+            forced_refresh = True
         if _latest_qc_has_cliche(db, ch.id):
             forced_refresh = True
     rerun_pre = bool(req.rerun_pre_warn or forced_refresh)
-    rerun_scene = bool(req.rerun_scene_plan or forced_refresh)
+    # 分场是导演单的派生产物；导演单一旦重跑，旧分场不得继续复用。
+    rerun_scene = bool(req.rerun_scene_plan or rerun_pre or forced_refresh)
 
     chunks: list[str] = []
     pre_warn_block = ""
@@ -214,6 +227,7 @@ async def run_prose_pipeline(
             location_bridge_block=location_bridge_block,
             qc_feedback_block=qc_feedback_block,
             forward_qc_block=forward_qc_block,
+            phrase_guard_block=phrase_guard_block,
             chapter_boundary_block=chapter_boundary_block,
             realm_writing_block=draft_ctx.realm_writing_block,
             replace_existing=replace_existing,

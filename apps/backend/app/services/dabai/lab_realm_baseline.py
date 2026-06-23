@@ -19,11 +19,12 @@ _CN_NUM = {
 }
 
 _LEGACY_MAJOR_RE = re.compile(
-    r"(炼气|筑基|金丹|元婴|化神|炼虚|合体|大乘|淬体|气海|灵纹|神宫|王座|涅槃|至尊|神吞|引灵)"
+    r"(炼气|练气|筑基|金丹|元婴|化神|炼虚|合体|大乘|淬体|气海|灵纹|神宫|王座|涅槃|至尊|神吞|引灵)"
     r"(?:境|期)?",
 )
 
 _SUB_RE = re.compile(r"([一二三四五六七八九十]+|\d+)[重层]")
+_SUB_MARKERS_RE = re.compile(r"([一二三四五六七八九十]+|\d+)[重层]|·第\s*\d+\s*层")
 
 _BREAKTHROUGH_MARKERS = (
     "突破", "狂飙", "暴涨", "灌顶", "连破", "破境", "破级", "提升至", "直达", "冲破",
@@ -44,6 +45,41 @@ class RealmBaseline:
     sub_level: int | None
     source: str
     source_chapter: int | None = None
+
+
+def realm_label_has_sub(text: str) -> bool:
+    """境界字符串是否已含小层（层/重/·第N层）。"""
+    return bool(_SUB_MARKERS_RE.search((text or "").strip()))
+
+
+def ensure_full_realm_label(
+    realm: str,
+    sub: int | None,
+    project: DabaiProject,
+    *,
+    fallback_sub: int | None = None,
+) -> str:
+    """合并大境名与小层整数，禁止落库/注入仅「练气期」类裸大境。
+
+    复盘 ``realm_snapshot.realm`` 常只给大境名、``sub_level`` 另字段；
+    若二者未合并就写入 meta/面板/人物 extra，下游导演单与人物面板会丢小层。
+    """
+    text = (realm or "").strip()
+    if not text:
+        return text
+    parsed = parse_realm_label(text, project) or {}
+    if parsed.get("sub_level") is not None:
+        return str(parsed.get("label") or text)
+    use_sub = sub if sub not in (None, "") else fallback_sub
+    try:
+        use_sub = int(use_sub) if use_sub not in (None, "") else None
+    except (TypeError, ValueError):
+        use_sub = None
+    if use_sub is not None:
+        major = str(parsed.get("major_name") or text).strip()
+        if not realm_label_has_sub(major):
+            return f"{major}·第{use_sub}层"
+    return text
 
 
 def cn_to_int(text: str) -> int | None:
@@ -126,16 +162,19 @@ def parse_realm_label(text: str, project: DabaiProject) -> dict | None:
     }
 
 
-def _label_from_snapshot(snapshot: dict) -> str:
+def _label_from_snapshot(snapshot: dict, project: DabaiProject | None = None) -> str:
     realm = str(snapshot.get("realm") or "").strip()
-    sub = snapshot.get("sub_level")
     if not realm:
         return ""
-    if sub is not None:
-        try:
-            return f"{realm}·第{int(sub)}层"
-        except (TypeError, ValueError):
-            pass
+    sub = snapshot.get("sub_level")
+    try:
+        sub_int = int(sub) if sub not in (None, "") else None
+    except (TypeError, ValueError):
+        sub_int = None
+    if project is not None:
+        return ensure_full_realm_label(realm, sub_int, project)
+    if sub_int is not None and not realm_label_has_sub(realm):
+        return f"{realm}·第{sub_int}层"
     return realm
 
 
@@ -156,11 +195,11 @@ def load_opening_realm_baseline(
         .first()
     )
     if snap and isinstance(snap.snapshot, dict):
-        label = _label_from_snapshot(snap.snapshot)
+        label = _label_from_snapshot(snap.snapshot, project)
         parsed = parse_realm_label(label, project) or {}
         if label:
             return RealmBaseline(
-                label=label,
+                label=str(parsed.get("label") or label),
                 major_name=str(parsed.get("major_name") or snap.snapshot.get("realm") or ""),
                 major_rank=parsed.get("major_rank"),
                 sub_level=parsed.get("sub_level"),
@@ -172,8 +211,9 @@ def load_opening_realm_baseline(
     meta_label = str(meta.get("protagonist_realm") or "").strip()
     if meta_label:
         parsed = parse_realm_label(meta_label, project) or {}
+        full_label = str(parsed.get("label") or meta_label)
         return RealmBaseline(
-            label=meta_label,
+            label=full_label,
             major_name=str(parsed.get("major_name") or meta_label),
             major_rank=parsed.get("major_rank"),
             sub_level=parsed.get("sub_level"),
@@ -265,7 +305,10 @@ def sanitize_prewarn_realm(
     beats = dict(out.get("beat_execution") or {})
 
     if baseline and baseline.label:
-        fact["realm"] = baseline.label
+        fact["realm"] = ensure_full_realm_label(
+            baseline.label, baseline.sub_level, project,
+            fallback_sub=getattr(ch, "realm_sub_rank", None),
+        )
 
     end_hint = outline_realm_end_hint(ch, project)
     realm_end = str(fact.get("realm_end") or "").strip()
@@ -380,12 +423,17 @@ def apply_realm_from_debrief(
         except (TypeError, ValueError):
             sub_level = None
         if realm_str:
-            compose = f"{realm_str}·第{sub_level}层" if sub_level else realm_str
+            fallback_sub = getattr(ch, "realm_sub_rank", None)
+            compose = ensure_full_realm_label(
+                realm_str, sub_level, project, fallback_sub=fallback_sub,
+            )
             parsed = parse_realm_label(compose, project)
             if parsed:
-                label = parsed["label"]
+                label = str(parsed.get("label") or compose)
                 major_rank = parsed.get("major_rank")
                 sub_level = sub_level if sub_level is not None else parsed.get("sub_level")
+            else:
+                label = compose
 
     if not label:
         content = re.sub(r"<[^>]+>", "", ch.content or "").strip()
@@ -411,6 +459,13 @@ def apply_realm_from_debrief(
 
     if not label:
         return None
+
+    label = ensure_full_realm_label(
+        label, sub_level, project, fallback_sub=getattr(ch, "realm_sub_rank", None),
+    )
+    parsed_final = parse_realm_label(label, project) or {}
+    if parsed_final.get("sub_level") is not None:
+        sub_level = int(parsed_final["sub_level"])
 
     meta = dict(project.meta or {})
     meta["protagonist_realm"] = label

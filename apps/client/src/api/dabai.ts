@@ -127,7 +127,7 @@ export type DabaiDraftEvent =
   | { event: 'quality_running'; dabai_mode: boolean }
   | {
       event: 'quality_done'; ok: boolean; status?: string
-      overall_score?: number; llm_status?: string; error?: string
+      overall_score?: number; raw_score?: number; llm_status?: string; error?: string
     }
   | { event: 'debrief_running'; dabai_mode: boolean }
   | {

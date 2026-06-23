@@ -4,11 +4,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.services.dabai.lab_realm_baseline import (
+    RealmBaseline,
     build_writing_realm_block,
+    ensure_full_realm_label,
     parse_realm_label,
+    realm_label_has_sub,
     sanitize_prewarn_realm,
 )
-from app.services.dabai.lab_realm_baseline import RealmBaseline
 
 
 def _project(levels=None):
@@ -37,6 +39,13 @@ def test_parse_lianqi_legacy_major():
     assert out is not None
     assert out["sub_level"] == 1
     assert out["major_rank"] == 1
+
+
+def test_ensure_full_realm_label_merges_bare_major_and_sub():
+    p = _project([{"rank": 1, "name": "练气期"}])
+    out = ensure_full_realm_label("练气期", 2, p)
+    assert realm_label_has_sub(out)
+    assert "2" in out or "二" in out
 
 
 def test_writing_realm_block_no_hard_cap():
@@ -70,6 +79,7 @@ def test_sanitize_prewarn_fixes_stall_after_surge():
         shuang_payoff="",
         emotion_turn="",
         title="",
+        realm_sub_rank=None,
     )
     baseline = RealmBaseline(
         label="炼气境·第1层",

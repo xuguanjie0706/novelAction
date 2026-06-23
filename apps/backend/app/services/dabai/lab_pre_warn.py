@@ -14,7 +14,9 @@ from sqlalchemy.orm import Session
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 from app.models.dabai_lab import DabaiPreWarnRecord
 from app.services.dabai.lab_draft_context import LabDraftContext
+from app.services.dabai.lab_pov_guard import normalize_prewarn_pov, prewarn_pov_issues
 from app.services.dabai.lab_prompt_shared import (
+    POV_LIMITED_RULES,
     build_power_ladder_block,
     build_witness_lock_block,
     sanitize_prewarn_result,
@@ -24,6 +26,13 @@ from app.services.dabai.lab_realm_baseline import (
     format_baseline_block,
     load_opening_realm_baseline,
     sanitize_prewarn_realm,
+)
+from app.services.dabai.lab_prewarn_outline_lock import (
+    build_outline_cast_lock_block,
+    extract_outline_cast_realms,
+    format_locked_realm_label,
+    sanitize_prewarn_outline_lock,
+    sync_cast_realm_from_outline,
 )
 from app.services.dabai.prewarn_format import _PREWARN_SYSTEM, format_prewarn_block
 from app.services.dabai.prose.beat_contract import beat_similarity, resolve_beats
@@ -35,7 +44,7 @@ from app.services.dabai.prose.opening_policy import (
 
 logger = logging.getLogger(__name__)
 
-PREWARN_VERSION = "dabai-lab-prewarn-v3"
+PREWARN_VERSION = "dabai-lab-prewarn-v4"
 
 _OPENING_CHAPTER_RULE = (
     "【开篇章规则（尚无已写正文）】事实基准=【开局剧情资产】+【当前台账】+金手指设定，"
@@ -45,8 +54,12 @@ _OPENING_CHAPTER_RULE = (
 )
 
 _LAB_PREWARN_SYSTEM = (
-    _PREWARN_SYSTEM + "\n5. 开篇章（无已写正文）时 conflict_notes 必须 []，"
+    _PREWARN_SYSTEM + POV_LIMITED_RULES
+    + "\n5. 开篇章（无已写正文）时 conflict_notes 必须 []，"
     "章纲与开局台账不一致只在 beat_execution 内按台账修正落法。"
+    "\n6. cast 与 fact_lock.on_stage 只允许填写和主角处于同一叙事现场、能被主角直接感知的人物；"
+    "幕后操盘者、远程观察者写入 offstage_involved，禁止为了交付见证者反应切到另一地点。"
+    "若必须交付幕后反应，只能设计主角可见/可听的信息渠道（传音、法镜回声、口信、现场动作）。"
 )
 
 
@@ -163,23 +176,43 @@ def _build_lab_beat_block(ch: DabaiChapterOutline, pre_warn_result: dict | None 
     ])
 
 
-def _character_roster_block(project: DabaiProject) -> str:
+def _character_roster_block(
+    project: DabaiProject,
+    ch: DabaiChapterOutline | None = None,
+) -> str:
     """可选出场人物表：导演单据此识别本章需出场的人物（cast 只能从中挑）。"""
     chars = [c for c in (project.characters or []) if c.name]
     if not chars:
         return ""
+    locked = extract_outline_cast_realms(ch) if ch else {}
     lines = []
     for c in chars[:24]:
         seg = f"  - {c.name}（{c.role or '配角'}"
         if c.tier:
             seg += f"/{c.tier}"
+        name = str(c.name).strip()
+        if name in locked:
+            realm = format_locked_realm_label(locked[name], project)
+            seg += f"，境界:{realm}（章纲锁定）"
+        else:
+            realm = str(c.start_realm or "").strip()
+            extra = c.extra if isinstance(c.extra, dict) else {}
+            if extra.get("current_realm"):
+                realm = str(extra["current_realm"])
+            if realm:
+                seg += f"，境界:{realm}"
+        extra = c.extra if isinstance(c.extra, dict) else {}
+        debut = extra.get("debut_chapter")
+        if debut not in (None, ""):
+            seg += f"，第{debut}章登场"
         if c.function:
             seg += f"，职能:{str(c.function)[:24]}"
         seg += "）"
         lines.append(seg)
     return (
         "【可选出场人物表（cast 只能从中挑选，按本章实际需要取人，"
-        "非必要人物不要硬塞）】\n" + "\n".join(lines)
+        "非必要人物不要硬塞；有「章纲锁定」的境界以章纲为准，勿用 bootstrap 旧层）】\n"
+        + "\n".join(lines)
     )
 
 
@@ -216,7 +249,7 @@ def build_lab_prewarn_prompt(
     witness_block = build_witness_lock_block(ch)
     if witness_block:
         parts.append(witness_block)
-    roster_block = _character_roster_block(project)
+    roster_block = _character_roster_block(project, ch)
     if roster_block:
         parts.append(roster_block)
     if ctx.narrative_state_block.strip():
@@ -259,8 +292,12 @@ def build_lab_prewarn_prompt(
         parts.append(chapter_boundary_block.strip())
     if opening_policy.strip():
         parts.append(opening_policy.strip())
-    parts.append("【本章章纲五拍（卷展开参考；beat_execution 须换写法，禁止照抄 yaqu 原句）】")
+    parts.append("【本章章纲五拍（卷展开参考；beat_execution 须换写法，禁止照抄 yaqu 原句；"
+                 "配角境界/战力档位不得偏离章纲）】")
     parts.append(_build_lab_beat_block(ch))
+    outline_lock = build_outline_cast_lock_block(ch)
+    if outline_lock.strip():
+        parts.append(outline_lock.strip())
     if opening_no_prior:
         parts.append(_OPENING_CHAPTER_RULE)
     if replace_existing:
@@ -287,12 +324,17 @@ def build_lab_prewarn_prompt(
         "台账与【可选出场人物表】确定本章必须出场的人物，并为每人写明出场原因"
         "（推动哪一拍/承担什么功能/与主角什么关系）；只取本章真正需要的人，"
         "非必要人物不要硬塞；fact_lock.on_stage 必须与 cast 的名字完全一致。"
+        "★cast/on_stage=物理同场人物；远程观察、幕后指使但不与主角同场的人只能写入"
+        "offstage_involved，并写清 information_channel，禁止远程切镜。★"
     )
     parts.append(
         "对照以上资料完成裁决与指导，只返回 JSON：\n"
         "{\n"
         '  "cast": [{"name": "本章出场人物（用人物表/称谓锁定中的名字）", '
         '"reason": "出场原因：推动哪一拍/承担什么功能/与主角关系，≤30字"}],\n'
+        '  "offstage_involved": [{"name": "幕后相关但不与主角同场的人物", '
+        '"reason": "幕后作用，≤30字", "information_channel": "主角如何看见/听见其影响；'
+        '无可靠渠道则填延后揭示"}],\n'
         '  "fact_lock": {\n'
         '    "realm": "本章开笔境界（大境·第N层，如 炼气境·第1层）",\n'
         '    "realm_sub_rank": 1,\n'
@@ -465,6 +507,21 @@ async def resolve_lab_pre_warn(
                 fact["forbidden"] = forbidden[:6]
                 result["fact_lock"] = fact
         result = normalize_opening_prewarn(result, opening_no_prior=opening_no_prior)
+        result = sanitize_prewarn_outline_lock(result, ch)
+        from app.services.dabai.lab_ledger import protagonist_name
+
+        protag = protagonist_name(project)
+        result = normalize_prewarn_pov(result, protagonist=protag)
+        pov_issues = prewarn_pov_issues(result, protagonist=protag)
+        if pov_issues:
+            raise ValueError("导演单限知视角不合法：" + "；".join(pov_issues[:3]))
+        if db is not None:
+            sync_logs = sync_cast_realm_from_outline(db, project, ch)
+            if sync_logs:
+                logger.info(
+                    "dabai-lab 章纲境界回写人物 chapter=%s: %s",
+                    ch.chapter_number, "；".join(sync_logs),
+                )
         result = _ensure_beat_not_copy(result, ch, project)
         result["version"] = PREWARN_VERSION
         # 上章正文指纹：上一章重写后据此判定本导演单已过期，强制重生成

@@ -20,6 +20,11 @@ from dabai.first_chapter_opening import (
     skip_ch1_cliche_lint,
     witness_stems,
 )
+from app.services.dabai.lab_qc_critical import run_critical_rule_checks
+from app.services.dabai.lab_phrase_guard import (
+    build_phrase_guard_block,
+    check_chapter_phrase_violations,
+)
 from app.services.dabai.lab_qc_prompt import build_lab_qc_prompt
 from app.services.dabai.lab_chapter_boundary import collect_future_cast_names
 from app.services.dabai.lab_prompt_shared import (
@@ -33,7 +38,7 @@ from app.services.dabai.lab_prompt_shared import (
 
 logger = logging.getLogger(__name__)
 
-LAB_QC_VERSION = "dabai-lab-qc-v3"
+LAB_QC_VERSION = "dabai-lab-qc-v4"
 
 # 见证者群体类同义词组（DLB-02 语义匹配；禁止在此硬编码具体书的人名/家族名）
 # 章纲词与正文词落在同一组即视为出现（如章纲「围观家奴」↔ 正文「家仆」）
@@ -164,7 +169,7 @@ def _rule_report(
     project: DabaiProject | None = None,
     ctx: LabDraftContext | None = None,
 ) -> dict:
-    """规则层：零 LLM 成本的硬检查。DLB-04 境界倒退为唯一阻断，其余 warning。"""
+    """规则层：零 LLM 成本的硬检查。DLB-04/07/08/09 为阻断，其余 warning。"""
     content = _plain_content(ch)
     warnings: list[dict] = []
     blockers: list[dict] = []
@@ -173,6 +178,12 @@ def _rule_report(
         regression = _check_realm_regression(ch, project, content)
         if regression:
             blockers.append(regression)
+        from app.services.dabai.lab_ledger import protagonist_name
+
+        protag = (protagonist_name(project) or "").strip()
+        blockers.extend(run_critical_rule_checks(
+            project, ch, content, protagonist_name=protag,
+        ))
 
     expected = ch.expected_words or 0
     if expected and content:
@@ -222,6 +233,17 @@ def _rule_report(
             bridge = _check_location_bridge(ch, prev, content, prev_tail=prev_tail)
             if bridge:
                 warnings.append(bridge)
+
+    if db is not None and project is not None and content:
+        phrase_hits = check_chapter_phrase_violations(
+            db, project.id, int(ch.chapter_number or 0), content,
+        )
+        if phrase_hits:
+            warnings.append({
+                "rule_id": "DBQ-07",
+                "message": f"近章禁词复述：{'、'.join(phrase_hits[:4])}",
+                "llm_overridable": True,
+            })
 
     if blockers:
         status = "blocked"
@@ -322,6 +344,9 @@ async def run_lab_quality(
             protected_cast = collect_future_cast_names(
                 db, project.id, int(ch.chapter_number or 0),
             )
+            phrase_guard_block = build_phrase_guard_block(
+                db, project.id, int(ch.chapter_number or 0),
+            )
             system, user = build_lab_qc_prompt(
                 project, ch, ctx,
                 prev_ch=prev_ch,
@@ -329,6 +354,7 @@ async def run_lab_quality(
                 next_chapters_block=_next_chapters_block(db, project, ch),
                 plain_content=plain,
                 protected_cast=protected_cast,
+                phrase_guard_block=phrase_guard_block,
             )
             raw = await call_with_retry(
                 svc, system, user, max_tokens=1800, task="dabai.quality",

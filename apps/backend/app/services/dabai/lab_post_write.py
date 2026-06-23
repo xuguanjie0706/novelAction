@@ -55,6 +55,7 @@ async def _run_post_write_pipeline(
                 events.put_nowait({"event": "quality_done", "ok": True,
                                    "status": report.get("status"),
                                    "overall_score": report.get("overall_score"),
+                                   "raw_score": report.get("raw_score"),
                                    "llm_status": report.get("llm_status")})
             except Exception as exc:  # noqa: BLE001
                 logger.warning("dabai-lab 写后质检失败 chapter=%s：%s", chapter_id, exc)

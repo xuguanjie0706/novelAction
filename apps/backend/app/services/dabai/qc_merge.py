@@ -5,9 +5,10 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
-QC_VERSION = "dabai-qc-v2"
+QC_VERSION = "dabai-qc-v3"
 
 _BEAT_KEYS = ("yaqu", "trigger", "yinbao", "payoff", "hook")
 _BEAT_LABELS = {
@@ -68,8 +69,61 @@ def _parse_future_cast_violations(llm: dict) -> list[dict]:
     return blockers
 
 
+_CRITICAL_KIND_RULE = {
+    "realm": "DBQ-08",
+    "pov": "DBQ-09",
+    "credibility": "DBQ-10",
+    "境界": "DBQ-08",
+    "可信": "DBQ-10",
+    "视角": "DBQ-09",
+}
+
+_CRITICAL_PREFIX_RE = re.compile(
+    r"^\[(境界|可信|视角|realm|pov|credibility)\]",
+    re.IGNORECASE,
+)
+
+
+def _parse_critical_violations(llm: dict) -> list[dict]:
+    """LLM 硬伤清单 → blocker（境界/视角/战力可信度）。"""
+    raw = llm.get("critical_violations")
+    if not isinstance(raw, list):
+        return []
+    blockers: list[dict] = []
+    for item in raw:
+        if isinstance(item, dict):
+            kind = str(item.get("kind") or item.get("type") or "").strip().lower()
+            msg = str(item.get("message") or item.get("reason") or "").strip()
+            if not msg:
+                continue
+            rid = _CRITICAL_KIND_RULE.get(kind, "DBQ-08")
+            blockers.append({"rule_id": rid, "message": msg[:160]})
+        elif isinstance(item, str) and item.strip():
+            blockers.append({"rule_id": "DBQ-08", "message": item.strip()[:160]})
+    return blockers
+
+
+def _blockers_from_prefixed_suggestions(llm: dict) -> list[dict]:
+    """chapter_suggestions 中带 [境界]/[可信]/[视角] 前缀的项升格为阻断。"""
+    tips = llm.get("chapter_suggestions") or llm.get("suggestions") or []
+    blockers: list[dict] = []
+    for s in tips:
+        text = str(s).strip()
+        m = _CRITICAL_PREFIX_RE.match(text)
+        if not m:
+            continue
+        kind = m.group(1).lower()
+        rid = _CRITICAL_KIND_RULE.get(kind, "DBQ-08")
+        body = _CRITICAL_PREFIX_RE.sub("", text).strip()
+        blockers.append({
+            "rule_id": rid,
+            "message": body[:160] if body else text[:160],
+        })
+    return blockers
+
+
 def _merge_report(rule: dict, llm: dict | None, llm_status: str) -> dict:
-    """规则 + LLM 合并：规则 blockers 仍是唯一阻断；LLM 只追加 warning 与建议。
+    """规则 + LLM 合并：硬伤（规则 DLB-07+ / LLM critical_violations）一律阻断。
 
     裁决权单轨：标记 ``llm_overridable`` 的规则 warning（如 DLB-03 位移证据）
     已注入 LLM prompt 由其裁决，LLM 正常返回时丢弃，避免规则误报否决 LLM 结论；
@@ -83,6 +137,22 @@ def _merge_report(rule: dict, llm: dict | None, llm_status: str) -> dict:
     if llm_status == "ok":
         rule_warnings = [w for w in rule_warnings if not w.get("llm_overridable")]
     report["warnings"] = rule_warnings
+    if llm_status in {"error", "parse_error"}:
+        report["raw_score"] = int(rule.get("overall_score") or 0)
+        report["warnings"] = [
+            *rule_warnings,
+            {
+                "rule_id": "DBQ-00",
+                "message": "LLM 质检未完成，本次报告不可作为通过依据，请重新质检",
+            },
+        ]
+        if report.get("blockers"):
+            report["status"] = "blocked"
+            report["overall_score"] = min(40, int(rule.get("overall_score") or 40))
+        else:
+            report["overall_score"] = 0
+            report["status"] = "unverified"
+        return report
     if not isinstance(llm, dict) or llm_status != "ok":
         return report
 
@@ -119,6 +189,22 @@ def _merge_report(rule: dict, llm: dict | None, llm_status: str) -> dict:
     if rep:
         warnings.append({"rule_id": "DBQ-04", "message": f"本章内重复铺陈：{rep[:80]}"})
 
+    naturalness = _coerce_score(llm.get("naturalness_score"), default=85)
+    overused = [
+        str(p).strip() for p in (llm.get("overused_phrases") or []) if str(p).strip()
+    ][:5]
+    witness_issue = str(llm.get("witness_reaction_issue") or "").strip()
+    if naturalness < 70:
+        msg = f"文字自然度偏低（{naturalness}分）"
+        if witness_issue:
+            msg += f"：{witness_issue[:60]}"
+        warnings.append({"rule_id": "DBQ-07", "message": msg[:120]})
+    elif overused:
+        warnings.append({
+            "rule_id": "DBQ-07",
+            "message": f"套话重复：{'、'.join(overused[:3])}"[:120],
+        })
+
     report["warnings"] = warnings
     report["llm"] = {
         "continuity_score": continuity,
@@ -128,9 +214,13 @@ def _merge_report(rule: dict, llm: dict | None, llm_status: str) -> dict:
         "beat_score": beat_score,
         "hook_score": hook,
         "hook_issue": str(llm.get("hook_issue") or "")[:200],
+        "naturalness_score": naturalness,
+        "overused_phrases": overused,
+        "witness_reaction_issue": witness_issue[:200],
         "chapter_suggestions": [
             str(s)[:120]
             for s in (llm.get("chapter_suggestions") or llm.get("suggestions") or [])
+            if not _CRITICAL_PREFIX_RE.match(str(s).strip())
         ][:3],
         "future_chapter_suggestions": [
             str(s)[:120] for s in (llm.get("future_chapter_suggestions") or [])
@@ -139,6 +229,7 @@ def _merge_report(rule: dict, llm: dict | None, llm_status: str) -> dict:
         "suggestions": [
             str(s)[:120]
             for s in (llm.get("chapter_suggestions") or llm.get("suggestions") or [])
+            if not _CRITICAL_PREFIX_RE.match(str(s).strip())
         ][:3],
     }
     llm_rewrite = str(llm.get("rewrite_prompt") or "").strip()
@@ -146,17 +237,40 @@ def _merge_report(rule: dict, llm: dict | None, llm_status: str) -> dict:
         report["llm"]["rewrite_prompt"] = llm_rewrite[:800]
 
     cast_blockers = _parse_future_cast_violations(llm)
-    if cast_blockers:
-        report["blockers"] = list(report.get("blockers") or []) + cast_blockers
+    critical_blockers = (
+        _parse_critical_violations(llm)
+        + _blockers_from_prefixed_suggestions(llm)
+    )
+    if cast_blockers or critical_blockers:
+        merged = list(report.get("blockers") or [])
+        seen = {str(b.get("message") or "") for b in merged}
+        for b in cast_blockers + critical_blockers:
+            if b.get("message") not in seen:
+                merged.append(b)
+                seen.add(str(b.get("message") or ""))
+        report["blockers"] = merged
 
-    # 综合分：任一 blocker（规则或 LLM 跨章边界）→ 40；
-    # 否则 衔接40% + 五拍40% + 钩子20%，再扣规则层 warning 计权（每条 -5 封顶 -15）
+    # 质量原始分与门控分分离：blocker 仍把兼容字段 overall_score 封顶 40，
+    # raw_score 保留正文自身质量，避免把「92分但有一条硬伤」误读为整体只有40分。
+    overall = round(
+        continuity * 0.35 + beat_score * 0.35 + hook * 0.15 + naturalness * 0.15,
+    )
+    penalty = 5 * len([w for w in rule_warnings if not w.get("score_exempt")])
+    raw_score = max(0, overall - min(penalty, 15))
+    report["raw_score"] = raw_score
     if report.get("blockers"):
         report["status"] = "blocked"
-        report["overall_score"] = 40
+        report["overall_score"] = min(40, int(report.get("overall_score") or 40))
+        if critical_blockers:
+            llm_part = report.get("llm") if isinstance(report.get("llm"), dict) else {}
+            report["llm"] = {
+                **llm_part,
+                "critical_violations": [
+                    {"kind": b.get("rule_id"), "message": b.get("message")}
+                    for b in critical_blockers
+                ],
+            }
         return report
-    overall = round(continuity * 0.4 + beat_score * 0.4 + hook * 0.2)
-    penalty = 5 * len([w for w in rule_warnings if not w.get("score_exempt")])
-    report["overall_score"] = max(0, overall - min(penalty, 15))
+    report["overall_score"] = raw_score
     report["status"] = "ok" if not warnings else "warning"
     return report

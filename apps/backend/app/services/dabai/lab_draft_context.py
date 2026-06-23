@@ -496,7 +496,7 @@ def build_lab_draft_context(
         prev_hook_block=_build_prev_hook_block(prev, hooks),
         prev_content_hash=prev_content_hash,
         narrative_state_block=narrative_state_block,
-        char_voice_block=build_char_voice_block(project, _chapter_stage_names(ch)),
+        char_voice_block=build_char_voice_block(project, _chapter_stage_names(ch), ch=ch),
         realm_writing_block=realm_writing_block,
     )
 

@@ -20,7 +20,7 @@ from app.models.dabai_lab import DabaiQualityReport
 # rule_id → 写给生成模型的规避指导语（不是给人看的报错文案）
 _RULE_GUIDANCE: dict[str, str] = {
     "DLB-01": "正文字数贴住 expected_words（±12%），不注水不腰斩",
-    "DLB-02": "章纲 witnesses 必须真实出场并给出分级反应（愣住→不信→震惊→心服）",
+    "DLB-02": "章纲 witnesses 须出场并给出分级反应（用动作/物件/空间，勿套话「不敢置信/如坠冰窟」）",
     "DLB-03": "跨场景章开篇先写位移/转场过程（怎么离开、经什么路径、怎么抵达），禁止无交代瞬移",
     "DLB-04": "境界不可倒退；提及旧境界须有「当年/突破自」类回忆语境",
     "DLB-06": "开篇须按 benchmark 改编换皮；禁止系统默认模板套话，禁止照搬对标书原句",
@@ -29,6 +29,13 @@ _RULE_GUIDANCE: dict[str, str] = {
     "DBQ-02": "五拍逐拍落实，payoff 必须写见证者的具体反应",
     "DBQ-03": "章末钩子要具体（更强敌人/更大机缘/打脸预告），禁用套话",
     "DBQ-04": "同一桥段只写一次，删掉重复铺陈/口水循环",
+    "DBQ-07": "套话/模板化见证者反应：换物件动作转义，禁用近章已出现的高频短语",
+    "DLB-07": "限知视角：禁止「此人正是…」「殊不知」式旁白报身份/修为；须对话/感知/议论",
+    "DLB-08": "配角境界与人物档案一致；旁白报错层须改对话或灵识感知",
+    "DLB-09": "越级碾压须有金手指明示动用或阴寒腐蚀/奇袭破绽铺垫",
+    "DBQ-08": "配角境界与档案/章纲矛盾——正文须改层或补突破描写",
+    "DBQ-09": "上帝视角/作者下场——改为限知感知或旁人议论",
+    "DBQ-10": "战力可信度硬伤——秒杀/废人须补金手指动用或破绽过程",
     "DBQ-05": "不得写死或永久移除后续章 involved 出场人物；本章须在 end_hook 处收笔",
 }
 
@@ -121,14 +128,15 @@ def build_lab_rewrite_prompt(report: dict) -> str:
 
 def attach_rewrite_prompt(report: dict, *, threshold: int = REWRITE_SCORE_THRESHOLD) -> dict:
     """score<threshold 时落库顶层 rewrite_prompt（优先 LLM 产出，否则规则合成）。"""
+    if report.get("status") == "unverified":
+        return {**report, "rewrite_prompt": ""}
     score = int(report.get("overall_score") or 0)
     llm = report.get("llm") if isinstance(report.get("llm"), dict) else {}
     llm_rp = str((llm or {}).get("rewrite_prompt") or "").strip()
     if score >= threshold:
-        report["rewrite_prompt"] = ""
-        return report
-    report["rewrite_prompt"] = (llm_rp or build_lab_rewrite_prompt(report))[:1500]
-    return report
+        return {**report, "rewrite_prompt": ""}
+    rewrite_prompt = (llm_rp or build_lab_rewrite_prompt(report))[:1500]
+    return {**report, "rewrite_prompt": rewrite_prompt}
 
 
 def build_chapter_range_qc_block(

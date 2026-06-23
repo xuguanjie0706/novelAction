@@ -65,17 +65,27 @@ _RESTRAINED_PROSE_BLOCK = (
     "每场至少一个这样的「位移/物件反应」细节，让读者自己读出情绪。\n"
 )
 
+# standard / loud 也注入：降 AI 味，与 restrained 的「物件转义」同向但不降调
+_WITNESS_PROSE_HINT = (
+    "\n★见证者与自然度（硬）★：\n"
+    "- 见证者反应须【分级递进】且【每章换写法】；优先物件/动作/空间（工具掉落、后退半步、"
+    "算盘停、茶盏悬在半空），少用「不敢置信/如坠冰窟/眼珠子都要掉出来/倒吸凉气」；\n"
+    "- 同一套话全书不超过 2 次；近章已出现的表达须换说法；\n"
+    "- 多个见证者时：主见证者写满阶梯，次见证者只写一镜动作，勿人人「震惊三连」。\n"
+)
+
 _LOUD_PROSE_BLOCK = ""  # 预留：当前与 standard 同，避免无谓加码
 
 
 def intensity_prose_block(intensity: str) -> str:
-    """正文 system 注入块；standard 返回空串（不改默认行为）。"""
+    """正文 system 注入块；standard 也带见证者自然度提示。"""
     intensity = normalize_intensity(intensity)
+    base = _WITNESS_PROSE_HINT
     if intensity == "restrained":
-        return _RESTRAINED_PROSE_BLOCK
+        return base + _RESTRAINED_PROSE_BLOCK
     if intensity == "loud":
-        return _LOUD_PROSE_BLOCK
-    return ""
+        return base + _LOUD_PROSE_BLOCK
+    return base
 
 
 _RESTRAINED_QC_NOTE = (

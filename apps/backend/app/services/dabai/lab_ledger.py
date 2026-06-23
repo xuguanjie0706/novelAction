@@ -415,6 +415,12 @@ def build_panel_snapshot(
         except (TypeError, ValueError):
             pass
 
+    from app.services.dabai.lab_realm_baseline import ensure_full_realm_label
+
+    realm_str = ensure_full_realm_label(
+        realm_str, sub_level, project, fallback_sub=getattr(ch, "realm_sub_rank", None),
+    )
+
     # ── 资产分类 ─────────────────────────────────────────────────────────────
     assets = (
         db.query(DabaiAsset)

@@ -117,7 +117,11 @@ export default function WriteDabailabWorkspace({
             onSaved()
           } else if (ev.event === 'quality_done') {
             setQualityRefreshKey(k => k + 1)
-            if (ev.ok && ev.overall_score != null)
+            if (ev.ok && ev.status === 'blocked' && ev.raw_score != null)
+              toast.error(`自动质检未通过：质量 ${ev.raw_score} 分，存在硬伤`)
+            else if (ev.ok && ev.status === 'unverified')
+              toast.error('自动质检未完成，请重新质检')
+            else if (ev.ok && ev.overall_score != null)
               toast.success(`自动质检完成：${ev.overall_score} 分`)
             else if (!ev.ok) toast.error(`自动质检失败：${ev.error ?? ''}`)
           } else if (ev.event === 'debrief_done') {

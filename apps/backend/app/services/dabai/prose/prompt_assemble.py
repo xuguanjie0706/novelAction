@@ -69,6 +69,7 @@ def build_prose_prompt(
     location_bridge_block: str = "",
     qc_feedback_block: str = "",
     forward_qc_block: str = "",
+    phrase_guard_block: str = "",
     chapter_boundary_block: str = "",
     realm_writing_block: str = "",
     scene_plan: dict | None = None,
@@ -159,7 +160,7 @@ def build_prose_prompt(
 
     cast_names = prewarn_cast_names(pre_warn_result)
     if cast_names:
-        rebuilt = build_char_voice_block(project, cast_names)
+        rebuilt = build_char_voice_block(project, cast_names, ch=ch)
         if rebuilt:
             char_voice_block = rebuilt
 
@@ -181,6 +182,11 @@ def build_prose_prompt(
             "\n★人物声音区分（硬约束）★：对话按【出场人物声音档案】各自的性格与说话风格写，"
             "不同人物的用词、句长、语气要有可分辨差异；主角保持其一贯腔调，"
             "禁止所有人一个腔调，禁止用旁白替代人物开口。"
+        )
+    if "【出场人物境界锁定" in char_voice_block:
+        system += (
+            "\n★配角境界（硬约束）★：【出场人物境界锁定】中列出的配角境界以人物档案为准，"
+            "正文与旁白称述须一致；禁止为「打得过」把更高境界配角擅自写成与主角同层。"
         )
 
     user_parts = [
@@ -235,6 +241,8 @@ def build_prose_prompt(
         user_parts.append(qc_feedback_block.strip())
     if forward_qc_block.strip():
         user_parts.append(forward_qc_block.strip())
+    if phrase_guard_block.strip():
+        user_parts.append(phrase_guard_block.strip())
     if chapter_boundary_block.strip():
         user_parts.append(chapter_boundary_block.strip())
 

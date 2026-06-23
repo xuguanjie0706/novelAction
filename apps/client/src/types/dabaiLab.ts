@@ -97,6 +97,9 @@ export interface DabaiLabQualityLlm {
 export interface DabaiLabQualityReport {
   version?: string
   status?: 'ok' | 'warning' | 'blocked' | string
+  /** 正文质量本身的综合分；存在硬伤时仍保留，不被门控40分覆盖。 */
+  raw_score?: number
+  /** 兼容门控字段：blocked 时封顶40，LLM失败时为0。 */
   overall_score?: number
   /** 综合分 <80 时生成的重写提示词（可直接填入写作指令）。 */
   rewrite_prompt?: string

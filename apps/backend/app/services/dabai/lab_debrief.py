@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.dabai import DabaiChapterOutline, DabaiProject
 from app.models.dabai_lab import DabaiClue, DabaiMemory
+from app.services.dabai.lab_char_voice import resolve_char_realm
 from app.services.dabai.lab_ledger import (
     apply_ledger_changes, build_ledger_block, build_panel_snapshot,
     prune_noise_assets, seed_ledgers, sync_protagonist_realm,
@@ -43,6 +44,13 @@ def _build_debrief_prompt(
     tail = content[-1500:] if len(content) > 6500 else ""
 
     names = [c.name for c in project.characters if c.name]
+    realm_lines = [
+        f"  - {c.name}：{resolve_char_realm(c)}"
+        for c in project.characters
+        if c.name and resolve_char_realm(c) and not (
+            (c.role or "").find("主角") >= 0
+        )
+    ][:20]
     clue_lines = [
         f"  - id={c.id} 《{c.title}》（第{c.chapter_planted}章埋设）：{(c.description or '')[:60]}"
         for c in open_clues[:20]
@@ -53,6 +61,12 @@ def _build_debrief_prompt(
         "【已建档人物（记忆 tags 必须用这些名字，禁止「主角」等代称；"
         "这些人勿放入 new_characters）】\n" + "、".join(names[:40]),
     ]
+    if realm_lines:
+        parts.append(
+            "【配角档案境界（写 state/fact 记忆时须与此一致；正文若写错层数勿照抄，"
+            "应按档案纠正；仅当正文明确描写该配角突破/跌境才可更新）】\n"
+            + "\n".join(realm_lines)
+        )
     if clue_lines:
         parts.append("【当前未回收线索（判断本章是否回收）】\n" + "\n".join(clue_lines))
     if ledger_block.strip():
@@ -60,6 +74,12 @@ def _build_debrief_prompt(
     parts.append(f"【本章正文（开头部分）】\n{head}")
     if tail:
         parts.append(f"【本章正文（结尾部分）】\n{tail}")
+    parts.append(
+        "【限知记忆边界】summary/memories 只写主角合理已知（亲眼看见、亲耳听见、"
+        "亲身经历或有证据可推断）的事实。若正文误含『与此同时/另一边』式幕后切镜，"
+        "不得把幕后人物的内心判断、秘密决定或远程反应写成主角已知记忆；"
+        "只能记录主角在现场获得的线索。"
+    )
     parts.append(
         "【资产变更约束】asset_changes 禁止写入修为点/修为/经验点等系统内部计数；"
         "golden_finger 仅限全书金手指本名（非系统面板词）。"

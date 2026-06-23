@@ -1,4 +1,4 @@
-"""五拍单一事实源：导演单 beat_execution 优先，章纲仅作情节结果约束。"""
+"""五拍单一事实源：导演单 beat_execution 优先换写法；章纲锁定的配角境界/战力档位不可被导演单改写。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -140,7 +140,7 @@ def resolve_beats(
         location=(ch.location or "").strip(),
         witnesses=_witnesses_str(ch),
         realm_rank=ch.realm_rank,
-        is_big_beat=bool(ch.is_big_beat),
+        is_big_beat=bool(getattr(ch, "is_big_beat", False)),
     )
 
 
